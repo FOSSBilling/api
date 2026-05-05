@@ -1,5 +1,5 @@
 {
-  "name": "api-worker",
+  "name": "api",
   "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
