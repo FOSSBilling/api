@@ -22,6 +22,7 @@ vi.mock("@octokit/request", () => ({
 }));
 
 import { request as ghRequest } from "@octokit/request";
+import { resetUpdateTokenCache } from "../../../../src/services/versions/v1/index";
 
 let restoreConsole: (() => void) | null = null;
 
@@ -29,6 +30,7 @@ describe("Versions API v1 - Error Handling", () => {
   beforeEach(async () => {
     restoreConsole = suppressConsole();
     await env.CACHE_KV.delete("gh-fossbilling-releases");
+    resetUpdateTokenCache();
     await env.AUTH_KV.put("UPDATE_TOKEN", "test-update-token-12345");
 
     vi.resetAllMocks();
@@ -71,6 +73,11 @@ describe("Versions API v1 - Error Handling", () => {
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(500);
+      const data = (await response.json()) as {
+        error: { message: string; code: string };
+      };
+      expect(data.error.message).toBe("Internal Server Error");
+      expect(data.error.message).not.toContain("UPDATE_TOKEN");
     });
 
     it("should reject malformed Authorization headers", async () => {

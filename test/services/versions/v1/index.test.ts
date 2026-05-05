@@ -334,6 +334,75 @@ describe("Versions API v1", () => {
 
       expect(response.status).toBe(401);
     });
+
+    it("should stop accepting a rotated token after the token cache TTL", async () => {
+      const now = Date.now();
+      const dateNow = vi.spyOn(Date, "now").mockReturnValue(now);
+
+      try {
+        const ctx1 = createExecutionContext();
+        const response1 = await app.request(
+          "/versions/v1/update",
+          {
+            headers: {
+              Authorization: "Bearer test-update-token-12345"
+            }
+          },
+          env,
+          ctx1
+        );
+        await waitOnExecutionContext(ctx1);
+        expect(response1.status).toBe(200);
+
+        await env.AUTH_KV.put("UPDATE_TOKEN", "rotated-update-token-12345");
+
+        const ctx2 = createExecutionContext();
+        const response2 = await app.request(
+          "/versions/v1/update",
+          {
+            headers: {
+              Authorization: "Bearer test-update-token-12345"
+            }
+          },
+          env,
+          ctx2
+        );
+        await waitOnExecutionContext(ctx2);
+        expect(response2.status).toBe(200);
+
+        dateNow.mockReturnValue(now + 60_001);
+
+        const ctx3 = createExecutionContext();
+        const response3 = await app.request(
+          "/versions/v1/update",
+          {
+            headers: {
+              Authorization: "Bearer test-update-token-12345"
+            }
+          },
+          env,
+          ctx3
+        );
+        await waitOnExecutionContext(ctx3);
+        expect(response3.status).toBe(401);
+
+        const ctx4 = createExecutionContext();
+        const response4 = await app.request(
+          "/versions/v1/update",
+          {
+            headers: {
+              Authorization: "Bearer rotated-update-token-12345"
+            }
+          },
+          env,
+          ctx4
+        );
+        await waitOnExecutionContext(ctx4);
+        expect(response4.status).toBe(200);
+      } finally {
+        dateNow.mockRestore();
+      }
+    });
   });
 
   describe("Error Handling", () => {

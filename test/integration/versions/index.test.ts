@@ -21,10 +21,12 @@ vi.mock("@octokit/request", () => ({
 }));
 
 import { request as ghRequest } from "@octokit/request";
+import { resetUpdateTokenCache } from "../../../src/services/versions/v1/index";
 
 describe("Versions API v1 - Integration Tests", () => {
   beforeEach(async () => {
     await env.CACHE_KV.delete("gh-fossbilling-releases");
+    resetUpdateTokenCache();
     await env.AUTH_KV.put("UPDATE_TOKEN", "test-update-token-12345");
 
     vi.resetAllMocks();

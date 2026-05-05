@@ -141,6 +141,30 @@ describe("Central Alerts API v1", () => {
   });
 
   describe("Error Cases", () => {
+    it("should not expose database exception details", async () => {
+      env.DB_CENTRAL_ALERTS = {
+        prepare() {
+          throw new Error("secret schema detail");
+        }
+      } as unknown as D1Database;
+
+      const ctx = createExecutionContext();
+      const response = await app.request(
+        "/central-alerts/v1/list",
+        {},
+        env,
+        ctx
+      );
+      await waitOnExecutionContext(ctx);
+
+      expect(response.status).toBe(500);
+      const data = (await response.json()) as {
+        error: { message: string; code: string };
+      };
+      expect(data.error.message).toBe("Unable to load central alerts");
+      expect(data.error.message).not.toContain("secret schema detail");
+    });
+
     it("should return 404 for unknown routes", async () => {
       const ctx = createExecutionContext();
       const response = await app.request(

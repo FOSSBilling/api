@@ -15,6 +15,7 @@ import {
 import { Releases, ReleaseDetails } from "./interfaces";
 import { getPlatform } from "../../../lib/middleware";
 import { ICache } from "../../../lib/interfaces";
+import { publicCacheKey } from "../../../lib/cache";
 import { logError, logWarn, logInfo } from "../../../lib/logger";
 import {
   GitHubError,
@@ -34,8 +35,9 @@ const RELEASES_URL =
   "https://api.github.com/repos/FOSSBilling/FOSSBilling/releases";
 type VersionsEnv = { Bindings: CloudflareBindings };
 
-// Cache for UPDATE_TOKEN to avoid repeated KV lookups
-let updateTokenCache: string | null = null;
+const UPDATE_TOKEN_CACHE_TTL_MS = 60_000;
+
+let updateTokenCache: { token: string; expiresAt: number } | null = null;
 
 const versionsV1 = new Hono<VersionsEnv>();
 
@@ -48,8 +50,8 @@ versionsV1.use(
 );
 
 async function getUpdateToken(cache: ICache): Promise<string> {
-  if (updateTokenCache) {
-    return updateTokenCache;
+  if (updateTokenCache && updateTokenCache.expiresAt > Date.now()) {
+    return updateTokenCache.token;
   }
 
   const token = await cache.get("UPDATE_TOKEN");
@@ -58,7 +60,10 @@ async function getUpdateToken(cache: ICache): Promise<string> {
     throw new Error("UPDATE_TOKEN not found in AUTH_KV storage");
   }
 
-  updateTokenCache = token;
+  updateTokenCache = {
+    token,
+    expiresAt: Date.now() + UPDATE_TOKEN_CACHE_TTL_MS
+  };
 
   return token;
 }
@@ -71,7 +76,8 @@ function registerCachedRoute<P extends string>(
     path,
     cache({
       cacheName: RELEASES_CACHE_NAME,
-      cacheControl: RELEASES_CACHE_CONTROL
+      cacheControl: RELEASES_CACHE_CONTROL,
+      keyGenerator: publicCacheKey
     }),
     etag(),
     prettyJSON(),

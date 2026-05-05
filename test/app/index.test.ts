@@ -27,6 +27,7 @@ vi.mock("@octokit/request", () => ({
 }));
 
 import { request as ghRequest } from "@octokit/request";
+import { resetUpdateTokenCache } from "../../src/services/versions/v1/index";
 
 const mockGitHubReleases = [
   {
@@ -57,6 +58,7 @@ describe("FOSSBilling API Worker - Main App", () => {
   beforeEach(async () => {
     // Clear KV cache before each test
     await env.CACHE_KV.delete("gh-fossbilling-releases");
+    resetUpdateTokenCache();
 
     // Set up UPDATE_TOKEN in AUTH_KV storage for tests
     const testUpdateToken = "test-update-token-12345";

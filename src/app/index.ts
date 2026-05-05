@@ -6,6 +6,7 @@ import versionsV1 from "../services/versions/v1";
 import statsV1 from "../services/stats/v1";
 import { platformMiddleware } from "../lib/middleware";
 import { createCloudflareBindings } from "../lib/adapters/cloudflare";
+import { logError } from "../lib/logger";
 
 const app = new Hono<{ Bindings: CloudflareBindings }>();
 
@@ -25,11 +26,14 @@ app.onError((err, c) => {
   if (err instanceof HTTPException) {
     return err.getResponse();
   }
+  logError("app", "Unhandled request error", {
+    message: err instanceof Error ? err.message : String(err)
+  });
   return c.json(
     {
       result: null,
       error: {
-        message: err.message || "Internal Server Error",
+        message: "Internal Server Error",
         code: "INTERNAL_SERVER_ERROR"
       }
     },

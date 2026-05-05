@@ -20,6 +20,7 @@ vi.mock("@octokit/request", () => ({
 }));
 
 import { request as ghRequest } from "@octokit/request";
+import { resetUpdateTokenCache } from "../../../../src/services/versions/v1/index";
 
 let restoreConsole: (() => void) | null = null;
 
@@ -27,6 +28,7 @@ describe("Versions API v1 - Middleware", () => {
   beforeEach(async () => {
     restoreConsole = suppressConsole();
     await env.CACHE_KV.delete("gh-fossbilling-releases");
+    resetUpdateTokenCache();
     await env.AUTH_KV.put("UPDATE_TOKEN", "test-update-token-12345");
 
     vi.clearAllMocks();

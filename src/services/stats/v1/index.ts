@@ -10,6 +10,7 @@ import { Releases } from "../../versions/v1/interfaces";
 import { StatsData, ReleasesPerYearData } from "./interfaces";
 import { getPlatform } from "../../../lib/middleware";
 import { ICache } from "../../../lib/interfaces";
+import { publicCacheKey } from "../../../lib/cache";
 import { logError, logInfo } from "../../../lib/logger";
 import { GitHubError } from "../../../lib/github-errors";
 
@@ -38,7 +39,8 @@ function registerCachedRoute<P extends string>(
     path,
     cache({
       cacheName: STATS_CACHE_NAME,
-      cacheControl: STATS_CACHE_CONTROL
+      cacheControl: STATS_CACHE_CONTROL,
+      keyGenerator: publicCacheKey
     }),
     etag(),
     prettyJSON(),

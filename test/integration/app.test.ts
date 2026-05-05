@@ -20,10 +20,12 @@ vi.mock("@octokit/request", () => ({
 }));
 
 import { request as ghRequest } from "@octokit/request";
+import { resetUpdateTokenCache } from "../../src/services/versions/v1/index";
 
 describe("FOSSBilling API Worker - Full App Integration", () => {
   beforeEach(async () => {
     await env.CACHE_KV.delete("gh-fossbilling-releases");
+    resetUpdateTokenCache();
     await env.AUTH_KV.put("UPDATE_TOKEN", "test-update-token-12345");
 
     env.DB_CENTRAL_ALERTS = mockD1Database;
