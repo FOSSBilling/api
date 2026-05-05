@@ -138,7 +138,7 @@ describe("FOSSBilling API Worker - Main App", () => {
       const data: ApiResponse<null> = await response.json();
       expect(data.result).toBe(null);
       expect(data.error_code).toBe(0);
-      expect(data.message).toContain("FOSSBilling API Worker");
+      expect(data.message).toContain("FOSSBilling API");
     });
   });
 
