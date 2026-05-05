@@ -84,7 +84,7 @@ describe("FOSSBilling API Worker - Full App Integration", () => {
       const data = (await response.json()) as ApiResponse<null>;
       expect(data.result).toBe(null);
       expect(data.error_code).toBe(0);
-      expect(data.message).toContain("FOSSBilling API Worker");
+      expect(data.message).toContain("FOSSBilling API");
     });
   });
 

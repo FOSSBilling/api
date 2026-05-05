@@ -1,15 +1,19 @@
 /**
- * For more details on how to configure Wrangler, refer to:
  * https://developers.cloudflare.com/workers/wrangler/configuration/
  */
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "api-worker",
+  "name": "api",
   "main": "src/app/index.ts",
   "compatibility_flags": ["nodejs_compat"],
-  "compatibility_date": "2025-09-15",
+  "compatibility_date": "2026-04-21",
   "observability": {
-    "enabled": true
+    "logs": {
+      "enabled": true
+    },
+    "traces": {
+      "enabled": true
+    }
   },
   "workers_dev": false,
   "placement": {
@@ -19,14 +23,12 @@
   "keep_vars": true,
   /**
    * Bindings
-   * Bindings allow your Worker to interact with resources on the Cloudflare Developer Platform, including
-   * databases, object storage, AI inference, real-time communication and more.
    * https://developers.cloudflare.com/workers/runtime-apis/bindings/
    */
   "d1_databases": [
     {
       "binding": "DB_CENTRAL_ALERTS",
-      "database_id": "a0b63150-ec97-447d-a31f-bfc0d0e13997"
+      "database_id": "3a47f7fd-5eda-4754-9594-9de809ad7823"
     }
   ],
   "kv_namespaces": [
@@ -48,7 +50,6 @@
   ]
   /**
    * Environment Variables
-   * https://developers.cloudflare.com/workers/wrangler/configuration/#environment-variables
    */
   // "vars": { "MY_VARIABLE": "production_value" },
   /**
