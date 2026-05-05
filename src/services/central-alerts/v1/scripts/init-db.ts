@@ -30,7 +30,7 @@ async function initializeDatabase(): Promise<void> {
     .map((stmt) => stmt + ";");
 
   for (const statement of statements) {
-    const command = `echo "${shellEscapeDoubleQuoted(statement)}" | npx wrangler d1 execute api-worker_central-alerts --local`;
+    const command = `echo "${shellEscapeDoubleQuoted(statement)}" | npx wrangler d1 execute api_central-alerts --local`;
     runWranglerCommand(command);
   }
 
