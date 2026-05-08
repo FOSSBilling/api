@@ -143,6 +143,10 @@ registerCachedRoute("/", async (c) => {
 versionsV1.get(
   "/update",
   async (c, next) => {
+    c.header("Cache-Control", "no-store");
+    return next();
+  },
+  async (c, next) => {
     const platform = getPlatform(c);
     const token = await getUpdateToken(platform.getCache("AUTH_KV"));
     const bearer = bearerAuth({ token });

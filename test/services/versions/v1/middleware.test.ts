@@ -232,6 +232,23 @@ describe("Versions API v1 - Middleware", () => {
       expect(response.status).toBe(200);
     });
 
+    it("should accept lowercase authorization header name", async () => {
+      const ctx = createExecutionContext();
+      const response = await app.request(
+        "/versions/v1/update",
+        {
+          headers: {
+            authorization: "Bearer test-update-token-12345"
+          }
+        },
+        env,
+        ctx
+      );
+      await waitOnExecutionContext(ctx);
+
+      expect(response.status).toBe(200);
+    });
+
     it("should require Authorization header", async () => {
       const ctx = createExecutionContext();
       const response = await app.request("/versions/v1/update", {}, env, ctx);
@@ -295,6 +312,7 @@ describe("Versions API v1 - Middleware", () => {
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);
+      expect(response.headers.get("Cache-Control")).toMatch(/no-store|no-cache/i);
     });
 
     it("should apply CORS even on auth failures", async () => {
