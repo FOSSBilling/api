@@ -14,7 +14,7 @@ const WRANGLER_D1_COMMAND = [
   "--local"
 ];
 
-function runWranglerCommand(args: string[]): void {
+function executeWranglerCommand(args: string[]): void {
   const command = [...WRANGLER_D1_COMMAND, ...args];
   const result = spawnSync("npx", command, {
     encoding: "utf8",
@@ -43,9 +43,9 @@ async function initializeDatabase(): Promise<void> {
 
   const initSQLPath = join(__dirname, "..", "db", "init.sql");
   try {
-    runWranglerCommand(["--file", initSQLPath]);
+    executeWranglerCommand(["--file", initSQLPath]);
   } catch (error) {
-    console.error(`Failed SQL file: ${initSQLPath}`);
+    console.error(`Failed SQL file: ${initSQLPath}`, error);
     throw error;
   }
 
