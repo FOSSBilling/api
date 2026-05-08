@@ -6,16 +6,20 @@ import { fileURLToPath } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+const WRANGLER_D1_COMMAND = [
+  "wrangler",
+  "d1",
+  "execute",
+  "api_central-alerts",
+  "--local"
+];
 
 function runWranglerCommand(args: string[]): void {
-  const result = spawnSync(
-    "npx",
-    ["wrangler", "d1", "execute", "api_central-alerts", "--local", ...args],
-    {
-      encoding: "utf8",
-      stdio: "pipe"
-    }
-  );
+  const command = [...WRANGLER_D1_COMMAND, ...args];
+  const result = spawnSync("npx", command, {
+    encoding: "utf8",
+    stdio: "pipe"
+  });
 
   if (result.error) {
     throw result.error;
@@ -24,7 +28,7 @@ function runWranglerCommand(args: string[]): void {
   if (result.status !== 0) {
     throw new Error(
       [
-        `Wrangler command failed: npx ${["wrangler", "d1", "execute", "api_central-alerts", "--local", ...args].join(" ")}`,
+        `Wrangler command failed: npx ${command.join(" ")}`,
         result.stderr.trim() ? `stderr: ${result.stderr.trim()}` : "",
         result.stdout.trim() ? `stdout: ${result.stdout.trim()}` : ""
       ]
