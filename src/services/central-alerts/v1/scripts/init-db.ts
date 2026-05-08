@@ -38,7 +38,7 @@ function executeWranglerCommand(args: string[]): void {
   }
 }
 
-async function initializeDatabase(): Promise<void> {
+function initializeDatabase(): void {
   console.log("Initializing Central Alerts Database...");
 
   const initSQLPath = join(__dirname, "..", "db", "init.sql");
@@ -53,12 +53,14 @@ async function initializeDatabase(): Promise<void> {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  initializeDatabase().catch((error) => {
+  try {
+    initializeDatabase();
+  } catch (error) {
     console.error(
       `Database initialization failed: ${error instanceof Error ? error.message : String(error)}`
     );
     process.exit(1);
-  });
+  }
 }
 
 export { initializeDatabase };
