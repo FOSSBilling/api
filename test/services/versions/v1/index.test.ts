@@ -98,6 +98,54 @@ describe("Versions API v1", () => {
       }
     });
 
+    it("should include releases with versioned zip asset names", async () => {
+      (vi.mocked(ghRequest) as MockGitHubRequest).mockImplementation(
+        async (route: string) => {
+          if (route === "GET /repos/{owner}/{repo}/releases") {
+            return {
+              data: [
+                ...mockGitHubReleases,
+                {
+                  id: 1005,
+                  tag_name: "0.8.0",
+                  name: "0.8.0",
+                  published_at: "2026-05-28T21:12:54Z",
+                  prerelease: false,
+                  body: "## 0.8.0\n- New release",
+                  assets: [
+                    {
+                      name: "FOSSBilling-0.8.0.zip",
+                      browser_download_url:
+                        "https://github.com/FOSSBilling/FOSSBilling/releases/download/0.8.0/FOSSBilling-0.8.0.zip",
+                      size: 2048000
+                    }
+                  ]
+                }
+              ]
+            };
+          }
+          if (route === "GET /repos/{owner}/{repo}/contents/{path}{?ref}") {
+            const content = btoa(JSON.stringify(mockComposerJson));
+            return { data: { content } };
+          }
+          throw new Error("Unexpected route");
+        }
+      );
+
+      const ctx = createExecutionContext();
+      const response = await app.request("/versions/v1", {}, env, ctx);
+      await waitOnExecutionContext(ctx);
+
+      expect(response.status).toBe(200);
+      const data: VersionsResponse = await response.json();
+      expect(data.result["0.8.0"]).toMatchObject({
+        version: "0.8.0",
+        download_url:
+          "https://github.com/FOSSBilling/FOSSBilling/releases/download/0.8.0/FOSSBilling-0.8.0.zip",
+        size_bytes: 2048000
+      });
+    });
+
     it("should cache releases data", async () => {
       const ctx = createExecutionContext();
       await app.request("/versions/v1", {}, env, ctx);
