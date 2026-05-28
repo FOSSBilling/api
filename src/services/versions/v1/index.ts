@@ -1,6 +1,5 @@
 import { bearerAuth } from "hono/bearer-auth";
 import { Hono, type Context, type Handler } from "hono";
-import { cache } from "hono/cache";
 import { cors } from "hono/cors";
 import { etag } from "hono/etag";
 import { prettyJSON } from "hono/pretty-json";
@@ -15,7 +14,6 @@ import {
 import { Releases, ReleaseDetails } from "./interfaces";
 import { getPlatform } from "../../../lib/middleware";
 import { ICache } from "../../../lib/interfaces";
-import { publicCacheKey } from "../../../lib/cache";
 import { logError, logWarn, logInfo } from "../../../lib/logger";
 import {
   GitHubError,
@@ -28,7 +26,6 @@ import {
 } from "../../../lib/github-errors";
 
 const RELEASE_CACHE_KEY = "gh-fossbilling-releases";
-const RELEASES_CACHE_NAME = "versions-api-v1";
 const RELEASES_CACHE_CONTROL = "max-age: 86400";
 const RELEASE_CACHE_TTL = 86400;
 const RELEASES_URL =
@@ -74,11 +71,10 @@ function registerCachedRoute<P extends string>(
 ) {
   return versionsV1.get(
     path,
-    cache({
-      cacheName: RELEASES_CACHE_NAME,
-      cacheControl: RELEASES_CACHE_CONTROL,
-      keyGenerator: publicCacheKey
-    }),
+    async (c, next) => {
+      c.header("Cache-Control", RELEASES_CACHE_CONTROL);
+      return next();
+    },
     etag(),
     prettyJSON(),
     handler
