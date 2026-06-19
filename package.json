@@ -23,7 +23,7 @@
     "semver": "^7.7.2"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "0.16.15",
+    "@cloudflare/vitest-pool-workers": "0.16.17",
     "@eslint/js": "10.0.1",
     "@types/node": "24.13.2",
     "@types/semver": "7.7.1",
