@@ -608,10 +608,9 @@ async function getBatchPhpVersions(
   if (releases.length === 0) return new Map();
 
   const fields = releases
-    .map(({ tag, composerPath }) => {
-      const alias = `v${tag.replace(/[^a-zA-Z0-9]/g, "_")}`;
-      return `${alias}: object(expression: "${tag}:${composerPath}") { ... on Blob { text } }`;
-    })
+    .map(({ tag, composerPath }, i) =>
+      `r${i}: object(expression: "${tag}:${composerPath}") { ... on Blob { text } }`
+    )
     .join("\n");
 
   const query = `{ repository(owner: "${REPO_OWNER}", name: "${REPO_NAME}") {\n${fields}\n} }`;
@@ -624,9 +623,9 @@ async function getBatchPhpVersions(
 
   const result = new Map<string, string>();
 
-  for (const { tag } of releases) {
-    const alias = `v${tag.replace(/[^a-zA-Z0-9]/g, "_")}`;
-    const blob = data.repository[alias];
+  for (let i = 0; i < releases.length; i++) {
+    const { tag } = releases[i];
+    const blob = data.repository[`r${i}`];
     if (blob?.text) {
       try {
         const composerJson = JSON.parse(blob.text) as {
