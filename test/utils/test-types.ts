@@ -123,7 +123,9 @@ export interface MockGitHubRequest {
 }
 
 export interface MockGitHubGraphQL {
-  mockImplementation: (fn: (query: string) => Promise<unknown>) => void;
+  mockImplementation: (
+    fn: (query: string, options?: unknown) => Promise<unknown>
+  ) => void;
   mockRejectedValueOnce: (value: unknown) => void;
 }
 
