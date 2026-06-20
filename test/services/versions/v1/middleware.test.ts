@@ -44,6 +44,7 @@ describe("Versions API v1 - Middleware", () => {
       restoreConsole();
       restoreConsole = null;
     }
+    vi.unstubAllGlobals();
   });
 
   describe("CORS Middleware", () => {
@@ -312,7 +313,9 @@ describe("Versions API v1 - Middleware", () => {
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);
-      expect(response.headers.get("Cache-Control")).toMatch(/no-store|no-cache/i);
+      expect(response.headers.get("Cache-Control")).toMatch(
+        /no-store|no-cache/i
+      );
     });
 
     it("should apply CORS even on auth failures", async () => {

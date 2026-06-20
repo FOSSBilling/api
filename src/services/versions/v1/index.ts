@@ -386,35 +386,89 @@ export async function getReleases(
       releaseCount: result.data.length
     });
 
-    let releases: Releases = {};
     const errors: GitHubError[] = [];
 
-    const releasePromises = result.data.map(
-      async (release): Promise<[string, ReleaseDetails] | null> => {
-        const tag = release.tag_name;
-        if (!semverValid(tag)) {
-          logWarn("versions", "Skipping release with invalid semver tag", {
-            tag,
-            releaseId: release.id
-          });
-          return null;
-        }
+    // Reuse PHP versions already stored in cache to avoid a subrequest per release.
+    // Only releases absent from the existing cache require a fresh fetch.
+    const existingReleases = cachedReleases
+      ? parseCachedReleases(
+          cachedReleases,
+          "Failed to parse existing cache during update"
+        )
+      : null;
 
-        const zipAsset = getReleaseZipAsset(release.assets, tag);
-        if (!zipAsset) {
-          return null;
-        }
+    type ProcessedRelease = {
+      tag: string;
+      release: (typeof result.data)[number];
+      zipAsset: ReleaseAsset;
+      cachedPhpVersion: string | undefined;
+    };
 
-        const phpResult = await getReleaseMinPhpVersion(githubToken, tag);
+    const releasesToProcess: ProcessedRelease[] = [];
+    const releasesToFetch: PhpVersionBatchItem[] = [];
 
-        if (phpResult.error) {
-          errors.push(phpResult.error);
-        }
+    for (const release of result.data) {
+      const tag = release.tag_name;
+      if (!semverValid(tag)) {
+        logWarn("versions", "Skipping release with invalid semver tag", {
+          tag,
+          releaseId: release.id
+        });
+        continue;
+      }
+
+      const zipAsset = getReleaseZipAsset(release.assets, tag);
+      if (!zipAsset) {
+        continue;
+      }
+
+      const cachedPhpVersion = existingReleases?.[tag]?.minimum_php_version;
+      releasesToProcess.push({ tag, release, zipAsset, cachedPhpVersion });
+
+      if (cachedPhpVersion === undefined) {
+        const composerPath = semverGte(tag, "0.5.0")
+          ? "composer.json"
+          : "src/composer.json";
+        releasesToFetch.push({ tag, composerPath });
+      }
+    }
+
+    // Single GraphQL request to fetch all missing PHP versions in one subrequest.
+    let batchPhpVersions = new Map<string, string>();
+    if (releasesToFetch.length > 0) {
+      try {
+        batchPhpVersions = await getBatchPhpVersions(
+          githubToken,
+          releasesToFetch
+        );
+        logInfo("versions", "Batch fetched PHP versions via GraphQL", {
+          requested: releasesToFetch.length,
+          resolved: batchPhpVersions.size
+        });
+      } catch (batchError) {
+        const githubError = classifyGitHubError(
+          batchError,
+          "https://api.github.com/graphql"
+        );
+        errors.push(githubError);
+        logWarn("versions", "Failed to batch fetch PHP versions", {
+          message: githubError.message,
+          count: releasesToFetch.length
+        });
+      }
+    }
+
+    const releaseEntries: [string, ReleaseDetails][] = releasesToProcess.map(
+      ({ tag, release, zipAsset, cachedPhpVersion }) => {
+        const phpVersion =
+          cachedPhpVersion !== undefined
+            ? cachedPhpVersion
+            : (batchPhpVersions.get(tag) ?? "");
 
         const releaseDetails: ReleaseDetails = {
           version: release.name || tag,
           released_on: release.published_at ?? "",
-          minimum_php_version: phpResult.version,
+          minimum_php_version: phpVersion,
           download_url: zipAsset.browser_download_url,
           size_bytes: zipAsset.size,
           is_prerelease: Boolean(release.prerelease),
@@ -425,14 +479,10 @@ export async function getReleases(
       }
     );
 
-    const releaseEntries = (await Promise.all(releasePromises)).filter(
-      (entry): entry is [string, ReleaseDetails] => entry !== null
-    );
-
     const sortedReleases = Object.fromEntries(
       releaseEntries.sort((a, b) => semverCompare(b[0], a[0]))
     );
-    releases = sortedReleases;
+    const releases = sortedReleases;
 
     if (Object.keys(releases).length > 0) {
       await cache.put(RELEASE_CACHE_KEY, JSON.stringify(releases), {
@@ -534,6 +584,98 @@ function parseCachedReleases(
   }
 
   return null;
+}
+
+interface PhpVersionBatchItem {
+  tag: string;
+  composerPath: string;
+}
+
+async function getBatchPhpVersions(
+  githubToken: string,
+  releases: PhpVersionBatchItem[]
+): Promise<Map<string, string>> {
+  if (releases.length === 0) return new Map();
+
+  const aliases = releases.map(({ tag, composerPath }) => ({
+    tag,
+    alias: `v${tag.replace(/[^a-zA-Z0-9]/g, "_")}`,
+    composerPath
+  }));
+
+  const fields = aliases
+    .map(
+      ({ alias, tag, composerPath }) =>
+        `${alias}: object(expression: "${tag}:${composerPath}") { ... on Blob { text } }`
+    )
+    .join("\n");
+
+  const query = `{ repository(owner: "FOSSBilling", name: "FOSSBilling") {\n${fields}\n} }`;
+
+  const response = await fetch("https://api.github.com/graphql", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${githubToken}`,
+      "Content-Type": "application/json",
+      "User-Agent": "fossbilling-api"
+    },
+    body: JSON.stringify({ query })
+  });
+
+  if (response.status === 401) {
+    throw Object.assign(new Error("Bad credentials"), { status: 401 });
+  }
+
+  if (response.status === 403) {
+    throw Object.assign(new Error("GitHub API rate limit exceeded"), {
+      status: 403
+    });
+  }
+
+  if (!response.ok) {
+    throw Object.assign(new Error(`GitHub API error: ${response.status}`), {
+      status: response.status
+    });
+  }
+
+  type GraphQLResponse = {
+    data?: { repository?: Record<string, { text?: string } | null> };
+    errors?: Array<{ message: string }>;
+  };
+
+  const data = (await response.json()) as GraphQLResponse;
+
+  if (data.errors?.length) {
+    logWarn(
+      "versions",
+      "GraphQL response contained errors when fetching PHP versions",
+      {
+        errors: data.errors.map((e) => e.message)
+      }
+    );
+  }
+
+  const repoData = data.data?.repository;
+  const result = new Map<string, string>();
+
+  for (const { tag, alias } of aliases) {
+    const blob = repoData?.[alias];
+    if (blob?.text) {
+      try {
+        const composerJson = JSON.parse(blob.text) as {
+          require?: { php?: string };
+        };
+        const phpRequirement = composerJson.require?.php;
+        if (phpRequirement) {
+          result.set(tag, phpRequirement.replace(/\^|>=/g, "").trim());
+        }
+      } catch {
+        // Ignore individual parse errors
+      }
+    }
+  }
+
+  return result;
 }
 
 interface GetReleaseMinPhpVersionResult {

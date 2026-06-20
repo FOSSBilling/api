@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   createExecutionContext,
   waitOnExecutionContext
@@ -35,6 +35,10 @@ describe("Versions API v1 - Integration Tests", () => {
       mockGitHubReleases,
       mockComposerJson
     );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   describe("Full Request/Response Cycle", () => {

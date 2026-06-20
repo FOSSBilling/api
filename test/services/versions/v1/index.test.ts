@@ -13,7 +13,8 @@ import {
 } from "../../../mocks/github-releases";
 import {
   suppressConsole,
-  setupGitHubApiMock
+  setupGitHubApiMock,
+  createGraphQLFetchMock
 } from "../../../utils/mock-helpers";
 import {
   ApiResponse,
@@ -60,6 +61,7 @@ describe("Versions API v1", () => {
       env.CACHE_KV.put = originalKVPut;
       originalKVPut = null;
     }
+    vi.unstubAllGlobals();
   });
 
   describe("GET /", () => {
@@ -470,17 +472,8 @@ describe("Versions API v1", () => {
     });
 
     it("should handle missing composer.json", async () => {
-      (vi.mocked(ghRequest) as unknown as MockGitHubRequest).mockImplementation(
-        async (route: string) => {
-          if (route === "GET /repos/{owner}/{repo}/releases") {
-            return { data: mockGitHubReleases };
-          }
-          if (route === "GET /repos/{owner}/{repo}/contents/{path}{?ref}") {
-            throw new Error("File not found");
-          }
-          throw new Error("Unexpected route");
-        }
-      );
+      // All blobs return null (no composer.json found for any release)
+      vi.stubGlobal("fetch", createGraphQLFetchMock(null));
 
       const ctx = createExecutionContext();
       const response = await app.request("/versions/v1/0.5.0", {}, env, ctx);
@@ -521,7 +514,9 @@ describe("Versions API v1", () => {
         }
         expect(data.result.version).toBe("0.6.0");
 
-        expect(vi.mocked(ghRequest)).toHaveBeenCalledTimes(6);
+        // 1 call for empty releases list + 1 call for retry releases list.
+        // PHP versions are now fetched via a single GraphQL fetch call, not ghRequest.
+        expect(vi.mocked(ghRequest)).toHaveBeenCalledTimes(2);
       });
 
       it("should return 404 when retry also fails", async () => {
@@ -592,7 +587,9 @@ describe("Versions API v1", () => {
         }
         expect(data.result.version).toBe("0.6.0");
 
-        expect(vi.mocked(ghRequest)).toHaveBeenCalledTimes(6);
+        // 1 call for empty releases list + 1 call for retry releases list.
+        // PHP versions are now fetched via a single GraphQL fetch call, not ghRequest.
+        expect(vi.mocked(ghRequest)).toHaveBeenCalledTimes(2);
       });
     });
   });
