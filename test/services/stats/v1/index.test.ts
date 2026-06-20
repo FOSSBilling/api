@@ -13,10 +13,14 @@ import {
   suppressConsole,
   setupGitHubApiMock
 } from "../../../utils/mock-helpers";
-import { MockGitHubRequest } from "../../../utils/test-types";
+import {
+  MockGitHubGraphQL,
+  MockGitHubRequest
+} from "../../../utils/test-types";
 import type { StatsData } from "../../../../src/services/stats/v1/interfaces";
 
 import { request as ghRequest } from "@octokit/request";
+import { graphql } from "@octokit/graphql";
 
 interface StatsApiResponse {
   result: StatsData | null;
@@ -29,8 +33,18 @@ interface StatsApiResponse {
   };
 }
 
-vi.mock("@octokit/request", () => ({
-  request: vi.fn()
+vi.mock("@octokit/request", () => {
+  const endpoint = { DEFAULTS: {} };
+  const derivedFn = Object.assign(vi.fn(), { defaults: vi.fn(), endpoint });
+  const request = Object.assign(vi.fn(), {
+    defaults: vi.fn().mockReturnValue(derivedFn),
+    endpoint
+  });
+  return { request };
+});
+
+vi.mock("@octokit/graphql", () => ({
+  graphql: vi.fn()
 }));
 
 let restoreConsole: (() => void) | null = null;
@@ -47,6 +61,7 @@ describe("Stats API v1", () => {
     vi.clearAllMocks();
     setupGitHubApiMock(
       vi.mocked(ghRequest) as MockGitHubRequest,
+      vi.mocked(graphql) as unknown as MockGitHubGraphQL,
       mockGitHubReleases,
       mockComposerJson
     );

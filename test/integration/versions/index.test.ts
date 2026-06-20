@@ -11,16 +11,28 @@ import {
 } from "../../mocks/github-releases";
 import { setupGitHubApiMock } from "../../utils/mock-helpers";
 import {
+  MockGitHubGraphQL,
   MockGitHubRequest,
   VersionsResponse,
   ApiResponse
 } from "../../utils/test-types";
 
-vi.mock("@octokit/request", () => ({
-  request: vi.fn()
+vi.mock("@octokit/request", () => {
+  const endpoint = { DEFAULTS: {} };
+  const derivedFn = Object.assign(vi.fn(), { defaults: vi.fn(), endpoint });
+  const request = Object.assign(vi.fn(), {
+    defaults: vi.fn().mockReturnValue(derivedFn),
+    endpoint
+  });
+  return { request };
+});
+
+vi.mock("@octokit/graphql", () => ({
+  graphql: vi.fn()
 }));
 
 import { request as ghRequest } from "@octokit/request";
+import { graphql } from "@octokit/graphql";
 import { resetUpdateTokenCache } from "../../../src/services/versions/v1/index";
 
 describe("Versions API v1 - Integration Tests", () => {
@@ -32,6 +44,7 @@ describe("Versions API v1 - Integration Tests", () => {
     vi.resetAllMocks();
     setupGitHubApiMock(
       vi.mocked(ghRequest) as MockGitHubRequest,
+      vi.mocked(graphql) as unknown as MockGitHubGraphQL,
       mockGitHubReleases,
       mockComposerJson
     );

@@ -21,13 +21,25 @@ import {
   VersionsResponse
 } from "../utils/test-types";
 
-// Mock @octokit/request for versions API integration
-vi.mock("@octokit/request", () => ({
-  request: vi.fn()
+vi.mock("@octokit/request", () => {
+  const endpoint = { DEFAULTS: {} };
+  const derivedFn = Object.assign(vi.fn(), { defaults: vi.fn(), endpoint });
+  const request = Object.assign(vi.fn(), {
+    defaults: vi.fn().mockReturnValue(derivedFn),
+    endpoint
+  });
+  return { request };
+});
+
+vi.mock("@octokit/graphql", () => ({
+  graphql: vi.fn()
 }));
 
 import { request as ghRequest } from "@octokit/request";
+import { graphql } from "@octokit/graphql";
 import { resetUpdateTokenCache } from "../../src/services/versions/v1/index";
+import { createGraphQLImplementation } from "../utils/mock-helpers";
+import { MockGitHubGraphQL } from "../utils/test-types";
 
 const mockGitHubReleases = [
   {
@@ -86,6 +98,10 @@ describe("FOSSBilling API Worker - Main App", () => {
         }
         throw new Error("Unexpected route");
       }
+    );
+
+    (vi.mocked(graphql) as unknown as MockGitHubGraphQL).mockImplementation(
+      createGraphQLImplementation(mockComposerJson)
     );
   });
 

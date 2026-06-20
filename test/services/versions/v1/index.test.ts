@@ -13,22 +13,35 @@ import {
 } from "../../../mocks/github-releases";
 import {
   suppressConsole,
-  setupGitHubApiMock
+  setupGitHubApiMock,
+  createGraphQLImplementation
 } from "../../../utils/mock-helpers";
 import {
   ApiResponse,
   ChangelogResponse,
+  MockGitHubGraphQL,
   MockGitHubRequest,
   UpdateResponse,
   VersionInfo,
   VersionsResponse
 } from "../../../utils/test-types";
 
-vi.mock("@octokit/request", () => ({
-  request: vi.fn()
+vi.mock("@octokit/request", () => {
+  const endpoint = { DEFAULTS: {} };
+  const derivedFn = Object.assign(vi.fn(), { defaults: vi.fn(), endpoint });
+  const request = Object.assign(vi.fn(), {
+    defaults: vi.fn().mockReturnValue(derivedFn),
+    endpoint
+  });
+  return { request };
+});
+
+vi.mock("@octokit/graphql", () => ({
+  graphql: vi.fn()
 }));
 
 import { request as ghRequest } from "@octokit/request";
+import { graphql } from "@octokit/graphql";
 import { resetUpdateTokenCache } from "../../../../src/services/versions/v1/index";
 
 let restoreConsole: (() => void) | null = null;
@@ -46,6 +59,7 @@ describe("Versions API v1", () => {
     vi.clearAllMocks();
     setupGitHubApiMock(
       vi.mocked(ghRequest) as MockGitHubRequest,
+      vi.mocked(graphql) as unknown as MockGitHubGraphQL,
       mockGitHubReleases,
       mockComposerJson
     );
@@ -470,16 +484,9 @@ describe("Versions API v1", () => {
     });
 
     it("should handle missing composer.json", async () => {
-      (vi.mocked(ghRequest) as unknown as MockGitHubRequest).mockImplementation(
-        async (route: string) => {
-          if (route === "GET /repos/{owner}/{repo}/releases") {
-            return { data: mockGitHubReleases };
-          }
-          if (route === "GET /repos/{owner}/{repo}/contents/{path}{?ref}") {
-            throw new Error("File not found");
-          }
-          throw new Error("Unexpected route");
-        }
+      // All blobs return null (no composer.json found for any release)
+      (vi.mocked(graphql) as unknown as MockGitHubGraphQL).mockImplementation(
+        createGraphQLImplementation(null)
       );
 
       const ctx = createExecutionContext();
@@ -521,7 +528,9 @@ describe("Versions API v1", () => {
         }
         expect(data.result.version).toBe("0.6.0");
 
-        expect(vi.mocked(ghRequest)).toHaveBeenCalledTimes(6);
+        // 1 call for empty releases list + 1 call for retry releases list.
+        // PHP versions are now fetched via a single GraphQL fetch call, not ghRequest.
+        expect(vi.mocked(ghRequest)).toHaveBeenCalledTimes(2);
       });
 
       it("should return 404 when retry also fails", async () => {
@@ -592,7 +601,9 @@ describe("Versions API v1", () => {
         }
         expect(data.result.version).toBe("0.6.0");
 
-        expect(vi.mocked(ghRequest)).toHaveBeenCalledTimes(6);
+        // 1 call for empty releases list + 1 call for retry releases list.
+        // PHP versions are now fetched via a single GraphQL fetch call, not ghRequest.
+        expect(vi.mocked(ghRequest)).toHaveBeenCalledTimes(2);
       });
     });
   });

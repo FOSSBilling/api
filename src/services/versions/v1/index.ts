@@ -3,6 +3,7 @@ import { Hono, type Context, type Handler } from "hono";
 import { cors } from "hono/cors";
 import { etag } from "hono/etag";
 import { prettyJSON } from "hono/pretty-json";
+import { graphql } from "@octokit/graphql";
 import { request as ghRequest } from "@octokit/request";
 import { trimTrailingSlash } from "hono/trailing-slash";
 import {
@@ -19,17 +20,17 @@ import {
   GitHubError,
   AuthError,
   RateLimitError,
-  NetworkError,
   ValidationError,
   classifyGitHubError,
   getMostCriticalError
 } from "../../../lib/github-errors";
 
+const REPO_OWNER = "FOSSBilling";
+const REPO_NAME = "FOSSBilling";
 const RELEASE_CACHE_KEY = "gh-fossbilling-releases";
 const RELEASES_CACHE_CONTROL = "max-age: 86400";
 const RELEASE_CACHE_TTL = 86400;
-const RELEASES_URL =
-  "https://api.github.com/repos/FOSSBilling/FOSSBilling/releases";
+const RELEASES_URL = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases`;
 type VersionsEnv = { Bindings: CloudflareBindings };
 
 const UPDATE_TOKEN_CACHE_TTL_MS = 60_000;
@@ -363,8 +364,8 @@ export async function getReleases(
 
   try {
     const result = await ghRequest("GET /repos/{owner}/{repo}/releases", {
-      owner: "FOSSBilling",
-      repo: "FOSSBilling",
+      owner: REPO_OWNER,
+      repo: REPO_NAME,
       headers: {
         Authorization: `Bearer ${githubToken}`
       },
@@ -386,35 +387,98 @@ export async function getReleases(
       releaseCount: result.data.length
     });
 
-    let releases: Releases = {};
     const errors: GitHubError[] = [];
 
-    const releasePromises = result.data.map(
-      async (release): Promise<[string, ReleaseDetails] | null> => {
-        const tag = release.tag_name;
-        if (!semverValid(tag)) {
-          logWarn("versions", "Skipping release with invalid semver tag", {
-            tag,
-            releaseId: release.id
-          });
-          return null;
-        }
+    // Reuse PHP versions already stored in cache to avoid a subrequest per release.
+    // Only releases absent from the existing cache require a fresh fetch.
+    const existingReleases = cachedReleases
+      ? parseCachedReleases(
+          cachedReleases,
+          "Failed to parse existing cache during update"
+        )
+      : null;
 
-        const zipAsset = getReleaseZipAsset(release.assets, tag);
-        if (!zipAsset) {
-          return null;
-        }
+    type ProcessedRelease = {
+      tag: string;
+      release: (typeof result.data)[number];
+      zipAsset: ReleaseAsset;
+      cachedPhpVersion: string | undefined;
+    };
 
-        const phpResult = await getReleaseMinPhpVersion(githubToken, tag);
+    const releasesToProcess: ProcessedRelease[] = [];
+    const releasesToFetch: PhpVersionBatchItem[] = [];
 
-        if (phpResult.error) {
-          errors.push(phpResult.error);
-        }
+    for (const release of result.data) {
+      const tag = release.tag_name;
+      if (!semverValid(tag)) {
+        logWarn("versions", "Skipping release with invalid semver tag", {
+          tag,
+          releaseId: release.id
+        });
+        continue;
+      }
+
+      const zipAsset = getReleaseZipAsset(release.assets, tag);
+      if (!zipAsset) {
+        continue;
+      }
+
+      const cachedPhpVersion = existingReleases?.[tag]?.minimum_php_version;
+      const cachedPhpVersionValue =
+        typeof cachedPhpVersion === "string" && cachedPhpVersion.trim() !== ""
+          ? cachedPhpVersion
+          : undefined;
+      releasesToProcess.push({
+        tag,
+        release,
+        zipAsset,
+        cachedPhpVersion: cachedPhpVersionValue
+      });
+
+      if (cachedPhpVersionValue === undefined) {
+        const composerPath = semverGte(tag, "0.5.0")
+          ? "composer.json"
+          : "src/composer.json";
+        releasesToFetch.push({ tag, composerPath });
+      }
+    }
+
+    // Single GraphQL request to fetch all missing PHP versions in one subrequest.
+    let batchPhpVersions = new Map<string, string>();
+    if (releasesToFetch.length > 0) {
+      try {
+        batchPhpVersions = await getBatchPhpVersions(
+          githubToken,
+          releasesToFetch
+        );
+        logInfo("versions", "Batch fetched PHP versions via GraphQL", {
+          requested: releasesToFetch.length,
+          resolved: batchPhpVersions.size
+        });
+      } catch (batchError) {
+        const githubError = classifyGitHubError(
+          batchError,
+          "https://api.github.com/graphql"
+        );
+        errors.push(githubError);
+        logWarn("versions", "Failed to batch fetch PHP versions", {
+          message: githubError.message,
+          count: releasesToFetch.length
+        });
+      }
+    }
+
+    const releaseEntries: [string, ReleaseDetails][] = releasesToProcess.map(
+      ({ tag, release, zipAsset, cachedPhpVersion }) => {
+        const phpVersion =
+          cachedPhpVersion !== undefined
+            ? cachedPhpVersion
+            : (batchPhpVersions.get(tag) ?? "");
 
         const releaseDetails: ReleaseDetails = {
           version: release.name || tag,
           released_on: release.published_at ?? "",
-          minimum_php_version: phpResult.version,
+          minimum_php_version: phpVersion,
           download_url: zipAsset.browser_download_url,
           size_bytes: zipAsset.size,
           is_prerelease: Boolean(release.prerelease),
@@ -425,14 +489,10 @@ export async function getReleases(
       }
     );
 
-    const releaseEntries = (await Promise.all(releasePromises)).filter(
-      (entry): entry is [string, ReleaseDetails] => entry !== null
-    );
-
     const sortedReleases = Object.fromEntries(
       releaseEntries.sort((a, b) => semverCompare(b[0], a[0]))
     );
-    releases = sortedReleases;
+    const releases = sortedReleases;
 
     if (Object.keys(releases).length > 0) {
       await cache.put(RELEASE_CACHE_KEY, JSON.stringify(releases), {
@@ -536,83 +596,50 @@ function parseCachedReleases(
   return null;
 }
 
-interface GetReleaseMinPhpVersionResult {
-  version: string;
-  error?: GitHubError;
+interface PhpVersionBatchItem {
+  tag: string;
+  composerPath: string;
 }
 
-export async function getReleaseMinPhpVersion(
+async function getBatchPhpVersions(
   githubToken: string,
-  version: string
-): Promise<GetReleaseMinPhpVersionResult> {
-  const composerPath = semverGte(version, "0.5.0")
-    ? "composer.json"
-    : "src/composer.json";
-  const url = `https://api.github.com/repos/FOSSBilling/FOSSBilling/contents/${composerPath}?ref=${version}`;
+  releases: PhpVersionBatchItem[]
+): Promise<Map<string, string>> {
+  if (releases.length === 0) return new Map();
 
-  try {
-    const result = await ghRequest(
-      "GET /repos/{owner}/{repo}/contents/{path}{?ref}",
-      {
-        owner: "FOSSBilling",
-        repo: "FOSSBilling",
-        path: composerPath,
-        ref: version,
-        headers: {
-          Authorization: `Bearer ${githubToken}`
-        }
-      }
-    );
+  const fields = releases
+    .map(({ tag, composerPath }, i) =>
+      `r${i}: object(expression: "${tag}:${composerPath}") { ... on Blob { text } }`
+    )
+    .join("\n");
 
-    const contentValue = result.data?.content;
-    if (typeof contentValue === "string" && contentValue) {
-      const content = new TextDecoder("utf-8").decode(
-        Uint8Array.from(atob(contentValue), (c) => c.charCodeAt(0))
-      );
-      const composerJson = JSON.parse(content);
-      if (composerJson.require && composerJson.require.php) {
-        return {
-          version: composerJson.require.php
-            .replace("^", "")
-            .replace(">=", "")
-            .trim()
+  const query = `{ repository(owner: "${REPO_OWNER}", name: "${REPO_NAME}") {\n${fields}\n} }`;
+
+  const data = await graphql<{
+    repository: Record<string, { text?: string } | null>;
+  }>(query, {
+    headers: { authorization: `Bearer ${githubToken}` }
+  });
+
+  const result = new Map<string, string>();
+
+  for (let i = 0; i < releases.length; i++) {
+    const { tag } = releases[i];
+    const blob = data.repository[`r${i}`];
+    if (blob?.text) {
+      try {
+        const composerJson = JSON.parse(blob.text) as {
+          require?: { php?: string };
         };
+        const phpRequirement = composerJson.require?.php;
+        if (phpRequirement) {
+          result.set(tag, phpRequirement.replace(/\^|>=/g, "").trim());
+        }
+      } catch {
+        // Ignore individual parse errors
       }
     }
-  } catch (error) {
-    const githubError = classifyGitHubError(error, url);
-
-    if (
-      githubError instanceof RateLimitError ||
-      githubError instanceof AuthError
-    ) {
-      logError("versions", "Critical GitHub API error fetching composer.json", {
-        version,
-        url,
-        message: githubError.message,
-        httpStatus: githubError.httpStatus
-      });
-    } else if (githubError instanceof NetworkError) {
-      logWarn("versions", "Network error fetching composer.json", {
-        version,
-        url,
-        message: githubError.message
-      });
-    } else {
-      logInfo("versions", "Unable to fetch composer.json", {
-        version,
-        url,
-        message: githubError.message
-      });
-    }
-
-    return {
-      version: "",
-      error: githubError
-    };
   }
 
-  return {
-    version: ""
-  };
+  return result;
 }

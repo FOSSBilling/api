@@ -9,19 +9,34 @@ import {
   mockGitHubReleases,
   mockComposerJson
 } from "../../../mocks/github-releases";
-import { suppressConsole } from "../../../utils/mock-helpers";
 import {
+  suppressConsole,
+  createGraphQLImplementation
+} from "../../../utils/mock-helpers";
+import {
+  MockGitHubGraphQL,
   MockGitHubRequest,
   ApiResponse,
   VersionsResponse,
   VersionResponse
 } from "../../../utils/test-types";
 
-vi.mock("@octokit/request", () => ({
-  request: vi.fn()
+vi.mock("@octokit/request", () => {
+  const endpoint = { DEFAULTS: {} };
+  const derivedFn = Object.assign(vi.fn(), { defaults: vi.fn(), endpoint });
+  const request = Object.assign(vi.fn(), {
+    defaults: vi.fn().mockReturnValue(derivedFn),
+    endpoint
+  });
+  return { request };
+});
+
+vi.mock("@octokit/graphql", () => ({
+  graphql: vi.fn()
 }));
 
 import { request as ghRequest } from "@octokit/request";
+import { graphql } from "@octokit/graphql";
 import { resetUpdateTokenCache } from "../../../../src/services/versions/v1/index";
 
 let restoreConsole: (() => void) | null = null;
@@ -39,12 +54,11 @@ describe("Versions API v1 - Error Handling", () => {
         if (route === "GET /repos/{owner}/{repo}/releases") {
           return { data: mockGitHubReleases };
         }
-        if (route === "GET /repos/{owner}/{repo}/contents/{path}{?ref}") {
-          const content = btoa(JSON.stringify(mockComposerJson));
-          return { data: { content } };
-        }
         throw new Error("Unexpected route");
       }
+    );
+    (vi.mocked(graphql) as unknown as MockGitHubGraphQL).mockImplementation(
+      createGraphQLImplementation(mockComposerJson)
     );
   });
 
@@ -398,10 +412,6 @@ describe("Versions API v1 - Error Handling", () => {
           if (route === "GET /repos/{owner}/{repo}/releases") {
             return { data: releasesWithInvalidSemver };
           }
-          if (route === "GET /repos/{owner}/{repo}/contents/{path}{?ref}") {
-            const content = btoa(JSON.stringify(mockComposerJson));
-            return { data: { content } };
-          }
           throw new Error("Unexpected route");
         }
       );
@@ -438,10 +448,6 @@ describe("Versions API v1 - Error Handling", () => {
         async (route: string) => {
           if (route === "GET /repos/{owner}/{repo}/releases") {
             return { data: incompleteReleases };
-          }
-          if (route === "GET /repos/{owner}/{repo}/contents/{path}{?ref}") {
-            const content = btoa(JSON.stringify(mockComposerJson));
-            return { data: { content } };
           }
           throw new Error("Unexpected route");
         }
@@ -481,10 +487,6 @@ describe("Versions API v1 - Error Handling", () => {
           if (route === "GET /repos/{owner}/{repo}/releases") {
             return { data: releasesWithoutTimestamp };
           }
-          if (route === "GET /repos/{owner}/{repo}/contents/{path}{?ref}") {
-            const content = btoa(JSON.stringify(mockComposerJson));
-            return { data: { content } };
-          }
           throw new Error("Unexpected route");
         }
       );
@@ -499,16 +501,8 @@ describe("Versions API v1 - Error Handling", () => {
 
   describe("Composer.json Errors", () => {
     it("should handle missing composer.json gracefully", async () => {
-      (vi.mocked(ghRequest) as MockGitHubRequest).mockImplementation(
-        async (route: string) => {
-          if (route === "GET /repos/{owner}/{repo}/releases") {
-            return { data: mockGitHubReleases };
-          }
-          if (route === "GET /repos/{owner}/{repo}/contents/{path}{?ref}") {
-            throw new Error("File not found");
-          }
-          throw new Error("Unexpected route");
-        }
+      (vi.mocked(graphql) as unknown as MockGitHubGraphQL).mockImplementation(
+        createGraphQLImplementation(null)
       );
 
       const ctx = createExecutionContext();
@@ -523,17 +517,8 @@ describe("Versions API v1 - Error Handling", () => {
     });
 
     it("should handle malformed composer.json", async () => {
-      (vi.mocked(ghRequest) as MockGitHubRequest).mockImplementation(
-        async (route: string) => {
-          if (route === "GET /repos/{owner}/{repo}/releases") {
-            return { data: mockGitHubReleases };
-          }
-          if (route === "GET /repos/{owner}/{repo}/contents/{path}{?ref}") {
-            const content = btoa("not valid json {{{");
-            return { data: { content } };
-          }
-          throw new Error("Unexpected route");
-        }
+      (vi.mocked(graphql) as unknown as MockGitHubGraphQL).mockImplementation(
+        createGraphQLImplementation(null, "not valid json {{{")
       );
 
       const ctx = createExecutionContext();
@@ -548,17 +533,8 @@ describe("Versions API v1 - Error Handling", () => {
     });
 
     it("should handle composer.json without php requirement", async () => {
-      (vi.mocked(ghRequest) as MockGitHubRequest).mockImplementation(
-        async (route: string) => {
-          if (route === "GET /repos/{owner}/{repo}/releases") {
-            return { data: mockGitHubReleases };
-          }
-          if (route === "GET /repos/{owner}/{repo}/contents/{path}{?ref}") {
-            const content = btoa(JSON.stringify({ require: {} }));
-            return { data: { content } };
-          }
-          throw new Error("Unexpected route");
-        }
+      (vi.mocked(graphql) as unknown as MockGitHubGraphQL).mockImplementation(
+        createGraphQLImplementation({ require: {} })
       );
 
       const ctx = createExecutionContext();

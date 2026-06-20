@@ -26,9 +26,36 @@ export function createMockFetchResponse(data: unknown, ok = true) {
   };
 }
 
+/**
+ * Returns a graphql mock implementation that builds a synthetic batch response
+ * from the aliases in the query. Pass null for composerJson to simulate missing
+ * files, or rawBlobText to return a specific string (e.g. malformed JSON).
+ */
+export function createGraphQLImplementation(
+  composerJson: Record<string, unknown> | null,
+  rawBlobText?: string
+) {
+  return async (query: string) => {
+    const repoData: Record<string, { text: string } | null> = {};
+    for (const [, alias] of query.matchAll(/(\w+): object\(expression:/g)) {
+      if (rawBlobText !== undefined) {
+        repoData[alias] = { text: rawBlobText };
+      } else {
+        repoData[alias] = composerJson
+          ? { text: JSON.stringify(composerJson) }
+          : null;
+      }
+    }
+    return { repository: repoData };
+  };
+}
+
 export function setupGitHubApiMock(
   ghRequest: {
     mockImplementation: (fn: (route: string) => Promise<unknown>) => void;
+  },
+  graphqlFn: {
+    mockImplementation: (fn: (query: string) => Promise<unknown>) => void;
   },
   githubReleases: unknown[],
   composerJson: Record<string, unknown>
@@ -37,14 +64,8 @@ export function setupGitHubApiMock(
     if (route === "GET /repos/{owner}/{repo}/releases") {
       return { data: githubReleases };
     }
-    if (route === "GET /repos/{owner}/{repo}/contents/{path}{?ref}") {
-      const content = btoa(JSON.stringify(composerJson));
-      return {
-        data: {
-          content: content
-        }
-      };
-    }
     throw new Error("Unexpected route");
   });
+
+  graphqlFn.mockImplementation(createGraphQLImplementation(composerJson));
 }
