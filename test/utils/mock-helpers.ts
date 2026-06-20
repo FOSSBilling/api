@@ -36,9 +36,8 @@ export function createGraphQLImplementation(
   rawBlobText?: string
 ) {
   return async (query: string) => {
-    const aliasMatches = [...query.matchAll(/(\w+): object\(expression:/g)];
     const repoData: Record<string, { text: string } | null> = {};
-    for (const [, alias] of aliasMatches) {
+    for (const [, alias] of query.matchAll(/(\w+): object\(expression:/g)) {
       if (rawBlobText !== undefined) {
         repoData[alias] = { text: rawBlobText };
       } else {

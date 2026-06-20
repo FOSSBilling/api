@@ -26,11 +26,12 @@ import {
   getMostCriticalError
 } from "../../../lib/github-errors";
 
+const REPO_OWNER = "FOSSBilling";
+const REPO_NAME = "FOSSBilling";
 const RELEASE_CACHE_KEY = "gh-fossbilling-releases";
 const RELEASES_CACHE_CONTROL = "max-age: 86400";
 const RELEASE_CACHE_TTL = 86400;
-const RELEASES_URL =
-  "https://api.github.com/repos/FOSSBilling/FOSSBilling/releases";
+const RELEASES_URL = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases`;
 type VersionsEnv = { Bindings: CloudflareBindings };
 
 const UPDATE_TOKEN_CACHE_TTL_MS = 60_000;
@@ -364,8 +365,8 @@ export async function getReleases(
 
   try {
     const result = await ghRequest("GET /repos/{owner}/{repo}/releases", {
-      owner: "FOSSBilling",
-      repo: "FOSSBilling",
+      owner: REPO_OWNER,
+      repo: REPO_NAME,
       headers: {
         Authorization: `Bearer ${githubToken}`
       },
@@ -598,20 +599,14 @@ async function getBatchPhpVersions(
 ): Promise<Map<string, string>> {
   if (releases.length === 0) return new Map();
 
-  const aliases = releases.map(({ tag, composerPath }) => ({
-    tag,
-    alias: `v${tag.replace(/[^a-zA-Z0-9]/g, "_")}`,
-    composerPath
-  }));
-
-  const fields = aliases
-    .map(
-      ({ alias, tag, composerPath }) =>
-        `${alias}: object(expression: "${tag}:${composerPath}") { ... on Blob { text } }`
-    )
+  const fields = releases
+    .map(({ tag, composerPath }) => {
+      const alias = `v${tag.replace(/[^a-zA-Z0-9]/g, "_")}`;
+      return `${alias}: object(expression: "${tag}:${composerPath}") { ... on Blob { text } }`;
+    })
     .join("\n");
 
-  const query = `{ repository(owner: "FOSSBilling", name: "FOSSBilling") {\n${fields}\n} }`;
+  const query = `{ repository(owner: "${REPO_OWNER}", name: "${REPO_NAME}") {\n${fields}\n} }`;
 
   const data = await graphql<{
     repository: Record<string, { text?: string } | null>;
@@ -621,7 +616,8 @@ async function getBatchPhpVersions(
 
   const result = new Map<string, string>();
 
-  for (const { tag, alias } of aliases) {
+  for (const { tag } of releases) {
+    const alias = `v${tag.replace(/[^a-zA-Z0-9]/g, "_")}`;
     const blob = data.repository[alias];
     if (blob?.text) {
       try {
@@ -639,85 +635,4 @@ async function getBatchPhpVersions(
   }
 
   return result;
-}
-
-interface GetReleaseMinPhpVersionResult {
-  version: string;
-  error?: GitHubError;
-}
-
-export async function getReleaseMinPhpVersion(
-  githubToken: string,
-  version: string
-): Promise<GetReleaseMinPhpVersionResult> {
-  const composerPath = semverGte(version, "0.5.0")
-    ? "composer.json"
-    : "src/composer.json";
-  const url = `https://api.github.com/repos/FOSSBilling/FOSSBilling/contents/${composerPath}?ref=${version}`;
-
-  try {
-    const result = await ghRequest(
-      "GET /repos/{owner}/{repo}/contents/{path}{?ref}",
-      {
-        owner: "FOSSBilling",
-        repo: "FOSSBilling",
-        path: composerPath,
-        ref: version,
-        headers: {
-          Authorization: `Bearer ${githubToken}`
-        }
-      }
-    );
-
-    const contentValue = result.data?.content;
-    if (typeof contentValue === "string" && contentValue) {
-      const content = new TextDecoder("utf-8").decode(
-        Uint8Array.from(atob(contentValue), (c) => c.charCodeAt(0))
-      );
-      const composerJson = JSON.parse(content);
-      if (composerJson.require && composerJson.require.php) {
-        return {
-          version: composerJson.require.php
-            .replace("^", "")
-            .replace(">=", "")
-            .trim()
-        };
-      }
-    }
-  } catch (error) {
-    const githubError = classifyGitHubError(error, url);
-
-    if (
-      githubError instanceof RateLimitError ||
-      githubError instanceof AuthError
-    ) {
-      logError("versions", "Critical GitHub API error fetching composer.json", {
-        version,
-        url,
-        message: githubError.message,
-        httpStatus: githubError.httpStatus
-      });
-    } else if (githubError instanceof NetworkError) {
-      logWarn("versions", "Network error fetching composer.json", {
-        version,
-        url,
-        message: githubError.message
-      });
-    } else {
-      logInfo("versions", "Unable to fetch composer.json", {
-        version,
-        url,
-        message: githubError.message
-      });
-    }
-
-    return {
-      version: "",
-      error: githubError
-    };
-  }
-
-  return {
-    version: ""
-  };
 }
