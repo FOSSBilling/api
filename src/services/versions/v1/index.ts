@@ -20,7 +20,6 @@ import {
   GitHubError,
   AuthError,
   RateLimitError,
-  NetworkError,
   ValidationError,
   classifyGitHubError,
   getMostCriticalError
