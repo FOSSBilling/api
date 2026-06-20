@@ -424,9 +424,18 @@ export async function getReleases(
       }
 
       const cachedPhpVersion = existingReleases?.[tag]?.minimum_php_version;
-      releasesToProcess.push({ tag, release, zipAsset, cachedPhpVersion });
+      const cachedPhpVersionValue =
+        typeof cachedPhpVersion === "string" && cachedPhpVersion.trim() !== ""
+          ? cachedPhpVersion
+          : undefined;
+      releasesToProcess.push({
+        tag,
+        release,
+        zipAsset,
+        cachedPhpVersion: cachedPhpVersionValue
+      });
 
-      if (cachedPhpVersion === undefined) {
+      if (cachedPhpVersionValue === undefined) {
         const composerPath = semverGte(tag, "0.5.0")
           ? "composer.json"
           : "src/composer.json";
