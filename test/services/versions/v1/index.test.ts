@@ -14,22 +14,34 @@ import {
 import {
   suppressConsole,
   setupGitHubApiMock,
-  createGraphQLFetchMock
+  createGraphQLImplementation
 } from "../../../utils/mock-helpers";
 import {
   ApiResponse,
   ChangelogResponse,
+  MockGitHubGraphQL,
   MockGitHubRequest,
   UpdateResponse,
   VersionInfo,
   VersionsResponse
 } from "../../../utils/test-types";
 
-vi.mock("@octokit/request", () => ({
-  request: vi.fn()
+vi.mock("@octokit/request", () => {
+  const endpoint = { DEFAULTS: {} };
+  const derivedFn = Object.assign(vi.fn(), { defaults: vi.fn(), endpoint });
+  const request = Object.assign(vi.fn(), {
+    defaults: vi.fn().mockReturnValue(derivedFn),
+    endpoint
+  });
+  return { request };
+});
+
+vi.mock("@octokit/graphql", () => ({
+  graphql: vi.fn()
 }));
 
 import { request as ghRequest } from "@octokit/request";
+import { graphql } from "@octokit/graphql";
 import { resetUpdateTokenCache } from "../../../../src/services/versions/v1/index";
 
 let restoreConsole: (() => void) | null = null;
@@ -47,6 +59,7 @@ describe("Versions API v1", () => {
     vi.clearAllMocks();
     setupGitHubApiMock(
       vi.mocked(ghRequest) as MockGitHubRequest,
+      vi.mocked(graphql) as unknown as MockGitHubGraphQL,
       mockGitHubReleases,
       mockComposerJson
     );
@@ -61,7 +74,6 @@ describe("Versions API v1", () => {
       env.CACHE_KV.put = originalKVPut;
       originalKVPut = null;
     }
-    vi.unstubAllGlobals();
   });
 
   describe("GET /", () => {
@@ -473,7 +485,9 @@ describe("Versions API v1", () => {
 
     it("should handle missing composer.json", async () => {
       // All blobs return null (no composer.json found for any release)
-      vi.stubGlobal("fetch", createGraphQLFetchMock(null));
+      (vi.mocked(graphql) as unknown as MockGitHubGraphQL).mockImplementation(
+        createGraphQLImplementation(null)
+      );
 
       const ctx = createExecutionContext();
       const response = await app.request("/versions/v1/0.5.0", {}, env, ctx);

@@ -27,50 +27,36 @@ export function createMockFetchResponse(data: unknown, ok = true) {
 }
 
 /**
- * Creates a fetch mock that handles GitHub GraphQL requests for PHP version
- * batch fetching. Parses aliases from the query and maps each to the provided
- * composerJson content (or null to simulate missing files).
- * Pass rawBlobText to return a specific string as the blob text (e.g. malformed JSON).
+ * Returns a graphql mock implementation that builds a synthetic batch response
+ * from the aliases in the query. Pass null for composerJson to simulate missing
+ * files, or rawBlobText to return a specific string (e.g. malformed JSON).
  */
-export function createGraphQLFetchMock(
+export function createGraphQLImplementation(
   composerJson: Record<string, unknown> | null,
   rawBlobText?: string
-): ReturnType<typeof vi.fn> {
-  return vi.fn(async (url: RequestInfo | URL, options?: RequestInit) => {
-    const urlStr = typeof url === "string" ? url : url.toString();
-
-    if (urlStr.includes("api.github.com/graphql")) {
-      const body = JSON.parse((options?.body as string) || "{}") as {
-        query?: string;
-      };
-      const query = body.query ?? "";
-      const aliasMatches = [...query.matchAll(/(\w+): object\(expression:/g)];
-
-      const repoData: Record<string, { text: string } | null> = {};
-      for (const [, alias] of aliasMatches) {
-        if (rawBlobText !== undefined) {
-          repoData[alias] = { text: rawBlobText };
-        } else {
-          repoData[alias] = composerJson
-            ? { text: JSON.stringify(composerJson) }
-            : null;
-        }
+) {
+  return async (query: string) => {
+    const aliasMatches = [...query.matchAll(/(\w+): object\(expression:/g)];
+    const repoData: Record<string, { text: string } | null> = {};
+    for (const [, alias] of aliasMatches) {
+      if (rawBlobText !== undefined) {
+        repoData[alias] = { text: rawBlobText };
+      } else {
+        repoData[alias] = composerJson
+          ? { text: JSON.stringify(composerJson) }
+          : null;
       }
-
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({ data: { repository: repoData } })
-      };
     }
-
-    throw new Error(`Unexpected fetch call to ${urlStr}`);
-  });
+    return { repository: repoData };
+  };
 }
 
 export function setupGitHubApiMock(
   ghRequest: {
     mockImplementation: (fn: (route: string) => Promise<unknown>) => void;
+  },
+  graphqlFn: {
+    mockImplementation: (fn: (query: string) => Promise<unknown>) => void;
   },
   githubReleases: unknown[],
   composerJson: Record<string, unknown>
@@ -82,5 +68,5 @@ export function setupGitHubApiMock(
     throw new Error("Unexpected route");
   });
 
-  vi.stubGlobal("fetch", createGraphQLFetchMock(composerJson));
+  graphqlFn.mockImplementation(createGraphQLImplementation(composerJson));
 }

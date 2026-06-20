@@ -122,6 +122,11 @@ export interface MockGitHubRequest {
   mockRejectedValueOnce: (value: unknown) => void;
 }
 
+export interface MockGitHubGraphQL {
+  mockImplementation: (fn: (query: string) => Promise<unknown>) => void;
+  mockRejectedValueOnce: (value: unknown) => void;
+}
+
 // Environment Types
 export interface TestEnv {
   CACHE_KV: {

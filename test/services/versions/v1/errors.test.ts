@@ -11,20 +11,32 @@ import {
 } from "../../../mocks/github-releases";
 import {
   suppressConsole,
-  createGraphQLFetchMock
+  createGraphQLImplementation
 } from "../../../utils/mock-helpers";
 import {
+  MockGitHubGraphQL,
   MockGitHubRequest,
   ApiResponse,
   VersionsResponse,
   VersionResponse
 } from "../../../utils/test-types";
 
-vi.mock("@octokit/request", () => ({
-  request: vi.fn()
+vi.mock("@octokit/request", () => {
+  const endpoint = { DEFAULTS: {} };
+  const derivedFn = Object.assign(vi.fn(), { defaults: vi.fn(), endpoint });
+  const request = Object.assign(vi.fn(), {
+    defaults: vi.fn().mockReturnValue(derivedFn),
+    endpoint
+  });
+  return { request };
+});
+
+vi.mock("@octokit/graphql", () => ({
+  graphql: vi.fn()
 }));
 
 import { request as ghRequest } from "@octokit/request";
+import { graphql } from "@octokit/graphql";
 import { resetUpdateTokenCache } from "../../../../src/services/versions/v1/index";
 
 let restoreConsole: (() => void) | null = null;
@@ -45,7 +57,9 @@ describe("Versions API v1 - Error Handling", () => {
         throw new Error("Unexpected route");
       }
     );
-    vi.stubGlobal("fetch", createGraphQLFetchMock(mockComposerJson));
+    (vi.mocked(graphql) as unknown as MockGitHubGraphQL).mockImplementation(
+      createGraphQLImplementation(mockComposerJson)
+    );
   });
 
   afterEach(() => {
@@ -53,7 +67,6 @@ describe("Versions API v1 - Error Handling", () => {
       restoreConsole();
       restoreConsole = null;
     }
-    vi.unstubAllGlobals();
   });
 
   describe("Update Endpoint Authentication", () => {
@@ -488,8 +501,9 @@ describe("Versions API v1 - Error Handling", () => {
 
   describe("Composer.json Errors", () => {
     it("should handle missing composer.json gracefully", async () => {
-      // All blobs return null (file not found for all releases)
-      vi.stubGlobal("fetch", createGraphQLFetchMock(null));
+      (vi.mocked(graphql) as unknown as MockGitHubGraphQL).mockImplementation(
+        createGraphQLImplementation(null)
+      );
 
       const ctx = createExecutionContext();
       const response = await app.request("/versions/v1/0.5.0", {}, env, ctx);
@@ -503,9 +517,8 @@ describe("Versions API v1 - Error Handling", () => {
     });
 
     it("should handle malformed composer.json", async () => {
-      vi.stubGlobal(
-        "fetch",
-        createGraphQLFetchMock(null, "not valid json {{{")
+      (vi.mocked(graphql) as unknown as MockGitHubGraphQL).mockImplementation(
+        createGraphQLImplementation(null, "not valid json {{{")
       );
 
       const ctx = createExecutionContext();
@@ -520,7 +533,9 @@ describe("Versions API v1 - Error Handling", () => {
     });
 
     it("should handle composer.json without php requirement", async () => {
-      vi.stubGlobal("fetch", createGraphQLFetchMock({ require: {} }));
+      (vi.mocked(graphql) as unknown as MockGitHubGraphQL).mockImplementation(
+        createGraphQLImplementation({ require: {} })
+      );
 
       const ctx = createExecutionContext();
       const response = await app.request("/versions/v1/0.5.0", {}, env, ctx);

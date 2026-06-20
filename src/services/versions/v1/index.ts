@@ -3,6 +3,7 @@ import { Hono, type Context, type Handler } from "hono";
 import { cors } from "hono/cors";
 import { etag } from "hono/etag";
 import { prettyJSON } from "hono/pretty-json";
+import { graphql } from "@octokit/graphql";
 import { request as ghRequest } from "@octokit/request";
 import { trimTrailingSlash } from "hono/trailing-slash";
 import {
@@ -612,54 +613,16 @@ async function getBatchPhpVersions(
 
   const query = `{ repository(owner: "FOSSBilling", name: "FOSSBilling") {\n${fields}\n} }`;
 
-  const response = await fetch("https://api.github.com/graphql", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${githubToken}`,
-      "Content-Type": "application/json",
-      "User-Agent": "fossbilling-api"
-    },
-    body: JSON.stringify({ query })
+  const data = await graphql<{
+    repository: Record<string, { text?: string } | null>;
+  }>(query, {
+    headers: { authorization: `Bearer ${githubToken}` }
   });
 
-  if (response.status === 401) {
-    throw Object.assign(new Error("Bad credentials"), { status: 401 });
-  }
-
-  if (response.status === 403) {
-    throw Object.assign(new Error("GitHub API rate limit exceeded"), {
-      status: 403
-    });
-  }
-
-  if (!response.ok) {
-    throw Object.assign(new Error(`GitHub API error: ${response.status}`), {
-      status: response.status
-    });
-  }
-
-  type GraphQLResponse = {
-    data?: { repository?: Record<string, { text?: string } | null> };
-    errors?: Array<{ message: string }>;
-  };
-
-  const data = (await response.json()) as GraphQLResponse;
-
-  if (data.errors?.length) {
-    logWarn(
-      "versions",
-      "GraphQL response contained errors when fetching PHP versions",
-      {
-        errors: data.errors.map((e) => e.message)
-      }
-    );
-  }
-
-  const repoData = data.data?.repository;
   const result = new Map<string, string>();
 
   for (const { tag, alias } of aliases) {
-    const blob = repoData?.[alias];
+    const blob = data.repository[alias];
     if (blob?.text) {
       try {
         const composerJson = JSON.parse(blob.text) as {

@@ -11,15 +11,27 @@ import { mockD1Database } from "../utils/d1-mock";
 import {
   ApiResponse,
   CentralAlertsResponse,
+  MockGitHubGraphQL,
   MockGitHubRequest,
   VersionsResponse
 } from "../utils/test-types";
 
-vi.mock("@octokit/request", () => ({
-  request: vi.fn()
+vi.mock("@octokit/request", () => {
+  const endpoint = { DEFAULTS: {} };
+  const derivedFn = Object.assign(vi.fn(), { defaults: vi.fn(), endpoint });
+  const request = Object.assign(vi.fn(), {
+    defaults: vi.fn().mockReturnValue(derivedFn),
+    endpoint
+  });
+  return { request };
+});
+
+vi.mock("@octokit/graphql", () => ({
+  graphql: vi.fn()
 }));
 
 import { request as ghRequest } from "@octokit/request";
+import { graphql } from "@octokit/graphql";
 import { resetUpdateTokenCache } from "../../src/services/versions/v1/index";
 
 describe("FOSSBilling API Worker - Full App Integration", () => {
@@ -33,6 +45,7 @@ describe("FOSSBilling API Worker - Full App Integration", () => {
     vi.clearAllMocks();
     setupGitHubApiMock(
       vi.mocked(ghRequest) as MockGitHubRequest,
+      vi.mocked(graphql) as unknown as MockGitHubGraphQL,
       mockGitHubReleases,
       mockComposerJson
     );

@@ -13,13 +13,24 @@ import {
   suppressConsole,
   setupGitHubApiMock
 } from "../../../utils/mock-helpers";
-import { MockGitHubRequest } from "../../../utils/test-types";
+import { MockGitHubGraphQL, MockGitHubRequest } from "../../../utils/test-types";
 
-vi.mock("@octokit/request", () => ({
-  request: vi.fn()
+vi.mock("@octokit/request", () => {
+  const endpoint = { DEFAULTS: {} };
+  const derivedFn = Object.assign(vi.fn(), { defaults: vi.fn(), endpoint });
+  const request = Object.assign(vi.fn(), {
+    defaults: vi.fn().mockReturnValue(derivedFn),
+    endpoint
+  });
+  return { request };
+});
+
+vi.mock("@octokit/graphql", () => ({
+  graphql: vi.fn()
 }));
 
 import { request as ghRequest } from "@octokit/request";
+import { graphql } from "@octokit/graphql";
 import { resetUpdateTokenCache } from "../../../../src/services/versions/v1/index";
 
 let restoreConsole: (() => void) | null = null;
@@ -34,6 +45,7 @@ describe("Versions API v1 - Middleware", () => {
     vi.clearAllMocks();
     setupGitHubApiMock(
       vi.mocked(ghRequest) as MockGitHubRequest,
+      vi.mocked(graphql) as unknown as MockGitHubGraphQL,
       mockGitHubReleases,
       mockComposerJson
     );
@@ -44,7 +56,6 @@ describe("Versions API v1 - Middleware", () => {
       restoreConsole();
       restoreConsole = null;
     }
-    vi.unstubAllGlobals();
   });
 
   describe("CORS Middleware", () => {
