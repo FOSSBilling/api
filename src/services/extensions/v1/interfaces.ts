@@ -63,8 +63,12 @@ export function getLatestRelease(extension: Extension): Release | undefined {
   let latestRelease = extension.releases[0];
   for (let i = 1; i < extension.releases.length; i++) {
     const release = extension.releases[i];
-    if (gt(release.tag, latestRelease.tag)) {
-      latestRelease = release;
+    try {
+      if (gt(release.tag, latestRelease.tag)) {
+        latestRelease = release;
+      }
+    } catch {
+      // Ignore invalid semver tags
     }
   }
 
@@ -73,8 +77,13 @@ export function getLatestRelease(extension: Extension): Release | undefined {
 
 export function sortReleasesDescending(releases: Release[]): Release[] {
   return [...releases].sort((a, b) => {
-    if (gt(a.tag, b.tag)) return -1;
-    if (lt(a.tag, b.tag)) return 1;
-    return 0;
+    try {
+      if (gt(a.tag, b.tag)) return -1;
+      if (lt(a.tag, b.tag)) return 1;
+      return 0;
+    } catch {
+      // Keep relative order when tags can't be compared as semver
+      return 0;
+    }
   });
 }
