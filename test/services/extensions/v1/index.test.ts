@@ -9,9 +9,12 @@ import app from "../../../../src/app";
 type ExtensionRow = {
   id: string;
   type: string;
+  author_id: string;
+  author_type: string;
+  author_name: string;
+  author_url: string | null;
   name: string;
   description: string;
-  author: string;
   releases: string;
   website: string;
   license: string;
@@ -26,14 +29,12 @@ const testExtensions: ExtensionRow[] = [
   {
     id: "Example",
     type: "mod",
+    author_id: "fossbilling",
+    author_type: "organization",
+    author_name: "fossbilling",
+    author_url: "https://fossbilling.org",
     name: "Example Module",
     description: "An example module for developers.",
-    author: JSON.stringify({
-      type: "organization",
-      name: "fossbilling",
-      id: "fossbilling",
-      URL: "https://fossbilling.org"
-    }),
     releases: JSON.stringify([
       {
         tag: "0.0.5",
@@ -66,14 +67,12 @@ const testExtensions: ExtensionRow[] = [
   {
     id: "TestTheme",
     type: "theme",
+    author_id: "fossbilling",
+    author_type: "organization",
+    author_name: "fossbilling",
+    author_url: "https://fossbilling.org",
     name: "Test Theme",
     description: "A test theme.",
-    author: JSON.stringify({
-      type: "organization",
-      name: "fossbilling",
-      id: "fossbilling",
-      URL: "https://fossbilling.org"
-    }),
     releases: JSON.stringify([
       {
         tag: "1.0.0",
@@ -105,7 +104,7 @@ function makeD1Mock(): D1Database {
         async all<T = unknown>(): Promise<D1Result<T>> {
           let rows = [...testExtensions];
 
-          if (query.includes("WHERE type = ?") && boundParams[0]) {
+          if (query.includes("WHERE e.type = ?") && boundParams[0]) {
             rows = rows.filter((r) => r.type === boundParams[0]);
           }
 
@@ -126,7 +125,7 @@ function makeD1Mock(): D1Database {
         },
 
         async first<T = unknown>(): Promise<T | null> {
-          if (query.includes("LOWER(id) = LOWER(?)") && boundParams[0]) {
+          if (query.includes("LOWER(e.id) = LOWER(?)") && boundParams[0]) {
             const id = String(boundParams[0]).toLowerCase();
             const found = testExtensions.find(
               (r) => r.id.toLowerCase() === id
