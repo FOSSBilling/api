@@ -33,9 +33,10 @@ extensionsV1.get("/:id/badges/:type", async (c) => {
 
   const { data: extension, error } = await db.getExtensionById(id);
   if (error || !extension) {
+    const status = error?.code === "NOT_FOUND" ? 404 : 500;
     return c.json(
       { error: { message: error?.message ?? "Extension not found" } },
-      500
+      status
     );
   }
 
@@ -82,9 +83,10 @@ extensionsV1.get("/:id/version", async (c) => {
 
   const { data: extension, error } = await db.getExtensionById(id);
   if (error || !extension) {
+    const status = error?.code === "NOT_FOUND" ? 404 : 500;
     return c.json(
       { error: { message: error?.message ?? "Extension not found" } },
-      500
+      status
     );
   }
 
@@ -104,9 +106,10 @@ extensionsV1.get("/:id", async (c) => {
 
   const { data: extension, error } = await db.getExtensionById(id);
   if (error || !extension) {
+    const status = error?.code === "NOT_FOUND" ? 404 : 500;
     return c.json(
       { error: { message: error?.message ?? "Extension not found" } },
-      500
+      status
     );
   }
 

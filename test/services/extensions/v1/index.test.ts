@@ -243,12 +243,12 @@ describe("Extensions API v1", () => {
       expect(data.result.id).toBe("Example");
     });
 
-    it("should return 500 for unknown extension", async () => {
+    it("should return 404 for unknown extension", async () => {
       const ctx = createExecutionContext();
       const res = await app.request("/extensions/v1/nonexistent", {}, env, ctx);
       await waitOnExecutionContext(ctx);
 
-      expect(res.status).toBe(500);
+      expect(res.status).toBe(404);
       const data = await res.json() as { error: { message: string } };
       expect(data.error.message).toContain("nonexistent");
     });
@@ -275,12 +275,12 @@ describe("Extensions API v1", () => {
       expect(text).toBe("0.0.5");
     });
 
-    it("should return 500 for unknown extension", async () => {
+    it("should return 404 for unknown extension", async () => {
       const ctx = createExecutionContext();
       const res = await app.request("/extensions/v1/nonexistent/version", {}, env, ctx);
       await waitOnExecutionContext(ctx);
 
-      expect(res.status).toBe(500);
+      expect(res.status).toBe(404);
     });
   });
 
@@ -331,7 +331,7 @@ describe("Extensions API v1", () => {
       expect(svg).toContain("<svg");
     });
 
-    it("should return 500 for unknown extension", async () => {
+    it("should return 404 for unknown extension", async () => {
       const ctx = createExecutionContext();
       const res = await app.request(
         "/extensions/v1/nonexistent/badges/version",
@@ -341,7 +341,7 @@ describe("Extensions API v1", () => {
       );
       await waitOnExecutionContext(ctx);
 
-      expect(res.status).toBe(500);
+      expect(res.status).toBe(404);
     });
   });
 });
