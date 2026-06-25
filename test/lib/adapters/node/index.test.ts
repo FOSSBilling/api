@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { createNodeBindings } from "../../../../src/lib/adapters/node/index";
+import { createNodeBindings, SQLiteAdapter } from "../../../../src/lib/adapters/node/index";
 
 describe("createNodeBindings", () => {
   it("should create bindings with default paths", () => {
@@ -7,7 +7,7 @@ describe("createNodeBindings", () => {
 
     expect(bindings).toBeDefined();
     expect(bindings.caches).toBeDefined();
-    expect(bindings.databases).toEqual({});
+    expect(bindings.databases.DB_EXTENSIONS).toBeInstanceOf(SQLiteAdapter);
     expect(bindings.environment).toBeDefined();
   });
 
