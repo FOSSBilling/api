@@ -29,6 +29,10 @@
     {
       "binding": "DB_CENTRAL_ALERTS",
       "database_id": "3a47f7fd-5eda-4754-9594-9de809ad7823"
+    },
+    {
+      "binding": "DB_EXTENSIONS",
+      "database_id": "00000000-0000-0000-0000-000000000000"
     }
   ],
   "kv_namespaces": [

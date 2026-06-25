@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { contextStorage } from "hono/context-storage";
 import { HTTPException } from "hono/http-exception";
 import centralAlertsV1 from "../services/central-alerts/v1";
+import extensionsV1 from "../services/extensions/v1";
 import versionsV1 from "../services/versions/v1";
 import statsV1 from "../services/stats/v1";
 import { platformMiddleware } from "../lib/middleware";
@@ -19,6 +20,7 @@ app.use("*", async (c, next) => {
 });
 
 app.route("/central-alerts/v1", centralAlertsV1);
+app.route("/extensions/v1", extensionsV1);
 app.route("/versions/v1", versionsV1);
 app.route("/stats/v1", statsV1);
 

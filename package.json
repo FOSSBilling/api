@@ -20,6 +20,7 @@
   "dependencies": {
     "@octokit/graphql": "^9.0.3",
     "@octokit/request": "^10.0.2",
+    "badge-maker": "^6.0.0",
     "hono": "^4.11.4",
     "semver": "^7.7.2"
   },

@@ -8,7 +8,8 @@ export function createCloudflareBindings(
 ): IPlatformBindings {
   return {
     databases: {
-      DB_CENTRAL_ALERTS: new CloudflareD1Adapter(env.DB_CENTRAL_ALERTS)
+      DB_CENTRAL_ALERTS: new CloudflareD1Adapter(env.DB_CENTRAL_ALERTS),
+      DB_EXTENSIONS: new CloudflareD1Adapter(env.DB_EXTENSIONS)
     },
     caches: {
       CACHE_KV: new CloudflareKVAdapter(env.CACHE_KV),
