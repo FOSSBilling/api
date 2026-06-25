@@ -15,6 +15,14 @@ export default defineConfig(
     }
   },
   {
+    rules: {
+      "@typescript-eslint/no-unused-vars": ["error", {
+        argsIgnorePattern: "^_",
+        varsIgnorePattern: "^_"
+      }]
+    }
+  },
+  {
     files: ["**/*.config.ts", "worker-configuration.d.ts"],
     extends: [tseslint.configs.disableTypeChecked]
   },
