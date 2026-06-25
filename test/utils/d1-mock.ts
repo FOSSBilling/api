@@ -308,21 +308,18 @@ export class MockD1Database implements D1Database {
   }
 
   batch<T = unknown>(
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     _statements: D1PreparedStatement[]
   ): Promise<D1Result<T>[]> {
     throw notImplementedInMock("batch");
   }
 
   exec(
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     _query: string
   ): Promise<D1ExecResult> {
     throw notImplementedInMock("exec");
   }
 
   withSession(
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     _constraintOrBookmark?: string
   ): D1DatabaseSession {
     throw notImplementedInMock("withSession");

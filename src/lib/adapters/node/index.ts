@@ -1,6 +1,7 @@
 import { IPlatformBindings } from "../../interfaces";
 import { createMemoryCache, createFileCache } from "./cache";
 import { NodeEnvironmentAdapter } from "./environment";
+import { createDefaultAdapter } from "./database";
 
 export function createNodeBindings(cacheDbPath?: string): IPlatformBindings {
   const cacheKv = cacheDbPath
@@ -11,7 +12,9 @@ export function createNodeBindings(cacheDbPath?: string): IPlatformBindings {
     : createMemoryCache();
 
   return {
-    databases: {},
+    databases: {
+      DB_EXTENSIONS: createDefaultAdapter()
+    },
     caches: {
       CACHE_KV: cacheKv,
       AUTH_KV: authKv
