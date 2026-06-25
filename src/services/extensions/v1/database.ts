@@ -1,6 +1,15 @@
 import { DatabaseResult, IDatabase } from "../../../lib/interfaces";
 import { Extension, Release, Author, Repository, sortReleasesDescending } from "./interfaces";
 
+const SELECT_EXTENSIONS = `
+  SELECT e.id, e.type, e.author_id,
+         a.type AS author_type, a.name AS author_name, a.url AS author_url,
+         e.name, e.description, e.releases, e.website, e.license,
+         e.icon_url, e.readme, e.source, e.version, e.download_url
+  FROM extensions e
+  LEFT JOIN authors a ON e.author_id = a.id
+`;
+
 export class ExtensionsDatabase {
   private db: IDatabase;
 
@@ -10,8 +19,8 @@ export class ExtensionsDatabase {
 
   async getAllExtensions(type?: string): Promise<DatabaseResult<Extension[]>> {
     const query = type
-      ? `SELECT * FROM extensions WHERE type = ?`
-      : `SELECT * FROM extensions`;
+      ? `${SELECT_EXTENSIONS} WHERE e.type = ?`
+      : SELECT_EXTENSIONS;
 
     let result;
     try {
@@ -44,7 +53,7 @@ export class ExtensionsDatabase {
   }
 
   async getExtensionById(id: string): Promise<DatabaseResult<Extension>> {
-    const query = `SELECT * FROM extensions WHERE LOWER(id) = LOWER(?)`;
+    const query = `${SELECT_EXTENSIONS} WHERE LOWER(e.id) = LOWER(?)`;
 
     let result;
     try {
@@ -94,11 +103,12 @@ function parseExtensionRow(row: Record<string, unknown>): Extension {
     type: row.type as Extension["type"],
     name: row.name as string,
     description: row.description as string,
-    author: parseJSON<Author>(row.author, {
-      type: "user",
-      name: "",
-      id: "" as Lowercase<string>
-    }),
+    author: {
+      type: (row.author_type as "organization" | "user") ?? "user",
+      name: (row.author_name as string) ?? "",
+      id: (row.author_id as Lowercase<string>) ?? ("" as Lowercase<string>),
+      URL: row.author_url as string | undefined
+    } as Author,
     releases: sortReleasesDescending(releases),
     website: row.website as string,
     license: parseJSON(row.license, { name: "" }),
