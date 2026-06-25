@@ -107,12 +107,12 @@ function parseExtensionRow(row: Record<string, unknown>): Extension {
       type: (row.author_type as "organization" | "user") ?? "user",
       name: (row.author_name as string) ?? "",
       id: (row.author_id as Lowercase<string>) ?? ("" as Lowercase<string>),
-      URL: row.author_url as string | undefined
+      URL: typeof row.author_url === "string" ? row.author_url : undefined
     } as Author,
     releases: sortReleasesDescending(releases),
     website: row.website as string,
     license: parseJSON(row.license, { name: "" }),
-    icon_url: row.icon_url as string | undefined,
+    icon_url: typeof row.icon_url === "string" ? row.icon_url : undefined,
     readme: row.readme as string,
     source: parseJSON<Repository>(row.source, { type: "custom", repo: "" }),
     version: row.version as string,
