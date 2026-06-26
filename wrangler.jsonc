@@ -1,12 +1,9 @@
-/**
- * https://developers.cloudflare.com/workers/wrangler/configuration/
- */
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "api",
   "main": "src/app/index.ts",
+  "compatibility_date": "2026-06-24",
   "compatibility_flags": ["nodejs_compat"],
-  "compatibility_date": "2026-04-21",
   "observability": {
     "logs": {
       "enabled": true
@@ -21,10 +18,13 @@
   },
   "preview_urls": true,
   "keep_vars": true,
-  /**
-   * Bindings
-   * https://developers.cloudflare.com/workers/runtime-apis/bindings/
-   */
+  "routes": [
+    {
+      "pattern": "api.fossbilling.net",
+      "zone_name": "fossbilling.net",
+      "custom_domain": true
+    }
+  ],
   "d1_databases": [
     {
       "binding": "DB_CENTRAL_ALERTS",
@@ -44,30 +44,5 @@
       "binding": "CACHE_KV",
       "id": "0771957093ae481b9cd974ffa83f8263"
     }
-  ],
-  "routes": [
-    {
-      "pattern": "api.fossbilling.net",
-      "zone_name": "fossbilling.net",
-      "custom_domain": true
-    }
   ]
-  /**
-   * Environment Variables
-   */
-  // "vars": { "MY_VARIABLE": "production_value" },
-  /**
-   * Note: Use secrets to store sensitive data.
-   * https://developers.cloudflare.com/workers/configuration/secrets/
-   */
-  /**
-   * Static Assets
-   * https://developers.cloudflare.com/workers/static-assets/binding/
-   */
-  // "assets": { "directory": "./public/", "binding": "ASSETS" },
-  /**
-   * Service Bindings (communicate between multiple Workers)
-   * https://developers.cloudflare.com/workers/wrangler/configuration/#service-bindings
-   */
-  // "services": [{ "binding": "MY_SERVICE", "service": "my-service" }]
 }
