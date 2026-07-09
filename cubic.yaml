@@ -8,7 +8,7 @@
 
 version: 1
 reviews:
-  enabled: false
+  enabled: true
   sensitivity: high
   incremental_commits: true
   check_drafts: false
