@@ -9,7 +9,8 @@ export default defineConfig({
         // Add test environment variables
         bindings: {
           GITHUB_TOKEN: "test-github-token",
-          UPDATE_TOKEN: "test-update-token"
+          UPDATE_TOKEN: "test-update-token",
+          ASSERTION_SIGNING_SECRET: "test-assertion-signing-secret"
         }
       }
     })

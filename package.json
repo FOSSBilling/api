@@ -9,6 +9,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "init:db": "npx tsx src/services/central-alerts/v1/scripts/init-db.ts",
+    "migrate:extensions-v2": "wrangler d1 migrations apply DB_EXTENSIONS",
+    "migrate:extensions-v2:list": "wrangler d1 migrations list DB_EXTENSIONS",
     "lint": "eslint",
     "lint:fix": "eslint --fix",
     "test": "vitest run",
@@ -18,11 +20,14 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@hono/zod-openapi": "^1.5.1",
     "@octokit/graphql": "^9.0.3",
     "@octokit/request": "^10.0.2",
+    "@scalar/hono-api-reference": "^0.11.11",
     "badge-maker": "^6.0.0",
     "hono": "^4.11.4",
-    "semver": "^7.7.2"
+    "semver": "^7.7.2",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "0.18.6",
