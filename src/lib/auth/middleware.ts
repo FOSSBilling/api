@@ -17,14 +17,13 @@ const verifiers: TokenVerifier[] = [bearerAssertionVerifier];
 export function requireAuth(): MiddlewareHandler {
   return async (c, next) => {
     const header = c.req.header("Authorization");
-    const token = header?.startsWith("Bearer ")
-      ? header.slice("Bearer ".length).trim()
-      : null;
+    const token = header?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim() || null;
 
     if (!token) {
       return c.json(
         { error: { message: "Missing bearer token", code: "UNAUTHORIZED" } },
-        401
+        401,
+        { "WWW-Authenticate": "Bearer" }
       );
     }
 
@@ -40,7 +39,8 @@ export function requireAuth(): MiddlewareHandler {
 
     return c.json(
       { error: { message: "Invalid or expired token", code: "UNAUTHORIZED" } },
-      401
+      401,
+      { "WWW-Authenticate": "Bearer" }
     );
   };
 }

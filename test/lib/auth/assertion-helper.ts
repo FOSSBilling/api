@@ -22,11 +22,11 @@ export async function signAssertion(
   secret: string,
   overrides: AssertionOverrides = {}
 ): Promise<string> {
-  const now = Math.floor(Date.now() / 1000);
+  const iat = overrides.iat ?? Math.floor(Date.now() / 1000);
   const payload = {
     sub: overrides.sub ?? "user-1",
-    iat: overrides.iat ?? now,
-    exp: overrides.exp ?? now + 60
+    iat,
+    exp: overrides.exp ?? iat + 60
   };
 
   const headerB64 = base64UrlEncodeString(

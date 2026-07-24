@@ -29,7 +29,9 @@ function isAssertionPayload(value: unknown): value is AssertionPayload {
     typeof record.sub === "string" &&
     record.sub.length > 0 &&
     typeof record.iat === "number" &&
-    typeof record.exp === "number"
+    Number.isFinite(record.iat) &&
+    typeof record.exp === "number" &&
+    Number.isFinite(record.exp)
   );
 }
 

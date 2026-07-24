@@ -10,12 +10,23 @@ export const EXTENSION_TYPES = [
   "translation"
 ] as const;
 
+// Lowercase alphanumeric slug (hyphens allowed, no leading/trailing hyphen) —
+// matches the shape of existing ids (e.g. "fossbilling") and rules out
+// anything that isn't safe to use as a URL path segment or DOM identifier.
 const lowercaseId = (label: string) =>
+  z.string().regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, {
+    message: `${label} id must be a lowercase alphanumeric slug`
+  });
+
+// Restricts to http(s) — z.string().url() alone accepts any scheme,
+// including javascript:/data:, which is unsafe for fields a consumer may
+// render as a link or image src.
+const httpUrl = () =>
   z
     .string()
-    .min(1)
-    .refine((value) => value === value.toLowerCase(), {
-      message: `${label} id must be lowercase`
+    .url()
+    .refine((value) => /^https?:\/\//i.test(value), {
+      message: "must use http or https"
     });
 
 export const AuthorSchema = z
@@ -23,7 +34,7 @@ export const AuthorSchema = z
     id: lowercaseId("author"),
     type: z.enum(["user", "organization"]),
     name: z.string().min(1),
-    url: z.string().url().optional()
+    URL: httpUrl().optional()
   })
   .openapi("Author");
 
@@ -31,8 +42,8 @@ export const ReleaseSchema = z
   .object({
     tag: z.string().min(1),
     date: z.string().min(1),
-    download_url: z.string().url(),
-    changelog_url: z.string().url().optional(),
+    download_url: httpUrl(),
+    changelog_url: httpUrl().optional(),
     min_fossbilling_version: z.string().min(1)
   })
   .openapi("Release");
@@ -47,7 +58,7 @@ export const RepositorySchema = z
 export const LicenseSchema = z
   .object({
     name: z.string().min(1),
-    URL: z.string().url().optional()
+    URL: httpUrl().optional()
   })
   .openapi("License");
 
@@ -58,13 +69,13 @@ export const ExtensionPayloadSchema = z
     name: z.string().min(1),
     description: z.string().min(1),
     releases: z.array(ReleaseSchema).min(1),
-    website: z.string().url(),
+    website: httpUrl(),
     license: LicenseSchema,
-    icon_url: z.string().url().optional(),
+    icon_url: httpUrl().optional(),
     readme: z.string().min(1),
     source: RepositorySchema,
     version: z.string().min(1),
-    download_url: z.string().url()
+    download_url: httpUrl()
   })
   .openapi("ExtensionPayload");
 
@@ -118,7 +129,8 @@ export const ErrorResponseSchema = z
   .object({
     error: z.object({
       message: z.string(),
-      code: z.string()
+      code: z.string(),
+      details: z.array(z.unknown()).optional()
     })
   })
   .openapi("Error");

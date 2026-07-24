@@ -9,6 +9,10 @@
 -- database. If that schema changes, update fossbilling/api AND that file. Assumed
 -- columns used here: users.id (TEXT, = auth `sub` claim), users.is_moderator
 -- (INTEGER 0/1).
+--
+-- Bootstrap order for a fresh database: v1's schema.sql (../../v1/db/schema.sql,
+-- creates `authors`/`extensions`) and the extensions repo's `users` table must
+-- both exist before this migration runs, since it ALTERs/references them.
 
 ALTER TABLE authors ADD COLUMN owner_user_id TEXT REFERENCES users(id);
 CREATE INDEX IF NOT EXISTS idx_authors_owner ON authors(owner_user_id);

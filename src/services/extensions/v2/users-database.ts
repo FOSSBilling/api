@@ -1,4 +1,5 @@
-import { IDatabase } from "../../../lib/interfaces";
+import { DatabaseResult, IDatabase } from "../../../lib/interfaces";
+import { databaseError } from "./errors";
 
 // `users` is owned by the FOSSBilling/extensions repo (src/lib/db/users.sql there),
 // NOT this repo, but lives in the same DB_EXTENSIONS database. If that schema
@@ -12,11 +13,15 @@ export class UsersDatabase {
     this.db = db;
   }
 
-  async isModerator(userId: string): Promise<boolean> {
-    const row = await this.db
-      .prepare("SELECT is_moderator FROM users WHERE id = ?")
-      .bind(userId)
-      .first<{ is_moderator: number }>();
-    return row?.is_moderator === 1;
+  async isModerator(userId: string): Promise<DatabaseResult<boolean>> {
+    try {
+      const row = await this.db
+        .prepare("SELECT is_moderator FROM users WHERE id = ?")
+        .bind(userId)
+        .first<{ is_moderator: number }>();
+      return { data: row?.is_moderator === 1, error: null };
+    } catch (error) {
+      return databaseError("isModerator", error);
+    }
   }
 }

@@ -54,7 +54,13 @@ function requireModerator(): MiddlewareHandler {
     const platform = getPlatform(c);
     const users = new UsersDatabase(platform.getDatabase("DB_EXTENSIONS"));
 
-    const isModerator = await users.isModerator(auth.userId);
+    const { data: isModerator, error } = await users.isModerator(auth.userId);
+    if (error) {
+      return c.json(
+        { error: { message: error.message, code: error.code } },
+        500
+      );
+    }
     if (!isModerator) {
       return c.json(
         { error: { message: "Moderator access required", code: "FORBIDDEN" } },
@@ -225,6 +231,10 @@ const queueRoute = createRoute({
       content: { "application/json": { schema: ErrorResponseSchema } },
       description: "Caller is not a moderator"
     },
+    422: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "status query param failed validation"
+    },
     500: {
       content: { "application/json": { schema: ErrorResponseSchema } },
       description: "Database error"
@@ -295,6 +305,10 @@ const approveRoute = createRoute({
       content: { "application/json": { schema: ErrorResponseSchema } },
       description:
         "Submission is not pending, or ownership has changed since it was submitted"
+    },
+    422: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "id param or review_note body failed validation"
     },
     500: {
       content: { "application/json": { schema: ErrorResponseSchema } },
@@ -409,7 +423,8 @@ extensionsV2.doc("/openapi.json", {
     version: "2.0.0",
     description:
       "Self-service extension submission, ownership, and moderation. Read-only listings remain at /extensions/v1."
-  }
+  },
+  servers: [{ url: "/extensions/v2" }]
 });
 
 extensionsV2.get("/docs", Scalar({ url: "/extensions/v2/openapi.json" }));

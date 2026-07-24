@@ -35,7 +35,7 @@ function samplePayload(overrides?: {
       id: overrides?.authorId ?? "new-author",
       type: "user",
       name: "Some Author",
-      url: "https://example.com"
+      URL: "https://example.com"
     },
     extension: {
       id: overrides?.extensionId ?? "new-ext",
@@ -328,6 +328,53 @@ describe("Extensions API v2", () => {
         {}
       );
       expect(secondApprove.status).toBe(409);
+      // The second (raced) approve must not write through again.
+      expect(tables.extensions.size).toBe(1);
+    });
+
+    it("updates the existing row instead of duplicating it when an edit's id differs only by case", async () => {
+      tables.authors.set("owner-author", {
+        id: "owner-author",
+        type: "user",
+        name: "Owner",
+        url: null,
+        owner_user_id: "owner-1"
+      });
+      // Legacy v1 data can have mixed-case ids; v2 submissions must be lowercase.
+      tables.extensions.set("Existing-Ext", {
+        id: "Existing-Ext",
+        type: "mod",
+        author_id: "owner-author",
+        name: "Existing",
+        description: "d",
+        releases: "[]",
+        website: "https://e.com",
+        license: '{"name":"MIT"}',
+        icon_url: null,
+        readme: "r",
+        source: '{"type":"github","repo":"example/existing"}',
+        version: "1.0.0",
+        download_url: "https://e.com/d.zip"
+      });
+      tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
+
+      const created = await post(
+        "/extensions/v2/submissions",
+        await authHeaders("owner-1"),
+        samplePayload({ extensionId: "existing-ext", authorId: "owner-author" })
+      );
+      const { result } = (await created.json()) as { result: { id: string } };
+
+      const approved = await post(
+        `/extensions/v2/submissions/${result.id}/approve`,
+        await authHeaders("mod-1"),
+        {}
+      );
+      expect(approved.status).toBe(200);
+
+      expect(tables.extensions.size).toBe(1);
+      const stored = tables.extensions.get("Existing-Ext");
+      expect(stored?.name).toBe("New Extension");
     });
 
     it("requires a review_note to reject", async () => {

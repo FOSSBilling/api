@@ -43,6 +43,12 @@
 - Local secrets go in `.dev.vars` (for example `GITHUB_TOKEN="..."`).
 - Bindings for D1/KV are defined in `wrangler.jsonc`; keep names aligned with `CloudflareBindings`.
 - Use Wrangler secrets for production tokens instead of committing them.
+- `ASSERTION_SIGNING_SECRET`: HMAC key the extensions v2 API uses to verify short-lived
+  bearer assertions minted by the extensions site (`src/lib/auth/bearer-assertion.ts`).
+  Not sent over the wire — only signs/verifies server-side in each Worker. Add
+  `ASSERTION_SIGNING_SECRET="..."` to `.dev.vars` for local dev; set via
+  `wrangler secret put ASSERTION_SIGNING_SECRET` in production, matching the value
+  configured in the extensions site's Worker.
 
 ## Stats API v1
 

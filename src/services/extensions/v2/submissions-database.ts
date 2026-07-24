@@ -1,4 +1,5 @@
 import { DatabaseResult, IDatabase } from "../../../lib/interfaces";
+import { databaseError } from "./errors";
 import { Submission, SubmissionPayload, SubmissionStatus } from "./interfaces";
 
 interface OwnershipResolution {
@@ -11,16 +12,6 @@ interface CreateInput {
   authorId: string;
   submittedBy: string;
   payload: SubmissionPayload;
-}
-
-function databaseError(error: unknown): DatabaseResult<never> {
-  return {
-    data: null,
-    error: {
-      message: error instanceof Error ? error.message : String(error),
-      code: "DATABASE_ERROR"
-    }
-  };
 }
 
 function parseSubmissionRow(row: Record<string, unknown>): Submission {
@@ -98,15 +89,16 @@ export class SubmissionsDatabase {
         error: null
       };
     } catch (error) {
-      return databaseError(error);
+      return databaseError("resolveOwnership", error);
     }
   }
 
   async create(input: CreateInput): Promise<DatabaseResult<{ id: string }>> {
     const id = crypto.randomUUID();
 
+    let result;
     try {
-      const result = await this.db
+      result = await this.db
         .prepare(
           `INSERT INTO extension_submissions (id, extension_id, author_id, submitted_by, status, payload)
            VALUES (?, ?, ?, ?, 'pending', ?)`
@@ -119,18 +111,15 @@ export class SubmissionsDatabase {
           JSON.stringify(input.payload)
         )
         .run();
-
-      if (!result.success) {
-        return {
-          data: null,
-          error: {
-            message: result.error || "Database query failed",
-            code: "DATABASE_ERROR"
-          }
-        };
-      }
     } catch (error) {
-      return databaseError(error);
+      return databaseError("create", error);
+    }
+
+    if (!result.success) {
+      return databaseError(
+        "create",
+        new Error(result.error || "Database query failed")
+      );
     }
 
     return { data: { id }, error: null };
@@ -146,17 +135,14 @@ export class SubmissionsDatabase {
         .bind(userId)
         .all<Record<string, unknown>>();
     } catch (error) {
-      return databaseError(error);
+      return databaseError("listBySubmitter", error);
     }
 
     if (!result.success) {
-      return {
-        data: null,
-        error: {
-          message: result.error || "Database query failed",
-          code: "DATABASE_ERROR"
-        }
-      };
+      return databaseError(
+        "listBySubmitter",
+        new Error(result.error || "Database query failed")
+      );
     }
 
     return {
@@ -177,17 +163,14 @@ export class SubmissionsDatabase {
         .bind(status)
         .all<Record<string, unknown>>();
     } catch (error) {
-      return databaseError(error);
+      return databaseError("listQueue", error);
     }
 
     if (!result.success) {
-      return {
-        data: null,
-        error: {
-          message: result.error || "Database query failed",
-          code: "DATABASE_ERROR"
-        }
-      };
+      return databaseError(
+        "listQueue",
+        new Error(result.error || "Database query failed")
+      );
     }
 
     return {
@@ -204,7 +187,7 @@ export class SubmissionsDatabase {
         .bind(id)
         .first<Record<string, unknown>>();
     } catch (error) {
-      return databaseError(error);
+      return databaseError("getById", error);
     }
 
     if (!row) {
@@ -220,11 +203,11 @@ export class SubmissionsDatabase {
     return { data: parseSubmissionRow(row), error: null };
   }
 
-  async reject(
-    id: string,
-    reviewerId: string,
-    reviewNote: string
-  ): Promise<DatabaseResult<{ id: string; status: "rejected" }>> {
+  // Notes what happened to an id-scoped write that didn't affect any rows:
+  // either it never existed, or someone else already moved it off 'pending'.
+  private async explainNoOpTransition(
+    id: string
+  ): Promise<DatabaseResult<never>> {
     const existing = await this.getById(id);
     if (existing.error || !existing.data) {
       return {
@@ -235,33 +218,47 @@ export class SubmissionsDatabase {
         }
       };
     }
+    return {
+      data: null,
+      error: { message: "Submission is not pending", code: "CONFLICT" }
+    };
+  }
 
-    if (existing.data.status !== "pending") {
-      return {
-        data: null,
-        error: { message: "Submission is not pending", code: "CONFLICT" }
-      };
-    }
-
+  // The `AND status = 'pending'` guard makes this a single atomic
+  // check-and-set: if two moderators race, only one's update affects a row.
+  async reject(
+    id: string,
+    reviewerId: string,
+    reviewNote: string
+  ): Promise<DatabaseResult<{ id: string; status: "rejected" }>> {
+    let result;
     try {
-      await this.db
+      result = await this.db
         .prepare(
           `UPDATE extension_submissions
            SET status = 'rejected', reviewer_id = ?, review_note = ?, reviewed_at = CURRENT_TIMESTAMP
-           WHERE id = ?`
+           WHERE id = ? AND status = 'pending'`
         )
         .bind(reviewerId, reviewNote, id)
         .run();
     } catch (error) {
-      return databaseError(error);
+      return databaseError("reject", error);
+    }
+
+    if (!result.success) {
+      return databaseError(
+        "reject",
+        new Error(result.error || "Database query failed")
+      );
+    }
+
+    if (!result.meta?.changes) {
+      return this.explainNoOpTransition(id);
     }
 
     return { data: { id, status: "rejected" }, error: null };
   }
 
-  // Re-checks ownership/availability (may have shifted since submission),
-  // then upserts through to authors/extensions in one atomic batch — the
-  // upsert form means create vs. edit needs no branching in the SQL.
   async approve(
     id: string,
     reviewerId: string,
@@ -314,18 +311,48 @@ export class SubmissionsDatabase {
       };
     }
 
-    const { author, extension } = submission.payload;
-
-    if (!this.db.batch) {
-      return {
-        data: null,
-        error: {
-          message: "Database adapter does not support batch operations",
-          code: "DATABASE_ERROR"
-        }
-      };
+    // Claim the transition atomically before writing anything through. If
+    // this affects no rows, a concurrent approve/reject already won the
+    // race — report CONFLICT without having touched authors/extensions.
+    let claim;
+    try {
+      claim = await this.db
+        .prepare(
+          `UPDATE extension_submissions
+           SET status = 'approved', reviewer_id = ?, review_note = ?, reviewed_at = CURRENT_TIMESTAMP
+           WHERE id = ? AND status = 'pending'`
+        )
+        .bind(reviewerId, reviewNote ?? null, id)
+        .run();
+    } catch (error) {
+      return databaseError("approve", error);
     }
 
+    if (!claim.success) {
+      return databaseError(
+        "approve",
+        new Error(claim.error || "Database query failed")
+      );
+    }
+
+    if (!claim.meta?.changes) {
+      return this.explainNoOpTransition(id);
+    }
+
+    if (!this.db.batch) {
+      return databaseError(
+        "approve",
+        new Error("Database adapter does not support batch operations")
+      );
+    }
+
+    const { author, extension } = submission.payload;
+    // Edits must update the existing row even if it was stored under a
+    // different case (e.g. legacy "Example" edited via "example") — using
+    // the payload's id here would insert a second row instead.
+    const extensionId = recheck.data.extensionId ?? extension.id;
+
+    let results;
     try {
       const authorStmt = this.db
         .prepare(
@@ -338,7 +365,7 @@ export class SubmissionsDatabase {
           author.id,
           author.type,
           author.name,
-          author.url ?? null,
+          author.URL ?? null,
           submission.submitted_by
         );
 
@@ -355,7 +382,7 @@ export class SubmissionsDatabase {
              download_url = excluded.download_url`
         )
         .bind(
-          extension.id,
+          extensionId,
           extension.type,
           author.id,
           extension.name,
@@ -370,17 +397,20 @@ export class SubmissionsDatabase {
           extension.download_url
         );
 
-      const submissionStmt = this.db
-        .prepare(
-          `UPDATE extension_submissions
-           SET status = 'approved', reviewer_id = ?, review_note = ?, reviewed_at = CURRENT_TIMESTAMP
-           WHERE id = ?`
-        )
-        .bind(reviewerId, reviewNote ?? null, id);
-
-      await this.db.batch([authorStmt, extensionStmt, submissionStmt]);
+      results = (await this.db.batch([authorStmt, extensionStmt])) as Array<{
+        success: boolean;
+        error?: string;
+      }>;
     } catch (error) {
-      return databaseError(error);
+      return databaseError("approve", error);
+    }
+
+    const failed = results.find((r) => !r.success);
+    if (failed) {
+      return databaseError(
+        "approve",
+        new Error(failed.error || "Database write failed")
+      );
     }
 
     return { data: { id, status: "approved" }, error: null };

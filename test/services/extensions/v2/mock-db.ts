@@ -16,14 +16,17 @@ export function createTables(): MockTables {
   };
 }
 
-function ok<T = Record<string, unknown>>(results: T[] = []): D1Result<T> {
+function ok<T = Record<string, unknown>>(
+  results: T[] = [],
+  changes = results.length
+): D1Result<T> {
   return {
     success: true,
     results,
     meta: {
       duration: 0,
       last_row_id: 0,
-      changes: results.length,
+      changes,
       served_by: "mock",
       size_after: 0,
       rows_read: 0,
@@ -35,6 +38,7 @@ function ok<T = Record<string, unknown>>(results: T[] = []): D1Result<T> {
 
 class MockStatement implements D1PreparedStatement {
   private params: unknown[] = [];
+  private changes = 0;
 
   constructor(
     private tables: MockTables,
@@ -156,11 +160,12 @@ class MockStatement implements D1PreparedStatement {
     if (q.startsWith("UPDATE extension_submissions SET status = 'rejected'")) {
       const [reviewer_id, review_note, id] = p;
       const row = this.tables.extension_submissions.get(String(id));
-      if (row) {
+      if (row && row.status === "pending") {
         row.status = "rejected";
         row.reviewer_id = reviewer_id;
         row.review_note = review_note;
         row.reviewed_at = new Date().toISOString();
+        this.changes = 1;
       }
       return [];
     }
@@ -168,11 +173,12 @@ class MockStatement implements D1PreparedStatement {
     if (q.startsWith("UPDATE extension_submissions SET status = 'approved'")) {
       const [reviewer_id, review_note, id] = p;
       const row = this.tables.extension_submissions.get(String(id));
-      if (row) {
+      if (row && row.status === "pending") {
         row.status = "approved";
         row.reviewer_id = reviewer_id;
         row.review_note = review_note;
         row.reviewed_at = new Date().toISOString();
+        this.changes = 1;
       }
       return [];
     }
@@ -246,7 +252,7 @@ class MockStatement implements D1PreparedStatement {
 
   async run<T = Record<string, unknown>>(): Promise<D1Result<T>> {
     this.execute();
-    return ok([]);
+    return ok<T>([], this.changes);
   }
 }
 
