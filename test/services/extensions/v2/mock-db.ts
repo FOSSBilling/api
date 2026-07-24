@@ -132,16 +132,28 @@ class MockStatement implements D1PreparedStatement {
 
     if (
       q.startsWith(
-        "INSERT INTO authors (id, type, name, url, owner_user_id, approved_at, created_at, updated_at)"
+        "INSERT INTO authors (id, type, name, url, bio, avatar_url, contact_email, owner_user_id, approved_at, created_at, updated_at)"
       )
     ) {
-      const [id, type, name, url, owner_user_id] = p;
+      const [
+        id,
+        type,
+        name,
+        url,
+        bio,
+        avatar_url,
+        contact_email,
+        owner_user_id
+      ] = p;
       const now = new Date().toISOString();
       this.tables.authors.set(String(id), {
         id,
         type,
         name,
         url,
+        bio,
+        avatar_url,
+        contact_email,
         owner_user_id,
         approved_at: null,
         created_at: now,
@@ -152,15 +164,18 @@ class MockStatement implements D1PreparedStatement {
 
     if (
       q.startsWith(
-        "UPDATE authors SET type = ?, name = ?, url = ?, approved_at = NULL"
+        "UPDATE authors SET type = ?, name = ?, url = ?, bio = ?, avatar_url = ?, contact_email = ?, approved_at = NULL"
       )
     ) {
-      const [type, name, url, id] = p;
+      const [type, name, url, bio, avatar_url, contact_email, id] = p;
       const row = this.tables.authors.get(String(id));
       if (row) {
         row.type = type;
         row.name = name;
         row.url = url;
+        row.bio = bio;
+        row.avatar_url = avatar_url;
+        row.contact_email = contact_email;
         row.approved_at = null;
         row.updated_at = new Date().toISOString();
         this.changes = 1;

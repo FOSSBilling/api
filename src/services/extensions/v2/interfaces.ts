@@ -34,7 +34,10 @@ export const AuthorSchema = z
     id: lowercaseId("author"),
     type: z.enum(["user", "organization"]),
     name: z.string().min(1),
-    URL: httpUrl().optional()
+    URL: httpUrl().optional(),
+    bio: z.string().max(500).optional(),
+    avatar_url: httpUrl().optional(),
+    contact_email: z.string().email().optional()
   })
   .openapi("Author");
 

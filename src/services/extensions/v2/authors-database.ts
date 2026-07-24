@@ -8,6 +8,9 @@ function parseAuthorRow(row: Record<string, unknown>): AuthorProfile {
     type: row.type as AuthorProfile["type"],
     name: row.name as string,
     URL: (row.url as string | null) ?? undefined,
+    bio: (row.bio as string | null) ?? undefined,
+    avatar_url: (row.avatar_url as string | null) ?? undefined,
+    contact_email: (row.contact_email as string | null) ?? undefined,
     approved: row.approved_at !== null && row.approved_at !== undefined
   };
 }
@@ -56,10 +59,19 @@ export class AuthorsDatabase {
 
         const result = await this.db
           .prepare(
-            `INSERT INTO authors (id, type, name, url, owner_user_id, approved_at, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+            `INSERT INTO authors (id, type, name, url, bio, avatar_url, contact_email, owner_user_id, approved_at, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
           )
-          .bind(author.id, author.type, author.name, author.URL ?? null, userId)
+          .bind(
+            author.id,
+            author.type,
+            author.name,
+            author.URL ?? null,
+            author.bio ?? null,
+            author.avatar_url ?? null,
+            author.contact_email ?? null,
+            userId
+          )
           .run();
 
         if (!result.success) {
@@ -84,10 +96,18 @@ export class AuthorsDatabase {
         // approval no longer applies. Not worth diffing old vs. new values.
         const result = await this.db
           .prepare(
-            `UPDATE authors SET type = ?, name = ?, url = ?, approved_at = NULL, updated_at = CURRENT_TIMESTAMP
+            `UPDATE authors SET type = ?, name = ?, url = ?, bio = ?, avatar_url = ?, contact_email = ?, approved_at = NULL, updated_at = CURRENT_TIMESTAMP
              WHERE id = ?`
           )
-          .bind(author.type, author.name, author.URL ?? null, author.id)
+          .bind(
+            author.type,
+            author.name,
+            author.URL ?? null,
+            author.bio ?? null,
+            author.avatar_url ?? null,
+            author.contact_email ?? null,
+            author.id
+          )
           .run();
 
         if (!result.success) {

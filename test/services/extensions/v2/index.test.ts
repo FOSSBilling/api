@@ -605,6 +605,53 @@ describe("Extensions API v2", () => {
       const data = (await res.json()) as { result: { approved: boolean } };
       expect(data.result.approved).toBe(false);
     });
+
+    it("round-trips bio, avatar_url, and contact_email", async () => {
+      const headers = await authHeaders("user-1");
+      const res = await put("/extensions/v2/authors/me", headers, {
+        ...sampleAuthor(),
+        bio: "I build FOSSBilling extensions.",
+        avatar_url: "https://example.com/avatar.png",
+        contact_email: "dev@example.com"
+      });
+
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as {
+        result: {
+          bio: string;
+          avatar_url: string;
+          contact_email: string;
+        };
+      };
+      expect(data.result.bio).toBe("I build FOSSBilling extensions.");
+      expect(data.result.avatar_url).toBe("https://example.com/avatar.png");
+      expect(data.result.contact_email).toBe("dev@example.com");
+
+      const stored = tables.authors.get("dev-author");
+      expect(stored?.bio).toBe("I build FOSSBilling extensions.");
+      expect(stored?.avatar_url).toBe("https://example.com/avatar.png");
+      expect(stored?.contact_email).toBe("dev@example.com");
+    });
+
+    it("accepts a payload without bio, avatar_url, or contact_email", async () => {
+      const res = await put(
+        "/extensions/v2/authors/me",
+        await authHeaders("user-1"),
+        sampleAuthor()
+      );
+
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as {
+        result: {
+          bio?: string;
+          avatar_url?: string;
+          contact_email?: string;
+        };
+      };
+      expect(data.result.bio).toBeUndefined();
+      expect(data.result.avatar_url).toBeUndefined();
+      expect(data.result.contact_email).toBeUndefined();
+    });
   });
 
   describe("author moderation", () => {
