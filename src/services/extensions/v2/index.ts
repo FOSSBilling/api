@@ -419,7 +419,7 @@ extensionsV2.openapi(rejectRoute, async (c) => {
 extensionsV2.doc("/openapi.json", {
   openapi: "3.1.0",
   info: {
-    title: "FOSSBilling Extensions API v2",
+    title: "FOSSBilling Extensions API (v2)",
     version: "2.0.0",
     description:
       "Self-service extension submission, ownership, and moderation. Read-only listings remain at /extensions/v1."
@@ -427,6 +427,9 @@ extensionsV2.doc("/openapi.json", {
   servers: [{ url: "/extensions/v2" }]
 });
 
-extensionsV2.get("/docs", Scalar({ url: "/extensions/v2/openapi.json" }));
+extensionsV2.get("/docs", Scalar({ 
+  url: "/extensions/v2/openapi.json",
+  pageTitle: 'FOSSBilling Extensions API (v2)',
+}));
 
 export default extensionsV2;
