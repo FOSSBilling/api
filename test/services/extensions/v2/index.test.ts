@@ -262,6 +262,39 @@ describe("Extensions API v2", () => {
   });
 
   describe("approve / reject", () => {
+    it("reverts to pending if the write-through fails after a successful claim", async () => {
+      tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
+
+      const created = await post(
+        "/extensions/v2/submissions",
+        await authHeaders("user-1"),
+        samplePayload()
+      );
+      const { result } = (await created.json()) as { result: { id: string } };
+
+      tables.forceExtensionWriteFailure = true;
+      const approved = await post(
+        `/extensions/v2/submissions/${result.id}/approve`,
+        await authHeaders("mod-1"),
+        {}
+      );
+      expect(approved.status).toBe(500);
+      expect(tables.extensions.size).toBe(0);
+
+      const stored = tables.extension_submissions.get(result.id);
+      expect(stored?.status).toBe("pending");
+
+      // Recovers cleanly once the underlying failure is gone.
+      tables.forceExtensionWriteFailure = false;
+      const retried = await post(
+        `/extensions/v2/submissions/${result.id}/approve`,
+        await authHeaders("mod-1"),
+        {}
+      );
+      expect(retried.status).toBe(200);
+      expect(tables.extensions.size).toBe(1);
+    });
+
     it("approves a submission and it becomes visible via the v1 read path", async () => {
       tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
 

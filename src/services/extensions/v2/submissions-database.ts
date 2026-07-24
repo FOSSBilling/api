@@ -203,6 +203,26 @@ export class SubmissionsDatabase {
     return { data: parseSubmissionRow(row), error: null };
   }
 
+  // Best-effort compensation: if the write-through after a successful claim
+  // fails, put the submission back to 'pending' rather than leaving it
+  // permanently 'approved' with no matching author/extension write. If this
+  // itself fails, the submission is stuck 'approved' and needs manual fixup —
+  // surfaced via the DATABASE_ERROR the caller already returns.
+  private async revertToPending(id: string): Promise<void> {
+    try {
+      await this.db
+        .prepare(
+          `UPDATE extension_submissions
+           SET status = 'pending', reviewer_id = NULL, review_note = NULL, reviewed_at = NULL
+           WHERE id = ?`
+        )
+        .bind(id)
+        .run();
+    } catch {
+      // best-effort only
+    }
+  }
+
   // Notes what happened to an id-scoped write that didn't affect any rows:
   // either it never existed, or someone else already moved it off 'pending'.
   private async explainNoOpTransition(
@@ -340,6 +360,7 @@ export class SubmissionsDatabase {
     }
 
     if (!this.db.batch) {
+      await this.revertToPending(id);
       return databaseError(
         "approve",
         new Error("Database adapter does not support batch operations")
@@ -402,11 +423,13 @@ export class SubmissionsDatabase {
         error?: string;
       }>;
     } catch (error) {
+      await this.revertToPending(id);
       return databaseError("approve", error);
     }
 
     const failed = results.find((r) => !r.success);
     if (failed) {
+      await this.revertToPending(id);
       return databaseError(
         "approve",
         new Error(failed.error || "Database write failed")

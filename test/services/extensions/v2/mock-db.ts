@@ -5,6 +5,8 @@ export interface MockTables {
   extensions: Map<string, Row>;
   extension_submissions: Map<string, Row>;
   users: Map<string, Row>;
+  // Test-only seam for simulating a write-through failure during approve().
+  forceExtensionWriteFailure?: boolean;
 }
 
 export function createTables(): MockTables {
@@ -183,6 +185,18 @@ class MockStatement implements D1PreparedStatement {
       return [];
     }
 
+    if (q.startsWith("UPDATE extension_submissions SET status = 'pending'")) {
+      const [id] = p;
+      const row = this.tables.extension_submissions.get(String(id));
+      if (row) {
+        row.status = "pending";
+        row.reviewer_id = null;
+        row.review_note = null;
+        row.reviewed_at = null;
+      }
+      return [];
+    }
+
     if (
       q.startsWith("INSERT INTO authors (id, type, name, url, owner_user_id)")
     ) {
@@ -203,6 +217,9 @@ class MockStatement implements D1PreparedStatement {
         "INSERT INTO extensions (id, type, author_id, name, description, releases, website, license, icon_url, readme, source, version, download_url)"
       )
     ) {
+      if (this.tables.forceExtensionWriteFailure) {
+        throw new Error("simulated write-through failure");
+      }
       const [
         id,
         type,

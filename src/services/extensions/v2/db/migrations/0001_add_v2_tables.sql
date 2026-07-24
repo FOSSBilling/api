@@ -1,7 +1,7 @@
 -- Migration number: 0001 	 2026-07-24T06:49:28.535Z
 --
 -- v2: self-service submissions, ownership, moderation.
--- Adds to the v1-owned `authors` table (../../v1/db/schema.sql) and creates a new
+-- Adds to the v1-owned `authors` table (../../../v1/db/schema.sql) and creates a new
 -- v2-owned table.
 --
 -- NOTE: `users` referenced below is owned by the FOSSBilling/extensions repo
@@ -10,7 +10,7 @@
 -- columns used here: users.id (TEXT, = auth `sub` claim), users.is_moderator
 -- (INTEGER 0/1).
 --
--- Bootstrap order for a fresh database: v1's schema.sql (../../v1/db/schema.sql,
+-- Bootstrap order for a fresh database: v1's schema.sql (../../../v1/db/schema.sql,
 -- creates `authors`/`extensions`) and the extensions repo's `users` table must
 -- both exist before this migration runs, since it ALTERs/references them.
 
