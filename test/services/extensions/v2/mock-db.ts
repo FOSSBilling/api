@@ -110,6 +110,78 @@ class MockStatement implements D1PreparedStatement {
       return row ? [row] : [];
     }
 
+    if (q.startsWith("SELECT * FROM authors WHERE owner_user_id = ?")) {
+      const row = [...this.tables.authors.values()].find(
+        (r) => r.owner_user_id === p[0]
+      );
+      return row ? [row] : [];
+    }
+
+    if (q.startsWith("SELECT * FROM authors WHERE id = ?")) {
+      const row = this.tables.authors.get(String(p[0]));
+      return row ? [row] : [];
+    }
+
+    if (q.startsWith("SELECT * FROM authors WHERE approved_at IS NULL")) {
+      return [...this.tables.authors.values()]
+        .filter((r) => (r.approved_at ?? null) === null)
+        .sort((a, b) =>
+          String(a.created_at ?? "").localeCompare(String(b.created_at ?? ""))
+        );
+    }
+
+    if (
+      q.startsWith(
+        "INSERT INTO authors (id, type, name, url, owner_user_id, approved_at, created_at, updated_at)"
+      )
+    ) {
+      const [id, type, name, url, owner_user_id] = p;
+      const now = new Date().toISOString();
+      this.tables.authors.set(String(id), {
+        id,
+        type,
+        name,
+        url,
+        owner_user_id,
+        approved_at: null,
+        created_at: now,
+        updated_at: now
+      });
+      return [];
+    }
+
+    if (
+      q.startsWith(
+        "UPDATE authors SET type = ?, name = ?, url = ?, approved_at = NULL"
+      )
+    ) {
+      const [type, name, url, id] = p;
+      const row = this.tables.authors.get(String(id));
+      if (row) {
+        row.type = type;
+        row.name = name;
+        row.url = url;
+        row.approved_at = null;
+        row.updated_at = new Date().toISOString();
+        this.changes = 1;
+      }
+      return [];
+    }
+
+    if (
+      q.startsWith(
+        "UPDATE authors SET approved_at = CURRENT_TIMESTAMP WHERE id = ?"
+      )
+    ) {
+      const [id] = p;
+      const row = this.tables.authors.get(String(id));
+      if (row) {
+        row.approved_at = new Date().toISOString();
+        this.changes = 1;
+      }
+      return [];
+    }
+
     if (q.startsWith("SELECT is_moderator FROM users WHERE id = ?")) {
       const row = this.tables.users.get(String(p[0]));
       return row ? [row] : [];

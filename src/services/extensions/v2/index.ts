@@ -6,6 +6,8 @@ import { Scalar } from "@scalar/hono-api-reference";
 import { getPlatform } from "../../../lib/middleware";
 import { getAuth, requireAuth } from "../../../lib/auth";
 import {
+  AuthorProfileSchema,
+  AuthorSchema,
   ErrorResponseSchema,
   IdParamSchema,
   QueueQuerySchema,
@@ -14,6 +16,7 @@ import {
   SubmissionPayloadSchema,
   SubmissionSchema
 } from "./interfaces";
+import { AuthorsDatabase } from "./authors-database";
 import { SubmissionsDatabase } from "./submissions-database";
 import { UsersDatabase } from "./users-database";
 
@@ -416,6 +419,185 @@ extensionsV2.openapi(rejectRoute, async (c) => {
   return c.json({ result: data }, 200);
 });
 
+const upsertOwnAuthorRoute = createRoute({
+  method: "put",
+  path: "/authors/me",
+  tags: ["Authors"],
+  summary: "Create or update the caller's own developer profile",
+  security: [{ Bearer: [] }],
+  middleware: [requireAuth()] as const,
+  request: {
+    body: {
+      content: { "application/json": { schema: AuthorSchema } }
+    }
+  },
+  responses: {
+    200: {
+      content: {
+        "application/json": {
+          schema: z.object({ result: AuthorProfileSchema })
+        }
+      },
+      description: "Developer profile created or updated and usable immediately"
+    },
+    401: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Missing or invalid bearer token"
+    },
+    409: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description:
+        "Author id already taken by someone else, or id was changed on an existing profile"
+    },
+    422: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Payload failed validation"
+    },
+    500: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Database error"
+    }
+  }
+});
+
+extensionsV2.openapi(upsertOwnAuthorRoute, async (c) => {
+  const auth = getAuth(c);
+  const body = c.req.valid("json");
+  const platform = getPlatform(c);
+  const db = new AuthorsDatabase(platform.getDatabase("DB_EXTENSIONS"));
+
+  const { data, error } = await db.upsertOwn(auth.userId, body);
+  if (error || !data) {
+    const status = error?.code === "CONFLICT" ? 409 : 500;
+    return c.json(
+      {
+        error: {
+          message: error?.message ?? "Unable to save developer profile",
+          code: error?.code ?? "DATABASE_ERROR"
+        }
+      },
+      status
+    );
+  }
+
+  return c.json({ result: data }, 200);
+});
+
+const unapprovedAuthorsRoute = createRoute({
+  method: "get",
+  path: "/authors/unapproved",
+  tags: ["Moderation"],
+  summary: "List developer profiles awaiting moderator review",
+  security: [{ Bearer: [] }],
+  middleware: [requireAuth(), requireModerator()] as const,
+  responses: {
+    200: {
+      content: {
+        "application/json": {
+          schema: z.object({ result: z.array(AuthorProfileSchema) })
+        }
+      },
+      description: "Developer profiles not yet approved"
+    },
+    401: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Missing or invalid bearer token"
+    },
+    403: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Caller is not a moderator"
+    },
+    500: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Database error"
+    }
+  }
+});
+
+extensionsV2.openapi(unapprovedAuthorsRoute, async (c) => {
+  const platform = getPlatform(c);
+  const db = new AuthorsDatabase(platform.getDatabase("DB_EXTENSIONS"));
+
+  const { data, error } = await db.listUnapproved();
+  if (error || !data) {
+    return c.json(
+      {
+        error: {
+          message: error?.message ?? "Unable to load unapproved authors",
+          code: "DATABASE_ERROR"
+        }
+      },
+      500
+    );
+  }
+
+  return c.json({ result: data }, 200);
+});
+
+const approveAuthorRoute = createRoute({
+  method: "post",
+  path: "/authors/{id}/approve",
+  tags: ["Moderation"],
+  summary: "Mark a developer profile as reviewed/approved",
+  security: [{ Bearer: [] }],
+  middleware: [requireAuth(), requireModerator()] as const,
+  request: { params: IdParamSchema },
+  responses: {
+    200: {
+      content: {
+        "application/json": {
+          schema: z.object({
+            result: z.object({ id: z.string(), approved: z.literal(true) })
+          })
+        }
+      },
+      description: "Developer profile marked approved"
+    },
+    401: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Missing or invalid bearer token"
+    },
+    403: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Caller is not a moderator"
+    },
+    404: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "No author with that id"
+    },
+    422: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "id param failed validation"
+    },
+    500: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Database error"
+    }
+  }
+});
+
+extensionsV2.openapi(approveAuthorRoute, async (c) => {
+  const { id } = c.req.valid("param");
+  const platform = getPlatform(c);
+  const db = new AuthorsDatabase(platform.getDatabase("DB_EXTENSIONS"));
+
+  const { data, error } = await db.approve(id);
+  if (error || !data) {
+    const status = error?.code === "NOT_FOUND" ? 404 : 500;
+    return c.json(
+      {
+        error: {
+          message: error?.message ?? "Unable to approve author",
+          code: error?.code ?? "DATABASE_ERROR"
+        }
+      },
+      status
+    );
+  }
+
+  return c.json({ result: data }, 200);
+});
+
 extensionsV2.doc("/openapi.json", {
   openapi: "3.1.0",
   info: {
@@ -427,9 +609,12 @@ extensionsV2.doc("/openapi.json", {
   servers: [{ url: "/extensions/v2" }]
 });
 
-extensionsV2.get("/docs", Scalar({ 
-  url: "/extensions/v2/openapi.json",
-  pageTitle: 'FOSSBilling Extensions API (v2)',
-}));
+extensionsV2.get(
+  "/docs",
+  Scalar({
+    url: "/extensions/v2/openapi.json",
+    pageTitle: "FOSSBilling Extensions API (v2)"
+  })
+);
 
 export default extensionsV2;

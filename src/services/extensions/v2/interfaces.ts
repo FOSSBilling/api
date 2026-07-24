@@ -38,6 +38,8 @@ export const AuthorSchema = z
   })
   .openapi("Author");
 
+export type Author = z.infer<typeof AuthorSchema>;
+
 export const ReleaseSchema = z
   .object({
     tag: z.string().min(1),
@@ -87,6 +89,12 @@ export const SubmissionPayloadSchema = z
   .openapi("SubmissionPayload");
 
 export type SubmissionPayload = z.infer<typeof SubmissionPayloadSchema>;
+
+export const AuthorProfileSchema = AuthorSchema.extend({
+  approved: z.boolean()
+}).openapi("AuthorProfile");
+
+export type AuthorProfile = z.infer<typeof AuthorProfileSchema>;
 
 export const ReviewNoteOptionalSchema = z
   .object({
