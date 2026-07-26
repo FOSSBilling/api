@@ -23,6 +23,24 @@ ALTER TABLE extension_submissions RENAME COLUMN author_id TO developer_id;
 DROP INDEX IF EXISTS idx_submissions_author;
 CREATE INDEX IF NOT EXISTS idx_submissions_developer ON extension_submissions(developer_id);
 
+-- extension_submissions.payload is a JSON blob (SubmissionPayload), not a
+-- SQL column, so the ALTER above doesn't touch it — every already-persisted
+-- row (any status) still has the old `{"author": {...}, "extension": {...}}`
+-- shape. Translate it in place so it matches the renamed
+-- SubmissionPayloadSchema everywhere, not just for submissions created after
+-- this migration. Without this, approve() on a pre-existing pending
+-- submission dereferences payload.developer on an object that only has
+-- .author, throwing and surfacing as a generic database error forever; list
+-- responses would also keep serving the old shape for old rows.
+UPDATE extension_submissions
+SET payload = json_set(
+  json_remove(payload, '$.author'),
+  '$.developer',
+  json_extract(payload, '$.author')
+)
+WHERE json_extract(payload, '$.author') IS NOT NULL
+  AND json_extract(payload, '$.developer') IS NULL;
+
 ALTER TABLE author_history RENAME TO developer_history;
 ALTER TABLE developer_history RENAME COLUMN author_id TO developer_id;
 
