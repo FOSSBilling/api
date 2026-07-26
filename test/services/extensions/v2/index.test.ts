@@ -809,6 +809,12 @@ describe("Extensions API v2", () => {
         "dev-author",
         "other-author"
       ]);
+      expect(body.result.find((a) => a.id === "dev-author")?.approved).toBe(
+        true
+      );
+      expect(body.result.find((a) => a.id === "other-author")?.approved).toBe(
+        false
+      );
     });
 
     it("blocks non-moderators from listing all authors", async () => {
