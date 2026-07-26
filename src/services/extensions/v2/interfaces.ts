@@ -17,9 +17,12 @@ export const EXTENSION_TYPES = [
 // matches the shape of existing ids (e.g. "fossbilling") and rules out
 // anything that isn't safe to use as a URL path segment or DOM identifier.
 const lowercaseId = (label: string) =>
-  z.string().regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, {
-    message: `${label} id must be a lowercase alphanumeric slug`
-  });
+  z
+    .string()
+    .max(100)
+    .regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, {
+      message: `${label} id must be a lowercase alphanumeric slug`
+    });
 
 // Restricts to http(s) — z.string().url() alone accepts any scheme,
 // including javascript:/data:, which is unsafe for fields a consumer may
@@ -27,6 +30,7 @@ const lowercaseId = (label: string) =>
 const httpUrl = () =>
   z
     .string()
+    .max(2048)
     .url()
     .refine((value) => /^https?:\/\//i.test(value), {
       message: "must use http or https"
@@ -49,10 +53,10 @@ export const DeveloperSchema = z
   .object({
     id: developerId(),
     type: z.enum(["user", "organization"]),
-    name: z.string().min(1),
+    name: z.string().min(1).max(120),
     URL: httpUrl().optional(),
     avatar_url: httpUrl().optional(),
-    contact_email: z.string().email().optional()
+    contact_email: z.string().email().max(254).optional()
   })
   .openapi("Developer");
 
@@ -73,11 +77,11 @@ export const SubmissionDeveloperSchema = DeveloperSchema.pick({
 
 export const ReleaseSchema = z
   .object({
-    tag: z.string().min(1),
-    date: z.string().min(1),
+    tag: z.string().min(1).max(100),
+    date: z.string().min(1).max(64),
     download_url: httpUrl(),
     changelog_url: httpUrl().optional(),
-    min_fossbilling_version: z.string().min(1)
+    min_fossbilling_version: z.string().min(1).max(100)
   })
   .openapi("Release");
 
@@ -86,7 +90,7 @@ export type Release = z.infer<typeof ReleaseSchema>;
 export const RepositorySchema = z
   .object({
     type: z.enum(["github", "gitlab", "custom"]),
-    repo: z.string().min(1)
+    repo: z.string().min(1).max(500)
   })
   .openapi("Repository");
 
@@ -94,7 +98,7 @@ export type Repository = z.infer<typeof RepositorySchema>;
 
 export const LicenseSchema = z
   .object({
-    name: z.string().min(1),
+    name: z.string().min(1).max(100),
     URL: httpUrl().optional()
   })
   .openapi("License");
@@ -105,15 +109,15 @@ export const ExtensionPayloadSchema = z
   .object({
     id: lowercaseId("extension"),
     type: z.enum(EXTENSION_TYPES),
-    name: z.string().min(1),
-    description: z.string().min(1),
-    releases: z.array(ReleaseSchema).min(1),
+    name: z.string().min(1).max(120),
+    description: z.string().min(1).max(4000),
+    releases: z.array(ReleaseSchema).min(1).max(100),
     website: httpUrl(),
     license: LicenseSchema,
     icon_url: httpUrl().optional(),
-    readme: z.string().min(1),
+    readme: z.string().min(1).max(100_000),
     source: RepositorySchema,
-    version: z.string().min(1),
+    version: z.string().min(1).max(100),
     download_url: httpUrl()
   })
   .openapi("ExtensionPayload");
@@ -123,12 +127,23 @@ export const SubmissionPayloadSchema = z
     developer: SubmissionDeveloperSchema,
     extension: ExtensionPayloadSchema
   })
+  .strict()
+  .superRefine((payload, ctx) => {
+    const size = new TextEncoder().encode(JSON.stringify(payload)).byteLength;
+    if (size > 256 * 1024) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Submission payload must not exceed 256 KiB"
+      });
+    }
+  })
   .openapi("SubmissionPayload");
 
 export type SubmissionPayload = z.infer<typeof SubmissionPayloadSchema>;
 
 export const DeveloperProfileSchema = DeveloperSchema.extend({
-  approved: z.boolean()
+  approved: z.boolean(),
+  content_revision: z.number().int().positive()
 }).openapi("DeveloperProfile");
 
 export type DeveloperProfile = z.infer<typeof DeveloperProfileSchema>;
@@ -137,7 +152,8 @@ export type DeveloperProfile = z.infer<typeof DeveloperProfileSchema>;
 // DeveloperProfile except contact_email, which exists for moderator/owner
 // communication and was never meant to be broadcast to anonymous callers.
 export const PublicDeveloperSchema = DeveloperProfileSchema.omit({
-  contact_email: true
+  contact_email: true,
+  content_revision: true
 }).openapi("PublicDeveloper");
 
 export type PublicDeveloper = z.infer<typeof PublicDeveloperSchema>;
@@ -189,13 +205,13 @@ export type DeveloperHistoryEntry = z.infer<typeof DeveloperHistoryEntrySchema>;
 
 export const ReviewNoteOptionalSchema = z
   .object({
-    review_note: z.string().optional()
+    review_note: z.string().max(2000).optional()
   })
   .openapi("ReviewNoteOptional");
 
 export const ReviewNoteRequiredSchema = z
   .object({
-    review_note: z.string().min(1)
+    review_note: z.string().min(1).max(2000)
   })
   .openapi("ReviewNoteRequired");
 
@@ -241,14 +257,15 @@ export const IdParamSchema = z.object({
   })
 });
 
-export const TokenParamSchema = z.object({
-  token: z
-    .string()
-    .min(1)
-    .openapi({
-      param: { name: "token", in: "path" }
-    })
-});
+export const TransferAcceptanceSchema = z
+  .object({ token: z.string().min(64).max(128) })
+  .strict()
+  .openapi("TransferAcceptance");
+
+export const DeveloperApprovalSchema = z
+  .object({ expected_revision: z.number().int().positive() })
+  .strict()
+  .openapi("DeveloperApproval");
 
 export const DeveloperTransferSchema = z
   .object({
@@ -291,5 +308,33 @@ export const ClaimNoteSchema = z
 export const QueueQuerySchema = z.object({
   status: SubmissionStatusSchema.optional().openapi({
     param: { name: "status", in: "query" }
-  })
+  }),
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(100)
+    .default(50)
+    .openapi({
+      param: { name: "limit", in: "query" }
+    }),
+  cursor: z
+    .string()
+    .max(1000)
+    .optional()
+    .openapi({
+      param: { name: "cursor", in: "query" }
+    })
 });
+
+export const SubmissionPageQuerySchema = QueueQuerySchema.pick({
+  limit: true,
+  cursor: true
+});
+
+export const PaginationSchema = z
+  .object({
+    next_cursor: z.string().nullable(),
+    has_more: z.boolean()
+  })
+  .openapi("Pagination");

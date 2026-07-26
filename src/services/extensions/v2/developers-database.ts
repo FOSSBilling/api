@@ -54,7 +54,12 @@ function parseDeveloperRow(row: Record<string, unknown>): DeveloperProfile {
     URL: (row.url as string | null) ?? undefined,
     avatar_url: (row.avatar_url as string | null) ?? undefined,
     contact_email: (row.contact_email as string | null) ?? undefined,
-    approved: row.approved_at !== null && row.approved_at !== undefined
+    approved:
+      row.approved_at !== null &&
+      row.approved_at !== undefined &&
+      (row.approved_revision == null ||
+        Number(row.approved_revision) === Number(row.content_revision ?? 1)),
+    content_revision: Number(row.content_revision ?? 1)
   };
 }
 
@@ -133,8 +138,12 @@ export class DevelopersDatabase {
         // approval no longer applies. Not worth diffing old vs. new values.
         mainStmt = this.db
           .prepare(
-            `UPDATE developers SET type = ?, name = ?, url = ?, avatar_url = ?, contact_email = ?, approved_at = NULL, updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?`
+            `UPDATE developers
+             SET type = ?, name = ?, url = ?, avatar_url = ?, contact_email = ?,
+                 content_revision = content_revision + 1,
+                 approved_at = NULL, approved_revision = NULL, approved_by = NULL,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = ? AND owner_user_id = ?`
           )
           .bind(
             developer.type,
@@ -142,7 +151,8 @@ export class DevelopersDatabase {
             developer.URL ?? null,
             developer.avatar_url ?? null,
             developer.contact_email ?? null,
-            developer.id
+            developer.id,
+            userId
           );
       }
 
@@ -156,7 +166,8 @@ export class DevelopersDatabase {
       const historyStmt = this.db
         .prepare(
           `INSERT INTO developer_history (id, developer_id, type, name, url, changed_by, changed_at)
-           VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
+           SELECT ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP
+           WHERE changes() = 1`
         )
         .bind(
           crypto.randomUUID(),
@@ -172,6 +183,7 @@ export class DevelopersDatabase {
         results = (await this.db.batch([mainStmt, historyStmt])) as Array<{
           success: boolean;
           error?: string;
+          meta?: { changes?: number };
         }>;
       } catch (error) {
         if (isOwnerConflict(error instanceof Error ? error.message : "")) {
@@ -203,7 +215,30 @@ export class DevelopersDatabase {
         );
       }
 
-      return this.getById(developer.id);
+      if (!results[0]?.meta?.changes) {
+        return {
+          data: null,
+          error: {
+            message: "Developer ownership changed while updating the profile",
+            code: "CONFLICT"
+          }
+        };
+      }
+
+      const current = await this.db
+        .prepare("SELECT * FROM developers WHERE id = ? AND owner_user_id = ?")
+        .bind(developer.id, userId)
+        .first<Record<string, unknown>>();
+      if (!current) {
+        return {
+          data: null,
+          error: {
+            message: "Developer ownership changed while updating the profile",
+            code: "CONFLICT"
+          }
+        };
+      }
+      return { data: parseDeveloperRow(current), error: null };
     } catch (error) {
       return databaseError("upsertOwn", error);
     }
@@ -461,15 +496,21 @@ export class DevelopersDatabase {
   }
 
   async approve(
-    id: string
+    id: string,
+    expectedRevision: number,
+    reviewerId: string
   ): Promise<DatabaseResult<{ id: string; approved: true }>> {
     let result;
     try {
       result = await this.db
         .prepare(
-          "UPDATE developers SET approved_at = CURRENT_TIMESTAMP WHERE id = ?"
+          `UPDATE developers
+           SET approved_at = CURRENT_TIMESTAMP,
+               approved_revision = content_revision,
+               approved_by = ?
+           WHERE id = ? AND content_revision = ?`
         )
-        .bind(id)
+        .bind(reviewerId, id, expectedRevision)
         .run();
     } catch (error) {
       return databaseError("approve", error);
@@ -483,13 +524,23 @@ export class DevelopersDatabase {
     }
 
     if (!result.meta?.changes) {
-      return {
-        data: null,
-        error: {
-          message: `Cannot find developer by id: ${id}`,
-          code: "NOT_FOUND"
-        }
-      };
+      const existing = await this.getById(id);
+      return existing.error
+        ? {
+            data: null,
+            error: {
+              message: `Cannot find developer by id: ${id}`,
+              code: "NOT_FOUND"
+            }
+          }
+        : {
+            data: null,
+            error: {
+              message:
+                "Developer profile changed after it was reviewed; reload it and approve the current revision",
+              code: "CONFLICT"
+            }
+          };
     }
 
     return { data: { id, approved: true }, error: null };
@@ -564,9 +615,7 @@ export class DevelopersDatabase {
         crypto.randomUUID().replace(/-/g, "") +
         crypto.randomUUID().replace(/-/g, "");
       const tokenHash = await sha256Hex(token);
-      const expiresAt = toSqliteDatetime(
-        new Date(Date.now() + 24 * 60 * 60 * 1000)
-      );
+      const expiresAt = toSqliteDatetime(new Date(Date.now() + 60 * 60 * 1000));
 
       if (!this.db.batch) {
         return databaseError(
@@ -730,7 +779,12 @@ export class DevelopersDatabase {
         .bind(userId, tokenHash, userId);
       const updateDeveloperStmt = this.db
         .prepare(
-          `UPDATE developers SET owner_user_id = ?, approved_at = NULL, updated_at = CURRENT_TIMESTAMP
+          `UPDATE developers
+           SET owner_user_id = ?,
+               ownership_epoch = ownership_epoch + 1,
+               content_revision = content_revision + 1,
+               approved_at = NULL, approved_revision = NULL, approved_by = NULL,
+               updated_at = CURRENT_TIMESTAMP
            WHERE changes() = 1
              AND id = (
                SELECT developer_id FROM developer_transfers
@@ -739,11 +793,27 @@ export class DevelopersDatabase {
         )
         .bind(userId, tokenHash, userId);
 
+      const rejectPendingStmt = this.db
+        .prepare(
+          `UPDATE extension_submissions
+           SET status = 'rejected',
+               review_note = 'Ownership changed before review',
+               reviewed_at = CURRENT_TIMESTAMP
+           WHERE changes() = 1
+             AND developer_id = (
+               SELECT developer_id FROM developer_transfers
+               WHERE token_hash = ? AND accepted_by = ? AND accepted_at IS NOT NULL
+             )
+             AND status = 'pending'`
+        )
+        .bind(tokenHash, userId);
+
       let results;
       try {
         results = (await this.db.batch([
           claimStmt,
-          updateDeveloperStmt
+          updateDeveloperStmt,
+          rejectPendingStmt
         ])) as Array<{
           success: boolean;
           error?: string;
@@ -1125,7 +1195,12 @@ export class DevelopersDatabase {
     try {
       const developerStmt = this.db
         .prepare(
-          `UPDATE developers SET owner_user_id = ?, approved_at = NULL, updated_at = CURRENT_TIMESTAMP
+          `UPDATE developers
+           SET owner_user_id = ?,
+               ownership_epoch = ownership_epoch + 1,
+               content_revision = content_revision + 1,
+               approved_at = NULL, approved_revision = NULL, approved_by = NULL,
+               updated_at = CURRENT_TIMESTAMP
            WHERE id = ? AND owner_user_id IS NULL`
         )
         .bind(claim.claimant_id, claim.developer_id);

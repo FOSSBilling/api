@@ -8,6 +8,7 @@ import { getAuth, requireAuth } from "../../../lib/auth";
 import {
   ClaimNoteSchema,
   DeveloperClaimSchema,
+  DeveloperApprovalSchema,
   DeveloperHistoryEntrySchema,
   DeveloperProfileSchema,
   DeveloperSchema,
@@ -17,13 +18,15 @@ import {
   ExtensionSchema,
   IdParamSchema,
   PendingDeveloperClaimSchema,
+  PaginationSchema,
   PublicDeveloperSchema,
   QueueQuerySchema,
   ReviewNoteOptionalSchema,
   ReviewNoteRequiredSchema,
   SubmissionPayloadSchema,
+  SubmissionPageQuerySchema,
   SubmissionSchema,
-  TokenParamSchema,
+  TransferAcceptanceSchema,
   toPublicDeveloper
 } from "./interfaces";
 import { DevelopersDatabase } from "./developers-database";
@@ -214,6 +217,11 @@ const createSubmissionRoute = createRoute({
       content: { "application/json": { schema: ErrorResponseSchema } },
       description: "Caller does not own the target developer or extension"
     },
+    409: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description:
+        "Ownership or target changed, a duplicate is pending, or the pending limit was reached"
+    },
     422: {
       content: { "application/json": { schema: ErrorResponseSchema } },
       description: "Payload failed validation"
@@ -247,6 +255,7 @@ extensionsV2.openapi(createSubmissionRoute, async (c) => {
   const created = await db.create({
     extensionId: ownership.data.extensionId,
     developerId: ownership.data.developerId,
+    ownershipEpoch: ownership.data.ownershipEpoch,
     submittedBy: auth.userId,
     payload
   });
@@ -255,10 +264,10 @@ extensionsV2.openapi(createSubmissionRoute, async (c) => {
       {
         error: {
           message: created.error?.message ?? "Unable to create submission",
-          code: "DATABASE_ERROR"
+          code: created.error?.code ?? "DATABASE_ERROR"
         }
       },
-      500
+      created.error?.code === "CONFLICT" ? 409 : 500
     );
   }
 
@@ -275,11 +284,15 @@ const mineRoute = createRoute({
   summary: "List the caller's own submissions, in any status",
   security: [{ Bearer: [] }],
   middleware: [requireAuth()] as const,
+  request: { query: SubmissionPageQuerySchema },
   responses: {
     200: {
       content: {
         "application/json": {
-          schema: z.object({ result: z.array(SubmissionSchema) })
+          schema: z.object({
+            result: z.array(SubmissionSchema),
+            pagination: PaginationSchema
+          })
         }
       },
       description: "The caller's submissions"
@@ -287,6 +300,10 @@ const mineRoute = createRoute({
     401: {
       content: { "application/json": { schema: ErrorResponseSchema } },
       description: "Missing or invalid bearer token"
+    },
+    422: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Pagination query failed validation"
     },
     500: {
       content: { "application/json": { schema: ErrorResponseSchema } },
@@ -297,10 +314,11 @@ const mineRoute = createRoute({
 
 extensionsV2.openapi(mineRoute, async (c) => {
   const auth = getAuth(c);
+  const { limit, cursor } = c.req.valid("query");
   const platform = getPlatform(c);
   const db = new SubmissionsDatabase(platform.getDatabase("DB_EXTENSIONS"));
 
-  const { data, error } = await db.listBySubmitter(auth.userId);
+  const { data, error } = await db.listBySubmitter(auth.userId, limit, cursor);
   if (error || !data) {
     return c.json(
       {
@@ -309,11 +327,20 @@ extensionsV2.openapi(mineRoute, async (c) => {
           code: "DATABASE_ERROR"
         }
       },
-      500
+      error?.code === "INVALID_CURSOR" ? 422 : 500
     );
   }
 
-  return c.json({ result: data }, 200);
+  return c.json(
+    {
+      result: data.items,
+      pagination: {
+        next_cursor: data.nextCursor,
+        has_more: data.hasMore
+      }
+    },
+    200
+  );
 });
 
 const queueRoute = createRoute({
@@ -328,7 +355,10 @@ const queueRoute = createRoute({
     200: {
       content: {
         "application/json": {
-          schema: z.object({ result: z.array(SubmissionSchema) })
+          schema: z.object({
+            result: z.array(SubmissionSchema),
+            pagination: PaginationSchema
+          })
         }
       },
       description:
@@ -357,9 +387,13 @@ extensionsV2.openapi(queueRoute, async (c) => {
   const platform = getPlatform(c);
   const db = new SubmissionsDatabase(platform.getDatabase("DB_EXTENSIONS"));
 
-  const { status } = c.req.valid("query");
+  const { status, limit, cursor } = c.req.valid("query");
 
-  const { data, error } = await db.listQueue(status ?? "pending");
+  const { data, error } = await db.listQueue(
+    status ?? "pending",
+    limit,
+    cursor
+  );
   if (error || !data) {
     return c.json(
       {
@@ -368,11 +402,20 @@ extensionsV2.openapi(queueRoute, async (c) => {
           code: "DATABASE_ERROR"
         }
       },
-      500
+      error?.code === "INVALID_CURSOR" ? 422 : 500
     );
   }
 
-  return c.json({ result: data }, 200);
+  return c.json(
+    {
+      result: data.items,
+      pagination: {
+        next_cursor: data.nextCursor,
+        has_more: data.hasMore
+      }
+    },
+    200
+  );
 });
 
 const approveRoute = createRoute({
@@ -1090,12 +1133,16 @@ extensionsV2.openapi(revokeTransferRoute, async (c) => {
 
 const acceptTransferRoute = createRoute({
   method: "post",
-  path: "/developers/transfers/{token}/accept",
+  path: "/developers/transfers/accept",
   tags: ["Developers"],
   summary: "Accept a developer profile transfer using its single-use token",
   security: [{ Bearer: [] }],
   middleware: [requireAuth()] as const,
-  request: { params: TokenParamSchema },
+  request: {
+    body: {
+      content: { "application/json": { schema: TransferAcceptanceSchema } }
+    }
+  },
   responses: {
     200: {
       content: {
@@ -1119,7 +1166,7 @@ const acceptTransferRoute = createRoute({
     },
     422: {
       content: { "application/json": { schema: ErrorResponseSchema } },
-      description: "token param failed validation"
+      description: "token body failed validation"
     },
     500: {
       content: { "application/json": { schema: ErrorResponseSchema } },
@@ -1130,7 +1177,7 @@ const acceptTransferRoute = createRoute({
 
 extensionsV2.openapi(acceptTransferRoute, async (c) => {
   const auth = getAuth(c);
-  const { token } = c.req.valid("param");
+  const { token } = c.req.valid("json");
   const platform = getPlatform(c);
   const db = new DevelopersDatabase(platform.getDatabase("DB_EXTENSIONS"));
 
@@ -1318,7 +1365,12 @@ const approveDeveloperRoute = createRoute({
   summary: "Mark a developer profile as reviewed/approved",
   security: [{ Bearer: [] }],
   middleware: [requireAuth(), requireModerator()] as const,
-  request: { params: IdParamSchema },
+  request: {
+    params: IdParamSchema,
+    body: {
+      content: { "application/json": { schema: DeveloperApprovalSchema } }
+    }
+  },
   responses: {
     200: {
       content: {
@@ -1342,6 +1394,10 @@ const approveDeveloperRoute = createRoute({
       content: { "application/json": { schema: ErrorResponseSchema } },
       description: "No developer with that id"
     },
+    409: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Profile changed after the reviewed revision"
+    },
     422: {
       content: { "application/json": { schema: ErrorResponseSchema } },
       description: "id param failed validation"
@@ -1354,13 +1410,15 @@ const approveDeveloperRoute = createRoute({
 });
 
 extensionsV2.openapi(approveDeveloperRoute, async (c) => {
+  const auth = getAuth(c);
   const { id } = c.req.valid("param");
+  const { expected_revision } = c.req.valid("json");
   const platform = getPlatform(c);
   const db = new DevelopersDatabase(platform.getDatabase("DB_EXTENSIONS"));
 
-  const { data, error } = await db.approve(id);
+  const { data, error } = await db.approve(id, expected_revision, auth.userId);
   if (error || !data) {
-    const status = error?.code === "NOT_FOUND" ? 404 : 500;
+    const status = statusFromErrorCode(error?.code);
     return c.json(
       {
         error: {
