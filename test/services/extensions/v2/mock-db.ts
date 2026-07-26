@@ -110,6 +110,102 @@ class MockStatement implements D1PreparedStatement {
       return row ? [row] : [];
     }
 
+    if (q.startsWith("SELECT * FROM authors WHERE owner_user_id = ?")) {
+      const row = [...this.tables.authors.values()].find(
+        (r) => r.owner_user_id === p[0]
+      );
+      return row ? [row] : [];
+    }
+
+    if (q.startsWith("SELECT * FROM authors WHERE id = ?")) {
+      const row = this.tables.authors.get(String(p[0]));
+      return row ? [row] : [];
+    }
+
+    if (q.startsWith("SELECT * FROM authors WHERE approved_at IS NULL")) {
+      return [...this.tables.authors.values()]
+        .filter((r) => (r.approved_at ?? null) === null)
+        .sort((a, b) =>
+          String(a.created_at ?? "").localeCompare(String(b.created_at ?? ""))
+        );
+    }
+
+    if (
+      q.startsWith(
+        "INSERT INTO authors (id, type, name, url, bio, avatar_url, contact_email, owner_user_id, approved_at, created_at, updated_at)"
+      )
+    ) {
+      const [
+        id,
+        type,
+        name,
+        url,
+        bio,
+        avatar_url,
+        contact_email,
+        owner_user_id
+      ] = p;
+      // Mirrors idx_authors_owner_unique: one profile per non-null owner.
+      const ownerTaken = [...this.tables.authors.values()].some(
+        (r) => owner_user_id !== null && r.owner_user_id === owner_user_id
+      );
+      if (ownerTaken) {
+        throw new Error(
+          "D1_ERROR: UNIQUE constraint failed: authors.owner_user_id"
+        );
+      }
+      const now = new Date().toISOString();
+      this.tables.authors.set(String(id), {
+        id,
+        type,
+        name,
+        url,
+        bio,
+        avatar_url,
+        contact_email,
+        owner_user_id,
+        approved_at: null,
+        created_at: now,
+        updated_at: now
+      });
+      return [];
+    }
+
+    if (
+      q.startsWith(
+        "UPDATE authors SET type = ?, name = ?, url = ?, bio = ?, avatar_url = ?, contact_email = ?, approved_at = NULL"
+      )
+    ) {
+      const [type, name, url, bio, avatar_url, contact_email, id] = p;
+      const row = this.tables.authors.get(String(id));
+      if (row) {
+        row.type = type;
+        row.name = name;
+        row.url = url;
+        row.bio = bio;
+        row.avatar_url = avatar_url;
+        row.contact_email = contact_email;
+        row.approved_at = null;
+        row.updated_at = new Date().toISOString();
+        this.changes = 1;
+      }
+      return [];
+    }
+
+    if (
+      q.startsWith(
+        "UPDATE authors SET approved_at = CURRENT_TIMESTAMP WHERE id = ?"
+      )
+    ) {
+      const [id] = p;
+      const row = this.tables.authors.get(String(id));
+      if (row) {
+        row.approved_at = new Date().toISOString();
+        this.changes = 1;
+      }
+      return [];
+    }
+
     if (q.startsWith("SELECT is_moderator FROM users WHERE id = ?")) {
       const row = this.tables.users.get(String(p[0]));
       return row ? [row] : [];

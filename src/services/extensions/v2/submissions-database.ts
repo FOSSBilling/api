@@ -77,10 +77,14 @@ export class SubmissionsDatabase {
         .bind(payload.author.id)
         .first<{ owner_user_id: string | null }>();
 
-      if (payloadAuthor && payloadAuthor.owner_user_id !== callerId) {
+      if (!payloadAuthor || payloadAuthor.owner_user_id !== callerId) {
         return {
           data: null,
-          error: { message: "You do not own this author", code: "FORBIDDEN" }
+          error: {
+            message:
+              "You do not own this author, or it doesn't exist yet — create a developer profile first",
+            code: "FORBIDDEN"
+          }
         };
       }
 

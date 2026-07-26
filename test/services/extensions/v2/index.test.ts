@@ -60,6 +60,18 @@ function samplePayload(overrides?: {
   };
 }
 
+// Extension submissions now require the named author to already exist
+// (created via PUT /authors/me) and be owned by the caller.
+function seedAuthor(id: string, ownerUserId: string): void {
+  tables.authors.set(id, {
+    id,
+    type: "user",
+    name: "Author",
+    url: null,
+    owner_user_id: ownerUserId
+  });
+}
+
 function seedOwnedExtension(): void {
   tables.authors.set("owner-author", {
     id: "owner-author",
@@ -112,6 +124,35 @@ async function get(path: string, headers: Record<string, string>) {
   return res;
 }
 
+async function put(
+  path: string,
+  headers: Record<string, string>,
+  body?: unknown
+) {
+  const ctx = createExecutionContext();
+  const res = await app.request(
+    path,
+    {
+      method: "PUT",
+      headers,
+      body: body !== undefined ? JSON.stringify(body) : undefined
+    },
+    env,
+    ctx
+  );
+  await waitOnExecutionContext(ctx);
+  return res;
+}
+
+function sampleAuthor(overrides?: { id?: string; name?: string }) {
+  return {
+    id: overrides?.id ?? "dev-author",
+    type: "user",
+    name: overrides?.name ?? "Dev Author",
+    URL: "https://example.com"
+  };
+}
+
 describe("Extensions API v2", () => {
   describe("POST /submissions", () => {
     it("requires auth", async () => {
@@ -136,7 +177,21 @@ describe("Extensions API v2", () => {
       expect(data.error.code).toBe("VALIDATION_ERROR");
     });
 
-    it("creates a pending submission for a brand-new extension and author", async () => {
+    it("rejects profile fields (bio/avatar_url/contact_email) on a submission's author", async () => {
+      seedAuthor("new-author", "user-1");
+      const headers = await authHeaders("user-1");
+      const payload = samplePayload();
+      const res = await post("/extensions/v2/submissions", headers, {
+        ...payload,
+        author: { ...payload.author, bio: "Should not be accepted here" }
+      });
+
+      expect(res.status).toBe(422);
+      expect(tables.extension_submissions.size).toBe(0);
+    });
+
+    it("creates a pending submission for a brand-new extension under an existing author", async () => {
+      seedAuthor("new-author", "user-1");
       const headers = await authHeaders("user-1");
       const res = await post(
         "/extensions/v2/submissions",
@@ -200,10 +255,25 @@ describe("Extensions API v2", () => {
 
       expect(res.status).toBe(403);
     });
+
+    it("rejects naming an author id that doesn't exist at all", async () => {
+      const headers = await authHeaders("user-1");
+
+      const res = await post(
+        "/extensions/v2/submissions",
+        headers,
+        samplePayload({ authorId: "no-such-author" })
+      );
+
+      expect(res.status).toBe(403);
+      expect(tables.extension_submissions.size).toBe(0);
+    });
   });
 
   describe("GET /submissions/mine", () => {
     it("returns only the caller's own submissions", async () => {
+      seedAuthor("author-a", "user-1");
+      seedAuthor("author-b", "user-2");
       await post(
         "/extensions/v2/submissions",
         await authHeaders("user-1"),
@@ -244,6 +314,7 @@ describe("Extensions API v2", () => {
 
     it("returns pending submissions for a moderator", async () => {
       tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
+      seedAuthor("new-author", "user-1");
       await post(
         "/extensions/v2/submissions",
         await authHeaders("user-1"),
@@ -264,6 +335,7 @@ describe("Extensions API v2", () => {
   describe("approve / reject", () => {
     it("reverts to pending if the write-through fails after a successful claim", async () => {
       tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
+      seedAuthor("new-author", "user-1");
 
       const created = await post(
         "/extensions/v2/submissions",
@@ -297,6 +369,7 @@ describe("Extensions API v2", () => {
 
     it("approves a submission and it becomes visible via the v1 read path", async () => {
       tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
+      seedAuthor("new-author", "user-1");
 
       const created = await post(
         "/extensions/v2/submissions",
@@ -326,6 +399,7 @@ describe("Extensions API v2", () => {
     });
 
     it("blocks non-moderators from approving", async () => {
+      seedAuthor("new-author", "user-1");
       const created = await post(
         "/extensions/v2/submissions",
         await authHeaders("user-1"),
@@ -343,6 +417,7 @@ describe("Extensions API v2", () => {
 
     it("rejects approving a submission that is not pending", async () => {
       tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
+      seedAuthor("new-author", "user-1");
       const created = await post(
         "/extensions/v2/submissions",
         await authHeaders("user-1"),
@@ -412,6 +487,7 @@ describe("Extensions API v2", () => {
 
     it("requires a review_note to reject", async () => {
       tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
+      seedAuthor("new-author", "user-1");
       const created = await post(
         "/extensions/v2/submissions",
         await authHeaders("user-1"),
@@ -429,6 +505,7 @@ describe("Extensions API v2", () => {
 
     it("rejects a submission with a note", async () => {
       tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
+      seedAuthor("new-author", "user-1");
       const created = await post(
         "/extensions/v2/submissions",
         await authHeaders("user-1"),
@@ -448,6 +525,276 @@ describe("Extensions API v2", () => {
     });
   });
 
+  describe("PUT /authors/me", () => {
+    it("creates a new author profile, unapproved", async () => {
+      const res = await put(
+        "/extensions/v2/authors/me",
+        await authHeaders("user-1"),
+        sampleAuthor()
+      );
+
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as { result: { approved: boolean } };
+      expect(data.result.approved).toBe(false);
+
+      const stored = tables.authors.get("dev-author");
+      expect(stored).toBeDefined();
+      expect(stored?.approved_at).toBeNull();
+    });
+
+    it("updates an existing profile, still unapproved", async () => {
+      await put(
+        "/extensions/v2/authors/me",
+        await authHeaders("user-1"),
+        sampleAuthor()
+      );
+
+      const res = await put(
+        "/extensions/v2/authors/me",
+        await authHeaders("user-1"),
+        sampleAuthor({ name: "Renamed Author" })
+      );
+
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as {
+        result: { name: string; approved: boolean };
+      };
+      expect(data.result.name).toBe("Renamed Author");
+      expect(data.result.approved).toBe(false);
+      expect(tables.authors.get("dev-author")?.name).toBe("Renamed Author");
+    });
+
+    it("only lets one of two concurrent first-time profile creations by the same caller win", async () => {
+      const headers = await authHeaders("user-1");
+      const [resA, resB] = await Promise.all([
+        put(
+          "/extensions/v2/authors/me",
+          headers,
+          sampleAuthor({ id: "author-a" })
+        ),
+        put(
+          "/extensions/v2/authors/me",
+          headers,
+          sampleAuthor({ id: "author-b" })
+        )
+      ]);
+
+      const statuses = [resA.status, resB.status].sort();
+      expect(statuses).toEqual([200, 409]);
+
+      const ownedAuthors = [...tables.authors.values()].filter(
+        (a) => a.owner_user_id === "user-1"
+      );
+      expect(ownedAuthors).toHaveLength(1);
+    });
+
+    it("rejects an id that already belongs to someone else", async () => {
+      await put(
+        "/extensions/v2/authors/me",
+        await authHeaders("user-1"),
+        sampleAuthor()
+      );
+
+      const res = await put(
+        "/extensions/v2/authors/me",
+        await authHeaders("user-2"),
+        sampleAuthor()
+      );
+
+      expect(res.status).toBe(409);
+    });
+
+    it("rejects changing the id on an existing profile", async () => {
+      await put(
+        "/extensions/v2/authors/me",
+        await authHeaders("user-1"),
+        sampleAuthor()
+      );
+
+      const res = await put(
+        "/extensions/v2/authors/me",
+        await authHeaders("user-1"),
+        sampleAuthor({ id: "different-id" })
+      );
+
+      expect(res.status).toBe(409);
+    });
+
+    it("clears approval when an approved profile is edited", async () => {
+      await put(
+        "/extensions/v2/authors/me",
+        await authHeaders("user-1"),
+        sampleAuthor()
+      );
+      tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
+      const approved = await post(
+        "/extensions/v2/authors/dev-author/approve",
+        await authHeaders("mod-1")
+      );
+      expect(approved.status).toBe(200);
+      const approvedBody = (await approved.json()) as {
+        result: { approved: boolean };
+      };
+      expect(approvedBody.result.approved).toBe(true);
+
+      const res = await put(
+        "/extensions/v2/authors/me",
+        await authHeaders("user-1"),
+        sampleAuthor({ name: "Edited Again" })
+      );
+
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as { result: { approved: boolean } };
+      expect(data.result.approved).toBe(false);
+    });
+
+    it("round-trips bio, avatar_url, and contact_email", async () => {
+      const headers = await authHeaders("user-1");
+      const res = await put("/extensions/v2/authors/me", headers, {
+        ...sampleAuthor(),
+        bio: "I build FOSSBilling extensions.",
+        avatar_url: "https://example.com/avatar.png",
+        contact_email: "dev@example.com"
+      });
+
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as {
+        result: {
+          bio: string;
+          avatar_url: string;
+          contact_email: string;
+        };
+      };
+      expect(data.result.bio).toBe("I build FOSSBilling extensions.");
+      expect(data.result.avatar_url).toBe("https://example.com/avatar.png");
+      expect(data.result.contact_email).toBe("dev@example.com");
+
+      const stored = tables.authors.get("dev-author");
+      expect(stored?.bio).toBe("I build FOSSBilling extensions.");
+      expect(stored?.avatar_url).toBe("https://example.com/avatar.png");
+      expect(stored?.contact_email).toBe("dev@example.com");
+    });
+
+    it("updates bio, avatar_url, and contact_email on an existing profile", async () => {
+      const headers = await authHeaders("user-1");
+      await put("/extensions/v2/authors/me", headers, {
+        ...sampleAuthor(),
+        bio: "Old bio.",
+        avatar_url: "https://example.com/old.png",
+        contact_email: "old@example.com"
+      });
+
+      const res = await put("/extensions/v2/authors/me", headers, {
+        ...sampleAuthor(),
+        bio: "New bio.",
+        avatar_url: "https://example.com/new.png",
+        contact_email: "new@example.com"
+      });
+
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as {
+        result: {
+          bio: string;
+          avatar_url: string;
+          contact_email: string;
+        };
+      };
+      expect(data.result.bio).toBe("New bio.");
+      expect(data.result.avatar_url).toBe("https://example.com/new.png");
+      expect(data.result.contact_email).toBe("new@example.com");
+
+      const stored = tables.authors.get("dev-author");
+      expect(stored?.bio).toBe("New bio.");
+      expect(stored?.avatar_url).toBe("https://example.com/new.png");
+      expect(stored?.contact_email).toBe("new@example.com");
+    });
+
+    it("accepts a payload without bio, avatar_url, or contact_email", async () => {
+      const res = await put(
+        "/extensions/v2/authors/me",
+        await authHeaders("user-1"),
+        sampleAuthor()
+      );
+
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as {
+        result: {
+          bio?: string;
+          avatar_url?: string;
+          contact_email?: string;
+        };
+      };
+      expect(data.result.bio).toBeUndefined();
+      expect(data.result.avatar_url).toBeUndefined();
+      expect(data.result.contact_email).toBeUndefined();
+    });
+  });
+
+  describe("author moderation", () => {
+    it("approves an author and removes it from the unapproved list", async () => {
+      await put(
+        "/extensions/v2/authors/me",
+        await authHeaders("user-1"),
+        sampleAuthor()
+      );
+      tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
+
+      const approve = await post(
+        "/extensions/v2/authors/dev-author/approve",
+        await authHeaders("mod-1")
+      );
+      expect(approve.status).toBe(200);
+      const approveBody = (await approve.json()) as {
+        result: { id: string; approved: boolean };
+      };
+      expect(approveBody.result).toEqual({ id: "dev-author", approved: true });
+
+      const unapproved = await get(
+        "/extensions/v2/authors/unapproved",
+        await authHeaders("mod-1")
+      );
+      expect(unapproved.status).toBe(200);
+      const unapprovedBody = (await unapproved.json()) as {
+        result: Array<{ id: string }>;
+      };
+      expect(unapprovedBody.result.map((a) => a.id)).not.toContain(
+        "dev-author"
+      );
+    });
+
+    it("404s approving a nonexistent author", async () => {
+      tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
+
+      const res = await post(
+        "/extensions/v2/authors/no-such-author/approve",
+        await authHeaders("mod-1")
+      );
+      expect(res.status).toBe(404);
+    });
+
+    it("blocks non-moderators from listing unapproved authors", async () => {
+      const res = await get(
+        "/extensions/v2/authors/unapproved",
+        await authHeaders("user-1")
+      );
+      expect(res.status).toBe(403);
+    });
+
+    it("blocks non-moderators from approving authors", async () => {
+      await put(
+        "/extensions/v2/authors/me",
+        await authHeaders("user-1"),
+        sampleAuthor()
+      );
+
+      const res = await post(
+        "/extensions/v2/authors/dev-author/approve",
+        await authHeaders("user-1")
+      );
+      expect(res.status).toBe(403);
+    });
+  });
+
   describe("OpenAPI docs", () => {
     it("serves a generated OpenAPI document", async () => {
       const res = await get("/extensions/v2/openapi.json", {});
@@ -463,7 +810,10 @@ describe("Extensions API v2", () => {
           "/submissions/mine",
           "/submissions/queue",
           "/submissions/{id}/approve",
-          "/submissions/{id}/reject"
+          "/submissions/{id}/reject",
+          "/authors/me",
+          "/authors/unapproved",
+          "/authors/{id}/approve"
         ])
       );
     });

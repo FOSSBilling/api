@@ -34,9 +34,27 @@ export const AuthorSchema = z
     id: lowercaseId("author"),
     type: z.enum(["user", "organization"]),
     name: z.string().min(1),
-    URL: httpUrl().optional()
+    URL: httpUrl().optional(),
+    bio: z.string().max(500).optional(),
+    avatar_url: httpUrl().optional(),
+    contact_email: z.string().email().optional()
   })
   .openapi("Author");
+
+export type Author = z.infer<typeof AuthorSchema>;
+
+// Submissions go through moderation and only ever touch identity fields —
+// profile fields (bio/avatar_url/contact_email) are direct-write-only via
+// PUT /authors/me, so this schema rejects them instead of silently
+// accepting-then-dropping them when a submission is approved.
+export const SubmissionAuthorSchema = AuthorSchema.pick({
+  id: true,
+  type: true,
+  name: true,
+  URL: true
+})
+  .strict()
+  .openapi("SubmissionAuthor");
 
 export const ReleaseSchema = z
   .object({
@@ -81,12 +99,18 @@ export const ExtensionPayloadSchema = z
 
 export const SubmissionPayloadSchema = z
   .object({
-    author: AuthorSchema,
+    author: SubmissionAuthorSchema,
     extension: ExtensionPayloadSchema
   })
   .openapi("SubmissionPayload");
 
 export type SubmissionPayload = z.infer<typeof SubmissionPayloadSchema>;
+
+export const AuthorProfileSchema = AuthorSchema.extend({
+  approved: z.boolean()
+}).openapi("AuthorProfile");
+
+export type AuthorProfile = z.infer<typeof AuthorProfileSchema>;
 
 export const ReviewNoteOptionalSchema = z
   .object({
