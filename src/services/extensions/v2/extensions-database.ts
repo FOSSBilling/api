@@ -19,7 +19,7 @@ const SELECT_EXTENSIONS = `
          e.icon_url, e.readme, e.source, e.version, e.download_url,
          COALESCE(d.id, e.author_id) AS developer_id,
          d.type AS developer_type, d.name AS developer_name,
-         d.url AS developer_url, d.bio AS developer_bio,
+         d.url AS developer_url,
          d.avatar_url AS developer_avatar_url, d.approved_at AS developer_approved_at
   FROM extensions e
   LEFT JOIN developers d ON e.author_id = d.id
@@ -134,8 +134,6 @@ function parseExtensionRow(row: Record<string, unknown>): Extension {
       name: (row.developer_name as string) ?? "",
       URL:
         typeof row.developer_url === "string" ? row.developer_url : undefined,
-      bio:
-        typeof row.developer_bio === "string" ? row.developer_bio : undefined,
       avatar_url:
         typeof row.developer_avatar_url === "string"
           ? row.developer_avatar_url

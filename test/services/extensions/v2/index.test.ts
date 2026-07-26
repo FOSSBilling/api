@@ -197,13 +197,16 @@ describe("Extensions API v2", () => {
       expect(data.error.code).toBe("VALIDATION_ERROR");
     });
 
-    it("rejects profile fields (bio/avatar_url/contact_email) on a submission's developer", async () => {
+    it("rejects profile fields (avatar_url/contact_email) on a submission's developer", async () => {
       seedDeveloper("new-developer", "user-1");
       const headers = await authHeaders("user-1");
       const payload = samplePayload();
       const res = await post("/extensions/v2/submissions", headers, {
         ...payload,
-        developer: { ...payload.developer, bio: "Should not be accepted here" }
+        developer: {
+          ...payload.developer,
+          avatar_url: "https://example.com/should-not-be-accepted.png"
+        }
       });
 
       expect(res.status).toBe(422);
@@ -694,11 +697,10 @@ describe("Extensions API v2", () => {
       expect(data.result.approved).toBe(false);
     });
 
-    it("round-trips bio, avatar_url, and contact_email", async () => {
+    it("round-trips avatar_url and contact_email", async () => {
       const headers = await authHeaders("user-1");
       const res = await put("/extensions/v2/developers/me", headers, {
         ...sampleDeveloper(),
-        bio: "I build FOSSBilling extensions.",
         avatar_url: "https://example.com/avatar.png",
         contact_email: "dev@example.com"
       });
@@ -706,33 +708,28 @@ describe("Extensions API v2", () => {
       expect(res.status).toBe(200);
       const data = (await res.json()) as {
         result: {
-          bio: string;
           avatar_url: string;
           contact_email: string;
         };
       };
-      expect(data.result.bio).toBe("I build FOSSBilling extensions.");
       expect(data.result.avatar_url).toBe("https://example.com/avatar.png");
       expect(data.result.contact_email).toBe("dev@example.com");
 
       const stored = tables.developers.get("dev-developer");
-      expect(stored?.bio).toBe("I build FOSSBilling extensions.");
       expect(stored?.avatar_url).toBe("https://example.com/avatar.png");
       expect(stored?.contact_email).toBe("dev@example.com");
     });
 
-    it("updates bio, avatar_url, and contact_email on an existing profile", async () => {
+    it("updates avatar_url and contact_email on an existing profile", async () => {
       const headers = await authHeaders("user-1");
       await put("/extensions/v2/developers/me", headers, {
         ...sampleDeveloper(),
-        bio: "Old bio.",
         avatar_url: "https://example.com/old.png",
         contact_email: "old@example.com"
       });
 
       const res = await put("/extensions/v2/developers/me", headers, {
         ...sampleDeveloper(),
-        bio: "New bio.",
         avatar_url: "https://example.com/new.png",
         contact_email: "new@example.com"
       });
@@ -740,22 +737,19 @@ describe("Extensions API v2", () => {
       expect(res.status).toBe(200);
       const data = (await res.json()) as {
         result: {
-          bio: string;
           avatar_url: string;
           contact_email: string;
         };
       };
-      expect(data.result.bio).toBe("New bio.");
       expect(data.result.avatar_url).toBe("https://example.com/new.png");
       expect(data.result.contact_email).toBe("new@example.com");
 
       const stored = tables.developers.get("dev-developer");
-      expect(stored?.bio).toBe("New bio.");
       expect(stored?.avatar_url).toBe("https://example.com/new.png");
       expect(stored?.contact_email).toBe("new@example.com");
     });
 
-    it("accepts a payload without bio, avatar_url, or contact_email", async () => {
+    it("accepts a payload without avatar_url or contact_email", async () => {
       const res = await put(
         "/extensions/v2/developers/me",
         await authHeaders("user-1"),
@@ -765,12 +759,10 @@ describe("Extensions API v2", () => {
       expect(res.status).toBe(200);
       const data = (await res.json()) as {
         result: {
-          bio?: string;
           avatar_url?: string;
           contact_email?: string;
         };
       };
-      expect(data.result.bio).toBeUndefined();
       expect(data.result.avatar_url).toBeUndefined();
       expect(data.result.contact_email).toBeUndefined();
     });
@@ -1599,7 +1591,6 @@ describe("Extensions API v2", () => {
         type: "organization",
         name: "Public Dev",
         url: "https://example.com",
-        bio: "We make things",
         avatar_url: "https://example.com/avatar.png",
         contact_email: "private@example.com",
         owner_user_id: "user-1",
@@ -1616,7 +1607,6 @@ describe("Extensions API v2", () => {
         type: "organization",
         name: "Public Dev",
         URL: "https://example.com",
-        bio: "We make things",
         avatar_url: "https://example.com/avatar.png",
         approved: true
       });

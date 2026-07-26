@@ -51,7 +51,6 @@ export const DeveloperSchema = z
     type: z.enum(["user", "organization"]),
     name: z.string().min(1),
     URL: httpUrl().optional(),
-    bio: z.string().max(500).optional(),
     avatar_url: httpUrl().optional(),
     contact_email: z.string().email().optional()
   })
@@ -60,7 +59,7 @@ export const DeveloperSchema = z
 export type Developer = z.infer<typeof DeveloperSchema>;
 
 // Submissions go through moderation and only ever touch identity fields —
-// profile fields (bio/avatar_url/contact_email) are direct-write-only via
+// profile fields (avatar_url/contact_email) are direct-write-only via
 // PUT /developers/me, so this schema rejects them instead of silently
 // accepting-then-dropping them when a submission is approved.
 export const SubmissionDeveloperSchema = DeveloperSchema.pick({
@@ -149,7 +148,6 @@ export function toPublicDeveloper(profile: DeveloperProfile): PublicDeveloper {
     type: profile.type,
     name: profile.name,
     URL: profile.URL,
-    bio: profile.bio,
     avatar_url: profile.avatar_url,
     approved: profile.approved
   };
