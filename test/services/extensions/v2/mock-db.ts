@@ -124,6 +124,12 @@ class MockStatement implements D1PreparedStatement {
       return row ? [row] : [];
     }
 
+    if (q.startsWith("SELECT * FROM authors ORDER BY name")) {
+      return [...this.tables.authors.values()].sort((a, b) =>
+        String(a.name ?? "").localeCompare(String(b.name ?? ""))
+      );
+    }
+
     if (q.startsWith("SELECT * FROM authors WHERE approved_at IS NULL")) {
       return [...this.tables.authors.values()]
         .filter((r) => (r.approved_at ?? null) === null)

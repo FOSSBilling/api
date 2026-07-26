@@ -484,6 +484,57 @@ extensionsV2.openapi(upsertOwnAuthorRoute, async (c) => {
   return c.json({ result: data }, 200);
 });
 
+const allAuthorsRoute = createRoute({
+  method: "get",
+  path: "/authors",
+  tags: ["Moderation"],
+  summary: "List every developer profile, approved or not",
+  security: [{ Bearer: [] }],
+  middleware: [requireAuth(), requireModerator()] as const,
+  responses: {
+    200: {
+      content: {
+        "application/json": {
+          schema: z.object({ result: z.array(AuthorProfileSchema) })
+        }
+      },
+      description: "All developer profiles"
+    },
+    401: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Missing or invalid bearer token"
+    },
+    403: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Caller is not a moderator"
+    },
+    500: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Database error"
+    }
+  }
+});
+
+extensionsV2.openapi(allAuthorsRoute, async (c) => {
+  const platform = getPlatform(c);
+  const db = new AuthorsDatabase(platform.getDatabase("DB_EXTENSIONS"));
+
+  const { data, error } = await db.listAll();
+  if (error || !data) {
+    return c.json(
+      {
+        error: {
+          message: error?.message ?? "Unable to load authors",
+          code: "DATABASE_ERROR"
+        }
+      },
+      500
+    );
+  }
+
+  return c.json({ result: data }, 200);
+});
+
 const unapprovedAuthorsRoute = createRoute({
   method: "get",
   path: "/authors/unapproved",

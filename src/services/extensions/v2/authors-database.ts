@@ -182,6 +182,29 @@ export class AuthorsDatabase {
     }
   }
 
+  async listAll(): Promise<DatabaseResult<AuthorProfile[]>> {
+    let result;
+    try {
+      result = await this.db
+        .prepare(`SELECT * FROM authors ORDER BY name`)
+        .all<Record<string, unknown>>();
+    } catch (error) {
+      return databaseError("listAll", error);
+    }
+
+    if (!result.success) {
+      return databaseError(
+        "listAll",
+        new Error(result.error || "Database query failed")
+      );
+    }
+
+    return {
+      data: (result.results ?? []).map(parseAuthorRow),
+      error: null
+    };
+  }
+
   async listUnapproved(): Promise<DatabaseResult<AuthorProfile[]>> {
     let result;
     try {
