@@ -353,11 +353,6 @@ export class AuthorsDatabase {
     userId: string
   ): Promise<DatabaseResult<AuthorTransfer>> {
     try {
-      const ownershipError = await this.checkOwnership(authorId, userId);
-      if (ownershipError) {
-        return { data: null, error: ownershipError };
-      }
-
       const token =
         crypto.randomUUID().replace(/-/g, "") +
         crypto.randomUUID().replace(/-/g, "");
@@ -373,25 +368,40 @@ export class AuthorsDatabase {
         );
       }
 
-      // Superseding any existing pending transfer (rather than stacking up)
-      // keeps idx_author_transfers_pending satisfied without needing a
-      // separate cleanup pass.
+      // Both writes are conditioned on current ownership in the same
+      // statement, rather than a separate SELECT beforehand — a caller who
+      // loses ownership between an up-front check and the write could
+      // otherwise still slip the write through. Superseding any existing
+      // pending transfer (rather than stacking up) keeps
+      // idx_author_transfers_pending satisfied without a separate cleanup
+      // pass.
       const revokeStmt = this.db
         .prepare(
           `UPDATE author_transfers SET revoked_at = CURRENT_TIMESTAMP
-           WHERE author_id = ? AND accepted_at IS NULL AND revoked_at IS NULL`
+           WHERE author_id = ? AND accepted_at IS NULL AND revoked_at IS NULL
+             AND EXISTS (SELECT 1 FROM authors WHERE authors.id = author_transfers.author_id AND authors.owner_user_id = ?)`
         )
-        .bind(authorId);
+        .bind(authorId, userId);
       const insertStmt = this.db
         .prepare(
           `INSERT INTO author_transfers (id, author_id, token_hash, created_by, expires_at)
-           VALUES (?, ?, ?, ?, ?)`
+           SELECT ?, ?, ?, ?, ?
+           WHERE EXISTS (SELECT 1 FROM authors WHERE id = ? AND owner_user_id = ?)`
         )
-        .bind(crypto.randomUUID(), authorId, tokenHash, userId, expiresAt);
+        .bind(
+          crypto.randomUUID(),
+          authorId,
+          tokenHash,
+          userId,
+          expiresAt,
+          authorId,
+          userId
+        );
 
       const results = (await this.db.batch([revokeStmt, insertStmt])) as Array<{
         success: boolean;
         error?: string;
+        meta?: { changes?: number };
       }>;
       const failed = results.find((r) => !r.success);
       if (failed) {
@@ -399,6 +409,21 @@ export class AuthorsDatabase {
           "initiateTransfer",
           new Error(failed.error || "Database write failed")
         );
+      }
+
+      // The INSERT only writes a row when the ownership guard above passes,
+      // so zero rows written means the caller doesn't currently own this
+      // author — a follow-up read distinguishes NOT_FOUND from FORBIDDEN for
+      // the response without reopening the race the guard closes.
+      if (!results[1]?.meta?.changes) {
+        const ownershipError = await this.checkOwnership(authorId, userId);
+        return {
+          data: null,
+          error: ownershipError ?? {
+            code: "FORBIDDEN",
+            message: "You don't own this profile"
+          }
+        };
       }
 
       return { data: { token, expires_at: expiresAt }, error: null };
@@ -412,17 +437,13 @@ export class AuthorsDatabase {
     userId: string
   ): Promise<DatabaseResult<{ id: string; revoked: true }>> {
     try {
-      const ownershipError = await this.checkOwnership(authorId, userId);
-      if (ownershipError) {
-        return { data: null, error: ownershipError };
-      }
-
       const result = await this.db
         .prepare(
           `UPDATE author_transfers SET revoked_at = CURRENT_TIMESTAMP
-           WHERE author_id = ? AND accepted_at IS NULL AND revoked_at IS NULL`
+           WHERE author_id = ? AND accepted_at IS NULL AND revoked_at IS NULL
+             AND EXISTS (SELECT 1 FROM authors WHERE authors.id = author_transfers.author_id AND authors.owner_user_id = ?)`
         )
-        .bind(authorId)
+        .bind(authorId, userId)
         .run();
 
       if (!result.success) {
@@ -430,6 +451,18 @@ export class AuthorsDatabase {
           "revokeTransfer",
           new Error(result.error || "Database write failed")
         );
+      }
+
+      // Zero rows changed is ambiguous by itself (no pending transfer vs.
+      // not the owner vs. no such author), since the ownership guard is
+      // folded into the write above rather than checked beforehand. A
+      // follow-up read-only check distinguishes them for the response
+      // without reopening the race that guard closes.
+      if (!result.meta?.changes) {
+        const ownershipError = await this.checkOwnership(authorId, userId);
+        if (ownershipError) {
+          return { data: null, error: ownershipError };
+        }
       }
 
       return { data: { id: authorId, revoked: true }, error: null };
@@ -444,15 +477,58 @@ export class AuthorsDatabase {
   ): Promise<DatabaseResult<AuthorProfile>> {
     try {
       const tokenHash = await sha256Hex(token);
-      const row = await this.db
-        .prepare(
-          `SELECT * FROM author_transfers
-           WHERE token_hash = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > CURRENT_TIMESTAMP`
-        )
-        .bind(tokenHash)
-        .first<Record<string, unknown>>();
 
-      if (!row) {
+      // Atomically claim the transfer: a plain check-then-act (SELECT the
+      // row, decide, then write) would let two concurrent accepts both read
+      // it as valid before either one wrote to it, making the token usable
+      // more than once. The NOT EXISTS guard folds the self-accept case
+      // (accepting user already owns *this* author) and the
+      // already-owns-a-different-profile case into the same atomic
+      // decision, so the token is never consumed unless the accepting user
+      // is actually eligible.
+      let claim;
+      try {
+        claim = await this.db
+          .prepare(
+            `UPDATE author_transfers SET accepted_at = CURRENT_TIMESTAMP, accepted_by = ?
+             WHERE token_hash = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > CURRENT_TIMESTAMP
+               AND NOT EXISTS (SELECT 1 FROM authors WHERE owner_user_id = ?)`
+          )
+          .bind(userId, tokenHash, userId)
+          .run();
+      } catch (error) {
+        return databaseError("acceptTransfer", error);
+      }
+
+      if (!claim.success) {
+        return databaseError(
+          "acceptTransfer",
+          new Error(claim.error || "Database write failed")
+        );
+      }
+
+      if (!claim.meta?.changes) {
+        // The claim can fail either because the token itself is bad (used,
+        // revoked, expired, unknown) or because it's still valid but the
+        // ownership guard rejected it — check which, for an accurate error.
+        const stillPending = await this.db
+          .prepare(
+            `SELECT 1 FROM author_transfers
+             WHERE token_hash = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > CURRENT_TIMESTAMP`
+          )
+          .bind(tokenHash)
+          .first();
+
+        if (stillPending) {
+          return {
+            data: null,
+            error: {
+              code: "CONFLICT",
+              message:
+                "You already have a developer profile — remove or transfer it before accepting a new one"
+            }
+          };
+        }
         return {
           data: null,
           error: {
@@ -462,55 +538,48 @@ export class AuthorsDatabase {
         };
       }
 
-      // idx_authors_owner_unique enforces this at the DB level too, but
-      // checking here lets us return a clear CONFLICT instead of a generic
-      // database error.
-      const conflict = await this.db
-        .prepare(`SELECT 1 FROM authors WHERE owner_user_id = ? AND id != ?`)
-        .bind(userId, row.author_id as string)
-        .first();
-      if (conflict) {
-        return {
-          data: null,
-          error: {
-            code: "CONFLICT",
-            message:
-              "You already have a developer profile — remove or transfer it before accepting a new one"
-          }
-        };
-      }
-
-      if (!this.db.batch) {
+      const transfer = await this.db
+        .prepare("SELECT author_id FROM author_transfers WHERE token_hash = ?")
+        .bind(tokenHash)
+        .first<{ author_id: string }>();
+      if (!transfer) {
         return databaseError(
           "acceptTransfer",
-          new Error("Database adapter does not support batch operations")
+          new Error("Claimed transfer row not found")
         );
       }
 
-      const updateAuthorStmt = this.db
-        .prepare(
-          `UPDATE authors SET owner_user_id = ?, approved_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
-        )
-        .bind(userId, row.author_id);
-      const updateTransferStmt = this.db
-        .prepare(
-          `UPDATE author_transfers SET accepted_at = CURRENT_TIMESTAMP, accepted_by = ? WHERE id = ?`
-        )
-        .bind(userId, row.id);
-
-      const results = (await this.db.batch([
-        updateAuthorStmt,
-        updateTransferStmt
-      ])) as Array<{ success: boolean; error?: string }>;
-      const failed = results.find((r) => !r.success);
-      if (failed) {
-        return databaseError(
-          "acceptTransfer",
-          new Error(failed.error || "Database write failed")
-        );
+      try {
+        const result = await this.db
+          .prepare(
+            `UPDATE authors SET owner_user_id = ?, approved_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+          )
+          .bind(userId, transfer.author_id)
+          .run();
+        if (!result.success) {
+          return databaseError(
+            "acceptTransfer",
+            new Error(result.error || "Database write failed")
+          );
+        }
+      } catch (error) {
+        // idx_authors_owner_unique is the authoritative backstop for the
+        // already-owns-a-profile check above, in case ownership changed in
+        // the moment between that check and this write.
+        if (isOwnerConflict(error instanceof Error ? error.message : "")) {
+          return {
+            data: null,
+            error: {
+              code: "CONFLICT",
+              message:
+                "You already have a developer profile — remove or transfer it before accepting a new one"
+            }
+          };
+        }
+        return databaseError("acceptTransfer", error);
       }
 
-      return this.getById(row.author_id as string);
+      return this.getById(transfer.author_id);
     } catch (error) {
       return databaseError("acceptTransfer", error);
     }

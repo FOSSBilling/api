@@ -238,19 +238,22 @@ class MockStatement implements D1PreparedStatement {
 
     if (
       q.startsWith(
-        "UPDATE author_transfers SET revoked_at = CURRENT_TIMESTAMP WHERE author_id = ? AND accepted_at IS NULL AND revoked_at IS NULL"
+        "UPDATE author_transfers SET revoked_at = CURRENT_TIMESTAMP WHERE author_id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND EXISTS"
       )
     ) {
-      const [author_id] = p;
+      const [author_id, owner_user_id] = p;
+      const author = this.tables.authors.get(String(author_id));
       let changes = 0;
-      for (const row of this.tables.author_transfers.values()) {
-        if (
-          row.author_id === author_id &&
-          row.accepted_at === null &&
-          row.revoked_at === null
-        ) {
-          row.revoked_at = new Date().toISOString();
-          changes++;
+      if (author?.owner_user_id === owner_user_id) {
+        for (const row of this.tables.author_transfers.values()) {
+          if (
+            row.author_id === author_id &&
+            row.accepted_at === null &&
+            row.revoked_at === null
+          ) {
+            row.revoked_at = new Date().toISOString();
+            changes++;
+          }
         }
       }
       this.changes = changes;
@@ -259,27 +262,68 @@ class MockStatement implements D1PreparedStatement {
 
     if (
       q.startsWith(
-        "INSERT INTO author_transfers (id, author_id, token_hash, created_by, expires_at)"
+        "INSERT INTO author_transfers (id, author_id, token_hash, created_by, expires_at) SELECT ?, ?, ?, ?, ? WHERE EXISTS"
       )
     ) {
-      const [id, author_id, token_hash, created_by, expires_at] = p;
-      this.tables.author_transfers.set(String(id), {
+      const [
         id,
         author_id,
         token_hash,
         created_by,
-        created_at: new Date().toISOString(),
         expires_at,
-        accepted_by: null,
-        accepted_at: null,
-        revoked_at: null
-      });
+        checkAuthorId,
+        owner_user_id
+      ] = p;
+      const author = this.tables.authors.get(String(checkAuthorId));
+      if (author?.owner_user_id === owner_user_id) {
+        this.tables.author_transfers.set(String(id), {
+          id,
+          author_id,
+          token_hash,
+          created_by,
+          created_at: new Date().toISOString(),
+          expires_at,
+          accepted_by: null,
+          accepted_at: null,
+          revoked_at: null
+        });
+        this.changes = 1;
+      } else {
+        this.changes = 0;
+      }
       return [];
     }
 
     if (
       q.startsWith(
-        "SELECT * FROM author_transfers WHERE token_hash = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > CURRENT_TIMESTAMP"
+        "UPDATE author_transfers SET accepted_at = CURRENT_TIMESTAMP, accepted_by = ? WHERE token_hash = ?"
+      )
+    ) {
+      const [accepted_by, token_hash, owner_user_id] = p;
+      const now = new Date();
+      const ownsAny = [...this.tables.authors.values()].some(
+        (r) => r.owner_user_id === owner_user_id
+      );
+      const row = [...this.tables.author_transfers.values()].find(
+        (r) =>
+          r.token_hash === token_hash &&
+          r.accepted_at === null &&
+          r.revoked_at === null &&
+          new Date(`${String(r.expires_at).replace(" ", "T")}Z`) > now
+      );
+      if (row && !ownsAny) {
+        row.accepted_at = new Date().toISOString();
+        row.accepted_by = accepted_by;
+        this.changes = 1;
+      } else {
+        this.changes = 0;
+      }
+      return [];
+    }
+
+    if (
+      q.startsWith(
+        "SELECT 1 FROM author_transfers WHERE token_hash = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > CURRENT_TIMESTAMP"
       )
     ) {
       const [token_hash] = p;
@@ -291,17 +335,19 @@ class MockStatement implements D1PreparedStatement {
           r.revoked_at === null &&
           new Date(`${String(r.expires_at).replace(" ", "T")}Z`) > now
       );
-      return row ? [row] : [];
+      return row ? [{ "1": 1 }] : [];
     }
 
     if (
-      q.startsWith("SELECT 1 FROM authors WHERE owner_user_id = ? AND id != ?")
+      q.startsWith(
+        "SELECT author_id FROM author_transfers WHERE token_hash = ?"
+      )
     ) {
-      const [owner_user_id, id] = p;
-      const row = [...this.tables.authors.values()].find(
-        (r) => r.owner_user_id === owner_user_id && r.id !== id
+      const [token_hash] = p;
+      const row = [...this.tables.author_transfers.values()].find(
+        (r) => r.token_hash === token_hash
       );
-      return row ? [row] : [];
+      return row ? [{ author_id: row.author_id }] : [];
     }
 
     if (
@@ -315,21 +361,6 @@ class MockStatement implements D1PreparedStatement {
         row.owner_user_id = owner_user_id;
         row.approved_at = null;
         row.updated_at = new Date().toISOString();
-        this.changes = 1;
-      }
-      return [];
-    }
-
-    if (
-      q.startsWith(
-        "UPDATE author_transfers SET accepted_at = CURRENT_TIMESTAMP, accepted_by = ? WHERE id = ?"
-      )
-    ) {
-      const [accepted_by, id] = p;
-      const row = this.tables.author_transfers.get(String(id));
-      if (row) {
-        row.accepted_at = new Date().toISOString();
-        row.accepted_by = accepted_by;
         this.changes = 1;
       }
       return [];

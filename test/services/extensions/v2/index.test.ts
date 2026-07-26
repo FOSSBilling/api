@@ -1092,6 +1092,28 @@ describe("Extensions API v2", () => {
       expect(tables.authors.get("dev-author")?.owner_user_id).toBe("user-1");
     });
 
+    it("rejects the current owner accepting their own transfer link", async () => {
+      await put(
+        "/extensions/v2/authors/me",
+        await authHeaders("user-1"),
+        sampleAuthor()
+      );
+
+      const initiate = await post(
+        "/extensions/v2/authors/dev-author/transfer",
+        await authHeaders("user-1")
+      );
+      const token = ((await initiate.json()) as { result: { token: string } })
+        .result.token;
+
+      const accept = await post(
+        `/extensions/v2/authors/transfers/${token}/accept`,
+        await authHeaders("user-1")
+      );
+      expect(accept.status).toBe(409);
+      expect(tables.authors.get("dev-author")?.owner_user_id).toBe("user-1");
+    });
+
     it("blocks a non-owner from initiating a transfer", async () => {
       await put(
         "/extensions/v2/authors/me",
@@ -1143,7 +1165,10 @@ describe("Extensions API v2", () => {
           "/submissions/{id}/reject",
           "/authors/me",
           "/authors/unapproved",
-          "/authors/{id}/approve"
+          "/authors/{id}/approve",
+          "/authors/{id}/transfer",
+          "/authors/{id}/transfer/revoke",
+          "/authors/transfers/{token}/accept"
         ])
       );
     });
