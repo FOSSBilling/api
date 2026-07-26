@@ -130,7 +130,6 @@ class MockStatement implements D1PreparedStatement {
           developer_type: developer?.type ?? "user",
           developer_name: developer?.name ?? "",
           developer_url: developer?.url ?? null,
-          developer_bio: developer?.bio ?? null,
           developer_avatar_url: developer?.avatar_url ?? null,
           developer_approved_at: developer?.approved_at ?? null
         };
@@ -248,7 +247,7 @@ class MockStatement implements D1PreparedStatement {
 
     if (
       q.startsWith(
-        "INSERT INTO developers (id, type, name, url, bio, avatar_url, contact_email, owner_user_id, approved_at, created_at, updated_at)"
+        "INSERT INTO developers (id, type, name, url, avatar_url, contact_email, owner_user_id, approved_at, created_at, updated_at)"
       )
     ) {
       const [
@@ -256,7 +255,6 @@ class MockStatement implements D1PreparedStatement {
         type,
         name,
         url,
-        bio,
         avatar_url,
         contact_email,
         owner_user_id
@@ -276,7 +274,6 @@ class MockStatement implements D1PreparedStatement {
         type,
         name,
         url,
-        bio,
         avatar_url,
         contact_email,
         owner_user_id,
@@ -289,16 +286,15 @@ class MockStatement implements D1PreparedStatement {
 
     if (
       q.startsWith(
-        "UPDATE developers SET type = ?, name = ?, url = ?, bio = ?, avatar_url = ?, contact_email = ?, approved_at = NULL"
+        "UPDATE developers SET type = ?, name = ?, url = ?, avatar_url = ?, contact_email = ?, approved_at = NULL"
       )
     ) {
-      const [type, name, url, bio, avatar_url, contact_email, id] = p;
+      const [type, name, url, avatar_url, contact_email, id] = p;
       const row = this.tables.developers.get(String(id));
       if (row) {
         row.type = type;
         row.name = name;
         row.url = url;
-        row.bio = bio;
         row.avatar_url = avatar_url;
         row.contact_email = contact_email;
         row.approved_at = null;

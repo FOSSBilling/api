@@ -52,7 +52,6 @@ function parseDeveloperRow(row: Record<string, unknown>): DeveloperProfile {
     type: row.type as DeveloperProfile["type"],
     name: row.name as string,
     URL: (row.url as string | null) ?? undefined,
-    bio: (row.bio as string | null) ?? undefined,
     avatar_url: (row.avatar_url as string | null) ?? undefined,
     contact_email: (row.contact_email as string | null) ?? undefined,
     approved: row.approved_at !== null && row.approved_at !== undefined
@@ -106,15 +105,14 @@ export class DevelopersDatabase {
 
         mainStmt = this.db
           .prepare(
-            `INSERT INTO developers (id, type, name, url, bio, avatar_url, contact_email, owner_user_id, approved_at, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+            `INSERT INTO developers (id, type, name, url, avatar_url, contact_email, owner_user_id, approved_at, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
           )
           .bind(
             developer.id,
             developer.type,
             developer.name,
             developer.URL ?? null,
-            developer.bio ?? null,
             developer.avatar_url ?? null,
             developer.contact_email ?? null,
             userId
@@ -135,14 +133,13 @@ export class DevelopersDatabase {
         // approval no longer applies. Not worth diffing old vs. new values.
         mainStmt = this.db
           .prepare(
-            `UPDATE developers SET type = ?, name = ?, url = ?, bio = ?, avatar_url = ?, contact_email = ?, approved_at = NULL, updated_at = CURRENT_TIMESTAMP
+            `UPDATE developers SET type = ?, name = ?, url = ?, avatar_url = ?, contact_email = ?, approved_at = NULL, updated_at = CURRENT_TIMESTAMP
              WHERE id = ?`
           )
           .bind(
             developer.type,
             developer.name,
             developer.URL ?? null,
-            developer.bio ?? null,
             developer.avatar_url ?? null,
             developer.contact_email ?? null,
             developer.id
