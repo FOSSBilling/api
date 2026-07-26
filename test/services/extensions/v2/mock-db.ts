@@ -145,6 +145,15 @@ class MockStatement implements D1PreparedStatement {
         contact_email,
         owner_user_id
       ] = p;
+      // Mirrors idx_authors_owner_unique: one profile per non-null owner.
+      const ownerTaken = [...this.tables.authors.values()].some(
+        (r) => owner_user_id !== null && r.owner_user_id === owner_user_id
+      );
+      if (ownerTaken) {
+        throw new Error(
+          "D1_ERROR: UNIQUE constraint failed: authors.owner_user_id"
+        );
+      }
       const now = new Date().toISOString();
       this.tables.authors.set(String(id), {
         id,

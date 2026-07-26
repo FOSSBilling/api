@@ -2,6 +2,13 @@ import { DatabaseResult, IDatabase } from "../../../lib/interfaces";
 import { databaseError } from "./errors";
 import { Author, AuthorProfile } from "./interfaces";
 
+// Matches the SQLite/D1 message for the idx_authors_owner_unique violation,
+// which is how a lost race between two concurrent first-time PUT /authors/me
+// requests (same caller, different ids) surfaces.
+function isOwnerConflict(message: string | undefined): boolean {
+  return !!message && /UNIQUE constraint failed.*owner_user_id/i.test(message);
+}
+
 function parseAuthorRow(row: Record<string, unknown>): AuthorProfile {
   return {
     id: row.id as string,
@@ -20,18 +27,6 @@ export class AuthorsDatabase {
 
   constructor(db: IDatabase) {
     this.db = db;
-  }
-
-  async getOwn(userId: string): Promise<DatabaseResult<AuthorProfile | null>> {
-    try {
-      const row = await this.db
-        .prepare("SELECT * FROM authors WHERE owner_user_id = ?")
-        .bind(userId)
-        .first<Record<string, unknown>>();
-      return { data: row ? parseAuthorRow(row) : null, error: null };
-    } catch (error) {
-      return databaseError("getOwn", error);
-    }
   }
 
   async upsertOwn(
@@ -57,24 +52,47 @@ export class AuthorsDatabase {
           };
         }
 
-        const result = await this.db
-          .prepare(
-            `INSERT INTO authors (id, type, name, url, bio, avatar_url, contact_email, owner_user_id, approved_at, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
-          )
-          .bind(
-            author.id,
-            author.type,
-            author.name,
-            author.URL ?? null,
-            author.bio ?? null,
-            author.avatar_url ?? null,
-            author.contact_email ?? null,
-            userId
-          )
-          .run();
+        let result;
+        try {
+          result = await this.db
+            .prepare(
+              `INSERT INTO authors (id, type, name, url, bio, avatar_url, contact_email, owner_user_id, approved_at, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+            )
+            .bind(
+              author.id,
+              author.type,
+              author.name,
+              author.URL ?? null,
+              author.bio ?? null,
+              author.avatar_url ?? null,
+              author.contact_email ?? null,
+              userId
+            )
+            .run();
+        } catch (error) {
+          if (isOwnerConflict(error instanceof Error ? error.message : "")) {
+            return {
+              data: null,
+              error: {
+                message: "You already have a developer profile",
+                code: "CONFLICT"
+              }
+            };
+          }
+          throw error;
+        }
 
         if (!result.success) {
+          if (isOwnerConflict(result.error)) {
+            return {
+              data: null,
+              error: {
+                message: "You already have a developer profile",
+                code: "CONFLICT"
+              }
+            };
+          }
           return databaseError(
             "upsertOwn",
             new Error(result.error || "Database query failed")
