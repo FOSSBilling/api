@@ -1,4 +1,7 @@
-import { gt, lt } from "semver";
+import { gt } from "semver";
+import { sortReleasesDescending } from "../../../lib/releases";
+
+export { sortReleasesDescending };
 
 export type Extension = {
   id: string;
@@ -73,17 +76,4 @@ export function getLatestRelease(extension: Extension): Release | undefined {
   }
 
   return latestRelease;
-}
-
-export function sortReleasesDescending(releases: Release[]): Release[] {
-  return [...releases].sort((a, b) => {
-    try {
-      if (gt(a.tag, b.tag)) return -1;
-      if (lt(a.tag, b.tag)) return 1;
-      return 0;
-    } catch {
-      // Keep relative order when tags can't be compared as semver
-      return 0;
-    }
-  });
 }

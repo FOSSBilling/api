@@ -646,6 +646,19 @@ describe("Extensions API v2", () => {
       expect(res.status).toBe(409);
     });
 
+    it.each(["claims", "unapproved"])(
+      "rejects the reserved id %s",
+      async (id) => {
+        const res = await put(
+          "/extensions/v2/developers/me",
+          await authHeaders("user-1"),
+          sampleDeveloper({ id })
+        );
+
+        expect(res.status).toBe(422);
+      }
+    );
+
     it("clears approval when an approved profile is edited", async () => {
       await put(
         "/extensions/v2/developers/me",
@@ -1532,6 +1545,37 @@ describe("Extensions API v2", () => {
     it("404s for an unknown extension", async () => {
       const res = await get("/extensions/v2/extensions/no-such-extension", {});
       expect(res.status).toBe(404);
+    });
+
+    it("still returns a usable developer.id when the developer row is missing", async () => {
+      // author_id isn't a hard FK (0001_add_v2_tables.sql), so this can
+      // happen without any application bug — the embedded developer must
+      // still satisfy the schema (id: string) rather than surface a null.
+      tables.extensions.set("orphaned-ext", {
+        id: "orphaned-ext",
+        type: "mod",
+        author_id: "no-such-developer",
+        name: "Orphaned",
+        description: "d",
+        releases: "[]",
+        website: "https://e.com",
+        license: '{"name":"MIT"}',
+        icon_url: null,
+        readme: "r",
+        source: '{"type":"github","repo":"example/orphaned"}',
+        version: "1.0.0",
+        download_url: "https://e.com/d.zip"
+      });
+
+      const res = await get("/extensions/v2/extensions/orphaned-ext", {});
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { result: { developer: unknown } };
+      expect(body.result.developer).toEqual({
+        id: "no-such-developer",
+        type: "user",
+        name: "",
+        approved: false
+      });
     });
   });
 

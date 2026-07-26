@@ -8,10 +8,17 @@ import {
   sortReleasesDescending
 } from "./interfaces";
 
+// LEFT JOIN so an extension whose developer row is missing (author_id
+// pointing nowhere) still lists — author_id isn't a hard FK (see
+// 0001_add_v2_tables.sql). COALESCE keeps developer_id non-null in that
+// case: e.author_id is itself NOT NULL, so the id half of the embedded
+// developer is never lost even when every other field falls back to a
+// default in parseExtensionRow below.
 const SELECT_EXTENSIONS = `
   SELECT e.id, e.type, e.name, e.description, e.releases, e.website, e.license,
          e.icon_url, e.readme, e.source, e.version, e.download_url,
-         d.id AS developer_id, d.type AS developer_type, d.name AS developer_name,
+         COALESCE(d.id, e.author_id) AS developer_id,
+         d.type AS developer_type, d.name AS developer_name,
          d.url AS developer_url, d.bio AS developer_bio,
          d.avatar_url AS developer_avatar_url, d.approved_at AS developer_approved_at
   FROM extensions e

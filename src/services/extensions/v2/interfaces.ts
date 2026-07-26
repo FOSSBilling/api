@@ -1,5 +1,7 @@
 import { z } from "@hono/zod-openapi";
-import { gt, lt } from "semver";
+import { sortReleasesDescending } from "../../../lib/releases";
+
+export { sortReleasesDescending };
 
 export const EXTENSION_TYPES = [
   "mod",
@@ -30,9 +32,22 @@ const httpUrl = () =>
       message: "must use http or https"
     });
 
+// GET /developers/{id} is registered after the static single-segment
+// GET /developers/* routes (claims, unapproved), so a developer whose id
+// literally matched one of those words would always hit the static route
+// instead — its public profile would be permanently unreachable there.
+// Rejecting these ids at creation time (rather than trying to route around
+// the collision) keeps every existing/future developer id resolvable.
+const RESERVED_DEVELOPER_IDS = new Set(["claims", "unapproved"]);
+
+const developerId = () =>
+  lowercaseId("developer").refine((id) => !RESERVED_DEVELOPER_IDS.has(id), {
+    message: "This developer id is reserved"
+  });
+
 export const DeveloperSchema = z
   .object({
-    id: lowercaseId("developer"),
+    id: developerId(),
     type: z.enum(["user", "organization"]),
     name: z.string().min(1),
     URL: httpUrl().optional(),
@@ -68,20 +83,6 @@ export const ReleaseSchema = z
   .openapi("Release");
 
 export type Release = z.infer<typeof ReleaseSchema>;
-
-// Newest first by semver; tags that don't parse as semver keep their
-// relative order rather than erroring the whole listing.
-export function sortReleasesDescending(releases: Release[]): Release[] {
-  return [...releases].sort((a, b) => {
-    try {
-      if (gt(a.tag, b.tag)) return -1;
-      if (lt(a.tag, b.tag)) return 1;
-      return 0;
-    } catch {
-      return 0;
-    }
-  });
-}
 
 export const RepositorySchema = z
   .object({
