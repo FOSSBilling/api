@@ -895,6 +895,33 @@ describe("Extensions API v2", () => {
         ).length
       ).toBeGreaterThan(0);
     });
+
+    it("refuses to delete if ownership moves away between the lookup and the delete", async () => {
+      await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        sampleDeveloper()
+      );
+      tables.users.set("user-2", { id: "user-2" });
+      // Simulates a transfer/claim landing in the window between deleteOwn's
+      // initial "find my profile" lookup and its guarded delete — the
+      // delete must re-check ownership at that point, not trust the lookup.
+      tables.raceOwnerChangeTo = "user-2";
+
+      const res = await del(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1")
+      );
+      expect(res.status).toBe(404);
+
+      const stillThere = await get(
+        "/extensions/v2/developers/dev-developer",
+        {}
+      );
+      expect(stillThere.status).toBe(200);
+      const body = (await stillThere.json()) as { result: { id: string } };
+      expect(body.result.id).toBe("dev-developer");
+    });
   });
 
   describe("developer moderation", () => {

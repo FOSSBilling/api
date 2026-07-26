@@ -10,6 +10,11 @@ export interface MockTables {
   users: Map<string, Row>;
   // Test-only seam for simulating a write-through failure during approve().
   forceExtensionWriteFailure?: boolean;
+  // Test-only seam for simulating a profile changing ownership in the
+  // window between deleteOwn()'s initial lookup and its guarded delete —
+  // fires (once) the first time that lookup runs, mutating the row so the
+  // guard sees a different owner than the caller who's mid-request.
+  raceOwnerChangeTo?: string;
 }
 
 export function createTables(): MockTables {
@@ -64,6 +69,22 @@ class MockStatement implements D1PreparedStatement {
 
   get normalizedQuery(): string {
     return this.query.replace(/\s+/g, " ").trim();
+  }
+
+  private isEligibleForDeveloperDeletion(
+    developerId: string,
+    ownerUserId: unknown
+  ): boolean {
+    const developer = this.tables.developers.get(developerId);
+    if (!developer || developer.owner_user_id !== ownerUserId) return false;
+    const hasExtensions = [...this.tables.extensions.values()].some(
+      (r) => r.author_id === developerId
+    );
+    if (hasExtensions) return false;
+    const hasPendingSubmission = [
+      ...this.tables.extension_submissions.values()
+    ].some((r) => r.developer_id === developerId && r.status === "pending");
+    return !hasPendingSubmission;
   }
 
   private execute(): Row[] {
@@ -192,6 +213,10 @@ class MockStatement implements D1PreparedStatement {
       const row = [...this.tables.developers.values()].find(
         (r) => r.owner_user_id === p[0]
       );
+      if (row && this.tables.raceOwnerChangeTo !== undefined) {
+        row.owner_user_id = this.tables.raceOwnerChangeTo;
+        this.tables.raceOwnerChangeTo = undefined;
+      }
       return row ? [{ id: row.id }] : [];
     }
 
@@ -801,15 +826,23 @@ class MockStatement implements D1PreparedStatement {
       return [];
     }
 
+    // These three mirror deleteOwn()'s guarded deletes: eligibility (still
+    // owned by the given user, no extensions, no pending submission) is
+    // re-checked per statement, same as the real correlated-subquery SQL,
+    // so a stale/raced caller sees all three affect zero rows here too.
     if (
       q.startsWith("DELETE FROM developer_transfers WHERE developer_id = ?")
     ) {
-      const [developer_id] = p;
+      const [developer_id, owner_user_id] = p;
       let changes = 0;
-      for (const [key, row] of this.tables.developer_transfers) {
-        if (row.developer_id === developer_id) {
-          this.tables.developer_transfers.delete(key);
-          changes++;
+      if (
+        this.isEligibleForDeveloperDeletion(String(developer_id), owner_user_id)
+      ) {
+        for (const [key, row] of this.tables.developer_transfers) {
+          if (row.developer_id === developer_id) {
+            this.tables.developer_transfers.delete(key);
+            changes++;
+          }
         }
       }
       this.changes = changes;
@@ -817,12 +850,16 @@ class MockStatement implements D1PreparedStatement {
     }
 
     if (q.startsWith("DELETE FROM developer_claims WHERE developer_id = ?")) {
-      const [developer_id] = p;
+      const [developer_id, owner_user_id] = p;
       let changes = 0;
-      for (const [key, row] of this.tables.developer_claims) {
-        if (row.developer_id === developer_id) {
-          this.tables.developer_claims.delete(key);
-          changes++;
+      if (
+        this.isEligibleForDeveloperDeletion(String(developer_id), owner_user_id)
+      ) {
+        for (const [key, row] of this.tables.developer_claims) {
+          if (row.developer_id === developer_id) {
+            this.tables.developer_claims.delete(key);
+            changes++;
+          }
         }
       }
       this.changes = changes;
@@ -830,8 +867,13 @@ class MockStatement implements D1PreparedStatement {
     }
 
     if (q.startsWith("DELETE FROM developers WHERE id = ?")) {
-      const [id] = p;
-      this.changes = this.tables.developers.delete(String(id)) ? 1 : 0;
+      const [id, owner_user_id] = p;
+      const eligible = this.isEligibleForDeveloperDeletion(
+        String(id),
+        owner_user_id
+      );
+      this.changes =
+        eligible && this.tables.developers.delete(String(id)) ? 1 : 0;
       return [];
     }
 
