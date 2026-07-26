@@ -297,6 +297,143 @@ describe("Extensions API v2", () => {
       expect(res.status).toBe(403);
       expect(tables.extension_submissions.size).toBe(0);
     });
+
+    it("bounds payload size and the number of releases", async () => {
+      seedDeveloper("new-developer", "user-1");
+      const payload = samplePayload();
+      const oversized = await post(
+        "/extensions/v2/submissions",
+        await authHeaders("user-1"),
+        {
+          ...payload,
+          extension: { ...payload.extension, readme: "x".repeat(100_001) }
+        }
+      );
+      expect(oversized.status).toBe(422);
+
+      const unknownExtensionField = await post(
+        "/extensions/v2/submissions",
+        await authHeaders("user-1"),
+        {
+          ...payload,
+          extension: {
+            ...payload.extension,
+            padding: "x"
+          }
+        }
+      );
+      expect(unknownExtensionField.status).toBe(422);
+      const unknownExtensionBody = (await unknownExtensionField.json()) as {
+        error: { details: Array<{ code: string; path: PropertyKey[] }> };
+      };
+      expect(unknownExtensionBody.error.details).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            code: "unrecognized_keys",
+            path: ["extension"]
+          })
+        ])
+      );
+
+      const unknownReleaseField = await post(
+        "/extensions/v2/submissions",
+        await authHeaders("user-1"),
+        {
+          ...payload,
+          extension: {
+            ...payload.extension,
+            releases: [
+              {
+                ...payload.extension.releases[0],
+                padding: "x"
+              }
+            ]
+          }
+        }
+      );
+      expect(unknownReleaseField.status).toBe(422);
+      const unknownReleaseBody = (await unknownReleaseField.json()) as {
+        error: { details: Array<{ code: string; path: PropertyKey[] }> };
+      };
+      expect(unknownReleaseBody.error.details).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            code: "unrecognized_keys",
+            path: ["extension", "releases", 0]
+          })
+        ])
+      );
+
+      const tooManyReleases = await post(
+        "/extensions/v2/submissions",
+        await authHeaders("user-1"),
+        {
+          ...payload,
+          extension: {
+            ...payload.extension,
+            releases: Array.from(
+              { length: 101 },
+              () => payload.extension.releases[0]
+            )
+          }
+        }
+      );
+      expect(tooManyReleases.status).toBe(422);
+    });
+
+    it("preserves compatibility with stored slug ids over 100 characters", async () => {
+      const developerId = "d".repeat(120);
+      const extensionId = "e".repeat(120);
+      seedDeveloper(developerId, "user-1");
+
+      const res = await post(
+        "/extensions/v2/submissions",
+        await authHeaders("user-1"),
+        samplePayload({ developerId, extensionId })
+      );
+
+      expect(res.status).toBe(201);
+    });
+
+    it("rejects duplicate pending targets and caps each user's backlog", async () => {
+      seedDeveloper("new-developer", "user-1");
+      const headers = await authHeaders("user-1");
+      expect(
+        (await post("/extensions/v2/submissions", headers, samplePayload()))
+          .status
+      ).toBe(201);
+      expect(
+        (await post("/extensions/v2/submissions", headers, samplePayload()))
+          .status
+      ).toBe(409);
+
+      seedDeveloper("other-developer", "user-2");
+      expect(
+        (
+          await post(
+            "/extensions/v2/submissions",
+            await authHeaders("user-2"),
+            samplePayload({ developerId: "other-developer" })
+          )
+        ).status
+      ).toBe(409);
+
+      for (let index = 1; index < 10; index++) {
+        const result = await post(
+          "/extensions/v2/submissions",
+          headers,
+          samplePayload({ extensionId: `new-ext-${index}` })
+        );
+        expect(result.status).toBe(201);
+      }
+      const overLimit = await post(
+        "/extensions/v2/submissions",
+        headers,
+        samplePayload({ extensionId: "new-ext-over-limit" })
+      );
+      expect(overLimit.status).toBe(409);
+      expect(tables.extension_submissions.size).toBe(10);
+    });
   });
 
   describe("GET /submissions/mine", () => {
@@ -330,6 +467,47 @@ describe("Extensions API v2", () => {
       const res = await get("/extensions/v2/submissions/mine", {});
       expect(res.status).toBe(401);
     });
+
+    it("paginates deterministically with an opaque cursor", async () => {
+      seedDeveloper("new-developer", "user-1");
+      const headers = await authHeaders("user-1");
+      for (const extensionId of ["page-a", "page-b", "page-c"]) {
+        expect(
+          (
+            await post(
+              "/extensions/v2/submissions",
+              headers,
+              samplePayload({ extensionId })
+            )
+          ).status
+        ).toBe(201);
+      }
+
+      const first = await get(
+        "/extensions/v2/submissions/mine?limit=2",
+        headers
+      );
+      const firstBody = (await first.json()) as {
+        result: unknown[];
+        pagination: { has_more: boolean; next_cursor: string };
+      };
+      expect(firstBody.result).toHaveLength(2);
+      expect(firstBody.pagination.has_more).toBe(true);
+
+      const second = await get(
+        `/extensions/v2/submissions/mine?limit=2&cursor=${encodeURIComponent(firstBody.pagination.next_cursor)}`,
+        headers
+      );
+      const secondBody = (await second.json()) as {
+        result: unknown[];
+        pagination: { has_more: boolean; next_cursor: null };
+      };
+      expect(secondBody.result).toHaveLength(1);
+      expect(secondBody.pagination).toEqual({
+        has_more: false,
+        next_cursor: null
+      });
+    });
   });
 
   describe("GET /submissions/queue", () => {
@@ -362,6 +540,29 @@ describe("Extensions API v2", () => {
   });
 
   describe("approve / reject", () => {
+    it("does not approve a former owner's payload when ownership changes at approval", async () => {
+      tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
+      seedDeveloper("new-developer", "user-1");
+      const created = await post(
+        "/extensions/v2/submissions",
+        await authHeaders("user-1"),
+        samplePayload()
+      );
+      const { result } = (await created.json()) as { result: { id: string } };
+
+      tables.raceOwnerChangeOnSubmissionApprovalTo = "user-2";
+      const approved = await post(
+        `/extensions/v2/submissions/${result.id}/approve`,
+        await authHeaders("mod-1"),
+        {}
+      );
+      expect(approved.status).toBe(409);
+      expect(tables.extension_submissions.get(result.id)?.status).toBe(
+        "pending"
+      );
+      expect(tables.extensions.size).toBe(0);
+    });
+
     it("reverts to pending if the write-through fails after a successful claim", async () => {
       tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
       seedDeveloper("new-developer", "user-1");
@@ -678,7 +879,8 @@ describe("Extensions API v2", () => {
       tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
       const approved = await post(
         "/extensions/v2/developers/dev-developer/approve",
-        await authHeaders("mod-1")
+        await authHeaders("mod-1"),
+        { expected_revision: 1 }
       );
       expect(approved.status).toBe(200);
       const approvedBody = (await approved.json()) as {
@@ -695,6 +897,34 @@ describe("Extensions API v2", () => {
       expect(res.status).toBe(200);
       const data = (await res.json()) as { result: { approved: boolean } };
       expect(data.result.approved).toBe(false);
+    });
+
+    it("does not update a profile after ownership changes mid-request", async () => {
+      await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        sampleDeveloper()
+      );
+      tables.raceOwnerChangeOnProfileUpdateTo = "user-2";
+
+      const raced = await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        sampleDeveloper({ name: "Former owner write" })
+      );
+
+      expect(raced.status).toBe(409);
+      expect(tables.developers.get("dev-developer")?.name).toBe(
+        "Dev Developer"
+      );
+      expect(tables.developers.get("dev-developer")?.owner_user_id).toBe(
+        "user-2"
+      );
+      expect(
+        [...tables.developer_history.values()].filter(
+          (row) => row.developer_id === "dev-developer"
+        )
+      ).toHaveLength(1);
     });
 
     it("round-trips avatar_url and contact_email", async () => {
@@ -917,6 +1147,33 @@ describe("Extensions API v2", () => {
   });
 
   describe("developer moderation", () => {
+    it("binds approval to the exact profile revision reviewed", async () => {
+      await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        sampleDeveloper()
+      );
+      await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        sampleDeveloper({ name: "Revision two" })
+      );
+      tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
+
+      const stale = await post(
+        "/extensions/v2/developers/dev-developer/approve",
+        await authHeaders("mod-1"),
+        { expected_revision: 1 }
+      );
+      expect(stale.status).toBe(409);
+
+      const current = await post(
+        "/extensions/v2/developers/dev-developer/approve",
+        await authHeaders("mod-1"),
+        { expected_revision: 2 }
+      );
+      expect(current.status).toBe(200);
+    });
     it("approves a developer and removes it from the unapproved list", async () => {
       await put(
         "/extensions/v2/developers/me",
@@ -927,7 +1184,8 @@ describe("Extensions API v2", () => {
 
       const approve = await post(
         "/extensions/v2/developers/dev-developer/approve",
-        await authHeaders("mod-1")
+        await authHeaders("mod-1"),
+        { expected_revision: 1 }
       );
       expect(approve.status).toBe(200);
       const approveBody = (await approve.json()) as {
@@ -956,7 +1214,8 @@ describe("Extensions API v2", () => {
 
       const res = await post(
         "/extensions/v2/developers/no-such-developer/approve",
-        await authHeaders("mod-1")
+        await authHeaders("mod-1"),
+        { expected_revision: 1 }
       );
       expect(res.status).toBe(404);
     });
@@ -983,7 +1242,8 @@ describe("Extensions API v2", () => {
       tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
       await post(
         "/extensions/v2/developers/dev-developer/approve",
-        await authHeaders("mod-1")
+        await authHeaders("mod-1"),
+        { expected_revision: 1 }
       );
 
       const res = await get(
@@ -1023,7 +1283,8 @@ describe("Extensions API v2", () => {
 
       const res = await post(
         "/extensions/v2/developers/dev-developer/approve",
-        await authHeaders("user-1")
+        await authHeaders("user-1"),
+        { expected_revision: 1 }
       );
       expect(res.status).toBe(403);
     });
@@ -1136,6 +1397,14 @@ describe("Extensions API v2", () => {
   });
 
   describe("developer transfers", () => {
+    it("does not accept transfer capabilities in URL paths", async () => {
+      const res = await post(
+        "/extensions/v2/developers/transfers/secret-token/accept",
+        await authHeaders("user-2")
+      );
+      expect(res.status).toBe(404);
+    });
+
     it("initiating a second transfer revokes the first token", async () => {
       await put(
         "/extensions/v2/developers/me",
@@ -1158,8 +1427,9 @@ describe("Extensions API v2", () => {
       expect(second.status).toBe(200);
 
       const acceptFirst = await post(
-        `/extensions/v2/developers/transfers/${firstToken}/accept`,
-        await authHeaders("user-2")
+        "/extensions/v2/developers/transfers/accept",
+        await authHeaders("user-2"),
+        { token: firstToken }
       );
       expect(acceptFirst.status).toBe(404);
     });
@@ -1173,7 +1443,8 @@ describe("Extensions API v2", () => {
       tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
       await post(
         "/extensions/v2/developers/dev-developer/approve",
-        await authHeaders("mod-1")
+        await authHeaders("mod-1"),
+        { expected_revision: 1 }
       );
 
       const initiate = await post(
@@ -1184,8 +1455,9 @@ describe("Extensions API v2", () => {
         .result.token;
 
       const accept = await post(
-        `/extensions/v2/developers/transfers/${token}/accept`,
-        await authHeaders("user-2")
+        "/extensions/v2/developers/transfers/accept",
+        await authHeaders("user-2"),
+        { token }
       );
       expect(accept.status).toBe(200);
       const accepted = (await accept.json()) as {
@@ -1198,8 +1470,9 @@ describe("Extensions API v2", () => {
       );
 
       const acceptAgain = await post(
-        `/extensions/v2/developers/transfers/${token}/accept`,
-        await authHeaders("user-3")
+        "/extensions/v2/developers/transfers/accept",
+        await authHeaders("user-3"),
+        { token }
       );
       expect(acceptAgain.status).toBe(404);
       expect(tables.developers.get("dev-developer")?.owner_user_id).toBe(
@@ -1222,8 +1495,9 @@ describe("Extensions API v2", () => {
         .result.token;
 
       const accept1 = await post(
-        `/extensions/v2/developers/transfers/${token1}/accept`,
-        await authHeaders("user-2")
+        "/extensions/v2/developers/transfers/accept",
+        await authHeaders("user-2"),
+        { token: token1 }
       );
       expect(accept1.status).toBe(200);
       expect(tables.developers.get("dev-developer")?.owner_user_id).toBe(
@@ -1238,8 +1512,9 @@ describe("Extensions API v2", () => {
       const token2 = ((await initiate2.json()) as { result: { token: string } })
         .result.token;
       const accept2 = await post(
-        `/extensions/v2/developers/transfers/${token2}/accept`,
-        await authHeaders("user-3")
+        "/extensions/v2/developers/transfers/accept",
+        await authHeaders("user-3"),
+        { token: token2 }
       );
       expect(accept2.status).toBe(200);
       expect(tables.developers.get("dev-developer")?.owner_user_id).toBe(
@@ -1249,8 +1524,9 @@ describe("Extensions API v2", () => {
       // Replaying the *first* (already-used) token, by the same user who
       // originally accepted it, must not silently reassign ownership back.
       const replay = await post(
-        `/extensions/v2/developers/transfers/${token1}/accept`,
-        await authHeaders("user-2")
+        "/extensions/v2/developers/transfers/accept",
+        await authHeaders("user-2"),
+        { token: token1 }
       );
       expect(replay.status).toBe(404);
       expect(tables.developers.get("dev-developer")?.owner_user_id).toBe(
@@ -1277,8 +1553,9 @@ describe("Extensions API v2", () => {
       }
 
       const accept = await post(
-        `/extensions/v2/developers/transfers/${token}/accept`,
-        await authHeaders("user-2")
+        "/extensions/v2/developers/transfers/accept",
+        await authHeaders("user-2"),
+        { token }
       );
       expect(accept.status).toBe(404);
     });
@@ -1304,8 +1581,9 @@ describe("Extensions API v2", () => {
       expect(revoke.status).toBe(200);
 
       const accept = await post(
-        `/extensions/v2/developers/transfers/${token}/accept`,
-        await authHeaders("user-2")
+        "/extensions/v2/developers/transfers/accept",
+        await authHeaders("user-2"),
+        { token }
       );
       expect(accept.status).toBe(404);
     });
@@ -1330,8 +1608,9 @@ describe("Extensions API v2", () => {
         .result.token;
 
       const accept = await post(
-        `/extensions/v2/developers/transfers/${token}/accept`,
-        await authHeaders("user-2")
+        "/extensions/v2/developers/transfers/accept",
+        await authHeaders("user-2"),
+        { token }
       );
       expect(accept.status).toBe(409);
       expect(tables.developers.get("dev-developer")?.owner_user_id).toBe(
@@ -1354,8 +1633,9 @@ describe("Extensions API v2", () => {
         .result.token;
 
       const accept = await post(
-        `/extensions/v2/developers/transfers/${token}/accept`,
-        await authHeaders("user-1")
+        "/extensions/v2/developers/transfers/accept",
+        await authHeaders("user-1"),
+        { token }
       );
       expect(accept.status).toBe(409);
       expect(tables.developers.get("dev-developer")?.owner_user_id).toBe(
@@ -1748,7 +2028,7 @@ describe("Extensions API v2", () => {
           "/developers/{id}/approve",
           "/developers/{id}/transfer",
           "/developers/{id}/transfer/revoke",
-          "/developers/transfers/{token}/accept",
+          "/developers/transfers/accept",
           "/developers/{id}/claim",
           "/developers/claims/mine",
           "/developers/claims",

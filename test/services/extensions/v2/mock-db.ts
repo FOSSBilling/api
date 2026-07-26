@@ -15,6 +15,9 @@ export interface MockTables {
   // fires (once) the first time that lookup runs, mutating the row so the
   // guard sees a different owner than the caller who's mid-request.
   raceOwnerChangeTo?: string;
+  // Fires immediately before a moderator's guarded submission approval.
+  raceOwnerChangeOnSubmissionApprovalTo?: string;
+  raceOwnerChangeOnProfileUpdateTo?: string;
 }
 
 export function createTables(): MockTables {
@@ -203,7 +206,12 @@ class MockStatement implements D1PreparedStatement {
       return [{ count }];
     }
 
-    if (q.startsWith("SELECT owner_user_id FROM developers WHERE id = ?")) {
+    if (
+      q.startsWith(
+        "SELECT owner_user_id, ownership_epoch FROM developers WHERE id = ?"
+      ) ||
+      q.startsWith("SELECT owner_user_id FROM developers WHERE id = ?")
+    ) {
       const row = this.tables.developers.get(String(p[0]));
       return row ? [row] : [];
     }
@@ -224,6 +232,15 @@ class MockStatement implements D1PreparedStatement {
         (r) => r.owner_user_id === p[0]
       );
       return row ? [row] : [];
+    }
+
+    if (
+      q.startsWith(
+        "SELECT * FROM developers WHERE id = ? AND owner_user_id = ?"
+      )
+    ) {
+      const row = this.tables.developers.get(String(p[0]));
+      return row && row.owner_user_id === p[1] ? [row] : [];
     }
 
     if (q.startsWith("SELECT * FROM developers WHERE id = ?")) {
@@ -250,15 +267,7 @@ class MockStatement implements D1PreparedStatement {
         "INSERT INTO developers (id, type, name, url, avatar_url, contact_email, owner_user_id, approved_at, created_at, updated_at)"
       )
     ) {
-      const [
-        id,
-        type,
-        name,
-        url,
-        avatar_url,
-        contact_email,
-        owner_user_id
-      ] = p;
+      const [id, type, name, url, avatar_url, contact_email, owner_user_id] = p;
       // Mirrors idx_developers_owner_unique: one profile per non-null owner.
       const ownerTaken = [...this.tables.developers.values()].some(
         (r) => owner_user_id !== null && r.owner_user_id === owner_user_id
@@ -278,26 +287,42 @@ class MockStatement implements D1PreparedStatement {
         contact_email,
         owner_user_id,
         approved_at: null,
+        ownership_epoch: 1,
+        content_revision: 1,
+        approved_revision: null,
+        approved_by: null,
         created_at: now,
         updated_at: now
       });
+      this.changes = 1;
       return [];
     }
 
     if (
       q.startsWith(
-        "UPDATE developers SET type = ?, name = ?, url = ?, avatar_url = ?, contact_email = ?, approved_at = NULL"
+        "UPDATE developers SET type = ?, name = ?, url = ?, avatar_url = ?, contact_email = ?"
       )
     ) {
-      const [type, name, url, avatar_url, contact_email, id] = p;
+      const [type, name, url, avatar_url, contact_email, id, owner_user_id] = p;
       const row = this.tables.developers.get(String(id));
-      if (row) {
+      if (row && this.tables.raceOwnerChangeOnProfileUpdateTo !== undefined) {
+        row.owner_user_id = this.tables.raceOwnerChangeOnProfileUpdateTo;
+        row.ownership_epoch = Number(row.ownership_epoch ?? 1) + 1;
+        this.tables.raceOwnerChangeOnProfileUpdateTo = undefined;
+      }
+      if (
+        row &&
+        (owner_user_id === undefined || row.owner_user_id === owner_user_id)
+      ) {
         row.type = type;
         row.name = name;
         row.url = url;
         row.avatar_url = avatar_url;
         row.contact_email = contact_email;
         row.approved_at = null;
+        row.approved_revision = null;
+        row.approved_by = null;
+        row.content_revision = Number(row.content_revision ?? 1) + 1;
         row.updated_at = new Date().toISOString();
         this.changes = 1;
       }
@@ -319,6 +344,31 @@ class MockStatement implements D1PreparedStatement {
         changed_by,
         changed_at: new Date().toISOString()
       });
+      return [];
+    }
+
+    if (
+      q.startsWith(
+        "UPDATE developers SET type = ?, name = ?, url = ?, content_revision = content_revision + 1"
+      )
+    ) {
+      const [type, name, url, id, owner_user_id, ownership_epoch] = p;
+      const row = this.tables.developers.get(String(id));
+      if (
+        row &&
+        row.owner_user_id === owner_user_id &&
+        Number(row.ownership_epoch ?? 1) === ownership_epoch
+      ) {
+        row.type = type;
+        row.name = name;
+        row.url = url;
+        row.content_revision = Number(row.content_revision ?? 1) + 1;
+        row.approved_at = null;
+        row.approved_revision = null;
+        row.approved_by = null;
+        row.updated_at = new Date().toISOString();
+        this.changes = 1;
+      }
       return [];
     }
 
@@ -453,9 +503,8 @@ class MockStatement implements D1PreparedStatement {
     }
 
     if (
-      q.startsWith(
-        "UPDATE developers SET owner_user_id = ?, approved_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE changes() = 1 AND id = ( SELECT developer_id FROM developer_transfers"
-      )
+      q.startsWith("UPDATE developers SET owner_user_id = ?") &&
+      q.includes("SELECT developer_id FROM developer_transfers")
     ) {
       const [owner_user_id, token_hash, accepted_by] = p;
       const transfer = [...this.tables.developer_transfers.values()].find(
@@ -469,7 +518,11 @@ class MockStatement implements D1PreparedStatement {
         : undefined;
       if (row) {
         row.owner_user_id = owner_user_id;
+        row.ownership_epoch = Number(row.ownership_epoch ?? 1) + 1;
+        row.content_revision = Number(row.content_revision ?? 1) + 1;
         row.approved_at = null;
+        row.approved_revision = null;
+        row.approved_by = null;
         row.updated_at = new Date().toISOString();
         this.changes = 1;
       } else {
@@ -480,13 +533,15 @@ class MockStatement implements D1PreparedStatement {
 
     if (
       q.startsWith(
-        "UPDATE developers SET approved_at = CURRENT_TIMESTAMP WHERE id = ?"
+        "UPDATE developers SET approved_at = CURRENT_TIMESTAMP, approved_revision = content_revision, approved_by = ? WHERE id = ? AND content_revision = ?"
       )
     ) {
-      const [id] = p;
+      const [reviewer_id, id, expected_revision] = p;
       const row = this.tables.developers.get(String(id));
-      if (row) {
+      if (row && Number(row.content_revision ?? 1) === expected_revision) {
         row.approved_at = new Date().toISOString();
+        row.approved_revision = Number(row.content_revision ?? 1);
+        row.approved_by = reviewer_id;
         this.changes = 1;
       }
       return [];
@@ -604,15 +659,18 @@ class MockStatement implements D1PreparedStatement {
     }
 
     if (
-      q.startsWith(
-        "UPDATE developers SET owner_user_id = ?, approved_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND owner_user_id IS NULL"
-      )
+      q.startsWith("UPDATE developers SET owner_user_id = ?") &&
+      q.includes("WHERE id = ? AND owner_user_id IS NULL")
     ) {
       const [owner_user_id, id] = p;
       const row = this.tables.developers.get(String(id));
       if (row && row.owner_user_id === null) {
         row.owner_user_id = owner_user_id;
+        row.ownership_epoch = Number(row.ownership_epoch ?? 1) + 1;
+        row.content_revision = Number(row.content_revision ?? 1) + 1;
         row.approved_at = null;
+        row.approved_revision = null;
+        row.approved_by = null;
         row.updated_at = new Date().toISOString();
         this.changes = 1;
       } else {
@@ -684,10 +742,39 @@ class MockStatement implements D1PreparedStatement {
 
     if (
       q.startsWith(
-        "INSERT INTO extension_submissions (id, extension_id, developer_id, submitted_by, status, payload)"
+        "INSERT INTO extension_submissions (id, extension_id, developer_id, submitted_by, status, payload, ownership_epoch, target_key)"
       )
     ) {
-      const [id, extension_id, developer_id, submitted_by, payload] = p;
+      const [
+        id,
+        extension_id,
+        developer_id,
+        submitted_by,
+        payload,
+        target_key,
+        checkDeveloperId,
+        checkOwner,
+        checkEpoch
+      ] = p;
+      const developer = this.tables.developers.get(String(checkDeveloperId));
+      const allPending = [...this.tables.extension_submissions.values()].filter(
+        (row) => row.status === "pending"
+      );
+      const submitterPending = allPending.filter(
+        (row) => row.submitted_by === submitted_by
+      );
+      if (
+        !developer ||
+        developer.owner_user_id !== checkOwner ||
+        Number(developer.ownership_epoch ?? 1) !== checkEpoch ||
+        submitterPending.length >= 10 ||
+        allPending.some(
+          (row) => row.target_key === String(target_key).toLowerCase()
+        )
+      ) {
+        this.changes = 0;
+        return [];
+      }
       this.tables.extension_submissions.set(String(id), {
         id,
         extension_id,
@@ -695,35 +782,90 @@ class MockStatement implements D1PreparedStatement {
         submitted_by,
         status: "pending",
         payload,
+        ownership_epoch: Number(developer.ownership_epoch ?? 1),
+        target_key: String(target_key).toLowerCase(),
         reviewer_id: null,
         review_note: null,
         created_at: new Date().toISOString(),
         reviewed_at: null
       });
+      this.changes = 1;
       return [];
     }
 
     if (
       q.startsWith("SELECT * FROM extension_submissions WHERE submitted_by = ?")
     ) {
-      return [...this.tables.extension_submissions.values()]
+      let rows = [...this.tables.extension_submissions.values()]
         .filter((r) => r.submitted_by === p[0])
-        .sort((a, b) =>
-          String(b.created_at).localeCompare(String(a.created_at))
+        .sort((a, b) => {
+          const byDate = String(b.created_at).localeCompare(
+            String(a.created_at)
+          );
+          return byDate || String(b.id).localeCompare(String(a.id));
+        });
+      if (q.includes("created_at < ?")) {
+        const [, createdAt, , id] = p;
+        rows = rows.filter(
+          (r) =>
+            String(r.created_at) < String(createdAt) ||
+            (r.created_at === createdAt && String(r.id) < String(id))
         );
+      }
+      return rows.slice(0, Number(p.at(-1)));
     }
 
     if (q.startsWith("SELECT * FROM extension_submissions WHERE status = ?")) {
-      return [...this.tables.extension_submissions.values()]
+      let rows = [...this.tables.extension_submissions.values()]
         .filter((r) => r.status === p[0])
-        .sort((a, b) =>
-          String(a.created_at).localeCompare(String(b.created_at))
+        .sort((a, b) => {
+          const byDate = String(a.created_at).localeCompare(
+            String(b.created_at)
+          );
+          return byDate || String(a.id).localeCompare(String(b.id));
+        });
+      if (q.includes("created_at > ?")) {
+        const [, createdAt, , id] = p;
+        rows = rows.filter(
+          (r) =>
+            String(r.created_at) > String(createdAt) ||
+            (r.created_at === createdAt && String(r.id) > String(id))
         );
+      }
+      return rows.slice(0, Number(p.at(-1)));
     }
 
     if (q.startsWith("SELECT * FROM extension_submissions WHERE id = ?")) {
       const row = this.tables.extension_submissions.get(String(p[0]));
       return row ? [row] : [];
+    }
+
+    if (
+      q.startsWith("UPDATE extension_submissions SET status = 'rejected'") &&
+      q.includes("Ownership changed before review")
+    ) {
+      const [token_hash, accepted_by] = p;
+      const transfer = [...this.tables.developer_transfers.values()].find(
+        (r) =>
+          r.token_hash === token_hash &&
+          r.accepted_by === accepted_by &&
+          r.accepted_at !== null
+      );
+      let changes = 0;
+      for (const row of this.tables.extension_submissions.values()) {
+        if (
+          transfer &&
+          row.developer_id === transfer.developer_id &&
+          row.status === "pending"
+        ) {
+          row.status = "rejected";
+          row.review_note = "Ownership changed before review";
+          row.reviewed_at = new Date().toISOString();
+          changes++;
+        }
+      }
+      this.changes = changes;
+      return [];
     }
 
     if (q.startsWith("UPDATE extension_submissions SET status = 'rejected'")) {
@@ -742,7 +884,29 @@ class MockStatement implements D1PreparedStatement {
     if (q.startsWith("UPDATE extension_submissions SET status = 'approved'")) {
       const [reviewer_id, review_note, id] = p;
       const row = this.tables.extension_submissions.get(String(id));
-      if (row && row.status === "pending") {
+      if (
+        this.tables.raceOwnerChangeOnSubmissionApprovalTo !== undefined &&
+        row
+      ) {
+        const developer = this.tables.developers.get(String(row.developer_id));
+        if (developer) {
+          developer.owner_user_id =
+            this.tables.raceOwnerChangeOnSubmissionApprovalTo;
+          developer.ownership_epoch =
+            Number(developer.ownership_epoch ?? 1) + 1;
+        }
+        this.tables.raceOwnerChangeOnSubmissionApprovalTo = undefined;
+      }
+      const developer = row
+        ? this.tables.developers.get(String(row.developer_id))
+        : undefined;
+      if (
+        row &&
+        row.status === "pending" &&
+        developer?.owner_user_id === row.submitted_by &&
+        Number(developer?.ownership_epoch ?? 1) ===
+          Number(row.ownership_epoch ?? 1)
+      ) {
         row.status = "approved";
         row.reviewer_id = reviewer_id;
         row.review_note = review_note;
@@ -906,6 +1070,15 @@ export function createMockD1(tables: MockTables): D1Database {
     async batch<T = unknown>(
       statements: D1PreparedStatement[]
     ): Promise<D1Result<T>[]> {
+      const snapshots = {
+        developers: structuredClone(tables.developers),
+        extensions: structuredClone(tables.extensions),
+        extension_submissions: structuredClone(tables.extension_submissions),
+        developer_history: structuredClone(tables.developer_history),
+        developer_transfers: structuredClone(tables.developer_transfers),
+        developer_claims: structuredClone(tables.developer_claims),
+        users: structuredClone(tables.users)
+      };
       const results: D1Result<T>[] = [];
       // Mirrors SQL's changes(): the mock has no other way to expose "how
       // many rows did the immediately preceding statement change" across
@@ -915,15 +1088,27 @@ export function createMockD1(tables: MockTables): D1Database {
       // past) — a statement referencing that gate is skipped here unless
       // the previous statement's change count was exactly 1.
       let lastChanges = 0;
-      for (const stmt of statements) {
-        const query = stmt instanceof MockStatement ? stmt.normalizedQuery : "";
-        if (query.includes("WHERE changes() = 1") && lastChanges !== 1) {
-          results.push(ok<T>([], 0));
-          continue;
+      try {
+        for (const stmt of statements) {
+          const query =
+            stmt instanceof MockStatement ? stmt.normalizedQuery : "";
+          if (query.includes("WHERE changes() = 1") && lastChanges !== 1) {
+            results.push(ok<T>([], 0));
+            continue;
+          }
+          const result = await stmt.run<T>();
+          lastChanges = result.meta?.changes ?? 0;
+          results.push(result);
         }
-        const result = await stmt.run<T>();
-        lastChanges = result.meta?.changes ?? 0;
-        results.push(result);
+      } catch (error) {
+        tables.developers = snapshots.developers;
+        tables.extensions = snapshots.extensions;
+        tables.extension_submissions = snapshots.extension_submissions;
+        tables.developer_history = snapshots.developer_history;
+        tables.developer_transfers = snapshots.developer_transfers;
+        tables.developer_claims = snapshots.developer_claims;
+        tables.users = snapshots.users;
+        throw error;
       }
       return results;
     },
