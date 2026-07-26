@@ -112,6 +112,19 @@ export const AuthorProfileSchema = AuthorSchema.extend({
 
 export type AuthorProfile = z.infer<typeof AuthorProfileSchema>;
 
+export const AuthorHistoryEntrySchema = z
+  .object({
+    author_id: z.string(),
+    type: z.enum(["user", "organization"]),
+    name: z.string(),
+    URL: httpUrl().optional(),
+    changed_by: z.string(),
+    changed_at: z.string()
+  })
+  .openapi("AuthorHistoryEntry");
+
+export type AuthorHistoryEntry = z.infer<typeof AuthorHistoryEntrySchema>;
+
 export const ReviewNoteOptionalSchema = z
   .object({
     review_note: z.string().optional()

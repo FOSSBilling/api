@@ -6,6 +6,7 @@ import { Scalar } from "@scalar/hono-api-reference";
 import { getPlatform } from "../../../lib/middleware";
 import { getAuth, requireAuth } from "../../../lib/auth";
 import {
+  AuthorHistoryEntrySchema,
   AuthorProfileSchema,
   AuthorSchema,
   ErrorResponseSchema,
@@ -592,6 +593,63 @@ extensionsV2.openapi(approveAuthorRoute, async (c) => {
         }
       },
       status
+    );
+  }
+
+  return c.json({ result: data }, 200);
+});
+
+const authorHistoryRoute = createRoute({
+  method: "get",
+  path: "/authors/{id}/history",
+  tags: ["Moderation"],
+  summary: "List the write history of a developer profile",
+  security: [{ Bearer: [] }],
+  middleware: [requireAuth(), requireModerator()] as const,
+  request: { params: IdParamSchema },
+  responses: {
+    200: {
+      content: {
+        "application/json": {
+          schema: z.object({ result: z.array(AuthorHistoryEntrySchema) })
+        }
+      },
+      description: "Snapshots of the profile, newest first"
+    },
+    401: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Missing or invalid bearer token"
+    },
+    403: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Caller is not a moderator"
+    },
+    422: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "id param failed validation"
+    },
+    500: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Database error"
+    }
+  }
+});
+
+extensionsV2.openapi(authorHistoryRoute, async (c) => {
+  const { id } = c.req.valid("param");
+  const platform = getPlatform(c);
+  const db = new AuthorsDatabase(platform.getDatabase("DB_EXTENSIONS"));
+
+  const { data, error } = await db.listHistory(id);
+  if (error || !data) {
+    return c.json(
+      {
+        error: {
+          message: error?.message ?? "Unable to load author history",
+          code: error?.code ?? "DATABASE_ERROR"
+        }
+      },
+      500
     );
   }
 

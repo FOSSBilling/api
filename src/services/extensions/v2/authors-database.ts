@@ -1,6 +1,6 @@
 import { DatabaseResult, IDatabase } from "../../../lib/interfaces";
 import { databaseError } from "./errors";
-import { Author, AuthorProfile } from "./interfaces";
+import { Author, AuthorHistoryEntry, AuthorProfile } from "./interfaces";
 
 // Matches the SQLite/D1 message for the idx_authors_owner_unique violation,
 // which is how a lost race between two concurrent first-time PUT /authors/me
@@ -44,6 +44,7 @@ export class AuthorsDatabase {
         .bind(author.id)
         .first<Record<string, unknown>>();
 
+      let mainStmt;
       if (!existingOwn) {
         if (existingById) {
           return {
@@ -52,52 +53,21 @@ export class AuthorsDatabase {
           };
         }
 
-        let result;
-        try {
-          result = await this.db
-            .prepare(
-              `INSERT INTO authors (id, type, name, url, bio, avatar_url, contact_email, owner_user_id, approved_at, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
-            )
-            .bind(
-              author.id,
-              author.type,
-              author.name,
-              author.URL ?? null,
-              author.bio ?? null,
-              author.avatar_url ?? null,
-              author.contact_email ?? null,
-              userId
-            )
-            .run();
-        } catch (error) {
-          if (isOwnerConflict(error instanceof Error ? error.message : "")) {
-            return {
-              data: null,
-              error: {
-                message: "You already have a developer profile",
-                code: "CONFLICT"
-              }
-            };
-          }
-          throw error;
-        }
-
-        if (!result.success) {
-          if (isOwnerConflict(result.error)) {
-            return {
-              data: null,
-              error: {
-                message: "You already have a developer profile",
-                code: "CONFLICT"
-              }
-            };
-          }
-          return databaseError(
-            "upsertOwn",
-            new Error(result.error || "Database query failed")
+        mainStmt = this.db
+          .prepare(
+            `INSERT INTO authors (id, type, name, url, bio, avatar_url, contact_email, owner_user_id, approved_at, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+          )
+          .bind(
+            author.id,
+            author.type,
+            author.name,
+            author.URL ?? null,
+            author.bio ?? null,
+            author.avatar_url ?? null,
+            author.contact_email ?? null,
+            userId
           );
-        }
       } else {
         if (author.id !== existingOwn.id) {
           return {
@@ -112,7 +82,7 @@ export class AuthorsDatabase {
         // approved_at is always cleared here, even if nothing meaningful
         // changed — the reviewed content just got overwritten, so the old
         // approval no longer applies. Not worth diffing old vs. new values.
-        const result = await this.db
+        mainStmt = this.db
           .prepare(
             `UPDATE authors SET type = ?, name = ?, url = ?, bio = ?, avatar_url = ?, contact_email = ?, approved_at = NULL, updated_at = CURRENT_TIMESTAMP
              WHERE id = ?`
@@ -125,15 +95,64 @@ export class AuthorsDatabase {
             author.avatar_url ?? null,
             author.contact_email ?? null,
             author.id
-          )
-          .run();
-
-        if (!result.success) {
-          return databaseError(
-            "upsertOwn",
-            new Error(result.error || "Database query failed")
           );
+      }
+
+      if (!this.db.batch) {
+        return databaseError(
+          "upsertOwn",
+          new Error("Database adapter does not support batch operations")
+        );
+      }
+
+      const historyStmt = this.db
+        .prepare(
+          `INSERT INTO author_history (id, author_id, type, name, url, changed_by, changed_at)
+           VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
+        )
+        .bind(
+          crypto.randomUUID(),
+          author.id,
+          author.type,
+          author.name,
+          author.URL ?? null,
+          userId
+        );
+
+      let results;
+      try {
+        results = (await this.db.batch([mainStmt, historyStmt])) as Array<{
+          success: boolean;
+          error?: string;
+        }>;
+      } catch (error) {
+        if (isOwnerConflict(error instanceof Error ? error.message : "")) {
+          return {
+            data: null,
+            error: {
+              message: "You already have a developer profile",
+              code: "CONFLICT"
+            }
+          };
         }
+        return databaseError("upsertOwn", error);
+      }
+
+      const failed = results.find((r) => !r.success);
+      if (failed) {
+        if (isOwnerConflict(failed.error)) {
+          return {
+            data: null,
+            error: {
+              message: "You already have a developer profile",
+              code: "CONFLICT"
+            }
+          };
+        }
+        return databaseError(
+          "upsertOwn",
+          new Error(failed.error || "Database write failed")
+        );
       }
 
       return this.getById(author.id);
@@ -218,5 +237,45 @@ export class AuthorsDatabase {
     }
 
     return { data: { id, approved: true }, error: null };
+  }
+
+  async listHistory(
+    authorId: string
+  ): Promise<DatabaseResult<AuthorHistoryEntry[]>> {
+    let result;
+    try {
+      result = await this.db
+        .prepare(
+          // CURRENT_TIMESTAMP has only second resolution, so two writes in
+          // the same second tie on changed_at; rowid (insertion order)
+          // breaks the tie so "newest first" is never ambiguous.
+          `SELECT author_id, type, name, url, changed_by, changed_at
+           FROM author_history WHERE author_id = ?
+           ORDER BY changed_at DESC, rowid DESC`
+        )
+        .bind(authorId)
+        .all<Record<string, unknown>>();
+    } catch (error) {
+      return databaseError("listHistory", error);
+    }
+
+    if (!result.success) {
+      return databaseError(
+        "listHistory",
+        new Error(result.error || "Database query failed")
+      );
+    }
+
+    return {
+      data: (result.results ?? []).map((row) => ({
+        author_id: row.author_id as string,
+        type: row.type as AuthorHistoryEntry["type"],
+        name: row.name as string,
+        URL: (row.url as string | null) ?? undefined,
+        changed_by: row.changed_by as string,
+        changed_at: row.changed_at as string
+      })),
+      error: null
+    };
   }
 }
