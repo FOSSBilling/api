@@ -4,6 +4,7 @@ export interface MockTables {
   authors: Map<string, Row>;
   extensions: Map<string, Row>;
   extension_submissions: Map<string, Row>;
+  author_history: Map<string, Row>;
   users: Map<string, Row>;
   // Test-only seam for simulating a write-through failure during approve().
   forceExtensionWriteFailure?: boolean;
@@ -14,6 +15,7 @@ export function createTables(): MockTables {
     authors: new Map(),
     extensions: new Map(),
     extension_submissions: new Map(),
+    author_history: new Map(),
     users: new Map()
   };
 }
@@ -190,6 +192,40 @@ class MockStatement implements D1PreparedStatement {
         this.changes = 1;
       }
       return [];
+    }
+
+    if (
+      q.startsWith(
+        "INSERT INTO author_history (id, author_id, type, name, url, changed_by, changed_at)"
+      )
+    ) {
+      const [id, author_id, type, name, url, changed_by] = p;
+      this.tables.author_history.set(String(id), {
+        id,
+        author_id,
+        type,
+        name,
+        url,
+        changed_by,
+        changed_at: new Date().toISOString()
+      });
+      return [];
+    }
+
+    if (
+      q.startsWith(
+        "SELECT author_id, type, name, url, changed_by, changed_at FROM author_history WHERE author_id = ?"
+      )
+    ) {
+      const [author_id] = p;
+      // Newest-first, with ties (same-second CURRENT_TIMESTAMP) broken by
+      // insertion order — mirrors the real query's `changed_at DESC, rowid DESC`.
+      return [...this.tables.author_history.values()]
+        .filter((r) => r.author_id === author_id)
+        .reverse()
+        .sort((a, b) =>
+          String(b.changed_at).localeCompare(String(a.changed_at))
+        );
     }
 
     if (

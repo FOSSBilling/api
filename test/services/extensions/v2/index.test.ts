@@ -795,6 +795,112 @@ describe("Extensions API v2", () => {
     });
   });
 
+  describe("GET /authors/{id}/history", () => {
+    it("records a history entry for a newly created profile", async () => {
+      await put(
+        "/extensions/v2/authors/me",
+        await authHeaders("user-1"),
+        sampleAuthor()
+      );
+      tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
+
+      const res = await get(
+        "/extensions/v2/authors/dev-author/history",
+        await authHeaders("mod-1")
+      );
+
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as {
+        result: Array<{
+          author_id: string;
+          name: string;
+          changed_by: string;
+        }>;
+      };
+      expect(data.result).toHaveLength(1);
+      expect(data.result[0].author_id).toBe("dev-author");
+      expect(data.result[0].name).toBe("Dev Author");
+      expect(data.result[0].changed_by).toBe("user-1");
+    });
+
+    it("orders entries newest-first and snapshots each write", async () => {
+      await put(
+        "/extensions/v2/authors/me",
+        await authHeaders("user-1"),
+        sampleAuthor({ name: "Original Name" })
+      );
+      await put(
+        "/extensions/v2/authors/me",
+        await authHeaders("user-1"),
+        sampleAuthor({ name: "Edited Name" })
+      );
+      tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
+
+      const res = await get(
+        "/extensions/v2/authors/dev-author/history",
+        await authHeaders("mod-1")
+      );
+
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as {
+        result: Array<{ name: string }>;
+      };
+      expect(data.result).toHaveLength(2);
+      expect(data.result[0].name).toBe("Edited Name");
+      expect(data.result[1].name).toBe("Original Name");
+    });
+
+    it("returns an empty array for an author with no history", async () => {
+      tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
+
+      const res = await get(
+        "/extensions/v2/authors/no-such-author/history",
+        await authHeaders("mod-1")
+      );
+
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as { result: unknown[] };
+      expect(data.result).toEqual([]);
+    });
+
+    it("blocks non-moderators", async () => {
+      await put(
+        "/extensions/v2/authors/me",
+        await authHeaders("user-1"),
+        sampleAuthor()
+      );
+
+      const res = await get(
+        "/extensions/v2/authors/dev-author/history",
+        await authHeaders("user-1")
+      );
+      expect(res.status).toBe(403);
+    });
+
+    it("does not record history for a rejected write (id already taken)", async () => {
+      await put(
+        "/extensions/v2/authors/me",
+        await authHeaders("user-1"),
+        sampleAuthor()
+      );
+
+      const res = await put(
+        "/extensions/v2/authors/me",
+        await authHeaders("user-2"),
+        sampleAuthor()
+      );
+      expect(res.status).toBe(409);
+
+      tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
+      const history = await get(
+        "/extensions/v2/authors/dev-author/history",
+        await authHeaders("mod-1")
+      );
+      const data = (await history.json()) as { result: unknown[] };
+      expect(data.result).toHaveLength(1);
+    });
+  });
+
   describe("OpenAPI docs", () => {
     it("serves a generated OpenAPI document", async () => {
       const res = await get("/extensions/v2/openapi.json", {});
