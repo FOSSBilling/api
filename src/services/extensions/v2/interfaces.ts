@@ -80,6 +80,7 @@ export const ReleaseSchema = z
     changelog_url: httpUrl().optional(),
     min_fossbilling_version: z.string().min(1).max(100)
   })
+  .strict()
   .openapi("Release");
 
 export type Release = z.infer<typeof ReleaseSchema>;
@@ -89,6 +90,7 @@ export const RepositorySchema = z
     type: z.enum(["github", "gitlab", "custom"]),
     repo: z.string().min(1).max(500)
   })
+  .strict()
   .openapi("Repository");
 
 export type Repository = z.infer<typeof RepositorySchema>;
@@ -98,6 +100,7 @@ export const LicenseSchema = z
     name: z.string().min(1).max(100),
     URL: httpUrl().optional()
   })
+  .strict()
   .openapi("License");
 
 export type License = z.infer<typeof LicenseSchema>;
@@ -117,6 +120,7 @@ export const ExtensionPayloadSchema = z
     version: z.string().min(1).max(100),
     download_url: httpUrl()
   })
+  .strict()
   .openapi("ExtensionPayload");
 
 export const SubmissionPayloadSchema = z

@@ -311,6 +311,37 @@ describe("Extensions API v2", () => {
       );
       expect(oversized.status).toBe(422);
 
+      const oversizedUnknownField = await post(
+        "/extensions/v2/submissions",
+        await authHeaders("user-1"),
+        {
+          ...payload,
+          extension: {
+            ...payload.extension,
+            padding: "x".repeat(300 * 1024)
+          }
+        }
+      );
+      expect(oversizedUnknownField.status).toBe(422);
+
+      const oversizedUnknownReleaseField = await post(
+        "/extensions/v2/submissions",
+        await authHeaders("user-1"),
+        {
+          ...payload,
+          extension: {
+            ...payload.extension,
+            releases: [
+              {
+                ...payload.extension.releases[0],
+                padding: "x".repeat(300 * 1024)
+              }
+            ]
+          }
+        }
+      );
+      expect(oversizedUnknownReleaseField.status).toBe(422);
+
       const tooManyReleases = await post(
         "/extensions/v2/submissions",
         await authHeaders("user-1"),
