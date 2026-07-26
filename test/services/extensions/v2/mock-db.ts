@@ -757,15 +757,18 @@ class MockStatement implements D1PreparedStatement {
         checkEpoch
       ] = p;
       const developer = this.tables.developers.get(String(checkDeveloperId));
-      const pending = [...this.tables.extension_submissions.values()].filter(
-        (row) => row.submitted_by === submitted_by && row.status === "pending"
+      const allPending = [...this.tables.extension_submissions.values()].filter(
+        (row) => row.status === "pending"
+      );
+      const submitterPending = allPending.filter(
+        (row) => row.submitted_by === submitted_by
       );
       if (
         !developer ||
         developer.owner_user_id !== checkOwner ||
         Number(developer.ownership_epoch ?? 1) !== checkEpoch ||
-        pending.length >= 10 ||
-        pending.some(
+        submitterPending.length >= 10 ||
+        allPending.some(
           (row) => row.target_key === String(target_key).toLowerCase()
         )
       ) {

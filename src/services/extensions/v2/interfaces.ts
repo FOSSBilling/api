@@ -17,12 +17,9 @@ export const EXTENSION_TYPES = [
 // matches the shape of existing ids (e.g. "fossbilling") and rules out
 // anything that isn't safe to use as a URL path segment or DOM identifier.
 const lowercaseId = (label: string) =>
-  z
-    .string()
-    .max(100)
-    .regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, {
-      message: `${label} id must be a lowercase alphanumeric slug`
-    });
+  z.string().regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, {
+    message: `${label} id must be a lowercase alphanumeric slug`
+  });
 
 // Restricts to http(s) — z.string().url() alone accepts any scheme,
 // including javascript:/data:, which is unsafe for fields a consumer may

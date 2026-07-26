@@ -328,6 +328,20 @@ describe("Extensions API v2", () => {
       expect(tooManyReleases.status).toBe(422);
     });
 
+    it("preserves compatibility with stored slug ids over 100 characters", async () => {
+      const developerId = "d".repeat(120);
+      const extensionId = "e".repeat(120);
+      seedDeveloper(developerId, "user-1");
+
+      const res = await post(
+        "/extensions/v2/submissions",
+        await authHeaders("user-1"),
+        samplePayload({ developerId, extensionId })
+      );
+
+      expect(res.status).toBe(201);
+    });
+
     it("rejects duplicate pending targets and caps each user's backlog", async () => {
       seedDeveloper("new-developer", "user-1");
       const headers = await authHeaders("user-1");
@@ -338,6 +352,17 @@ describe("Extensions API v2", () => {
       expect(
         (await post("/extensions/v2/submissions", headers, samplePayload()))
           .status
+      ).toBe(409);
+
+      seedDeveloper("other-developer", "user-2");
+      expect(
+        (
+          await post(
+            "/extensions/v2/submissions",
+            await authHeaders("user-2"),
+            samplePayload({ developerId: "other-developer" })
+          )
+        ).status
       ).toBe(409);
 
       for (let index = 1; index < 10; index++) {
@@ -842,6 +867,11 @@ describe("Extensions API v2", () => {
       expect(tables.developers.get("dev-developer")?.owner_user_id).toBe(
         "user-2"
       );
+      expect(
+        [...tables.developer_history.values()].filter(
+          (row) => row.developer_id === "dev-developer"
+        )
+      ).toHaveLength(1);
     });
 
     it("round-trips avatar_url and contact_email", async () => {

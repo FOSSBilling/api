@@ -24,7 +24,7 @@ SET target_key = LOWER(COALESCE(extension_id, json_extract(payload, '$.extension
 -- Deployments with duplicate pending rows must reconcile them before applying
 -- this migration; silently choosing one would mutate moderation state.
 CREATE UNIQUE INDEX idx_extension_submissions_pending_target
-  ON extension_submissions(submitted_by, target_key)
+  ON extension_submissions(target_key)
   WHERE status = 'pending';
 
 CREATE INDEX idx_extension_submissions_submitter_page
