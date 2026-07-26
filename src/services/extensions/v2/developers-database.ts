@@ -212,6 +212,188 @@ export class DevelopersDatabase {
     }
   }
 
+  // Diagnoses why the guarded delete in deleteOwn() below affected zero
+  // rows: distinguishes no-longer-owned/nonexistent from the two blocking
+  // conditions, without reopening the race the guard already closed.
+  private async deletionBlockedError(
+    developerId: string,
+    userId: string
+  ): Promise<{ code: "NOT_FOUND" | "CONFLICT"; message: string }> {
+    const developer = await this.db
+      .prepare("SELECT owner_user_id FROM developers WHERE id = ?")
+      .bind(developerId)
+      .first<{ owner_user_id: string | null }>();
+
+    if (!developer || developer.owner_user_id !== userId) {
+      return { code: "NOT_FOUND", message: "Developer not found" };
+    }
+
+    const extensionCount = await this.db
+      .prepare("SELECT COUNT(*) AS count FROM extensions WHERE author_id = ?")
+      .bind(developerId)
+      .first<{ count: number }>();
+    const extensionsCount = extensionCount?.count ?? 0;
+    if (extensionsCount > 0) {
+      return {
+        code: "CONFLICT",
+        message: `You have ${extensionsCount} published extension(s) under this profile. Transfer ownership or remove them before deleting it.`
+      };
+    }
+
+    const pendingCount = await this.db
+      .prepare(
+        "SELECT COUNT(*) AS count FROM extension_submissions WHERE developer_id = ? AND status = 'pending'"
+      )
+      .bind(developerId)
+      .first<{ count: number }>();
+    if ((pendingCount?.count ?? 0) > 0) {
+      return {
+        code: "CONFLICT",
+        message:
+          "You have a pending submission under review. Wait for it to be resolved before deleting your profile."
+      };
+    }
+
+    // The guard failed but a fresh look finds nothing wrong — whatever
+    // blocked it (someone else's transfer/claim landing, a submission
+    // that has since been resolved) has already cleared. Ask the caller
+    // to retry rather than guessing at a reason that's no longer true.
+    return {
+      code: "CONFLICT",
+      message:
+        "Your profile changed while processing this request. Please try again."
+    };
+  }
+
+  // Permanently removes the caller's own developer profile, for a
+  // privacy-focused account-deletion flow. Refuses while anything would be
+  // left dangling in a way that isn't just historical record-keeping:
+  // published extensions (someone still needs to own them) and pending
+  // submissions (nothing left to approve/reject against once the named
+  // developer is gone). developer_history is deliberately left alone —
+  // it's an append-only audit log, moderator-only, never rendered publicly,
+  // and 0009_drop_developer_history_fk.sql dropped its FK to developers(id)
+  // specifically so a deleted developer's history rows can outlive it.
+  async deleteOwn(
+    userId: string
+  ): Promise<DatabaseResult<{ id: string; deleted: true }>> {
+    try {
+      const developer = await this.db
+        .prepare("SELECT id FROM developers WHERE owner_user_id = ?")
+        .bind(userId)
+        .first<{ id: string }>();
+
+      if (!developer) {
+        return {
+          data: null,
+          error: { message: "Developer not found", code: "NOT_FOUND" }
+        };
+      }
+
+      if (!this.db.batch) {
+        return databaseError(
+          "deleteOwn",
+          new Error("Database adapter does not support batch operations")
+        );
+      }
+
+      // Every statement re-checks eligibility (still owned by this caller,
+      // no published extensions, no pending submission) at the moment it
+      // runs, rather than trusting the SELECT above: ownership can move
+      // (an accepted transfer/claim) and a new extension or pending
+      // submission can appear between that check and this write, and this
+      // delete is the caller's only authorization check. The same guard is
+      // repeated on all three statements — not just the last — so they're
+      // all-or-nothing: if it fails, nothing here is touched, instead of
+      // transfers/claims being deleted out from under a profile whose own
+      // deletion then gets blocked.
+      const deleteTransfersStmt = this.db
+        .prepare(
+          `DELETE FROM developer_transfers
+           WHERE developer_id = ?
+             AND EXISTS (
+               SELECT 1 FROM developers
+               WHERE developers.id = developer_transfers.developer_id
+                 AND developers.owner_user_id = ?
+                 AND NOT EXISTS (SELECT 1 FROM extensions WHERE extensions.author_id = developers.id)
+                 AND NOT EXISTS (
+                   SELECT 1 FROM extension_submissions
+                   WHERE extension_submissions.developer_id = developers.id
+                     AND extension_submissions.status = 'pending'
+                 )
+             )`
+        )
+        .bind(developer.id, userId);
+
+      const deleteClaimsStmt = this.db
+        .prepare(
+          `DELETE FROM developer_claims
+           WHERE developer_id = ?
+             AND EXISTS (
+               SELECT 1 FROM developers
+               WHERE developers.id = developer_claims.developer_id
+                 AND developers.owner_user_id = ?
+                 AND NOT EXISTS (SELECT 1 FROM extensions WHERE extensions.author_id = developers.id)
+                 AND NOT EXISTS (
+                   SELECT 1 FROM extension_submissions
+                   WHERE extension_submissions.developer_id = developers.id
+                     AND extension_submissions.status = 'pending'
+                 )
+             )`
+        )
+        .bind(developer.id, userId);
+
+      const deleteDeveloperStmt = this.db
+        .prepare(
+          `DELETE FROM developers
+           WHERE id = ?
+             AND owner_user_id = ?
+             AND NOT EXISTS (SELECT 1 FROM extensions WHERE extensions.author_id = developers.id)
+             AND NOT EXISTS (
+               SELECT 1 FROM extension_submissions
+               WHERE extension_submissions.developer_id = developers.id
+                 AND extension_submissions.status = 'pending'
+             )`
+        )
+        .bind(developer.id, userId);
+
+      let results;
+      try {
+        results = (await this.db.batch([
+          deleteTransfersStmt,
+          deleteClaimsStmt,
+          deleteDeveloperStmt
+        ])) as Array<{
+          success: boolean;
+          error?: string;
+          meta?: { changes?: number };
+        }>;
+      } catch (error) {
+        return databaseError("deleteOwn", error);
+      }
+
+      const failed = results.find((r) => !r.success);
+      if (failed) {
+        return databaseError(
+          "deleteOwn",
+          new Error(failed.error || "Database write failed")
+        );
+      }
+
+      const [, , developerResult] = results;
+      if (!developerResult.meta?.changes) {
+        return {
+          data: null,
+          error: await this.deletionBlockedError(developer.id, userId)
+        };
+      }
+
+      return { data: { id: developer.id, deleted: true }, error: null };
+    } catch (error) {
+      return databaseError("deleteOwn", error);
+    }
+  }
+
   async getById(id: string): Promise<DatabaseResult<DeveloperProfile>> {
     try {
       const row = await this.db
