@@ -186,7 +186,7 @@ export class AuthorsDatabase {
     let result;
     try {
       result = await this.db
-        .prepare(`SELECT * FROM authors ORDER BY name`)
+        .prepare("SELECT * FROM authors ORDER BY name")
         .all<Record<string, unknown>>();
     } catch (error) {
       return databaseError("listAll", error);
