@@ -179,6 +179,24 @@ export const IdParamSchema = z.object({
   })
 });
 
+export const TokenParamSchema = z.object({
+  token: z
+    .string()
+    .min(1)
+    .openapi({
+      param: { name: "token", in: "path" }
+    })
+});
+
+export const AuthorTransferSchema = z
+  .object({
+    token: z.string(),
+    expires_at: z.string()
+  })
+  .openapi("AuthorTransfer");
+
+export type AuthorTransfer = z.infer<typeof AuthorTransferSchema>;
+
 export const QueueQuerySchema = z.object({
   status: SubmissionStatusSchema.optional().openapi({
     param: { name: "status", in: "query" }

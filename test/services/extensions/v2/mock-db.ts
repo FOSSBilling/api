@@ -5,6 +5,7 @@ export interface MockTables {
   extensions: Map<string, Row>;
   extension_submissions: Map<string, Row>;
   author_history: Map<string, Row>;
+  author_transfers: Map<string, Row>;
   users: Map<string, Row>;
   // Test-only seam for simulating a write-through failure during approve().
   forceExtensionWriteFailure?: boolean;
@@ -16,6 +17,7 @@ export function createTables(): MockTables {
     extensions: new Map(),
     extension_submissions: new Map(),
     author_history: new Map(),
+    author_transfers: new Map(),
     users: new Map()
   };
 }
@@ -232,6 +234,105 @@ class MockStatement implements D1PreparedStatement {
         .sort((a, b) =>
           String(b.changed_at).localeCompare(String(a.changed_at))
         );
+    }
+
+    if (
+      q.startsWith(
+        "UPDATE author_transfers SET revoked_at = CURRENT_TIMESTAMP WHERE author_id = ? AND accepted_at IS NULL AND revoked_at IS NULL"
+      )
+    ) {
+      const [author_id] = p;
+      let changes = 0;
+      for (const row of this.tables.author_transfers.values()) {
+        if (
+          row.author_id === author_id &&
+          row.accepted_at === null &&
+          row.revoked_at === null
+        ) {
+          row.revoked_at = new Date().toISOString();
+          changes++;
+        }
+      }
+      this.changes = changes;
+      return [];
+    }
+
+    if (
+      q.startsWith(
+        "INSERT INTO author_transfers (id, author_id, token_hash, created_by, expires_at)"
+      )
+    ) {
+      const [id, author_id, token_hash, created_by, expires_at] = p;
+      this.tables.author_transfers.set(String(id), {
+        id,
+        author_id,
+        token_hash,
+        created_by,
+        created_at: new Date().toISOString(),
+        expires_at,
+        accepted_by: null,
+        accepted_at: null,
+        revoked_at: null
+      });
+      return [];
+    }
+
+    if (
+      q.startsWith(
+        "SELECT * FROM author_transfers WHERE token_hash = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > CURRENT_TIMESTAMP"
+      )
+    ) {
+      const [token_hash] = p;
+      const now = new Date();
+      const row = [...this.tables.author_transfers.values()].find(
+        (r) =>
+          r.token_hash === token_hash &&
+          r.accepted_at === null &&
+          r.revoked_at === null &&
+          new Date(`${String(r.expires_at).replace(" ", "T")}Z`) > now
+      );
+      return row ? [row] : [];
+    }
+
+    if (
+      q.startsWith("SELECT 1 FROM authors WHERE owner_user_id = ? AND id != ?")
+    ) {
+      const [owner_user_id, id] = p;
+      const row = [...this.tables.authors.values()].find(
+        (r) => r.owner_user_id === owner_user_id && r.id !== id
+      );
+      return row ? [row] : [];
+    }
+
+    if (
+      q.startsWith(
+        "UPDATE authors SET owner_user_id = ?, approved_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+      )
+    ) {
+      const [owner_user_id, id] = p;
+      const row = this.tables.authors.get(String(id));
+      if (row) {
+        row.owner_user_id = owner_user_id;
+        row.approved_at = null;
+        row.updated_at = new Date().toISOString();
+        this.changes = 1;
+      }
+      return [];
+    }
+
+    if (
+      q.startsWith(
+        "UPDATE author_transfers SET accepted_at = CURRENT_TIMESTAMP, accepted_by = ? WHERE id = ?"
+      )
+    ) {
+      const [accepted_by, id] = p;
+      const row = this.tables.author_transfers.get(String(id));
+      if (row) {
+        row.accepted_at = new Date().toISOString();
+        row.accepted_by = accepted_by;
+        this.changes = 1;
+      }
+      return [];
     }
 
     if (

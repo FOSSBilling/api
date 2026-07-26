@@ -946,6 +946,185 @@ describe("Extensions API v2", () => {
     });
   });
 
+  describe("author transfers", () => {
+    it("initiating a second transfer revokes the first token", async () => {
+      await put(
+        "/extensions/v2/authors/me",
+        await authHeaders("user-1"),
+        sampleAuthor()
+      );
+
+      const first = await post(
+        "/extensions/v2/authors/dev-author/transfer",
+        await authHeaders("user-1")
+      );
+      expect(first.status).toBe(200);
+      const firstToken = ((await first.json()) as { result: { token: string } })
+        .result.token;
+
+      const second = await post(
+        "/extensions/v2/authors/dev-author/transfer",
+        await authHeaders("user-1")
+      );
+      expect(second.status).toBe(200);
+
+      const acceptFirst = await post(
+        `/extensions/v2/authors/transfers/${firstToken}/accept`,
+        await authHeaders("user-2")
+      );
+      expect(acceptFirst.status).toBe(404);
+    });
+
+    it("accepts a valid token, transferring ownership and clearing approval", async () => {
+      await put(
+        "/extensions/v2/authors/me",
+        await authHeaders("user-1"),
+        sampleAuthor()
+      );
+      tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
+      await post(
+        "/extensions/v2/authors/dev-author/approve",
+        await authHeaders("mod-1")
+      );
+
+      const initiate = await post(
+        "/extensions/v2/authors/dev-author/transfer",
+        await authHeaders("user-1")
+      );
+      const token = ((await initiate.json()) as { result: { token: string } })
+        .result.token;
+
+      const accept = await post(
+        `/extensions/v2/authors/transfers/${token}/accept`,
+        await authHeaders("user-2")
+      );
+      expect(accept.status).toBe(200);
+      const accepted = (await accept.json()) as {
+        result: { id: string; approved: boolean };
+      };
+      expect(accepted.result.id).toBe("dev-author");
+      expect(accepted.result.approved).toBe(false);
+      expect(tables.authors.get("dev-author")?.owner_user_id).toBe("user-2");
+
+      const acceptAgain = await post(
+        `/extensions/v2/authors/transfers/${token}/accept`,
+        await authHeaders("user-3")
+      );
+      expect(acceptAgain.status).toBe(404);
+    });
+
+    it("rejects an expired token", async () => {
+      await put(
+        "/extensions/v2/authors/me",
+        await authHeaders("user-1"),
+        sampleAuthor()
+      );
+
+      const initiate = await post(
+        "/extensions/v2/authors/dev-author/transfer",
+        await authHeaders("user-1")
+      );
+      const token = ((await initiate.json()) as { result: { token: string } })
+        .result.token;
+
+      for (const transfer of tables.author_transfers.values()) {
+        transfer.expires_at = "2000-01-01 00:00:00";
+      }
+
+      const accept = await post(
+        `/extensions/v2/authors/transfers/${token}/accept`,
+        await authHeaders("user-2")
+      );
+      expect(accept.status).toBe(404);
+    });
+
+    it("rejects a revoked token", async () => {
+      await put(
+        "/extensions/v2/authors/me",
+        await authHeaders("user-1"),
+        sampleAuthor()
+      );
+
+      const initiate = await post(
+        "/extensions/v2/authors/dev-author/transfer",
+        await authHeaders("user-1")
+      );
+      const token = ((await initiate.json()) as { result: { token: string } })
+        .result.token;
+
+      const revoke = await post(
+        "/extensions/v2/authors/dev-author/transfer/revoke",
+        await authHeaders("user-1")
+      );
+      expect(revoke.status).toBe(200);
+
+      const accept = await post(
+        `/extensions/v2/authors/transfers/${token}/accept`,
+        await authHeaders("user-2")
+      );
+      expect(accept.status).toBe(404);
+    });
+
+    it("rejects acceptance by a user who already owns a different profile", async () => {
+      await put(
+        "/extensions/v2/authors/me",
+        await authHeaders("user-1"),
+        sampleAuthor()
+      );
+      await put(
+        "/extensions/v2/authors/me",
+        await authHeaders("user-2"),
+        sampleAuthor({ id: "other-author", name: "Other Author" })
+      );
+
+      const initiate = await post(
+        "/extensions/v2/authors/dev-author/transfer",
+        await authHeaders("user-1")
+      );
+      const token = ((await initiate.json()) as { result: { token: string } })
+        .result.token;
+
+      const accept = await post(
+        `/extensions/v2/authors/transfers/${token}/accept`,
+        await authHeaders("user-2")
+      );
+      expect(accept.status).toBe(409);
+      expect(tables.authors.get("dev-author")?.owner_user_id).toBe("user-1");
+    });
+
+    it("blocks a non-owner from initiating a transfer", async () => {
+      await put(
+        "/extensions/v2/authors/me",
+        await authHeaders("user-1"),
+        sampleAuthor()
+      );
+
+      const res = await post(
+        "/extensions/v2/authors/dev-author/transfer",
+        await authHeaders("intruder")
+      );
+      expect(res.status).toBe(403);
+    });
+
+    it("blocks a non-owner from revoking a transfer", async () => {
+      await put(
+        "/extensions/v2/authors/me",
+        await authHeaders("user-1"),
+        sampleAuthor()
+      );
+      await post(
+        "/extensions/v2/authors/dev-author/transfer",
+        await authHeaders("user-1")
+      );
+
+      const res = await post(
+        "/extensions/v2/authors/dev-author/transfer/revoke",
+        await authHeaders("intruder")
+      );
+      expect(res.status).toBe(403);
+    });
+  });
+
   describe("OpenAPI docs", () => {
     it("serves a generated OpenAPI document", async () => {
       const res = await get("/extensions/v2/openapi.json", {});
