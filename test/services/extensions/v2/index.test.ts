@@ -780,6 +780,51 @@ describe("Extensions API v2", () => {
       expect(res.status).toBe(403);
     });
 
+    it("lists every author, approved and unapproved", async () => {
+      await put(
+        "/extensions/v2/authors/me",
+        await authHeaders("user-1"),
+        sampleAuthor()
+      );
+      await put(
+        "/extensions/v2/authors/me",
+        await authHeaders("user-2"),
+        sampleAuthor({ id: "other-author", name: "Other Author" })
+      );
+      tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
+      await post(
+        "/extensions/v2/authors/dev-author/approve",
+        await authHeaders("mod-1")
+      );
+
+      const res = await get(
+        "/extensions/v2/authors",
+        await authHeaders("mod-1")
+      );
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        result: Array<{ id: string; approved: boolean }>;
+      };
+      expect(body.result.map((a) => a.id).sort()).toEqual([
+        "dev-author",
+        "other-author"
+      ]);
+      expect(body.result.find((a) => a.id === "dev-author")?.approved).toBe(
+        true
+      );
+      expect(body.result.find((a) => a.id === "other-author")?.approved).toBe(
+        false
+      );
+    });
+
+    it("blocks non-moderators from listing all authors", async () => {
+      const res = await get(
+        "/extensions/v2/authors",
+        await authHeaders("user-1")
+      );
+      expect(res.status).toBe(403);
+    });
+
     it("blocks non-moderators from approving authors", async () => {
       await put(
         "/extensions/v2/authors/me",
