@@ -478,35 +478,94 @@ export class AuthorsDatabase {
     try {
       const tokenHash = await sha256Hex(token);
 
-      // Atomically claim the transfer: a plain check-then-act (SELECT the
-      // row, decide, then write) would let two concurrent accepts both read
-      // it as valid before either one wrote to it, making the token usable
-      // more than once. The NOT EXISTS guard folds the self-accept case
-      // (accepting user already owns *this* author) and the
-      // already-owns-a-different-profile case into the same atomic
-      // decision, so the token is never consumed unless the accepting user
-      // is actually eligible.
-      let claim;
-      try {
-        claim = await this.db
-          .prepare(
-            `UPDATE author_transfers SET accepted_at = CURRENT_TIMESTAMP, accepted_by = ?
-             WHERE token_hash = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > CURRENT_TIMESTAMP
-               AND NOT EXISTS (SELECT 1 FROM authors WHERE owner_user_id = ?)`
-          )
-          .bind(userId, tokenHash, userId)
-          .run();
-      } catch (error) {
-        return databaseError("acceptTransfer", error);
-      }
-
-      if (!claim.success) {
+      if (!this.db.batch) {
         return databaseError(
           "acceptTransfer",
-          new Error(claim.error || "Database write failed")
+          new Error("Database adapter does not support batch operations")
         );
       }
 
+      // Claim the transfer and move ownership in the same atomic batch,
+      // rather than as two separate writes. Splitting them would leave a
+      // window, after the claim commits but before ownership actually
+      // moves, where the *former* owner's initiateTransfer call would still
+      // see itself as the current owner (per the authors row) and could
+      // mint a fresh, valid link for a profile that's already mid-handoff.
+      // It would also mean a failure on the ownership write alone (e.g. the
+      // recipient racing to create another profile) permanently burns the
+      // token without ever transferring ownership, with no way to retry.
+      // Batching both as one D1 transaction makes them succeed or fail as a
+      // unit: the second statement's subquery only resolves once the first
+      // has actually claimed the row, so there's nothing to update if the
+      // claim didn't happen, and a failure on either rolls back both.
+      //
+      // The claim's NOT EXISTS guard folds the self-accept case (accepting
+      // user already owns *this* author) and the already-owns-a-different-
+      // profile case into the same atomic decision, so the token is never
+      // consumed unless the accepting user is actually eligible. A plain
+      // check-then-act (SELECT the row, decide, then write) would let two
+      // concurrent accepts both read it as valid before either one wrote to
+      // it, making the token usable more than once.
+      const claimStmt = this.db
+        .prepare(
+          `UPDATE author_transfers SET accepted_at = CURRENT_TIMESTAMP, accepted_by = ?
+           WHERE token_hash = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > CURRENT_TIMESTAMP
+             AND NOT EXISTS (SELECT 1 FROM authors WHERE owner_user_id = ?)`
+        )
+        .bind(userId, tokenHash, userId);
+      const updateAuthorStmt = this.db
+        .prepare(
+          `UPDATE authors SET owner_user_id = ?, approved_at = NULL, updated_at = CURRENT_TIMESTAMP
+           WHERE id = (
+             SELECT author_id FROM author_transfers
+             WHERE token_hash = ? AND accepted_by = ? AND accepted_at IS NOT NULL
+           )`
+        )
+        .bind(userId, tokenHash, userId);
+
+      let results;
+      try {
+        results = (await this.db.batch([
+          claimStmt,
+          updateAuthorStmt
+        ])) as Array<{
+          success: boolean;
+          error?: string;
+          meta?: { changes?: number };
+        }>;
+      } catch (error) {
+        if (isOwnerConflict(error instanceof Error ? error.message : "")) {
+          return {
+            data: null,
+            error: {
+              code: "CONFLICT",
+              message:
+                "You already have a developer profile — remove or transfer it before accepting a new one"
+            }
+          };
+        }
+        return databaseError("acceptTransfer", error);
+      }
+
+      const failed = results.find((r) => !r.success);
+      if (failed) {
+        if (isOwnerConflict(failed.error)) {
+          return {
+            data: null,
+            error: {
+              code: "CONFLICT",
+              message:
+                "You already have a developer profile — remove or transfer it before accepting a new one"
+            }
+          };
+        }
+        return databaseError(
+          "acceptTransfer",
+          new Error(failed.error || "Database write failed")
+        );
+      }
+
+      const [claim] = results;
       if (!claim.meta?.changes) {
         // The claim can fail either because the token itself is bad (used,
         // revoked, expired, unknown) or because it's still valid but the
@@ -547,36 +606,6 @@ export class AuthorsDatabase {
           "acceptTransfer",
           new Error("Claimed transfer row not found")
         );
-      }
-
-      try {
-        const result = await this.db
-          .prepare(
-            `UPDATE authors SET owner_user_id = ?, approved_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
-          )
-          .bind(userId, transfer.author_id)
-          .run();
-        if (!result.success) {
-          return databaseError(
-            "acceptTransfer",
-            new Error(result.error || "Database write failed")
-          );
-        }
-      } catch (error) {
-        // idx_authors_owner_unique is the authoritative backstop for the
-        // already-owns-a-profile check above, in case ownership changed in
-        // the moment between that check and this write.
-        if (isOwnerConflict(error instanceof Error ? error.message : "")) {
-          return {
-            data: null,
-            error: {
-              code: "CONFLICT",
-              message:
-                "You already have a developer profile — remove or transfer it before accepting a new one"
-            }
-          };
-        }
-        return databaseError("acceptTransfer", error);
       }
 
       return this.getById(transfer.author_id);

@@ -352,16 +352,26 @@ class MockStatement implements D1PreparedStatement {
 
     if (
       q.startsWith(
-        "UPDATE authors SET owner_user_id = ?, approved_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+        "UPDATE authors SET owner_user_id = ?, approved_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ( SELECT author_id FROM author_transfers"
       )
     ) {
-      const [owner_user_id, id] = p;
-      const row = this.tables.authors.get(String(id));
+      const [owner_user_id, token_hash, accepted_by] = p;
+      const transfer = [...this.tables.author_transfers.values()].find(
+        (r) =>
+          r.token_hash === token_hash &&
+          r.accepted_by === accepted_by &&
+          r.accepted_at !== null
+      );
+      const row = transfer
+        ? this.tables.authors.get(String(transfer.author_id))
+        : undefined;
       if (row) {
         row.owner_user_id = owner_user_id;
         row.approved_at = null;
         row.updated_at = new Date().toISOString();
         this.changes = 1;
+      } else {
+        this.changes = 0;
       }
       return [];
     }
