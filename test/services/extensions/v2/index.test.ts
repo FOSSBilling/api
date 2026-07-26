@@ -311,20 +311,31 @@ describe("Extensions API v2", () => {
       );
       expect(oversized.status).toBe(422);
 
-      const oversizedUnknownField = await post(
+      const unknownExtensionField = await post(
         "/extensions/v2/submissions",
         await authHeaders("user-1"),
         {
           ...payload,
           extension: {
             ...payload.extension,
-            padding: "x".repeat(300 * 1024)
+            padding: "x"
           }
         }
       );
-      expect(oversizedUnknownField.status).toBe(422);
+      expect(unknownExtensionField.status).toBe(422);
+      const unknownExtensionBody = (await unknownExtensionField.json()) as {
+        error: { details: Array<{ code: string; path: PropertyKey[] }> };
+      };
+      expect(unknownExtensionBody.error.details).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            code: "unrecognized_keys",
+            path: ["extension"]
+          })
+        ])
+      );
 
-      const oversizedUnknownReleaseField = await post(
+      const unknownReleaseField = await post(
         "/extensions/v2/submissions",
         await authHeaders("user-1"),
         {
@@ -334,13 +345,24 @@ describe("Extensions API v2", () => {
             releases: [
               {
                 ...payload.extension.releases[0],
-                padding: "x".repeat(300 * 1024)
+                padding: "x"
               }
             ]
           }
         }
       );
-      expect(oversizedUnknownReleaseField.status).toBe(422);
+      expect(unknownReleaseField.status).toBe(422);
+      const unknownReleaseBody = (await unknownReleaseField.json()) as {
+        error: { details: Array<{ code: string; path: PropertyKey[] }> };
+      };
+      expect(unknownReleaseBody.error.details).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            code: "unrecognized_keys",
+            path: ["extension", "releases", 0]
+          })
+        ])
+      );
 
       const tooManyReleases = await post(
         "/extensions/v2/submissions",
