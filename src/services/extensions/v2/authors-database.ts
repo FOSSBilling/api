@@ -495,9 +495,17 @@ export class AuthorsDatabase {
       // recipient racing to create another profile) permanently burns the
       // token without ever transferring ownership, with no way to retry.
       // Batching both as one D1 transaction makes them succeed or fail as a
-      // unit: the second statement's subquery only resolves once the first
-      // has actually claimed the row, so there's nothing to update if the
-      // claim didn't happen, and a failure on either rolls back both.
+      // unit. The `changes() = 1` guard on the second statement is load-
+      // bearing, not redundant with the subquery: accepted_by/accepted_at
+      // are a permanent historical record once a token is claimed, so the
+      // subquery alone would match a *previously* accepted token forever,
+      // letting a replay of an old, already-used link silently reassign
+      // ownership again (even to a profile since handed off to someone
+      // else) despite the claim itself changing zero rows.
+      // `changes()` reports the row count from the immediately preceding
+      // statement on this same connection, so it's only 1 when *this*
+      // batch's claim just fired — proving the update below is reacting to
+      // a fresh claim, not replaying an old one.
       //
       // The claim's NOT EXISTS guard folds the self-accept case (accepting
       // user already owns *this* author) and the already-owns-a-different-
@@ -516,10 +524,11 @@ export class AuthorsDatabase {
       const updateAuthorStmt = this.db
         .prepare(
           `UPDATE authors SET owner_user_id = ?, approved_at = NULL, updated_at = CURRENT_TIMESTAMP
-           WHERE id = (
-             SELECT author_id FROM author_transfers
-             WHERE token_hash = ? AND accepted_by = ? AND accepted_at IS NOT NULL
-           )`
+           WHERE changes() = 1
+             AND id = (
+               SELECT author_id FROM author_transfers
+               WHERE token_hash = ? AND accepted_by = ? AND accepted_at IS NOT NULL
+             )`
         )
         .bind(userId, tokenHash, userId);
 

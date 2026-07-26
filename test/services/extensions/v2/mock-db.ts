@@ -60,8 +60,12 @@ class MockStatement implements D1PreparedStatement {
     throw new Error("not implemented");
   }) as D1PreparedStatement["raw"];
 
+  get normalizedQuery(): string {
+    return this.query.replace(/\s+/g, " ").trim();
+  }
+
   private execute(): Row[] {
-    const q = this.query.replace(/\s+/g, " ").trim();
+    const q = this.normalizedQuery;
     const p = this.params;
 
     // v1's SELECT_EXTENSIONS join (database.ts), for cross-service verification
@@ -352,7 +356,7 @@ class MockStatement implements D1PreparedStatement {
 
     if (
       q.startsWith(
-        "UPDATE authors SET owner_user_id = ?, approved_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ( SELECT author_id FROM author_transfers"
+        "UPDATE authors SET owner_user_id = ?, approved_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE changes() = 1 AND id = ( SELECT author_id FROM author_transfers"
       )
     ) {
       const [owner_user_id, token_hash, accepted_by] = p;
@@ -567,8 +571,23 @@ export function createMockD1(tables: MockTables): D1Database {
       statements: D1PreparedStatement[]
     ): Promise<D1Result<T>[]> {
       const results: D1Result<T>[] = [];
+      // Mirrors SQL's changes(): the mock has no other way to expose "how
+      // many rows did the immediately preceding statement change" across
+      // statements, but acceptTransfer's ownership UPDATE deliberately
+      // gates on changes() = 1 to prove the just-run claim actually fired
+      // (rather than the token having been accepted at some point in the
+      // past) — a statement referencing that gate is skipped here unless
+      // the previous statement's change count was exactly 1.
+      let lastChanges = 0;
       for (const stmt of statements) {
-        results.push(await stmt.run<T>());
+        const query = stmt instanceof MockStatement ? stmt.normalizedQuery : "";
+        if (query.includes("WHERE changes() = 1") && lastChanges !== 1) {
+          results.push(ok<T>([], 0));
+          continue;
+        }
+        const result = await stmt.run<T>();
+        lastChanges = result.meta?.changes ?? 0;
+        results.push(result);
       }
       return results;
     },

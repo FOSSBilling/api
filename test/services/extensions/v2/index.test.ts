@@ -1011,6 +1011,52 @@ describe("Extensions API v2", () => {
         await authHeaders("user-3")
       );
       expect(acceptAgain.status).toBe(404);
+      expect(tables.authors.get("dev-author")?.owner_user_id).toBe("user-2");
+    });
+
+    it("does not let replaying an already-used token reassign ownership away from a later owner", async () => {
+      await put(
+        "/extensions/v2/authors/me",
+        await authHeaders("user-1"),
+        sampleAuthor()
+      );
+
+      const initiate1 = await post(
+        "/extensions/v2/authors/dev-author/transfer",
+        await authHeaders("user-1")
+      );
+      const token1 = ((await initiate1.json()) as { result: { token: string } })
+        .result.token;
+
+      const accept1 = await post(
+        `/extensions/v2/authors/transfers/${token1}/accept`,
+        await authHeaders("user-2")
+      );
+      expect(accept1.status).toBe(200);
+      expect(tables.authors.get("dev-author")?.owner_user_id).toBe("user-2");
+
+      // dev-author is legitimately handed off again, to a third user.
+      const initiate2 = await post(
+        "/extensions/v2/authors/dev-author/transfer",
+        await authHeaders("user-2")
+      );
+      const token2 = ((await initiate2.json()) as { result: { token: string } })
+        .result.token;
+      const accept2 = await post(
+        `/extensions/v2/authors/transfers/${token2}/accept`,
+        await authHeaders("user-3")
+      );
+      expect(accept2.status).toBe(200);
+      expect(tables.authors.get("dev-author")?.owner_user_id).toBe("user-3");
+
+      // Replaying the *first* (already-used) token, by the same user who
+      // originally accepted it, must not silently reassign ownership back.
+      const replay = await post(
+        `/extensions/v2/authors/transfers/${token1}/accept`,
+        await authHeaders("user-2")
+      );
+      expect(replay.status).toBe(404);
+      expect(tables.authors.get("dev-author")?.owner_user_id).toBe("user-3");
     });
 
     it("rejects an expired token", async () => {
