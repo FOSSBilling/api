@@ -1,12 +1,12 @@
 type Row = Record<string, unknown>;
 
 export interface MockTables {
-  authors: Map<string, Row>;
+  developers: Map<string, Row>;
   extensions: Map<string, Row>;
   extension_submissions: Map<string, Row>;
-  author_history: Map<string, Row>;
-  author_transfers: Map<string, Row>;
-  author_claims: Map<string, Row>;
+  developer_history: Map<string, Row>;
+  developer_transfers: Map<string, Row>;
+  developer_claims: Map<string, Row>;
   users: Map<string, Row>;
   // Test-only seam for simulating a write-through failure during approve().
   forceExtensionWriteFailure?: boolean;
@@ -14,12 +14,12 @@ export interface MockTables {
 
 export function createTables(): MockTables {
   return {
-    authors: new Map(),
+    developers: new Map(),
     extensions: new Map(),
     extension_submissions: new Map(),
-    author_history: new Map(),
-    author_transfers: new Map(),
-    author_claims: new Map(),
+    developer_history: new Map(),
+    developer_transfers: new Map(),
+    developer_claims: new Map(),
     users: new Map()
   };
 }
@@ -81,14 +81,14 @@ class MockStatement implements D1PreparedStatement {
         rows = rows.filter((r) => String(r.id).toLowerCase() === id);
       }
       return rows.map((r) => {
-        const author = this.tables.authors.get(String(r.author_id));
+        const developer = this.tables.developers.get(String(r.author_id));
         return {
           id: r.id,
           type: r.type,
           author_id: r.author_id,
-          author_type: author?.type ?? "user",
-          author_name: author?.name ?? "",
-          author_url: author?.url ?? null,
+          author_type: developer?.type ?? "user",
+          author_name: developer?.name ?? "",
+          author_url: developer?.url ?? null,
           name: r.name,
           description: r.description,
           releases: r.releases,
@@ -115,31 +115,31 @@ class MockStatement implements D1PreparedStatement {
       return row ? [row] : [];
     }
 
-    if (q.startsWith("SELECT owner_user_id FROM authors WHERE id = ?")) {
-      const row = this.tables.authors.get(String(p[0]));
+    if (q.startsWith("SELECT owner_user_id FROM developers WHERE id = ?")) {
+      const row = this.tables.developers.get(String(p[0]));
       return row ? [row] : [];
     }
 
-    if (q.startsWith("SELECT * FROM authors WHERE owner_user_id = ?")) {
-      const row = [...this.tables.authors.values()].find(
+    if (q.startsWith("SELECT * FROM developers WHERE owner_user_id = ?")) {
+      const row = [...this.tables.developers.values()].find(
         (r) => r.owner_user_id === p[0]
       );
       return row ? [row] : [];
     }
 
-    if (q.startsWith("SELECT * FROM authors WHERE id = ?")) {
-      const row = this.tables.authors.get(String(p[0]));
+    if (q.startsWith("SELECT * FROM developers WHERE id = ?")) {
+      const row = this.tables.developers.get(String(p[0]));
       return row ? [row] : [];
     }
 
-    if (q.startsWith("SELECT * FROM authors ORDER BY name")) {
-      return [...this.tables.authors.values()].sort((a, b) =>
+    if (q.startsWith("SELECT * FROM developers ORDER BY name")) {
+      return [...this.tables.developers.values()].sort((a, b) =>
         String(a.name ?? "").localeCompare(String(b.name ?? ""))
       );
     }
 
-    if (q.startsWith("SELECT * FROM authors WHERE approved_at IS NULL")) {
-      return [...this.tables.authors.values()]
+    if (q.startsWith("SELECT * FROM developers WHERE approved_at IS NULL")) {
+      return [...this.tables.developers.values()]
         .filter((r) => (r.approved_at ?? null) === null)
         .sort((a, b) =>
           String(a.created_at ?? "").localeCompare(String(b.created_at ?? ""))
@@ -148,7 +148,7 @@ class MockStatement implements D1PreparedStatement {
 
     if (
       q.startsWith(
-        "INSERT INTO authors (id, type, name, url, bio, avatar_url, contact_email, owner_user_id, approved_at, created_at, updated_at)"
+        "INSERT INTO developers (id, type, name, url, bio, avatar_url, contact_email, owner_user_id, approved_at, created_at, updated_at)"
       )
     ) {
       const [
@@ -161,17 +161,17 @@ class MockStatement implements D1PreparedStatement {
         contact_email,
         owner_user_id
       ] = p;
-      // Mirrors idx_authors_owner_unique: one profile per non-null owner.
-      const ownerTaken = [...this.tables.authors.values()].some(
+      // Mirrors idx_developers_owner_unique: one profile per non-null owner.
+      const ownerTaken = [...this.tables.developers.values()].some(
         (r) => owner_user_id !== null && r.owner_user_id === owner_user_id
       );
       if (ownerTaken) {
         throw new Error(
-          "D1_ERROR: UNIQUE constraint failed: authors.owner_user_id"
+          "D1_ERROR: UNIQUE constraint failed: developers.owner_user_id"
         );
       }
       const now = new Date().toISOString();
-      this.tables.authors.set(String(id), {
+      this.tables.developers.set(String(id), {
         id,
         type,
         name,
@@ -189,11 +189,11 @@ class MockStatement implements D1PreparedStatement {
 
     if (
       q.startsWith(
-        "UPDATE authors SET type = ?, name = ?, url = ?, bio = ?, avatar_url = ?, contact_email = ?, approved_at = NULL"
+        "UPDATE developers SET type = ?, name = ?, url = ?, bio = ?, avatar_url = ?, contact_email = ?, approved_at = NULL"
       )
     ) {
       const [type, name, url, bio, avatar_url, contact_email, id] = p;
-      const row = this.tables.authors.get(String(id));
+      const row = this.tables.developers.get(String(id));
       if (row) {
         row.type = type;
         row.name = name;
@@ -210,13 +210,13 @@ class MockStatement implements D1PreparedStatement {
 
     if (
       q.startsWith(
-        "INSERT INTO author_history (id, author_id, type, name, url, changed_by, changed_at)"
+        "INSERT INTO developer_history (id, developer_id, type, name, url, changed_by, changed_at)"
       )
     ) {
-      const [id, author_id, type, name, url, changed_by] = p;
-      this.tables.author_history.set(String(id), {
+      const [id, developer_id, type, name, url, changed_by] = p;
+      this.tables.developer_history.set(String(id), {
         id,
-        author_id,
+        developer_id,
         type,
         name,
         url,
@@ -228,14 +228,14 @@ class MockStatement implements D1PreparedStatement {
 
     if (
       q.startsWith(
-        "SELECT author_id, type, name, url, changed_by, changed_at FROM author_history WHERE author_id = ?"
+        "SELECT developer_id, type, name, url, changed_by, changed_at FROM developer_history WHERE developer_id = ?"
       )
     ) {
-      const [author_id] = p;
+      const [developer_id] = p;
       // Newest-first, with ties (same-second CURRENT_TIMESTAMP) broken by
       // insertion order — mirrors the real query's `changed_at DESC, rowid DESC`.
-      return [...this.tables.author_history.values()]
-        .filter((r) => r.author_id === author_id)
+      return [...this.tables.developer_history.values()]
+        .filter((r) => r.developer_id === developer_id)
         .reverse()
         .sort((a, b) =>
           String(b.changed_at).localeCompare(String(a.changed_at))
@@ -244,16 +244,16 @@ class MockStatement implements D1PreparedStatement {
 
     if (
       q.startsWith(
-        "UPDATE author_transfers SET revoked_at = CURRENT_TIMESTAMP WHERE author_id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND EXISTS"
+        "UPDATE developer_transfers SET revoked_at = CURRENT_TIMESTAMP WHERE developer_id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND EXISTS"
       )
     ) {
-      const [author_id, owner_user_id] = p;
-      const author = this.tables.authors.get(String(author_id));
+      const [developer_id, owner_user_id] = p;
+      const developer = this.tables.developers.get(String(developer_id));
       let changes = 0;
-      if (author?.owner_user_id === owner_user_id) {
-        for (const row of this.tables.author_transfers.values()) {
+      if (developer?.owner_user_id === owner_user_id) {
+        for (const row of this.tables.developer_transfers.values()) {
           if (
-            row.author_id === author_id &&
+            row.developer_id === developer_id &&
             row.accepted_at === null &&
             row.revoked_at === null
           ) {
@@ -268,23 +268,23 @@ class MockStatement implements D1PreparedStatement {
 
     if (
       q.startsWith(
-        "INSERT INTO author_transfers (id, author_id, token_hash, created_by, expires_at) SELECT ?, ?, ?, ?, ? WHERE EXISTS"
+        "INSERT INTO developer_transfers (id, developer_id, token_hash, created_by, expires_at) SELECT ?, ?, ?, ?, ? WHERE EXISTS"
       )
     ) {
       const [
         id,
-        author_id,
+        developer_id,
         token_hash,
         created_by,
         expires_at,
-        checkAuthorId,
+        checkDeveloperId,
         owner_user_id
       ] = p;
-      const author = this.tables.authors.get(String(checkAuthorId));
-      if (author?.owner_user_id === owner_user_id) {
-        this.tables.author_transfers.set(String(id), {
+      const developer = this.tables.developers.get(String(checkDeveloperId));
+      if (developer?.owner_user_id === owner_user_id) {
+        this.tables.developer_transfers.set(String(id), {
           id,
-          author_id,
+          developer_id,
           token_hash,
           created_by,
           created_at: new Date().toISOString(),
@@ -302,15 +302,15 @@ class MockStatement implements D1PreparedStatement {
 
     if (
       q.startsWith(
-        "UPDATE author_transfers SET accepted_at = CURRENT_TIMESTAMP, accepted_by = ? WHERE token_hash = ?"
+        "UPDATE developer_transfers SET accepted_at = CURRENT_TIMESTAMP, accepted_by = ? WHERE token_hash = ?"
       )
     ) {
       const [accepted_by, token_hash, owner_user_id] = p;
       const now = new Date();
-      const ownsAny = [...this.tables.authors.values()].some(
+      const ownsAny = [...this.tables.developers.values()].some(
         (r) => r.owner_user_id === owner_user_id
       );
-      const row = [...this.tables.author_transfers.values()].find(
+      const row = [...this.tables.developer_transfers.values()].find(
         (r) =>
           r.token_hash === token_hash &&
           r.accepted_at === null &&
@@ -329,12 +329,12 @@ class MockStatement implements D1PreparedStatement {
 
     if (
       q.startsWith(
-        "SELECT 1 FROM author_transfers WHERE token_hash = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > CURRENT_TIMESTAMP"
+        "SELECT 1 FROM developer_transfers WHERE token_hash = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > CURRENT_TIMESTAMP"
       )
     ) {
       const [token_hash] = p;
       const now = new Date();
-      const row = [...this.tables.author_transfers.values()].find(
+      const row = [...this.tables.developer_transfers.values()].find(
         (r) =>
           r.token_hash === token_hash &&
           r.accepted_at === null &&
@@ -346,30 +346,30 @@ class MockStatement implements D1PreparedStatement {
 
     if (
       q.startsWith(
-        "SELECT author_id FROM author_transfers WHERE token_hash = ?"
+        "SELECT developer_id FROM developer_transfers WHERE token_hash = ?"
       )
     ) {
       const [token_hash] = p;
-      const row = [...this.tables.author_transfers.values()].find(
+      const row = [...this.tables.developer_transfers.values()].find(
         (r) => r.token_hash === token_hash
       );
-      return row ? [{ author_id: row.author_id }] : [];
+      return row ? [{ developer_id: row.developer_id }] : [];
     }
 
     if (
       q.startsWith(
-        "UPDATE authors SET owner_user_id = ?, approved_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE changes() = 1 AND id = ( SELECT author_id FROM author_transfers"
+        "UPDATE developers SET owner_user_id = ?, approved_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE changes() = 1 AND id = ( SELECT developer_id FROM developer_transfers"
       )
     ) {
       const [owner_user_id, token_hash, accepted_by] = p;
-      const transfer = [...this.tables.author_transfers.values()].find(
+      const transfer = [...this.tables.developer_transfers.values()].find(
         (r) =>
           r.token_hash === token_hash &&
           r.accepted_by === accepted_by &&
           r.accepted_at !== null
       );
       const row = transfer
-        ? this.tables.authors.get(String(transfer.author_id))
+        ? this.tables.developers.get(String(transfer.developer_id))
         : undefined;
       if (row) {
         row.owner_user_id = owner_user_id;
@@ -384,11 +384,11 @@ class MockStatement implements D1PreparedStatement {
 
     if (
       q.startsWith(
-        "UPDATE authors SET approved_at = CURRENT_TIMESTAMP WHERE id = ?"
+        "UPDATE developers SET approved_at = CURRENT_TIMESTAMP WHERE id = ?"
       )
     ) {
       const [id] = p;
-      const row = this.tables.authors.get(String(id));
+      const row = this.tables.developers.get(String(id));
       if (row) {
         row.approved_at = new Date().toISOString();
         this.changes = 1;
@@ -396,8 +396,8 @@ class MockStatement implements D1PreparedStatement {
       return [];
     }
 
-    if (q.startsWith("SELECT 1 FROM authors WHERE owner_user_id = ?")) {
-      const row = [...this.tables.authors.values()].find(
+    if (q.startsWith("SELECT 1 FROM developers WHERE owner_user_id = ?")) {
+      const row = [...this.tables.developers.values()].find(
         (r) => r.owner_user_id === p[0]
       );
       return row ? [{ "1": 1 }] : [];
@@ -405,35 +405,41 @@ class MockStatement implements D1PreparedStatement {
 
     if (
       q.startsWith(
-        "INSERT INTO author_claims (id, author_id, claimant_id, note) SELECT ?, ?, ?, ? WHERE EXISTS"
+        "INSERT INTO developer_claims (id, developer_id, claimant_id, note) SELECT ?, ?, ?, ? WHERE EXISTS"
       )
     ) {
-      const [id, author_id, claimant_id, note, checkAuthorId, checkClaimantId] =
-        p;
-      const author = this.tables.authors.get(String(checkAuthorId));
-      const claimantOwnsAny = [...this.tables.authors.values()].some(
+      const [
+        id,
+        developer_id,
+        claimant_id,
+        note,
+        checkDeveloperId,
+        checkClaimantId
+      ] = p;
+      const developer = this.tables.developers.get(String(checkDeveloperId));
+      const claimantOwnsAny = [...this.tables.developers.values()].some(
         (r) => r.owner_user_id === checkClaimantId
       );
-      if (!author || author.owner_user_id !== null || claimantOwnsAny) {
+      if (!developer || developer.owner_user_id !== null || claimantOwnsAny) {
         this.changes = 0;
         return [];
       }
 
-      const pendingExists = [...this.tables.author_claims.values()].some(
+      const pendingExists = [...this.tables.developer_claims.values()].some(
         (r) =>
-          r.author_id === author_id &&
+          r.developer_id === developer_id &&
           r.claimant_id === claimant_id &&
           r.status === "pending"
       );
       if (pendingExists) {
         throw new Error(
-          "D1_ERROR: UNIQUE constraint failed: author_claims.author_id, author_claims.claimant_id"
+          "D1_ERROR: UNIQUE constraint failed: developer_claims.developer_id, developer_claims.claimant_id"
         );
       }
       const now = new Date().toISOString();
-      this.tables.author_claims.set(String(id), {
+      this.tables.developer_claims.set(String(id), {
         id,
-        author_id,
+        developer_id,
         claimant_id,
         status: "pending",
         note,
@@ -446,17 +452,17 @@ class MockStatement implements D1PreparedStatement {
       return [];
     }
 
-    if (q.startsWith("SELECT * FROM author_claims WHERE id = ?")) {
-      const row = this.tables.author_claims.get(String(p[0]));
+    if (q.startsWith("SELECT * FROM developer_claims WHERE id = ?")) {
+      const row = this.tables.developer_claims.get(String(p[0]));
       return row ? [row] : [];
     }
 
     if (
       q.startsWith(
-        "SELECT * FROM author_claims WHERE claimant_id = ? ORDER BY created_at DESC"
+        "SELECT * FROM developer_claims WHERE claimant_id = ? ORDER BY created_at DESC"
       )
     ) {
-      return [...this.tables.author_claims.values()]
+      return [...this.tables.developer_claims.values()]
         .filter((r) => r.claimant_id === p[0])
         .sort((a, b) =>
           String(b.created_at).localeCompare(String(a.created_at))
@@ -464,30 +470,32 @@ class MockStatement implements D1PreparedStatement {
     }
 
     if (
-      q.startsWith("SELECT c.*, a.name AS author_name, a.type AS author_type")
+      q.startsWith(
+        "SELECT c.*, d.name AS developer_name, d.type AS developer_type"
+      )
     ) {
-      return [...this.tables.author_claims.values()]
+      return [...this.tables.developer_claims.values()]
         .filter((r) => r.status === "pending")
         .sort((a, b) =>
           String(a.created_at).localeCompare(String(b.created_at))
         )
         .map((r) => {
-          const author = this.tables.authors.get(String(r.author_id));
+          const developer = this.tables.developers.get(String(r.developer_id));
           return {
             ...r,
-            author_name: author?.name ?? "",
-            author_type: author?.type ?? "user"
+            developer_name: developer?.name ?? "",
+            developer_type: developer?.type ?? "user"
           };
         });
     }
 
     if (
       q.startsWith(
-        "UPDATE author_claims SET status = 'approved', reviewer_id = ?, reviewed_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'pending'"
+        "UPDATE developer_claims SET status = 'approved', reviewer_id = ?, reviewed_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'pending'"
       )
     ) {
       const [reviewer_id, id] = p;
-      const row = this.tables.author_claims.get(String(id));
+      const row = this.tables.developer_claims.get(String(id));
       if (row && row.status === "pending") {
         row.status = "approved";
         row.reviewer_id = reviewer_id;
@@ -501,11 +509,11 @@ class MockStatement implements D1PreparedStatement {
 
     if (
       q.startsWith(
-        "UPDATE authors SET owner_user_id = ?, approved_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND owner_user_id IS NULL"
+        "UPDATE developers SET owner_user_id = ?, approved_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND owner_user_id IS NULL"
       )
     ) {
       const [owner_user_id, id] = p;
-      const row = this.tables.authors.get(String(id));
+      const row = this.tables.developers.get(String(id));
       if (row && row.owner_user_id === null) {
         row.owner_user_id = owner_user_id;
         row.approved_at = null;
@@ -519,14 +527,14 @@ class MockStatement implements D1PreparedStatement {
 
     if (
       q.startsWith(
-        "UPDATE author_claims SET status = 'rejected', reviewer_id = ?, reviewed_at = CURRENT_TIMESTAMP, review_note = 'Another claim on this profile was approved' WHERE changes() = 1 AND author_id = ?"
+        "UPDATE developer_claims SET status = 'rejected', reviewer_id = ?, reviewed_at = CURRENT_TIMESTAMP, review_note = 'Another claim on this profile was approved' WHERE changes() = 1 AND developer_id = ?"
       )
     ) {
-      const [reviewer_id, author_id, excludeId] = p;
+      const [reviewer_id, developer_id, excludeId] = p;
       const now = new Date().toISOString();
-      for (const row of this.tables.author_claims.values()) {
+      for (const row of this.tables.developer_claims.values()) {
         if (
-          row.author_id === author_id &&
+          row.developer_id === developer_id &&
           row.status === "pending" &&
           row.id !== excludeId
         ) {
@@ -541,11 +549,11 @@ class MockStatement implements D1PreparedStatement {
 
     if (
       q.startsWith(
-        "UPDATE author_claims SET status = 'pending', reviewer_id = NULL, reviewed_at = NULL WHERE id = ?"
+        "UPDATE developer_claims SET status = 'pending', reviewer_id = NULL, reviewed_at = NULL WHERE id = ?"
       )
     ) {
       const [id] = p;
-      const row = this.tables.author_claims.get(String(id));
+      const row = this.tables.developer_claims.get(String(id));
       if (row) {
         row.status = "pending";
         row.reviewer_id = null;
@@ -556,11 +564,11 @@ class MockStatement implements D1PreparedStatement {
 
     if (
       q.startsWith(
-        "UPDATE author_claims SET status = 'rejected', reviewer_id = ?, review_note = ?, reviewed_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'pending'"
+        "UPDATE developer_claims SET status = 'rejected', reviewer_id = ?, review_note = ?, reviewed_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'pending'"
       )
     ) {
       const [reviewer_id, review_note, id] = p;
-      const row = this.tables.author_claims.get(String(id));
+      const row = this.tables.developer_claims.get(String(id));
       if (row && row.status === "pending") {
         row.status = "rejected";
         row.reviewer_id = reviewer_id;
@@ -580,14 +588,14 @@ class MockStatement implements D1PreparedStatement {
 
     if (
       q.startsWith(
-        "INSERT INTO extension_submissions (id, extension_id, author_id, submitted_by, status, payload)"
+        "INSERT INTO extension_submissions (id, extension_id, developer_id, submitted_by, status, payload)"
       )
     ) {
-      const [id, extension_id, author_id, submitted_by, payload] = p;
+      const [id, extension_id, developer_id, submitted_by, payload] = p;
       this.tables.extension_submissions.set(String(id), {
         id,
         extension_id,
-        author_id,
+        developer_id,
         submitted_by,
         status: "pending",
         payload,
@@ -661,11 +669,13 @@ class MockStatement implements D1PreparedStatement {
     }
 
     if (
-      q.startsWith("INSERT INTO authors (id, type, name, url, owner_user_id)")
+      q.startsWith(
+        "INSERT INTO developers (id, type, name, url, owner_user_id)"
+      )
     ) {
       const [id, type, name, url, owner_user_id] = p;
-      const existing = this.tables.authors.get(String(id));
-      this.tables.authors.set(String(id), {
+      const existing = this.tables.developers.get(String(id));
+      this.tables.developers.set(String(id), {
         id,
         type,
         name,

@@ -29,9 +29,9 @@ const httpUrl = () =>
       message: "must use http or https"
     });
 
-export const AuthorSchema = z
+export const DeveloperSchema = z
   .object({
-    id: lowercaseId("author"),
+    id: lowercaseId("developer"),
     type: z.enum(["user", "organization"]),
     name: z.string().min(1),
     URL: httpUrl().optional(),
@@ -39,22 +39,22 @@ export const AuthorSchema = z
     avatar_url: httpUrl().optional(),
     contact_email: z.string().email().optional()
   })
-  .openapi("Author");
+  .openapi("Developer");
 
-export type Author = z.infer<typeof AuthorSchema>;
+export type Developer = z.infer<typeof DeveloperSchema>;
 
 // Submissions go through moderation and only ever touch identity fields —
 // profile fields (bio/avatar_url/contact_email) are direct-write-only via
-// PUT /authors/me, so this schema rejects them instead of silently
+// PUT /developers/me, so this schema rejects them instead of silently
 // accepting-then-dropping them when a submission is approved.
-export const SubmissionAuthorSchema = AuthorSchema.pick({
+export const SubmissionDeveloperSchema = DeveloperSchema.pick({
   id: true,
   type: true,
   name: true,
   URL: true
 })
   .strict()
-  .openapi("SubmissionAuthor");
+  .openapi("SubmissionDeveloper");
 
 export const ReleaseSchema = z
   .object({
@@ -99,31 +99,31 @@ export const ExtensionPayloadSchema = z
 
 export const SubmissionPayloadSchema = z
   .object({
-    author: SubmissionAuthorSchema,
+    developer: SubmissionDeveloperSchema,
     extension: ExtensionPayloadSchema
   })
   .openapi("SubmissionPayload");
 
 export type SubmissionPayload = z.infer<typeof SubmissionPayloadSchema>;
 
-export const AuthorProfileSchema = AuthorSchema.extend({
+export const DeveloperProfileSchema = DeveloperSchema.extend({
   approved: z.boolean()
-}).openapi("AuthorProfile");
+}).openapi("DeveloperProfile");
 
-export type AuthorProfile = z.infer<typeof AuthorProfileSchema>;
+export type DeveloperProfile = z.infer<typeof DeveloperProfileSchema>;
 
-export const AuthorHistoryEntrySchema = z
+export const DeveloperHistoryEntrySchema = z
   .object({
-    author_id: z.string(),
+    developer_id: z.string(),
     type: z.enum(["user", "organization"]),
     name: z.string(),
     URL: httpUrl().optional(),
     changed_by: z.string(),
     changed_at: z.string()
   })
-  .openapi("AuthorHistoryEntry");
+  .openapi("DeveloperHistoryEntry");
 
-export type AuthorHistoryEntry = z.infer<typeof AuthorHistoryEntrySchema>;
+export type DeveloperHistoryEntry = z.infer<typeof DeveloperHistoryEntrySchema>;
 
 export const ReviewNoteOptionalSchema = z
   .object({
@@ -149,7 +149,7 @@ export const SubmissionSchema = z
   .object({
     id: z.string(),
     extension_id: z.string().nullable(),
-    author_id: z.string(),
+    developer_id: z.string(),
     submitted_by: z.string(),
     status: SubmissionStatusSchema,
     payload: SubmissionPayloadSchema,
@@ -188,19 +188,19 @@ export const TokenParamSchema = z.object({
     })
 });
 
-export const AuthorTransferSchema = z
+export const DeveloperTransferSchema = z
   .object({
     token: z.string(),
     expires_at: z.string()
   })
-  .openapi("AuthorTransfer");
+  .openapi("DeveloperTransfer");
 
-export type AuthorTransfer = z.infer<typeof AuthorTransferSchema>;
+export type DeveloperTransfer = z.infer<typeof DeveloperTransferSchema>;
 
-export const AuthorClaimSchema = z
+export const DeveloperClaimSchema = z
   .object({
     id: z.string(),
-    author_id: z.string(),
+    developer_id: z.string(),
     claimant_id: z.string(),
     status: z.enum(["pending", "approved", "rejected"]),
     note: z.string().optional(),
@@ -209,16 +209,16 @@ export const AuthorClaimSchema = z
     created_at: z.string(),
     reviewed_at: z.string().optional()
   })
-  .openapi("AuthorClaim");
+  .openapi("DeveloperClaim");
 
-export type AuthorClaim = z.infer<typeof AuthorClaimSchema>;
+export type DeveloperClaim = z.infer<typeof DeveloperClaimSchema>;
 
-export const PendingAuthorClaimSchema = AuthorClaimSchema.extend({
-  author_name: z.string(),
-  author_type: z.enum(["user", "organization"])
-}).openapi("PendingAuthorClaim");
+export const PendingDeveloperClaimSchema = DeveloperClaimSchema.extend({
+  developer_name: z.string(),
+  developer_type: z.enum(["user", "organization"])
+}).openapi("PendingDeveloperClaim");
 
-export type PendingAuthorClaim = z.infer<typeof PendingAuthorClaimSchema>;
+export type PendingDeveloperClaim = z.infer<typeof PendingDeveloperClaimSchema>;
 
 export const ClaimNoteSchema = z
   .object({

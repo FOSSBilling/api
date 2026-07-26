@@ -1,26 +1,28 @@
 import { DatabaseResult, IDatabase } from "../../../lib/interfaces";
 import { databaseError } from "./errors";
 import {
-  Author,
-  AuthorClaim,
-  AuthorHistoryEntry,
-  AuthorProfile,
-  AuthorTransfer,
-  PendingAuthorClaim
+  Developer,
+  DeveloperClaim,
+  DeveloperHistoryEntry,
+  DeveloperProfile,
+  DeveloperTransfer,
+  PendingDeveloperClaim
 } from "./interfaces";
 
-// Matches the SQLite/D1 message for the idx_authors_owner_unique violation,
-// which is how a lost race between two concurrent first-time PUT /authors/me
-// requests (same caller, different ids) surfaces.
+// Matches the SQLite/D1 message for the idx_developers_owner_unique
+// violation, which is how a lost race between two concurrent first-time PUT
+// /developers/me requests (same caller, different ids) surfaces.
 function isOwnerConflict(message: string | undefined): boolean {
   return !!message && /UNIQUE constraint failed.*owner_user_id/i.test(message);
 }
 
-// Matches the SQLite/D1 message for the idx_author_claims_pending_unique
+// Matches the SQLite/D1 message for the idx_developer_claims_pending_unique
 // violation, which is how a duplicate claim() call while one is already
 // pending surfaces.
 function isPendingClaimConflict(message: string | undefined): boolean {
-  return !!message && /UNIQUE constraint failed.*author_claims/i.test(message);
+  return (
+    !!message && /UNIQUE constraint failed.*developer_claims/i.test(message)
+  );
 }
 
 async function sha256Hex(input: string): Promise<string> {
@@ -44,10 +46,10 @@ function toSqliteDatetime(date: Date): string {
   return date.toISOString().slice(0, 19).replace("T", " ");
 }
 
-function parseAuthorRow(row: Record<string, unknown>): AuthorProfile {
+function parseDeveloperRow(row: Record<string, unknown>): DeveloperProfile {
   return {
     id: row.id as string,
-    type: row.type as AuthorProfile["type"],
+    type: row.type as DeveloperProfile["type"],
     name: row.name as string,
     URL: (row.url as string | null) ?? undefined,
     bio: (row.bio as string | null) ?? undefined,
@@ -57,12 +59,12 @@ function parseAuthorRow(row: Record<string, unknown>): AuthorProfile {
   };
 }
 
-function parseClaimRow(row: Record<string, unknown>): AuthorClaim {
+function parseClaimRow(row: Record<string, unknown>): DeveloperClaim {
   return {
     id: row.id as string,
-    author_id: row.author_id as string,
+    developer_id: row.developer_id as string,
     claimant_id: row.claimant_id as string,
-    status: row.status as AuthorClaim["status"],
+    status: row.status as DeveloperClaim["status"],
     note: (row.note as string | null) ?? undefined,
     review_note: (row.review_note as string | null) ?? undefined,
     reviewer_id: (row.reviewer_id as string | null) ?? undefined,
@@ -71,7 +73,7 @@ function parseClaimRow(row: Record<string, unknown>): AuthorClaim {
   };
 }
 
-export class AuthorsDatabase {
+export class DevelopersDatabase {
   private db: IDatabase;
 
   constructor(db: IDatabase) {
@@ -80,17 +82,17 @@ export class AuthorsDatabase {
 
   async upsertOwn(
     userId: string,
-    author: Author
-  ): Promise<DatabaseResult<AuthorProfile>> {
+    developer: Developer
+  ): Promise<DatabaseResult<DeveloperProfile>> {
     try {
       const existingOwn = await this.db
-        .prepare("SELECT * FROM authors WHERE owner_user_id = ?")
+        .prepare("SELECT * FROM developers WHERE owner_user_id = ?")
         .bind(userId)
         .first<Record<string, unknown>>();
 
       const existingById = await this.db
-        .prepare("SELECT * FROM authors WHERE id = ?")
-        .bind(author.id)
+        .prepare("SELECT * FROM developers WHERE id = ?")
+        .bind(developer.id)
         .first<Record<string, unknown>>();
 
       let mainStmt;
@@ -98,31 +100,31 @@ export class AuthorsDatabase {
         if (existingById) {
           return {
             data: null,
-            error: { message: "Author id already exists", code: "CONFLICT" }
+            error: { message: "Developer id already exists", code: "CONFLICT" }
           };
         }
 
         mainStmt = this.db
           .prepare(
-            `INSERT INTO authors (id, type, name, url, bio, avatar_url, contact_email, owner_user_id, approved_at, created_at, updated_at)
+            `INSERT INTO developers (id, type, name, url, bio, avatar_url, contact_email, owner_user_id, approved_at, created_at, updated_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
           )
           .bind(
-            author.id,
-            author.type,
-            author.name,
-            author.URL ?? null,
-            author.bio ?? null,
-            author.avatar_url ?? null,
-            author.contact_email ?? null,
+            developer.id,
+            developer.type,
+            developer.name,
+            developer.URL ?? null,
+            developer.bio ?? null,
+            developer.avatar_url ?? null,
+            developer.contact_email ?? null,
             userId
           );
       } else {
-        if (author.id !== existingOwn.id) {
+        if (developer.id !== existingOwn.id) {
           return {
             data: null,
             error: {
-              message: "Author id cannot be changed",
+              message: "Developer id cannot be changed",
               code: "CONFLICT"
             }
           };
@@ -133,17 +135,17 @@ export class AuthorsDatabase {
         // approval no longer applies. Not worth diffing old vs. new values.
         mainStmt = this.db
           .prepare(
-            `UPDATE authors SET type = ?, name = ?, url = ?, bio = ?, avatar_url = ?, contact_email = ?, approved_at = NULL, updated_at = CURRENT_TIMESTAMP
+            `UPDATE developers SET type = ?, name = ?, url = ?, bio = ?, avatar_url = ?, contact_email = ?, approved_at = NULL, updated_at = CURRENT_TIMESTAMP
              WHERE id = ?`
           )
           .bind(
-            author.type,
-            author.name,
-            author.URL ?? null,
-            author.bio ?? null,
-            author.avatar_url ?? null,
-            author.contact_email ?? null,
-            author.id
+            developer.type,
+            developer.name,
+            developer.URL ?? null,
+            developer.bio ?? null,
+            developer.avatar_url ?? null,
+            developer.contact_email ?? null,
+            developer.id
           );
       }
 
@@ -156,15 +158,15 @@ export class AuthorsDatabase {
 
       const historyStmt = this.db
         .prepare(
-          `INSERT INTO author_history (id, author_id, type, name, url, changed_by, changed_at)
+          `INSERT INTO developer_history (id, developer_id, type, name, url, changed_by, changed_at)
            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
         )
         .bind(
           crypto.randomUUID(),
-          author.id,
-          author.type,
-          author.name,
-          author.URL ?? null,
+          developer.id,
+          developer.type,
+          developer.name,
+          developer.URL ?? null,
           userId
         );
 
@@ -204,38 +206,38 @@ export class AuthorsDatabase {
         );
       }
 
-      return this.getById(author.id);
+      return this.getById(developer.id);
     } catch (error) {
       return databaseError("upsertOwn", error);
     }
   }
 
-  private async getById(id: string): Promise<DatabaseResult<AuthorProfile>> {
+  private async getById(id: string): Promise<DatabaseResult<DeveloperProfile>> {
     try {
       const row = await this.db
-        .prepare("SELECT * FROM authors WHERE id = ?")
+        .prepare("SELECT * FROM developers WHERE id = ?")
         .bind(id)
         .first<Record<string, unknown>>();
       if (!row) {
         return {
           data: null,
           error: {
-            message: `Cannot find author by id: ${id}`,
+            message: `Cannot find developer by id: ${id}`,
             code: "NOT_FOUND"
           }
         };
       }
-      return { data: parseAuthorRow(row), error: null };
+      return { data: parseDeveloperRow(row), error: null };
     } catch (error) {
       return databaseError("getById", error);
     }
   }
 
-  async listAll(): Promise<DatabaseResult<AuthorProfile[]>> {
+  async listAll(): Promise<DatabaseResult<DeveloperProfile[]>> {
     let result;
     try {
       result = await this.db
-        .prepare("SELECT * FROM authors ORDER BY name")
+        .prepare("SELECT * FROM developers ORDER BY name")
         .all<Record<string, unknown>>();
     } catch (error) {
       return databaseError("listAll", error);
@@ -249,17 +251,17 @@ export class AuthorsDatabase {
     }
 
     return {
-      data: (result.results ?? []).map(parseAuthorRow),
+      data: (result.results ?? []).map(parseDeveloperRow),
       error: null
     };
   }
 
-  async listUnapproved(): Promise<DatabaseResult<AuthorProfile[]>> {
+  async listUnapproved(): Promise<DatabaseResult<DeveloperProfile[]>> {
     let result;
     try {
       result = await this.db
         .prepare(
-          "SELECT * FROM authors WHERE approved_at IS NULL ORDER BY created_at ASC"
+          "SELECT * FROM developers WHERE approved_at IS NULL ORDER BY created_at ASC"
         )
         .all<Record<string, unknown>>();
     } catch (error) {
@@ -274,7 +276,7 @@ export class AuthorsDatabase {
     }
 
     return {
-      data: (result.results ?? []).map(parseAuthorRow),
+      data: (result.results ?? []).map(parseDeveloperRow),
       error: null
     };
   }
@@ -286,7 +288,7 @@ export class AuthorsDatabase {
     try {
       result = await this.db
         .prepare(
-          "UPDATE authors SET approved_at = CURRENT_TIMESTAMP WHERE id = ?"
+          "UPDATE developers SET approved_at = CURRENT_TIMESTAMP WHERE id = ?"
         )
         .bind(id)
         .run();
@@ -304,7 +306,10 @@ export class AuthorsDatabase {
     if (!result.meta?.changes) {
       return {
         data: null,
-        error: { message: `Cannot find author by id: ${id}`, code: "NOT_FOUND" }
+        error: {
+          message: `Cannot find developer by id: ${id}`,
+          code: "NOT_FOUND"
+        }
       };
     }
 
@@ -312,8 +317,8 @@ export class AuthorsDatabase {
   }
 
   async listHistory(
-    authorId: string
-  ): Promise<DatabaseResult<AuthorHistoryEntry[]>> {
+    developerId: string
+  ): Promise<DatabaseResult<DeveloperHistoryEntry[]>> {
     let result;
     try {
       result = await this.db
@@ -321,11 +326,11 @@ export class AuthorsDatabase {
           // CURRENT_TIMESTAMP has only second resolution, so two writes in
           // the same second tie on changed_at; rowid (insertion order)
           // breaks the tie so "newest first" is never ambiguous.
-          `SELECT author_id, type, name, url, changed_by, changed_at
-           FROM author_history WHERE author_id = ?
+          `SELECT developer_id, type, name, url, changed_by, changed_at
+           FROM developer_history WHERE developer_id = ?
            ORDER BY changed_at DESC, rowid DESC`
         )
-        .bind(authorId)
+        .bind(developerId)
         .all<Record<string, unknown>>();
     } catch (error) {
       return databaseError("listHistory", error);
@@ -340,8 +345,8 @@ export class AuthorsDatabase {
 
     return {
       data: (result.results ?? []).map((row) => ({
-        author_id: row.author_id as string,
-        type: row.type as AuthorHistoryEntry["type"],
+        developer_id: row.developer_id as string,
+        type: row.type as DeveloperHistoryEntry["type"],
         name: row.name as string,
         URL: (row.url as string | null) ?? undefined,
         changed_by: row.changed_by as string,
@@ -352,18 +357,18 @@ export class AuthorsDatabase {
   }
 
   // Shared by initiateTransfer/revokeTransfer: both are owner-only actions on
-  // an existing author, so both need the same NOT_FOUND/FORBIDDEN check.
+  // an existing developer, so both need the same NOT_FOUND/FORBIDDEN check.
   private async checkOwnership(
-    authorId: string,
+    developerId: string,
     userId: string
   ): Promise<{ code: "NOT_FOUND" | "FORBIDDEN"; message: string } | null> {
     const owner = await this.db
-      .prepare("SELECT owner_user_id FROM authors WHERE id = ?")
-      .bind(authorId)
+      .prepare("SELECT owner_user_id FROM developers WHERE id = ?")
+      .bind(developerId)
       .first<{ owner_user_id: string | null }>();
 
     if (!owner) {
-      return { code: "NOT_FOUND", message: "Author not found" };
+      return { code: "NOT_FOUND", message: "Developer not found" };
     }
     if (owner.owner_user_id !== userId) {
       return { code: "FORBIDDEN", message: "You don't own this profile" };
@@ -372,9 +377,9 @@ export class AuthorsDatabase {
   }
 
   async initiateTransfer(
-    authorId: string,
+    developerId: string,
     userId: string
-  ): Promise<DatabaseResult<AuthorTransfer>> {
+  ): Promise<DatabaseResult<DeveloperTransfer>> {
     try {
       const token =
         crypto.randomUUID().replace(/-/g, "") +
@@ -396,28 +401,28 @@ export class AuthorsDatabase {
       // loses ownership between an up-front check and the write could
       // otherwise still slip the write through. Superseding any existing
       // pending transfer (rather than stacking up) keeps
-      // idx_author_transfers_pending satisfied without a separate cleanup
+      // idx_developer_transfers_pending satisfied without a separate cleanup
       // pass.
       const revokeStmt = this.db
         .prepare(
-          `UPDATE author_transfers SET revoked_at = CURRENT_TIMESTAMP
-           WHERE author_id = ? AND accepted_at IS NULL AND revoked_at IS NULL
-             AND EXISTS (SELECT 1 FROM authors WHERE authors.id = author_transfers.author_id AND authors.owner_user_id = ?)`
+          `UPDATE developer_transfers SET revoked_at = CURRENT_TIMESTAMP
+           WHERE developer_id = ? AND accepted_at IS NULL AND revoked_at IS NULL
+             AND EXISTS (SELECT 1 FROM developers WHERE developers.id = developer_transfers.developer_id AND developers.owner_user_id = ?)`
         )
-        .bind(authorId, userId);
+        .bind(developerId, userId);
       const insertStmt = this.db
         .prepare(
-          `INSERT INTO author_transfers (id, author_id, token_hash, created_by, expires_at)
+          `INSERT INTO developer_transfers (id, developer_id, token_hash, created_by, expires_at)
            SELECT ?, ?, ?, ?, ?
-           WHERE EXISTS (SELECT 1 FROM authors WHERE id = ? AND owner_user_id = ?)`
+           WHERE EXISTS (SELECT 1 FROM developers WHERE id = ? AND owner_user_id = ?)`
         )
         .bind(
           crypto.randomUUID(),
-          authorId,
+          developerId,
           tokenHash,
           userId,
           expiresAt,
-          authorId,
+          developerId,
           userId
         );
 
@@ -436,10 +441,10 @@ export class AuthorsDatabase {
 
       // The INSERT only writes a row when the ownership guard above passes,
       // so zero rows written means the caller doesn't currently own this
-      // author — a follow-up read distinguishes NOT_FOUND from FORBIDDEN for
-      // the response without reopening the race the guard closes.
+      // developer — a follow-up read distinguishes NOT_FOUND from FORBIDDEN
+      // for the response without reopening the race the guard closes.
       if (!results[1]?.meta?.changes) {
-        const ownershipError = await this.checkOwnership(authorId, userId);
+        const ownershipError = await this.checkOwnership(developerId, userId);
         return {
           data: null,
           error: ownershipError ?? {
@@ -456,17 +461,17 @@ export class AuthorsDatabase {
   }
 
   async revokeTransfer(
-    authorId: string,
+    developerId: string,
     userId: string
   ): Promise<DatabaseResult<{ id: string; revoked: true }>> {
     try {
       const result = await this.db
         .prepare(
-          `UPDATE author_transfers SET revoked_at = CURRENT_TIMESTAMP
-           WHERE author_id = ? AND accepted_at IS NULL AND revoked_at IS NULL
-             AND EXISTS (SELECT 1 FROM authors WHERE authors.id = author_transfers.author_id AND authors.owner_user_id = ?)`
+          `UPDATE developer_transfers SET revoked_at = CURRENT_TIMESTAMP
+           WHERE developer_id = ? AND accepted_at IS NULL AND revoked_at IS NULL
+             AND EXISTS (SELECT 1 FROM developers WHERE developers.id = developer_transfers.developer_id AND developers.owner_user_id = ?)`
         )
-        .bind(authorId, userId)
+        .bind(developerId, userId)
         .run();
 
       if (!result.success) {
@@ -477,18 +482,18 @@ export class AuthorsDatabase {
       }
 
       // Zero rows changed is ambiguous by itself (no pending transfer vs.
-      // not the owner vs. no such author), since the ownership guard is
+      // not the owner vs. no such developer), since the ownership guard is
       // folded into the write above rather than checked beforehand. A
       // follow-up read-only check distinguishes them for the response
       // without reopening the race that guard closes.
       if (!result.meta?.changes) {
-        const ownershipError = await this.checkOwnership(authorId, userId);
+        const ownershipError = await this.checkOwnership(developerId, userId);
         if (ownershipError) {
           return { data: null, error: ownershipError };
         }
       }
 
-      return { data: { id: authorId, revoked: true }, error: null };
+      return { data: { id: developerId, revoked: true }, error: null };
     } catch (error) {
       return databaseError("revokeTransfer", error);
     }
@@ -497,7 +502,7 @@ export class AuthorsDatabase {
   async acceptTransfer(
     token: string,
     userId: string
-  ): Promise<DatabaseResult<AuthorProfile>> {
+  ): Promise<DatabaseResult<DeveloperProfile>> {
     try {
       const tokenHash = await sha256Hex(token);
 
@@ -512,7 +517,7 @@ export class AuthorsDatabase {
       // rather than as two separate writes. Splitting them would leave a
       // window, after the claim commits but before ownership actually
       // moves, where the *former* owner's initiateTransfer call would still
-      // see itself as the current owner (per the authors row) and could
+      // see itself as the current owner (per the developers row) and could
       // mint a fresh, valid link for a profile that's already mid-handoff.
       // It would also mean a failure on the ownership write alone (e.g. the
       // recipient racing to create another profile) permanently burns the
@@ -531,25 +536,25 @@ export class AuthorsDatabase {
       // a fresh claim, not replaying an old one.
       //
       // The claim's NOT EXISTS guard folds the self-accept case (accepting
-      // user already owns *this* author) and the already-owns-a-different-
-      // profile case into the same atomic decision, so the token is never
-      // consumed unless the accepting user is actually eligible. A plain
-      // check-then-act (SELECT the row, decide, then write) would let two
-      // concurrent accepts both read it as valid before either one wrote to
-      // it, making the token usable more than once.
+      // user already owns *this* developer) and the already-owns-a-
+      // different-profile case into the same atomic decision, so the token
+      // is never consumed unless the accepting user is actually eligible. A
+      // plain check-then-act (SELECT the row, decide, then write) would let
+      // two concurrent accepts both read it as valid before either one
+      // wrote to it, making the token usable more than once.
       const claimStmt = this.db
         .prepare(
-          `UPDATE author_transfers SET accepted_at = CURRENT_TIMESTAMP, accepted_by = ?
+          `UPDATE developer_transfers SET accepted_at = CURRENT_TIMESTAMP, accepted_by = ?
            WHERE token_hash = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > CURRENT_TIMESTAMP
-             AND NOT EXISTS (SELECT 1 FROM authors WHERE owner_user_id = ?)`
+             AND NOT EXISTS (SELECT 1 FROM developers WHERE owner_user_id = ?)`
         )
         .bind(userId, tokenHash, userId);
-      const updateAuthorStmt = this.db
+      const updateDeveloperStmt = this.db
         .prepare(
-          `UPDATE authors SET owner_user_id = ?, approved_at = NULL, updated_at = CURRENT_TIMESTAMP
+          `UPDATE developers SET owner_user_id = ?, approved_at = NULL, updated_at = CURRENT_TIMESTAMP
            WHERE changes() = 1
              AND id = (
-               SELECT author_id FROM author_transfers
+               SELECT developer_id FROM developer_transfers
                WHERE token_hash = ? AND accepted_by = ? AND accepted_at IS NOT NULL
              )`
         )
@@ -559,7 +564,7 @@ export class AuthorsDatabase {
       try {
         results = (await this.db.batch([
           claimStmt,
-          updateAuthorStmt
+          updateDeveloperStmt
         ])) as Array<{
           success: boolean;
           error?: string;
@@ -604,7 +609,7 @@ export class AuthorsDatabase {
         // ownership guard rejected it — check which, for an accurate error.
         const stillPending = await this.db
           .prepare(
-            `SELECT 1 FROM author_transfers
+            `SELECT 1 FROM developer_transfers
              WHERE token_hash = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > CURRENT_TIMESTAMP`
           )
           .bind(tokenHash)
@@ -630,9 +635,11 @@ export class AuthorsDatabase {
       }
 
       const transfer = await this.db
-        .prepare("SELECT author_id FROM author_transfers WHERE token_hash = ?")
+        .prepare(
+          "SELECT developer_id FROM developer_transfers WHERE token_hash = ?"
+        )
         .bind(tokenHash)
-        .first<{ author_id: string }>();
+        .first<{ developer_id: string }>();
       if (!transfer) {
         return databaseError(
           "acceptTransfer",
@@ -640,16 +647,18 @@ export class AuthorsDatabase {
         );
       }
 
-      return this.getById(transfer.author_id);
+      return this.getById(transfer.developer_id);
     } catch (error) {
       return databaseError("acceptTransfer", error);
     }
   }
 
-  private async getClaimById(id: string): Promise<DatabaseResult<AuthorClaim>> {
+  private async getClaimById(
+    id: string
+  ): Promise<DatabaseResult<DeveloperClaim>> {
     try {
       const row = await this.db
-        .prepare("SELECT * FROM author_claims WHERE id = ?")
+        .prepare("SELECT * FROM developer_claims WHERE id = ?")
         .bind(id)
         .first<Record<string, unknown>>();
       if (!row) {
@@ -667,21 +676,21 @@ export class AuthorsDatabase {
     }
   }
 
-  // Shared by claim/approveClaim once an author/eligibility-guarded write
-  // affects zero rows: distinguishes "no such author" from the two possible
-  // ownership conflicts for an accurate response, without reopening the
-  // race the guarded write already closed.
+  // Shared by claim/approveClaim once a developer/eligibility-guarded write
+  // affects zero rows: distinguishes "no such developer" from the two
+  // possible ownership conflicts for an accurate response, without
+  // reopening the race the guarded write already closed.
   private async claimIneligibilityError(
-    authorId: string
+    developerId: string
   ): Promise<{ code: "NOT_FOUND" | "CONFLICT"; message: string }> {
-    const author = await this.db
-      .prepare("SELECT owner_user_id FROM authors WHERE id = ?")
-      .bind(authorId)
+    const developer = await this.db
+      .prepare("SELECT owner_user_id FROM developers WHERE id = ?")
+      .bind(developerId)
       .first<{ owner_user_id: string | null }>();
-    if (!author) {
-      return { code: "NOT_FOUND", message: "Author not found" };
+    if (!developer) {
+      return { code: "NOT_FOUND", message: "Developer not found" };
     }
-    if (author.owner_user_id !== null) {
+    if (developer.owner_user_id !== null) {
       return { code: "CONFLICT", message: "This profile is already owned" };
     }
     return {
@@ -691,27 +700,34 @@ export class AuthorsDatabase {
   }
 
   async claim(
-    authorId: string,
+    developerId: string,
     claimantId: string,
     note?: string
-  ): Promise<DatabaseResult<AuthorClaim>> {
+  ): Promise<DatabaseResult<DeveloperClaim>> {
     try {
       const id = crypto.randomUUID();
       let result;
       try {
         // Both eligibility checks are folded into the INSERT itself, rather
         // than a separate SELECT beforehand — a caller who loses eligibility
-        // (author gets claimed/transferred, or the caller picks up a
+        // (developer gets claimed/transferred, or the caller picks up a
         // different profile) between an up-front check and the write could
         // otherwise still slip a stale claim through.
         result = await this.db
           .prepare(
-            `INSERT INTO author_claims (id, author_id, claimant_id, note)
+            `INSERT INTO developer_claims (id, developer_id, claimant_id, note)
              SELECT ?, ?, ?, ?
-             WHERE EXISTS (SELECT 1 FROM authors WHERE id = ? AND owner_user_id IS NULL)
-               AND NOT EXISTS (SELECT 1 FROM authors WHERE owner_user_id = ?)`
+             WHERE EXISTS (SELECT 1 FROM developers WHERE id = ? AND owner_user_id IS NULL)
+               AND NOT EXISTS (SELECT 1 FROM developers WHERE owner_user_id = ?)`
           )
-          .bind(id, authorId, claimantId, note ?? null, authorId, claimantId)
+          .bind(
+            id,
+            developerId,
+            claimantId,
+            note ?? null,
+            developerId,
+            claimantId
+          )
           .run();
       } catch (error) {
         if (
@@ -738,7 +754,7 @@ export class AuthorsDatabase {
       if (!result.meta?.changes) {
         return {
           data: null,
-          error: await this.claimIneligibilityError(authorId)
+          error: await this.claimIneligibilityError(developerId)
         };
       }
 
@@ -750,12 +766,12 @@ export class AuthorsDatabase {
 
   async listMyClaims(
     claimantId: string
-  ): Promise<DatabaseResult<AuthorClaim[]>> {
+  ): Promise<DatabaseResult<DeveloperClaim[]>> {
     let result;
     try {
       result = await this.db
         .prepare(
-          "SELECT * FROM author_claims WHERE claimant_id = ? ORDER BY created_at DESC"
+          "SELECT * FROM developer_claims WHERE claimant_id = ? ORDER BY created_at DESC"
         )
         .bind(claimantId)
         .all<Record<string, unknown>>();
@@ -776,13 +792,13 @@ export class AuthorsDatabase {
     };
   }
 
-  async listPendingClaims(): Promise<DatabaseResult<PendingAuthorClaim[]>> {
+  async listPendingClaims(): Promise<DatabaseResult<PendingDeveloperClaim[]>> {
     let result;
     try {
       result = await this.db
         .prepare(
-          `SELECT c.*, a.name AS author_name, a.type AS author_type
-           FROM author_claims c JOIN authors a ON a.id = c.author_id
+          `SELECT c.*, d.name AS developer_name, d.type AS developer_type
+           FROM developer_claims c JOIN developers d ON d.id = c.developer_id
            WHERE c.status = 'pending' ORDER BY c.created_at ASC`
         )
         .all<Record<string, unknown>>();
@@ -800,8 +816,9 @@ export class AuthorsDatabase {
     return {
       data: (result.results ?? []).map((row) => ({
         ...parseClaimRow(row),
-        author_name: row.author_name as string,
-        author_type: row.author_type as PendingAuthorClaim["author_type"]
+        developer_name: row.developer_name as string,
+        developer_type:
+          row.developer_type as PendingDeveloperClaim["developer_type"]
       })),
       error: null
     };
@@ -814,7 +831,7 @@ export class AuthorsDatabase {
     try {
       await this.db
         .prepare(
-          `UPDATE author_claims SET status = 'pending', reviewer_id = NULL, reviewed_at = NULL
+          `UPDATE developer_claims SET status = 'pending', reviewer_id = NULL, reviewed_at = NULL
            WHERE id = ?`
         )
         .bind(id)
@@ -827,7 +844,7 @@ export class AuthorsDatabase {
   async approveClaim(
     claimId: string,
     reviewerId: string
-  ): Promise<DatabaseResult<AuthorProfile>> {
+  ): Promise<DatabaseResult<DeveloperProfile>> {
     const existing = await this.getClaimById(claimId);
     if (existing.error || !existing.data) {
       return {
@@ -855,17 +872,17 @@ export class AuthorsDatabase {
     }
 
     try {
-      const author = await this.db
-        .prepare("SELECT owner_user_id FROM authors WHERE id = ?")
-        .bind(claim.author_id)
+      const developer = await this.db
+        .prepare("SELECT owner_user_id FROM developers WHERE id = ?")
+        .bind(claim.developer_id)
         .first<{ owner_user_id: string | null }>();
-      if (!author) {
+      if (!developer) {
         return {
           data: null,
-          error: { message: "Author not found", code: "NOT_FOUND" }
+          error: { message: "Developer not found", code: "NOT_FOUND" }
         };
       }
-      if (author.owner_user_id !== null) {
+      if (developer.owner_user_id !== null) {
         return {
           data: null,
           error: { message: "This profile is already owned", code: "CONFLICT" }
@@ -873,7 +890,7 @@ export class AuthorsDatabase {
       }
 
       const conflict = await this.db
-        .prepare("SELECT 1 FROM authors WHERE owner_user_id = ?")
+        .prepare("SELECT 1 FROM developers WHERE owner_user_id = ?")
         .bind(claim.claimant_id)
         .first();
       if (conflict) {
@@ -895,7 +912,7 @@ export class AuthorsDatabase {
     try {
       claimResult = await this.db
         .prepare(
-          `UPDATE author_claims SET status = 'approved', reviewer_id = ?, reviewed_at = CURRENT_TIMESTAMP
+          `UPDATE developer_claims SET status = 'approved', reviewer_id = ?, reviewed_at = CURRENT_TIMESTAMP
            WHERE id = ? AND status = 'pending'`
         )
         .bind(reviewerId, claimId)
@@ -919,29 +936,32 @@ export class AuthorsDatabase {
 
     // The ownership write is itself guarded by `owner_user_id IS NULL`, so a
     // second concurrent approval of a *different* pending claim on the same
-    // author (each claim id claims its own status row above, so both could
-    // reach this point) can't also move ownership — only the first to commit
-    // here wins, and the loser's authorStmt affects zero rows, caught below.
-    // rejectOthersStmt is gated on that same win via `changes() = 1`, so
-    // competing claims are only auto-rejected once ownership has actually
-    // moved, not whenever this batch merely runs.
+    // developer (each claim id claims its own status row above, so both
+    // could reach this point) can't also move ownership — only the first to
+    // commit here wins, and the loser's developerStmt affects zero rows,
+    // caught below. rejectOthersStmt is gated on that same win via
+    // `changes() = 1`, so competing claims are only auto-rejected once
+    // ownership has actually moved, not whenever this batch merely runs.
     let results;
     try {
-      const authorStmt = this.db
+      const developerStmt = this.db
         .prepare(
-          `UPDATE authors SET owner_user_id = ?, approved_at = NULL, updated_at = CURRENT_TIMESTAMP
+          `UPDATE developers SET owner_user_id = ?, approved_at = NULL, updated_at = CURRENT_TIMESTAMP
            WHERE id = ? AND owner_user_id IS NULL`
         )
-        .bind(claim.claimant_id, claim.author_id);
+        .bind(claim.claimant_id, claim.developer_id);
       const rejectOthersStmt = this.db
         .prepare(
-          `UPDATE author_claims SET status = 'rejected', reviewer_id = ?, reviewed_at = CURRENT_TIMESTAMP,
+          `UPDATE developer_claims SET status = 'rejected', reviewer_id = ?, reviewed_at = CURRENT_TIMESTAMP,
              review_note = 'Another claim on this profile was approved'
-           WHERE changes() = 1 AND author_id = ? AND status = 'pending' AND id != ?`
+           WHERE changes() = 1 AND developer_id = ? AND status = 'pending' AND id != ?`
         )
-        .bind(reviewerId, claim.author_id, claimId);
+        .bind(reviewerId, claim.developer_id, claimId);
 
-      results = (await this.db.batch([authorStmt, rejectOthersStmt])) as Array<{
+      results = (await this.db.batch([
+        developerStmt,
+        rejectOthersStmt
+      ])) as Array<{
         success: boolean;
         error?: string;
         meta?: { changes?: number };
@@ -960,8 +980,8 @@ export class AuthorsDatabase {
       );
     }
 
-    const [authorResult] = results;
-    if (!authorResult.meta?.changes) {
+    const [developerResult] = results;
+    if (!developerResult.meta?.changes) {
       await this.revertClaimToPending(claimId);
       return {
         data: null,
@@ -972,19 +992,19 @@ export class AuthorsDatabase {
       };
     }
 
-    return this.getById(claim.author_id);
+    return this.getById(claim.developer_id);
   }
 
   async rejectClaim(
     claimId: string,
     reviewerId: string,
     reviewNote: string
-  ): Promise<DatabaseResult<AuthorClaim>> {
+  ): Promise<DatabaseResult<DeveloperClaim>> {
     let result;
     try {
       result = await this.db
         .prepare(
-          `UPDATE author_claims SET status = 'rejected', reviewer_id = ?, review_note = ?, reviewed_at = CURRENT_TIMESTAMP
+          `UPDATE developer_claims SET status = 'rejected', reviewer_id = ?, review_note = ?, reviewed_at = CURRENT_TIMESTAMP
            WHERE id = ? AND status = 'pending'`
         )
         .bind(reviewerId, reviewNote, claimId)

@@ -1,5 +1,11 @@
 import { DatabaseResult, IDatabase } from "../../../lib/interfaces";
-import { Extension, Release, Author, Repository, sortReleasesDescending } from "./interfaces";
+import {
+  Extension,
+  Release,
+  Author,
+  Repository,
+  sortReleasesDescending
+} from "./interfaces";
 
 const SELECT_EXTENSIONS = `
   SELECT e.id, e.type, e.author_id,
@@ -7,7 +13,7 @@ const SELECT_EXTENSIONS = `
          e.name, e.description, e.releases, e.website, e.license,
          e.icon_url, e.readme, e.source, e.version, e.download_url
   FROM extensions e
-  LEFT JOIN authors a ON e.author_id = a.id
+  LEFT JOIN developers a ON e.author_id = a.id
 `;
 
 export class ExtensionsDatabase {
