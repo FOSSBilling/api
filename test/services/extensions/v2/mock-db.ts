@@ -70,6 +70,52 @@ class MockStatement implements D1PreparedStatement {
     const q = this.normalizedQuery;
     const p = this.params;
 
+    // v2's SELECT_EXTENSIONS join (extensions-database.ts): public
+    // list/getById reads, with an optional WHERE for type / author_id /
+    // case-insensitive id, applied in that order to match how the params
+    // are bound.
+    if (q.startsWith("SELECT e.id, e.type, e.name, e.description,")) {
+      let rows = [...this.tables.extensions.values()];
+      let paramIdx = 0;
+      if (q.includes("e.type = ?")) {
+        rows = rows.filter((r) => r.type === p[paramIdx]);
+        paramIdx++;
+      }
+      if (q.includes("e.author_id = ?")) {
+        rows = rows.filter((r) => r.author_id === p[paramIdx]);
+        paramIdx++;
+      }
+      if (q.includes("LOWER(e.id) = LOWER(?)")) {
+        const id = String(p[paramIdx]).toLowerCase();
+        rows = rows.filter((r) => String(r.id).toLowerCase() === id);
+        paramIdx++;
+      }
+      return rows.map((r) => {
+        const developer = this.tables.developers.get(String(r.author_id));
+        return {
+          id: r.id,
+          type: r.type,
+          name: r.name,
+          description: r.description,
+          releases: r.releases,
+          website: r.website,
+          license: r.license,
+          icon_url: r.icon_url,
+          readme: r.readme,
+          source: r.source,
+          version: r.version,
+          download_url: r.download_url,
+          developer_id: developer?.id ?? r.author_id,
+          developer_type: developer?.type ?? "user",
+          developer_name: developer?.name ?? "",
+          developer_url: developer?.url ?? null,
+          developer_bio: developer?.bio ?? null,
+          developer_avatar_url: developer?.avatar_url ?? null,
+          developer_approved_at: developer?.approved_at ?? null
+        };
+      });
+    }
+
     // v1's SELECT_EXTENSIONS join (database.ts), for cross-service verification
     // that an approved v2 submission is visible via the v1 read path.
     if (q.startsWith("SELECT e.id, e.type, e.author_id,")) {
