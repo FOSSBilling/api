@@ -212,7 +212,7 @@ export class DevelopersDatabase {
     }
   }
 
-  private async getById(id: string): Promise<DatabaseResult<DeveloperProfile>> {
+  async getById(id: string): Promise<DatabaseResult<DeveloperProfile>> {
     try {
       const row = await this.db
         .prepare("SELECT * FROM developers WHERE id = ?")

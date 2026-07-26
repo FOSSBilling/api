@@ -1424,6 +1424,117 @@ describe("Extensions API v2", () => {
     });
   });
 
+  describe("GET /developers/{id}", () => {
+    it("returns a developer's public profile without contact_email, unauthenticated", async () => {
+      tables.developers.set("public-dev", {
+        id: "public-dev",
+        type: "organization",
+        name: "Public Dev",
+        url: "https://example.com",
+        bio: "We make things",
+        avatar_url: "https://example.com/avatar.png",
+        contact_email: "private@example.com",
+        owner_user_id: "user-1",
+        approved_at: new Date().toISOString(),
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      });
+
+      const res = await get("/extensions/v2/developers/public-dev", {});
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { result: Record<string, unknown> };
+      expect(body.result).toEqual({
+        id: "public-dev",
+        type: "organization",
+        name: "Public Dev",
+        URL: "https://example.com",
+        bio: "We make things",
+        avatar_url: "https://example.com/avatar.png",
+        approved: true
+      });
+      expect(body.result.contact_email).toBeUndefined();
+    });
+
+    it("404s for an unknown developer", async () => {
+      const res = await get("/extensions/v2/developers/no-such-developer", {});
+      expect(res.status).toBe(404);
+    });
+  });
+
+  describe("GET /extensions", () => {
+    it("lists published extensions with the developer embedded", async () => {
+      seedOwnedExtension();
+
+      const res = await get("/extensions/v2/extensions", {});
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        result: Array<{ id: string; developer: { id: string } }>;
+      };
+      expect(body.result).toHaveLength(1);
+      expect(body.result[0].id).toBe("existing-ext");
+      expect(body.result[0].developer.id).toBe("owner-developer");
+    });
+
+    it("filters by type", async () => {
+      seedOwnedExtension();
+
+      const matching = await get("/extensions/v2/extensions?type=mod", {});
+      const matchingBody = (await matching.json()) as { result: unknown[] };
+      expect(matchingBody.result).toHaveLength(1);
+
+      const nonMatching = await get("/extensions/v2/extensions?type=theme", {});
+      const nonMatchingBody = (await nonMatching.json()) as {
+        result: unknown[];
+      };
+      expect(nonMatchingBody.result).toHaveLength(0);
+    });
+
+    it("422s on an invalid type filter", async () => {
+      const res = await get("/extensions/v2/extensions?type=not-a-type", {});
+      expect(res.status).toBe(422);
+    });
+
+    it("filters by developer_id", async () => {
+      seedOwnedExtension();
+
+      const matching = await get(
+        "/extensions/v2/extensions?developer_id=owner-developer",
+        {}
+      );
+      const matchingBody = (await matching.json()) as { result: unknown[] };
+      expect(matchingBody.result).toHaveLength(1);
+
+      const nonMatching = await get(
+        "/extensions/v2/extensions?developer_id=someone-else",
+        {}
+      );
+      const nonMatchingBody = (await nonMatching.json()) as {
+        result: unknown[];
+      };
+      expect(nonMatchingBody.result).toHaveLength(0);
+    });
+  });
+
+  describe("GET /extensions/{id}", () => {
+    it("gets a single extension, case-insensitively", async () => {
+      seedOwnedExtension();
+
+      const res = await get("/extensions/v2/extensions/EXISTING-EXT", {});
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        result: { id: string; developer: { name: string; approved: boolean } };
+      };
+      expect(body.result.id).toBe("existing-ext");
+      expect(body.result.developer.name).toBe("Owner");
+      expect(body.result.developer.approved).toBe(false);
+    });
+
+    it("404s for an unknown extension", async () => {
+      const res = await get("/extensions/v2/extensions/no-such-extension", {});
+      expect(res.status).toBe(404);
+    });
+  });
+
   describe("OpenAPI docs", () => {
     it("serves a generated OpenAPI document", async () => {
       const res = await get("/extensions/v2/openapi.json", {});
@@ -1435,12 +1546,15 @@ describe("Extensions API v2", () => {
       expect(spec.openapi).toBe("3.1.0");
       expect(Object.keys(spec.paths)).toEqual(
         expect.arrayContaining([
+          "/extensions",
+          "/extensions/{id}",
           "/submissions",
           "/submissions/mine",
           "/submissions/queue",
           "/submissions/{id}/approve",
           "/submissions/{id}/reject",
           "/developers/me",
+          "/developers/{id}",
           "/developers/unapproved",
           "/developers/{id}/approve",
           "/developers/{id}/transfer",

@@ -1,4 +1,5 @@
 import { z } from "@hono/zod-openapi";
+import { gt, lt } from "semver";
 
 export const EXTENSION_TYPES = [
   "mod",
@@ -66,6 +67,22 @@ export const ReleaseSchema = z
   })
   .openapi("Release");
 
+export type Release = z.infer<typeof ReleaseSchema>;
+
+// Newest first by semver; tags that don't parse as semver keep their
+// relative order rather than erroring the whole listing.
+export function sortReleasesDescending(releases: Release[]): Release[] {
+  return [...releases].sort((a, b) => {
+    try {
+      if (gt(a.tag, b.tag)) return -1;
+      if (lt(a.tag, b.tag)) return 1;
+      return 0;
+    } catch {
+      return 0;
+    }
+  });
+}
+
 export const RepositorySchema = z
   .object({
     type: z.enum(["github", "gitlab", "custom"]),
@@ -73,12 +90,16 @@ export const RepositorySchema = z
   })
   .openapi("Repository");
 
+export type Repository = z.infer<typeof RepositorySchema>;
+
 export const LicenseSchema = z
   .object({
     name: z.string().min(1),
     URL: httpUrl().optional()
   })
   .openapi("License");
+
+export type License = z.infer<typeof LicenseSchema>;
 
 export const ExtensionPayloadSchema = z
   .object({
@@ -111,6 +132,48 @@ export const DeveloperProfileSchema = DeveloperSchema.extend({
 }).openapi("DeveloperProfile");
 
 export type DeveloperProfile = z.infer<typeof DeveloperProfileSchema>;
+
+// The publicly-readable view of a developer profile: everything in
+// DeveloperProfile except contact_email, which exists for moderator/owner
+// communication and was never meant to be broadcast to anonymous callers.
+export const PublicDeveloperSchema = DeveloperProfileSchema.omit({
+  contact_email: true
+}).openapi("PublicDeveloper");
+
+export type PublicDeveloper = z.infer<typeof PublicDeveloperSchema>;
+
+export function toPublicDeveloper(profile: DeveloperProfile): PublicDeveloper {
+  return {
+    id: profile.id,
+    type: profile.type,
+    name: profile.name,
+    URL: profile.URL,
+    bio: profile.bio,
+    avatar_url: profile.avatar_url,
+    approved: profile.approved
+  };
+}
+
+export const ExtensionSchema = ExtensionPayloadSchema.extend({
+  developer: PublicDeveloperSchema
+}).openapi("Extension");
+
+export type Extension = z.infer<typeof ExtensionSchema>;
+
+export const ExtensionListQuerySchema = z.object({
+  type: z
+    .enum(EXTENSION_TYPES)
+    .optional()
+    .openapi({
+      param: { name: "type", in: "query" }
+    }),
+  developer_id: z
+    .string()
+    .optional()
+    .openapi({
+      param: { name: "developer_id", in: "query" }
+    })
+});
 
 export const DeveloperHistoryEntrySchema = z
   .object({

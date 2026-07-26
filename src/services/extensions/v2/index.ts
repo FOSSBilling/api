@@ -13,16 +13,21 @@ import {
   DeveloperSchema,
   DeveloperTransferSchema,
   ErrorResponseSchema,
+  ExtensionListQuerySchema,
+  ExtensionSchema,
   IdParamSchema,
   PendingDeveloperClaimSchema,
+  PublicDeveloperSchema,
   QueueQuerySchema,
   ReviewNoteOptionalSchema,
   ReviewNoteRequiredSchema,
   SubmissionPayloadSchema,
   SubmissionSchema,
-  TokenParamSchema
+  TokenParamSchema,
+  toPublicDeveloper
 } from "./interfaces";
 import { DevelopersDatabase } from "./developers-database";
+import { ExtensionsDatabase } from "./extensions-database";
 import { SubmissionsDatabase } from "./submissions-database";
 import { UsersDatabase } from "./users-database";
 
@@ -80,6 +85,103 @@ function requireModerator(): MiddlewareHandler {
     await next();
   };
 }
+
+const listExtensionsRoute = createRoute({
+  method: "get",
+  path: "/extensions",
+  tags: ["Extensions"],
+  summary: "List published extensions",
+  request: { query: ExtensionListQuerySchema },
+  responses: {
+    200: {
+      content: {
+        "application/json": {
+          schema: z.object({ result: z.array(ExtensionSchema) })
+        }
+      },
+      description: "Extensions matching the given filters"
+    },
+    422: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "type or developer_id query param failed validation"
+    },
+    500: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Database error"
+    }
+  }
+});
+
+extensionsV2.openapi(listExtensionsRoute, async (c) => {
+  const { type, developer_id } = c.req.valid("query");
+  const platform = getPlatform(c);
+  const db = new ExtensionsDatabase(platform.getDatabase("DB_EXTENSIONS"));
+
+  const { data, error } = await db.list({ type, developerId: developer_id });
+  if (error || !data) {
+    return c.json(
+      {
+        error: {
+          message: error?.message ?? "Unable to load extensions",
+          code: "DATABASE_ERROR"
+        }
+      },
+      500
+    );
+  }
+
+  return c.json({ result: data }, 200);
+});
+
+const getExtensionRoute = createRoute({
+  method: "get",
+  path: "/extensions/{id}",
+  tags: ["Extensions"],
+  summary: "Get a single published extension",
+  request: { params: IdParamSchema },
+  responses: {
+    200: {
+      content: {
+        "application/json": { schema: z.object({ result: ExtensionSchema }) }
+      },
+      description: "The extension"
+    },
+    404: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "No extension with that id"
+    },
+    422: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "id param failed validation"
+    },
+    500: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Database error"
+    }
+  }
+});
+
+extensionsV2.openapi(getExtensionRoute, async (c) => {
+  const { id } = c.req.valid("param");
+  const platform = getPlatform(c);
+  const db = new ExtensionsDatabase(platform.getDatabase("DB_EXTENSIONS"));
+
+  const { data, error } = await db.getById(id);
+  if (error || !data) {
+    const status = error?.code === "NOT_FOUND" ? 404 : 500;
+    return c.json(
+      {
+        error: {
+          message: error?.message ?? "Extension not found",
+          code: error?.code ?? "DATABASE_ERROR"
+        }
+      },
+      status
+    );
+  }
+
+  return c.json({ result: data }, 200);
+});
 
 const createSubmissionRoute = createRoute({
   method: "post",
@@ -1092,6 +1194,64 @@ extensionsV2.openapi(unapprovedDevelopersRoute, async (c) => {
   return c.json({ result: data }, 200);
 });
 
+// Registered after every other static-segment GET /developers/* route
+// (claims, claims/mine, unapproved above) — Hono matches path params against
+// whichever handler was registered first among overlapping patterns, so this
+// wildcard would otherwise shadow those static routes (e.g. swallow
+// GET /developers/claims as a lookup for a developer literally named
+// "claims").
+const getDeveloperRoute = createRoute({
+  method: "get",
+  path: "/developers/{id}",
+  tags: ["Developers"],
+  summary: "Get a developer's public profile",
+  request: { params: IdParamSchema },
+  responses: {
+    200: {
+      content: {
+        "application/json": {
+          schema: z.object({ result: PublicDeveloperSchema })
+        }
+      },
+      description: "The developer's public profile"
+    },
+    404: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "No developer with that id"
+    },
+    422: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "id param failed validation"
+    },
+    500: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Database error"
+    }
+  }
+});
+
+extensionsV2.openapi(getDeveloperRoute, async (c) => {
+  const { id } = c.req.valid("param");
+  const platform = getPlatform(c);
+  const db = new DevelopersDatabase(platform.getDatabase("DB_EXTENSIONS"));
+
+  const { data, error } = await db.getById(id);
+  if (error || !data) {
+    const status = error?.code === "NOT_FOUND" ? 404 : 500;
+    return c.json(
+      {
+        error: {
+          message: error?.message ?? "Developer not found",
+          code: error?.code ?? "DATABASE_ERROR"
+        }
+      },
+      status
+    );
+  }
+
+  return c.json({ result: toPublicDeveloper(data) }, 200);
+});
+
 const approveDeveloperRoute = createRoute({
   method: "post",
   path: "/developers/{id}/approve",
@@ -1219,7 +1379,7 @@ extensionsV2.doc("/openapi.json", {
     title: "FOSSBilling Extensions API (v2)",
     version: "2.0.0",
     description:
-      "Self-service extension submission, ownership, and moderation. Read-only listings remain at /extensions/v1."
+      "Self-service extension submission, ownership, moderation, and public browsing. v1 (/extensions/v1) remains available for existing integrations."
   },
   servers: [{ url: "/extensions/v2" }]
 });
