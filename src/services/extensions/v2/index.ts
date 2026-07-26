@@ -6,12 +6,15 @@ import { Scalar } from "@scalar/hono-api-reference";
 import { getPlatform } from "../../../lib/middleware";
 import { getAuth, requireAuth } from "../../../lib/auth";
 import {
+  AuthorClaimSchema,
   AuthorHistoryEntrySchema,
   AuthorProfileSchema,
   AuthorSchema,
   AuthorTransferSchema,
+  ClaimNoteSchema,
   ErrorResponseSchema,
   IdParamSchema,
+  PendingAuthorClaimSchema,
   QueueQuerySchema,
   ReviewNoteOptionalSchema,
   ReviewNoteRequiredSchema,
@@ -491,6 +494,307 @@ function statusFromOwnershipErrorCode(code?: string): 403 | 404 | 500 {
   if (code === "FORBIDDEN") return 403;
   return 500;
 }
+
+const claimAuthorRoute = createRoute({
+  method: "post",
+  path: "/authors/{id}/claim",
+  tags: ["Authors"],
+  summary: "Request ownership of an unowned developer profile",
+  security: [{ Bearer: [] }],
+  middleware: [requireAuth()] as const,
+  request: {
+    params: IdParamSchema,
+    body: {
+      content: { "application/json": { schema: ClaimNoteSchema } }
+    }
+  },
+  responses: {
+    201: {
+      content: {
+        "application/json": { schema: z.object({ result: AuthorClaimSchema }) }
+      },
+      description: "Claim created and pending moderator review"
+    },
+    401: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Missing or invalid bearer token"
+    },
+    404: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "No author with that id"
+    },
+    409: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description:
+        "Profile is already owned, caller already owns a different profile, or already has a pending claim on this one"
+    },
+    422: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "id param or note body failed validation"
+    },
+    500: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Database error"
+    }
+  }
+});
+
+extensionsV2.openapi(claimAuthorRoute, async (c) => {
+  const auth = getAuth(c);
+  const { id } = c.req.valid("param");
+  const { note } = c.req.valid("json");
+  const platform = getPlatform(c);
+  const db = new AuthorsDatabase(platform.getDatabase("DB_EXTENSIONS"));
+
+  const { data, error } = await db.claim(id, auth.userId, note);
+  if (error || !data) {
+    return c.json(
+      {
+        error: {
+          message: error?.message ?? "Unable to create claim",
+          code: error?.code ?? "DATABASE_ERROR"
+        }
+      },
+      statusFromErrorCode(error?.code)
+    );
+  }
+
+  return c.json({ result: data }, 201);
+});
+
+const myClaimsRoute = createRoute({
+  method: "get",
+  path: "/authors/claims/mine",
+  tags: ["Authors"],
+  summary: "List the caller's own profile claims, in any status",
+  security: [{ Bearer: [] }],
+  middleware: [requireAuth()] as const,
+  responses: {
+    200: {
+      content: {
+        "application/json": {
+          schema: z.object({ result: z.array(AuthorClaimSchema) })
+        }
+      },
+      description: "The caller's claims"
+    },
+    401: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Missing or invalid bearer token"
+    },
+    500: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Database error"
+    }
+  }
+});
+
+extensionsV2.openapi(myClaimsRoute, async (c) => {
+  const auth = getAuth(c);
+  const platform = getPlatform(c);
+  const db = new AuthorsDatabase(platform.getDatabase("DB_EXTENSIONS"));
+
+  const { data, error } = await db.listMyClaims(auth.userId);
+  if (error || !data) {
+    return c.json(
+      {
+        error: {
+          message: error?.message ?? "Unable to load claims",
+          code: "DATABASE_ERROR"
+        }
+      },
+      500
+    );
+  }
+
+  return c.json({ result: data }, 200);
+});
+
+const pendingClaimsRoute = createRoute({
+  method: "get",
+  path: "/authors/claims",
+  tags: ["Moderation"],
+  summary: "List pending profile claims",
+  security: [{ Bearer: [] }],
+  middleware: [requireAuth(), requireModerator()] as const,
+  responses: {
+    200: {
+      content: {
+        "application/json": {
+          schema: z.object({ result: z.array(PendingAuthorClaimSchema) })
+        }
+      },
+      description: "Claims awaiting moderator review"
+    },
+    401: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Missing or invalid bearer token"
+    },
+    403: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Caller is not a moderator"
+    },
+    500: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Database error"
+    }
+  }
+});
+
+extensionsV2.openapi(pendingClaimsRoute, async (c) => {
+  const platform = getPlatform(c);
+  const db = new AuthorsDatabase(platform.getDatabase("DB_EXTENSIONS"));
+
+  const { data, error } = await db.listPendingClaims();
+  if (error || !data) {
+    return c.json(
+      {
+        error: {
+          message: error?.message ?? "Unable to load pending claims",
+          code: "DATABASE_ERROR"
+        }
+      },
+      500
+    );
+  }
+
+  return c.json({ result: data }, 200);
+});
+
+const approveClaimRoute = createRoute({
+  method: "post",
+  path: "/authors/claims/{id}/approve",
+  tags: ["Moderation"],
+  summary: "Approve a pending profile claim",
+  security: [{ Bearer: [] }],
+  middleware: [requireAuth(), requireModerator()] as const,
+  request: { params: IdParamSchema },
+  responses: {
+    200: {
+      content: {
+        "application/json": {
+          schema: z.object({ result: AuthorProfileSchema })
+        }
+      },
+      description:
+        "Claim approved; profile ownership transferred to the claimant"
+    },
+    401: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Missing or invalid bearer token"
+    },
+    403: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Caller is not a moderator"
+    },
+    404: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "No claim or author with that id"
+    },
+    409: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description:
+        "Claim is no longer pending, profile is no longer unowned, or the claimant now owns a different profile"
+    },
+    422: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "id param failed validation"
+    },
+    500: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Database error"
+    }
+  }
+});
+
+extensionsV2.openapi(approveClaimRoute, async (c) => {
+  const auth = getAuth(c);
+  const { id } = c.req.valid("param");
+  const platform = getPlatform(c);
+  const db = new AuthorsDatabase(platform.getDatabase("DB_EXTENSIONS"));
+
+  const { data, error } = await db.approveClaim(id, auth.userId);
+  if (error || !data) {
+    return c.json(
+      {
+        error: {
+          message: error?.message ?? "Unable to approve claim",
+          code: error?.code ?? "DATABASE_ERROR"
+        }
+      },
+      statusFromErrorCode(error?.code)
+    );
+  }
+
+  return c.json({ result: data }, 200);
+});
+
+const rejectClaimRoute = createRoute({
+  method: "post",
+  path: "/authors/claims/{id}/reject",
+  tags: ["Moderation"],
+  summary: "Reject a pending profile claim",
+  security: [{ Bearer: [] }],
+  middleware: [requireAuth(), requireModerator()] as const,
+  request: {
+    params: IdParamSchema,
+    body: {
+      content: { "application/json": { schema: ReviewNoteRequiredSchema } }
+    }
+  },
+  responses: {
+    200: {
+      content: {
+        "application/json": { schema: z.object({ result: AuthorClaimSchema }) }
+      },
+      description: "Claim rejected"
+    },
+    401: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Missing or invalid bearer token"
+    },
+    403: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Caller is not a moderator"
+    },
+    404: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "No pending claim with that id"
+    },
+    422: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "id param or review_note body failed validation"
+    },
+    500: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Database error"
+    }
+  }
+});
+
+extensionsV2.openapi(rejectClaimRoute, async (c) => {
+  const auth = getAuth(c);
+  const { id } = c.req.valid("param");
+  const { review_note } = c.req.valid("json");
+  const platform = getPlatform(c);
+  const db = new AuthorsDatabase(platform.getDatabase("DB_EXTENSIONS"));
+
+  const { data, error } = await db.rejectClaim(id, auth.userId, review_note);
+  if (error || !data) {
+    const status = error?.code === "NOT_FOUND" ? 404 : 500;
+    return c.json(
+      {
+        error: {
+          message: error?.message ?? "Unable to reject claim",
+          code: error?.code ?? "DATABASE_ERROR"
+        }
+      },
+      status
+    );
+  }
+
+  return c.json({ result: data }, 200);
+});
 
 const initiateTransferRoute = createRoute({
   method: "post",

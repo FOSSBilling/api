@@ -197,6 +197,35 @@ export const AuthorTransferSchema = z
 
 export type AuthorTransfer = z.infer<typeof AuthorTransferSchema>;
 
+export const AuthorClaimSchema = z
+  .object({
+    id: z.string(),
+    author_id: z.string(),
+    claimant_id: z.string(),
+    status: z.enum(["pending", "approved", "rejected"]),
+    note: z.string().optional(),
+    review_note: z.string().optional(),
+    reviewer_id: z.string().optional(),
+    created_at: z.string(),
+    reviewed_at: z.string().optional()
+  })
+  .openapi("AuthorClaim");
+
+export type AuthorClaim = z.infer<typeof AuthorClaimSchema>;
+
+export const PendingAuthorClaimSchema = AuthorClaimSchema.extend({
+  author_name: z.string(),
+  author_type: z.enum(["user", "organization"])
+}).openapi("PendingAuthorClaim");
+
+export type PendingAuthorClaim = z.infer<typeof PendingAuthorClaimSchema>;
+
+export const ClaimNoteSchema = z
+  .object({
+    note: z.string().max(500).optional()
+  })
+  .openapi("ClaimNote");
+
 export const QueueQuerySchema = z.object({
   status: SubmissionStatusSchema.optional().openapi({
     param: { name: "status", in: "query" }

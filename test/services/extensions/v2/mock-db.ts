@@ -6,6 +6,7 @@ export interface MockTables {
   extension_submissions: Map<string, Row>;
   author_history: Map<string, Row>;
   author_transfers: Map<string, Row>;
+  author_claims: Map<string, Row>;
   users: Map<string, Row>;
   // Test-only seam for simulating a write-through failure during approve().
   forceExtensionWriteFailure?: boolean;
@@ -18,6 +19,7 @@ export function createTables(): MockTables {
     extension_submissions: new Map(),
     author_history: new Map(),
     author_transfers: new Map(),
+    author_claims: new Map(),
     users: new Map()
   };
 }
@@ -390,6 +392,172 @@ class MockStatement implements D1PreparedStatement {
       if (row) {
         row.approved_at = new Date().toISOString();
         this.changes = 1;
+      }
+      return [];
+    }
+
+    if (q.startsWith("SELECT 1 FROM authors WHERE owner_user_id = ?")) {
+      const row = [...this.tables.authors.values()].find(
+        (r) => r.owner_user_id === p[0]
+      );
+      return row ? [{ "1": 1 }] : [];
+    }
+
+    if (
+      q.startsWith(
+        "INSERT INTO author_claims (id, author_id, claimant_id, note) VALUES (?, ?, ?, ?)"
+      )
+    ) {
+      const [id, author_id, claimant_id, note] = p;
+      const pendingExists = [...this.tables.author_claims.values()].some(
+        (r) =>
+          r.author_id === author_id &&
+          r.claimant_id === claimant_id &&
+          r.status === "pending"
+      );
+      if (pendingExists) {
+        throw new Error(
+          "D1_ERROR: UNIQUE constraint failed: author_claims.author_id, author_claims.claimant_id"
+        );
+      }
+      const now = new Date().toISOString();
+      this.tables.author_claims.set(String(id), {
+        id,
+        author_id,
+        claimant_id,
+        status: "pending",
+        note,
+        review_note: null,
+        reviewer_id: null,
+        created_at: now,
+        reviewed_at: null
+      });
+      return [];
+    }
+
+    if (q.startsWith("SELECT * FROM author_claims WHERE id = ?")) {
+      const row = this.tables.author_claims.get(String(p[0]));
+      return row ? [row] : [];
+    }
+
+    if (
+      q.startsWith(
+        "SELECT * FROM author_claims WHERE claimant_id = ? ORDER BY created_at DESC"
+      )
+    ) {
+      return [...this.tables.author_claims.values()]
+        .filter((r) => r.claimant_id === p[0])
+        .sort((a, b) =>
+          String(b.created_at).localeCompare(String(a.created_at))
+        );
+    }
+
+    if (
+      q.startsWith("SELECT c.*, a.name AS author_name, a.type AS author_type")
+    ) {
+      return [...this.tables.author_claims.values()]
+        .filter((r) => r.status === "pending")
+        .sort((a, b) =>
+          String(a.created_at).localeCompare(String(b.created_at))
+        )
+        .map((r) => {
+          const author = this.tables.authors.get(String(r.author_id));
+          return {
+            ...r,
+            author_name: author?.name ?? "",
+            author_type: author?.type ?? "user"
+          };
+        });
+    }
+
+    if (
+      q.startsWith(
+        "UPDATE author_claims SET status = 'approved', reviewer_id = ?, reviewed_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'pending'"
+      )
+    ) {
+      const [reviewer_id, id] = p;
+      const row = this.tables.author_claims.get(String(id));
+      if (row && row.status === "pending") {
+        row.status = "approved";
+        row.reviewer_id = reviewer_id;
+        row.reviewed_at = new Date().toISOString();
+        this.changes = 1;
+      } else {
+        this.changes = 0;
+      }
+      return [];
+    }
+
+    if (
+      q.startsWith(
+        "UPDATE authors SET owner_user_id = ?, approved_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+      )
+    ) {
+      const [owner_user_id, id] = p;
+      const row = this.tables.authors.get(String(id));
+      if (row) {
+        row.owner_user_id = owner_user_id;
+        row.approved_at = null;
+        row.updated_at = new Date().toISOString();
+        this.changes = 1;
+      } else {
+        this.changes = 0;
+      }
+      return [];
+    }
+
+    if (
+      q.startsWith(
+        "UPDATE author_claims SET status = 'rejected', reviewer_id = ?, reviewed_at = CURRENT_TIMESTAMP, review_note = 'Another claim on this profile was approved' WHERE author_id = ?"
+      )
+    ) {
+      const [reviewer_id, author_id, excludeId] = p;
+      const now = new Date().toISOString();
+      for (const row of this.tables.author_claims.values()) {
+        if (
+          row.author_id === author_id &&
+          row.status === "pending" &&
+          row.id !== excludeId
+        ) {
+          row.status = "rejected";
+          row.reviewer_id = reviewer_id;
+          row.reviewed_at = now;
+          row.review_note = "Another claim on this profile was approved";
+        }
+      }
+      return [];
+    }
+
+    if (
+      q.startsWith(
+        "UPDATE author_claims SET status = 'pending', reviewer_id = NULL, reviewed_at = NULL WHERE id = ?"
+      )
+    ) {
+      const [id] = p;
+      const row = this.tables.author_claims.get(String(id));
+      if (row) {
+        row.status = "pending";
+        row.reviewer_id = null;
+        row.reviewed_at = null;
+      }
+      return [];
+    }
+
+    if (
+      q.startsWith(
+        "UPDATE author_claims SET status = 'rejected', reviewer_id = ?, review_note = ?, reviewed_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'pending'"
+      )
+    ) {
+      const [reviewer_id, review_note, id] = p;
+      const row = this.tables.author_claims.get(String(id));
+      if (row && row.status === "pending") {
+        row.status = "rejected";
+        row.reviewer_id = reviewer_id;
+        row.review_note = review_note;
+        row.reviewed_at = new Date().toISOString();
+        this.changes = 1;
+      } else {
+        this.changes = 0;
       }
       return [];
     }
