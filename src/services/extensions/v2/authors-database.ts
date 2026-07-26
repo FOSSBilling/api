@@ -667,58 +667,52 @@ export class AuthorsDatabase {
     }
   }
 
+  // Shared by claim/approveClaim once an author/eligibility-guarded write
+  // affects zero rows: distinguishes "no such author" from the two possible
+  // ownership conflicts for an accurate response, without reopening the
+  // race the guarded write already closed.
+  private async claimIneligibilityError(
+    authorId: string
+  ): Promise<{ code: "NOT_FOUND" | "CONFLICT"; message: string }> {
+    const author = await this.db
+      .prepare("SELECT owner_user_id FROM authors WHERE id = ?")
+      .bind(authorId)
+      .first<{ owner_user_id: string | null }>();
+    if (!author) {
+      return { code: "NOT_FOUND", message: "Author not found" };
+    }
+    if (author.owner_user_id !== null) {
+      return { code: "CONFLICT", message: "This profile is already owned" };
+    }
+    return {
+      code: "CONFLICT",
+      message: "You already have a developer profile"
+    };
+  }
+
   async claim(
     authorId: string,
     claimantId: string,
     note?: string
   ): Promise<DatabaseResult<AuthorClaim>> {
     try {
-      const author = await this.db
-        .prepare("SELECT owner_user_id FROM authors WHERE id = ?")
-        .bind(authorId)
-        .first<{ owner_user_id: string | null }>();
-      if (!author) {
-        return {
-          data: null,
-          error: { code: "NOT_FOUND", message: "Author not found" }
-        };
-      }
-      if (author.owner_user_id !== null) {
-        return {
-          data: null,
-          error: { code: "CONFLICT", message: "This profile is already owned" }
-        };
-      }
-
-      const conflict = await this.db
-        .prepare("SELECT 1 FROM authors WHERE owner_user_id = ?")
-        .bind(claimantId)
-        .first();
-      if (conflict) {
-        return {
-          data: null,
-          error: {
-            code: "CONFLICT",
-            message: "You already have a developer profile"
-          }
-        };
-      }
-
       const id = crypto.randomUUID();
+      let result;
       try {
-        const result = await this.db
+        // Both eligibility checks are folded into the INSERT itself, rather
+        // than a separate SELECT beforehand — a caller who loses eligibility
+        // (author gets claimed/transferred, or the caller picks up a
+        // different profile) between an up-front check and the write could
+        // otherwise still slip a stale claim through.
+        result = await this.db
           .prepare(
             `INSERT INTO author_claims (id, author_id, claimant_id, note)
-             VALUES (?, ?, ?, ?)`
+             SELECT ?, ?, ?, ?
+             WHERE EXISTS (SELECT 1 FROM authors WHERE id = ? AND owner_user_id IS NULL)
+               AND NOT EXISTS (SELECT 1 FROM authors WHERE owner_user_id = ?)`
           )
-          .bind(id, authorId, claimantId, note ?? null)
+          .bind(id, authorId, claimantId, note ?? null, authorId, claimantId)
           .run();
-        if (!result.success) {
-          return databaseError(
-            "claim",
-            new Error(result.error || "Database write failed")
-          );
-        }
       } catch (error) {
         if (
           isPendingClaimConflict(error instanceof Error ? error.message : "")
@@ -732,6 +726,20 @@ export class AuthorsDatabase {
           };
         }
         return databaseError("claim", error);
+      }
+
+      if (!result.success) {
+        return databaseError(
+          "claim",
+          new Error(result.error || "Database write failed")
+        );
+      }
+
+      if (!result.meta?.changes) {
+        return {
+          data: null,
+          error: await this.claimIneligibilityError(authorId)
+        };
       }
 
       return this.getClaimById(id);
@@ -839,35 +847,46 @@ export class AuthorsDatabase {
       };
     }
 
-    const author = await this.db
-      .prepare("SELECT owner_user_id FROM authors WHERE id = ?")
-      .bind(claim.author_id)
-      .first<{ owner_user_id: string | null }>();
-    if (!author) {
-      return {
-        data: null,
-        error: { message: "Author not found", code: "NOT_FOUND" }
-      };
-    }
-    if (author.owner_user_id !== null) {
-      return {
-        data: null,
-        error: { message: "This profile is already owned", code: "CONFLICT" }
-      };
+    if (!this.db.batch) {
+      return databaseError(
+        "approveClaim",
+        new Error("Database adapter does not support batch operations")
+      );
     }
 
-    const conflict = await this.db
-      .prepare("SELECT 1 FROM authors WHERE owner_user_id = ?")
-      .bind(claim.claimant_id)
-      .first();
-    if (conflict) {
-      return {
-        data: null,
-        error: {
-          message: "The claimant already owns a different developer profile",
-          code: "CONFLICT"
-        }
-      };
+    try {
+      const author = await this.db
+        .prepare("SELECT owner_user_id FROM authors WHERE id = ?")
+        .bind(claim.author_id)
+        .first<{ owner_user_id: string | null }>();
+      if (!author) {
+        return {
+          data: null,
+          error: { message: "Author not found", code: "NOT_FOUND" }
+        };
+      }
+      if (author.owner_user_id !== null) {
+        return {
+          data: null,
+          error: { message: "This profile is already owned", code: "CONFLICT" }
+        };
+      }
+
+      const conflict = await this.db
+        .prepare("SELECT 1 FROM authors WHERE owner_user_id = ?")
+        .bind(claim.claimant_id)
+        .first();
+      if (conflict) {
+        return {
+          data: null,
+          error: {
+            message: "The claimant already owns a different developer profile",
+            code: "CONFLICT"
+          }
+        };
+      }
+    } catch (error) {
+      return databaseError("approveClaim", error);
     }
 
     // Claim the transition atomically before writing anything through. If
@@ -898,33 +917,34 @@ export class AuthorsDatabase {
       };
     }
 
-    if (!this.db.batch) {
-      await this.revertClaimToPending(claimId);
-      return databaseError(
-        "approveClaim",
-        new Error("Database adapter does not support batch operations")
-      );
-    }
-
+    // The ownership write is itself guarded by `owner_user_id IS NULL`, so a
+    // second concurrent approval of a *different* pending claim on the same
+    // author (each claim id claims its own status row above, so both could
+    // reach this point) can't also move ownership — only the first to commit
+    // here wins, and the loser's authorStmt affects zero rows, caught below.
+    // rejectOthersStmt is gated on that same win via `changes() = 1`, so
+    // competing claims are only auto-rejected once ownership has actually
+    // moved, not whenever this batch merely runs.
     let results;
     try {
       const authorStmt = this.db
         .prepare(
           `UPDATE authors SET owner_user_id = ?, approved_at = NULL, updated_at = CURRENT_TIMESTAMP
-           WHERE id = ?`
+           WHERE id = ? AND owner_user_id IS NULL`
         )
         .bind(claim.claimant_id, claim.author_id);
       const rejectOthersStmt = this.db
         .prepare(
           `UPDATE author_claims SET status = 'rejected', reviewer_id = ?, reviewed_at = CURRENT_TIMESTAMP,
              review_note = 'Another claim on this profile was approved'
-           WHERE author_id = ? AND status = 'pending' AND id != ?`
+           WHERE changes() = 1 AND author_id = ? AND status = 'pending' AND id != ?`
         )
         .bind(reviewerId, claim.author_id, claimId);
 
       results = (await this.db.batch([authorStmt, rejectOthersStmt])) as Array<{
         success: boolean;
         error?: string;
+        meta?: { changes?: number };
       }>;
     } catch (error) {
       await this.revertClaimToPending(claimId);
@@ -938,6 +958,18 @@ export class AuthorsDatabase {
         "approveClaim",
         new Error(failed.error || "Database write failed")
       );
+    }
+
+    const [authorResult] = results;
+    if (!authorResult.meta?.changes) {
+      await this.revertClaimToPending(claimId);
+      return {
+        data: null,
+        error: {
+          message: "This profile is no longer unowned",
+          code: "CONFLICT"
+        }
+      };
     }
 
     return this.getById(claim.author_id);

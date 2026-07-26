@@ -21,3 +21,10 @@ CREATE INDEX IF NOT EXISTS idx_author_claims_claimant ON author_claims(claimant_
 CREATE UNIQUE INDEX IF NOT EXISTS idx_author_claims_pending_unique
   ON author_claims(author_id, claimant_id)
   WHERE status = 'pending';
+
+-- Serves listPendingClaims()'s `WHERE status = 'pending' ORDER BY created_at`
+-- directly (index is scoped to pending rows and pre-ordered by created_at),
+-- so the moderation queue stays cheap as rejected/approved history grows.
+CREATE INDEX IF NOT EXISTS idx_author_claims_pending_queue
+  ON author_claims(created_at)
+  WHERE status = 'pending';

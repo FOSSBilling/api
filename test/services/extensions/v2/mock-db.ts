@@ -405,10 +405,20 @@ class MockStatement implements D1PreparedStatement {
 
     if (
       q.startsWith(
-        "INSERT INTO author_claims (id, author_id, claimant_id, note) VALUES (?, ?, ?, ?)"
+        "INSERT INTO author_claims (id, author_id, claimant_id, note) SELECT ?, ?, ?, ? WHERE EXISTS"
       )
     ) {
-      const [id, author_id, claimant_id, note] = p;
+      const [id, author_id, claimant_id, note, checkAuthorId, checkClaimantId] =
+        p;
+      const author = this.tables.authors.get(String(checkAuthorId));
+      const claimantOwnsAny = [...this.tables.authors.values()].some(
+        (r) => r.owner_user_id === checkClaimantId
+      );
+      if (!author || author.owner_user_id !== null || claimantOwnsAny) {
+        this.changes = 0;
+        return [];
+      }
+
       const pendingExists = [...this.tables.author_claims.values()].some(
         (r) =>
           r.author_id === author_id &&
@@ -432,6 +442,7 @@ class MockStatement implements D1PreparedStatement {
         created_at: now,
         reviewed_at: null
       });
+      this.changes = 1;
       return [];
     }
 
@@ -490,12 +501,12 @@ class MockStatement implements D1PreparedStatement {
 
     if (
       q.startsWith(
-        "UPDATE authors SET owner_user_id = ?, approved_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+        "UPDATE authors SET owner_user_id = ?, approved_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND owner_user_id IS NULL"
       )
     ) {
       const [owner_user_id, id] = p;
       const row = this.tables.authors.get(String(id));
-      if (row) {
+      if (row && row.owner_user_id === null) {
         row.owner_user_id = owner_user_id;
         row.approved_at = null;
         row.updated_at = new Date().toISOString();
@@ -508,7 +519,7 @@ class MockStatement implements D1PreparedStatement {
 
     if (
       q.startsWith(
-        "UPDATE author_claims SET status = 'rejected', reviewer_id = ?, reviewed_at = CURRENT_TIMESTAMP, review_note = 'Another claim on this profile was approved' WHERE author_id = ?"
+        "UPDATE author_claims SET status = 'rejected', reviewer_id = ?, reviewed_at = CURRENT_TIMESTAMP, review_note = 'Another claim on this profile was approved' WHERE changes() = 1 AND author_id = ?"
       )
     ) {
       const [reviewer_id, author_id, excludeId] = p;
