@@ -72,6 +72,19 @@ function seedAuthor(id: string, ownerUserId: string): void {
   });
 }
 
+function seedUnownedAuthor(id: string, name = "Legacy Author"): void {
+  tables.authors.set(id, {
+    id,
+    type: "user",
+    name,
+    url: null,
+    owner_user_id: null,
+    approved_at: null,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  });
+}
+
 function seedOwnedExtension(): void {
   tables.authors.set("owner-author", {
     id: "owner-author",
@@ -1193,6 +1206,190 @@ describe("Extensions API v2", () => {
     });
   });
 
+  describe("author claims", () => {
+    it("lets a user claim an unowned author, visible to the claimant and moderators", async () => {
+      seedUnownedAuthor("legacy-author");
+
+      const res = await post(
+        "/extensions/v2/authors/legacy-author/claim",
+        await authHeaders("user-1"),
+        { note: "I'm the maintainer, see github.com/x" }
+      );
+      expect(res.status).toBe(201);
+      const created = (await res.json()) as { result: { id: string } };
+
+      const mine = await get(
+        "/extensions/v2/authors/claims/mine",
+        await authHeaders("user-1")
+      );
+      expect(mine.status).toBe(200);
+      const mineData = (await mine.json()) as {
+        result: Array<{ id: string; status: string }>;
+      };
+      expect(mineData.result.map((c) => c.id)).toEqual([created.result.id]);
+      expect(mineData.result[0].status).toBe("pending");
+
+      tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
+      const pending = await get(
+        "/extensions/v2/authors/claims",
+        await authHeaders("mod-1")
+      );
+      expect(pending.status).toBe(200);
+      const pendingData = (await pending.json()) as {
+        result: Array<{ id: string; author_name: string }>;
+      };
+      expect(pendingData.result.map((c) => c.id)).toEqual([created.result.id]);
+      expect(pendingData.result[0].author_name).toBe("Legacy Author");
+    });
+
+    it("rejects claiming an author that already has an owner", async () => {
+      await put(
+        "/extensions/v2/authors/me",
+        await authHeaders("user-1"),
+        sampleAuthor()
+      );
+
+      const res = await post(
+        "/extensions/v2/authors/dev-author/claim",
+        await authHeaders("user-2"),
+        {}
+      );
+      expect(res.status).toBe(409);
+    });
+
+    it("does not create a duplicate row for a second claim while one is already pending", async () => {
+      seedUnownedAuthor("legacy-author");
+
+      const first = await post(
+        "/extensions/v2/authors/legacy-author/claim",
+        await authHeaders("user-1"),
+        {}
+      );
+      expect(first.status).toBe(201);
+
+      const second = await post(
+        "/extensions/v2/authors/legacy-author/claim",
+        await authHeaders("user-1"),
+        {}
+      );
+      expect(second.status).toBe(409);
+      expect(tables.author_claims.size).toBe(1);
+    });
+
+    it("rejects a claim from a user who already owns a different profile", async () => {
+      seedUnownedAuthor("legacy-author");
+      await put(
+        "/extensions/v2/authors/me",
+        await authHeaders("user-1"),
+        sampleAuthor()
+      );
+
+      const res = await post(
+        "/extensions/v2/authors/legacy-author/claim",
+        await authHeaders("user-1"),
+        {}
+      );
+      expect(res.status).toBe(409);
+    });
+
+    it("approving a claim transfers ownership and auto-rejects competing claims", async () => {
+      seedUnownedAuthor("legacy-author");
+      tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
+
+      const claim1 = await post(
+        "/extensions/v2/authors/legacy-author/claim",
+        await authHeaders("user-1"),
+        {}
+      );
+      const claim1Id = ((await claim1.json()) as { result: { id: string } })
+        .result.id;
+
+      const claim2 = await post(
+        "/extensions/v2/authors/legacy-author/claim",
+        await authHeaders("user-2"),
+        {}
+      );
+      const claim2Id = ((await claim2.json()) as { result: { id: string } })
+        .result.id;
+
+      const approve = await post(
+        `/extensions/v2/authors/claims/${claim1Id}/approve`,
+        await authHeaders("mod-1")
+      );
+      expect(approve.status).toBe(200);
+      const approved = (await approve.json()) as {
+        result: { id: string; approved: boolean };
+      };
+      expect(approved.result.id).toBe("legacy-author");
+      expect(approved.result.approved).toBe(false);
+      expect(tables.authors.get("legacy-author")?.owner_user_id).toBe("user-1");
+
+      const rejectedClaim = tables.author_claims.get(claim2Id);
+      expect(rejectedClaim?.status).toBe("rejected");
+      expect(rejectedClaim?.review_note).toBe(
+        "Another claim on this profile was approved"
+      );
+    });
+
+    it("lets a moderator reject a claim with a review note, leaving the author unowned", async () => {
+      seedUnownedAuthor("legacy-author");
+      tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
+
+      const claim = await post(
+        "/extensions/v2/authors/legacy-author/claim",
+        await authHeaders("user-1"),
+        {}
+      );
+      const claimId = ((await claim.json()) as { result: { id: string } })
+        .result.id;
+
+      const reject = await post(
+        `/extensions/v2/authors/claims/${claimId}/reject`,
+        await authHeaders("mod-1"),
+        { review_note: "Not enough evidence of maintainership" }
+      );
+      expect(reject.status).toBe(200);
+      const rejected = (await reject.json()) as {
+        result: { status: string; review_note?: string };
+      };
+      expect(rejected.result.status).toBe("rejected");
+      expect(rejected.result.review_note).toBe(
+        "Not enough evidence of maintainership"
+      );
+      expect(tables.authors.get("legacy-author")?.owner_user_id).toBeNull();
+    });
+
+    it("blocks non-moderators from the claims queue and review routes", async () => {
+      seedUnownedAuthor("legacy-author");
+      const claim = await post(
+        "/extensions/v2/authors/legacy-author/claim",
+        await authHeaders("user-1"),
+        {}
+      );
+      const claimId = ((await claim.json()) as { result: { id: string } })
+        .result.id;
+
+      const queue = await get(
+        "/extensions/v2/authors/claims",
+        await authHeaders("intruder")
+      );
+      expect(queue.status).toBe(403);
+
+      const approve = await post(
+        `/extensions/v2/authors/claims/${claimId}/approve`,
+        await authHeaders("intruder")
+      );
+      expect(approve.status).toBe(403);
+
+      const reject = await post(
+        `/extensions/v2/authors/claims/${claimId}/reject`,
+        await authHeaders("intruder"),
+        { review_note: "no" }
+      );
+      expect(reject.status).toBe(403);
+    });
+  });
+
   describe("OpenAPI docs", () => {
     it("serves a generated OpenAPI document", async () => {
       const res = await get("/extensions/v2/openapi.json", {});
@@ -1214,7 +1411,12 @@ describe("Extensions API v2", () => {
           "/authors/{id}/approve",
           "/authors/{id}/transfer",
           "/authors/{id}/transfer/revoke",
-          "/authors/transfers/{token}/accept"
+          "/authors/transfers/{token}/accept",
+          "/authors/{id}/claim",
+          "/authors/claims/mine",
+          "/authors/claims",
+          "/authors/claims/{id}/approve",
+          "/authors/claims/{id}/reject"
         ])
       );
     });

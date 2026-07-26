@@ -2,9 +2,11 @@ import { DatabaseResult, IDatabase } from "../../../lib/interfaces";
 import { databaseError } from "./errors";
 import {
   Author,
+  AuthorClaim,
   AuthorHistoryEntry,
   AuthorProfile,
-  AuthorTransfer
+  AuthorTransfer,
+  PendingAuthorClaim
 } from "./interfaces";
 
 // Matches the SQLite/D1 message for the idx_authors_owner_unique violation,
@@ -12,6 +14,13 @@ import {
 // requests (same caller, different ids) surfaces.
 function isOwnerConflict(message: string | undefined): boolean {
   return !!message && /UNIQUE constraint failed.*owner_user_id/i.test(message);
+}
+
+// Matches the SQLite/D1 message for the idx_author_claims_pending_unique
+// violation, which is how a duplicate claim() call while one is already
+// pending surfaces.
+function isPendingClaimConflict(message: string | undefined): boolean {
+  return !!message && /UNIQUE constraint failed.*author_claims/i.test(message);
 }
 
 async function sha256Hex(input: string): Promise<string> {
@@ -45,6 +54,20 @@ function parseAuthorRow(row: Record<string, unknown>): AuthorProfile {
     avatar_url: (row.avatar_url as string | null) ?? undefined,
     contact_email: (row.contact_email as string | null) ?? undefined,
     approved: row.approved_at !== null && row.approved_at !== undefined
+  };
+}
+
+function parseClaimRow(row: Record<string, unknown>): AuthorClaim {
+  return {
+    id: row.id as string,
+    author_id: row.author_id as string,
+    claimant_id: row.claimant_id as string,
+    status: row.status as AuthorClaim["status"],
+    note: (row.note as string | null) ?? undefined,
+    review_note: (row.review_note as string | null) ?? undefined,
+    reviewer_id: (row.reviewer_id as string | null) ?? undefined,
+    created_at: row.created_at as string,
+    reviewed_at: (row.reviewed_at as string | null) ?? undefined
   };
 }
 
@@ -621,5 +644,372 @@ export class AuthorsDatabase {
     } catch (error) {
       return databaseError("acceptTransfer", error);
     }
+  }
+
+  private async getClaimById(id: string): Promise<DatabaseResult<AuthorClaim>> {
+    try {
+      const row = await this.db
+        .prepare("SELECT * FROM author_claims WHERE id = ?")
+        .bind(id)
+        .first<Record<string, unknown>>();
+      if (!row) {
+        return {
+          data: null,
+          error: {
+            message: `Cannot find claim by id: ${id}`,
+            code: "NOT_FOUND"
+          }
+        };
+      }
+      return { data: parseClaimRow(row), error: null };
+    } catch (error) {
+      return databaseError("getClaimById", error);
+    }
+  }
+
+  // Shared by claim/approveClaim once an author/eligibility-guarded write
+  // affects zero rows: distinguishes "no such author" from the two possible
+  // ownership conflicts for an accurate response, without reopening the
+  // race the guarded write already closed.
+  private async claimIneligibilityError(
+    authorId: string
+  ): Promise<{ code: "NOT_FOUND" | "CONFLICT"; message: string }> {
+    const author = await this.db
+      .prepare("SELECT owner_user_id FROM authors WHERE id = ?")
+      .bind(authorId)
+      .first<{ owner_user_id: string | null }>();
+    if (!author) {
+      return { code: "NOT_FOUND", message: "Author not found" };
+    }
+    if (author.owner_user_id !== null) {
+      return { code: "CONFLICT", message: "This profile is already owned" };
+    }
+    return {
+      code: "CONFLICT",
+      message: "You already have a developer profile"
+    };
+  }
+
+  async claim(
+    authorId: string,
+    claimantId: string,
+    note?: string
+  ): Promise<DatabaseResult<AuthorClaim>> {
+    try {
+      const id = crypto.randomUUID();
+      let result;
+      try {
+        // Both eligibility checks are folded into the INSERT itself, rather
+        // than a separate SELECT beforehand — a caller who loses eligibility
+        // (author gets claimed/transferred, or the caller picks up a
+        // different profile) between an up-front check and the write could
+        // otherwise still slip a stale claim through.
+        result = await this.db
+          .prepare(
+            `INSERT INTO author_claims (id, author_id, claimant_id, note)
+             SELECT ?, ?, ?, ?
+             WHERE EXISTS (SELECT 1 FROM authors WHERE id = ? AND owner_user_id IS NULL)
+               AND NOT EXISTS (SELECT 1 FROM authors WHERE owner_user_id = ?)`
+          )
+          .bind(id, authorId, claimantId, note ?? null, authorId, claimantId)
+          .run();
+      } catch (error) {
+        if (
+          isPendingClaimConflict(error instanceof Error ? error.message : "")
+        ) {
+          return {
+            data: null,
+            error: {
+              code: "CONFLICT",
+              message: "You already have a pending claim on this profile"
+            }
+          };
+        }
+        return databaseError("claim", error);
+      }
+
+      if (!result.success) {
+        return databaseError(
+          "claim",
+          new Error(result.error || "Database write failed")
+        );
+      }
+
+      if (!result.meta?.changes) {
+        return {
+          data: null,
+          error: await this.claimIneligibilityError(authorId)
+        };
+      }
+
+      return this.getClaimById(id);
+    } catch (error) {
+      return databaseError("claim", error);
+    }
+  }
+
+  async listMyClaims(
+    claimantId: string
+  ): Promise<DatabaseResult<AuthorClaim[]>> {
+    let result;
+    try {
+      result = await this.db
+        .prepare(
+          "SELECT * FROM author_claims WHERE claimant_id = ? ORDER BY created_at DESC"
+        )
+        .bind(claimantId)
+        .all<Record<string, unknown>>();
+    } catch (error) {
+      return databaseError("listMyClaims", error);
+    }
+
+    if (!result.success) {
+      return databaseError(
+        "listMyClaims",
+        new Error(result.error || "Database query failed")
+      );
+    }
+
+    return {
+      data: (result.results ?? []).map(parseClaimRow),
+      error: null
+    };
+  }
+
+  async listPendingClaims(): Promise<DatabaseResult<PendingAuthorClaim[]>> {
+    let result;
+    try {
+      result = await this.db
+        .prepare(
+          `SELECT c.*, a.name AS author_name, a.type AS author_type
+           FROM author_claims c JOIN authors a ON a.id = c.author_id
+           WHERE c.status = 'pending' ORDER BY c.created_at ASC`
+        )
+        .all<Record<string, unknown>>();
+    } catch (error) {
+      return databaseError("listPendingClaims", error);
+    }
+
+    if (!result.success) {
+      return databaseError(
+        "listPendingClaims",
+        new Error(result.error || "Database query failed")
+      );
+    }
+
+    return {
+      data: (result.results ?? []).map((row) => ({
+        ...parseClaimRow(row),
+        author_name: row.author_name as string,
+        author_type: row.author_type as PendingAuthorClaim["author_type"]
+      })),
+      error: null
+    };
+  }
+
+  // Best-effort compensation: if the write-through after claiming the status
+  // transition fails, put the claim back to 'pending' rather than leaving it
+  // permanently 'approved' with no matching ownership change.
+  private async revertClaimToPending(id: string): Promise<void> {
+    try {
+      await this.db
+        .prepare(
+          `UPDATE author_claims SET status = 'pending', reviewer_id = NULL, reviewed_at = NULL
+           WHERE id = ?`
+        )
+        .bind(id)
+        .run();
+    } catch {
+      // best-effort only
+    }
+  }
+
+  async approveClaim(
+    claimId: string,
+    reviewerId: string
+  ): Promise<DatabaseResult<AuthorProfile>> {
+    const existing = await this.getClaimById(claimId);
+    if (existing.error || !existing.data) {
+      return {
+        data: null,
+        error: existing.error ?? {
+          message: `Cannot find claim by id: ${claimId}`,
+          code: "NOT_FOUND"
+        }
+      };
+    }
+    const claim = existing.data;
+
+    if (claim.status !== "pending") {
+      return {
+        data: null,
+        error: { message: "Claim is not pending", code: "CONFLICT" }
+      };
+    }
+
+    if (!this.db.batch) {
+      return databaseError(
+        "approveClaim",
+        new Error("Database adapter does not support batch operations")
+      );
+    }
+
+    try {
+      const author = await this.db
+        .prepare("SELECT owner_user_id FROM authors WHERE id = ?")
+        .bind(claim.author_id)
+        .first<{ owner_user_id: string | null }>();
+      if (!author) {
+        return {
+          data: null,
+          error: { message: "Author not found", code: "NOT_FOUND" }
+        };
+      }
+      if (author.owner_user_id !== null) {
+        return {
+          data: null,
+          error: { message: "This profile is already owned", code: "CONFLICT" }
+        };
+      }
+
+      const conflict = await this.db
+        .prepare("SELECT 1 FROM authors WHERE owner_user_id = ?")
+        .bind(claim.claimant_id)
+        .first();
+      if (conflict) {
+        return {
+          data: null,
+          error: {
+            message: "The claimant already owns a different developer profile",
+            code: "CONFLICT"
+          }
+        };
+      }
+    } catch (error) {
+      return databaseError("approveClaim", error);
+    }
+
+    // Claim the transition atomically before writing anything through. If
+    // this affects no rows, a concurrent approve/reject already won the race.
+    let claimResult;
+    try {
+      claimResult = await this.db
+        .prepare(
+          `UPDATE author_claims SET status = 'approved', reviewer_id = ?, reviewed_at = CURRENT_TIMESTAMP
+           WHERE id = ? AND status = 'pending'`
+        )
+        .bind(reviewerId, claimId)
+        .run();
+    } catch (error) {
+      return databaseError("approveClaim", error);
+    }
+
+    if (!claimResult.success) {
+      return databaseError(
+        "approveClaim",
+        new Error(claimResult.error || "Database query failed")
+      );
+    }
+    if (!claimResult.meta?.changes) {
+      return {
+        data: null,
+        error: { message: "Claim is not pending", code: "CONFLICT" }
+      };
+    }
+
+    // The ownership write is itself guarded by `owner_user_id IS NULL`, so a
+    // second concurrent approval of a *different* pending claim on the same
+    // author (each claim id claims its own status row above, so both could
+    // reach this point) can't also move ownership — only the first to commit
+    // here wins, and the loser's authorStmt affects zero rows, caught below.
+    // rejectOthersStmt is gated on that same win via `changes() = 1`, so
+    // competing claims are only auto-rejected once ownership has actually
+    // moved, not whenever this batch merely runs.
+    let results;
+    try {
+      const authorStmt = this.db
+        .prepare(
+          `UPDATE authors SET owner_user_id = ?, approved_at = NULL, updated_at = CURRENT_TIMESTAMP
+           WHERE id = ? AND owner_user_id IS NULL`
+        )
+        .bind(claim.claimant_id, claim.author_id);
+      const rejectOthersStmt = this.db
+        .prepare(
+          `UPDATE author_claims SET status = 'rejected', reviewer_id = ?, reviewed_at = CURRENT_TIMESTAMP,
+             review_note = 'Another claim on this profile was approved'
+           WHERE changes() = 1 AND author_id = ? AND status = 'pending' AND id != ?`
+        )
+        .bind(reviewerId, claim.author_id, claimId);
+
+      results = (await this.db.batch([authorStmt, rejectOthersStmt])) as Array<{
+        success: boolean;
+        error?: string;
+        meta?: { changes?: number };
+      }>;
+    } catch (error) {
+      await this.revertClaimToPending(claimId);
+      return databaseError("approveClaim", error);
+    }
+
+    const failed = results.find((r) => !r.success);
+    if (failed) {
+      await this.revertClaimToPending(claimId);
+      return databaseError(
+        "approveClaim",
+        new Error(failed.error || "Database write failed")
+      );
+    }
+
+    const [authorResult] = results;
+    if (!authorResult.meta?.changes) {
+      await this.revertClaimToPending(claimId);
+      return {
+        data: null,
+        error: {
+          message: "This profile is no longer unowned",
+          code: "CONFLICT"
+        }
+      };
+    }
+
+    return this.getById(claim.author_id);
+  }
+
+  async rejectClaim(
+    claimId: string,
+    reviewerId: string,
+    reviewNote: string
+  ): Promise<DatabaseResult<AuthorClaim>> {
+    let result;
+    try {
+      result = await this.db
+        .prepare(
+          `UPDATE author_claims SET status = 'rejected', reviewer_id = ?, review_note = ?, reviewed_at = CURRENT_TIMESTAMP
+           WHERE id = ? AND status = 'pending'`
+        )
+        .bind(reviewerId, reviewNote, claimId)
+        .run();
+    } catch (error) {
+      return databaseError("rejectClaim", error);
+    }
+
+    if (!result.success) {
+      return databaseError(
+        "rejectClaim",
+        new Error(result.error || "Database query failed")
+      );
+    }
+
+    if (!result.meta?.changes) {
+      return {
+        data: null,
+        error: {
+          message: `Cannot find pending claim by id: ${claimId}`,
+          code: "NOT_FOUND"
+        }
+      };
+    }
+
+    return this.getClaimById(claimId);
   }
 }

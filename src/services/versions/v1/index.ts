@@ -163,7 +163,7 @@ versionsV1.get(
   async (c, next) => {
     const platform = getPlatform(c);
     const token = await getUpdateToken(platform.getCache("AUTH_KV"));
-    const bearer = bearerAuth({ token });
+    const bearer = bearerAuth<VersionsEnv>({ token });
     return bearer(c, next);
   },
   async (c) => {
@@ -608,8 +608,9 @@ async function getBatchPhpVersions(
   if (releases.length === 0) return new Map();
 
   const fields = releases
-    .map(({ tag, composerPath }, i) =>
-      `r${i}: object(expression: "${tag}:${composerPath}") { ... on Blob { text } }`
+    .map(
+      ({ tag, composerPath }, i) =>
+        `r${i}: object(expression: "${tag}:${composerPath}") { ... on Blob { text } }`
     )
     .join("\n");
 
