@@ -9,13 +9,15 @@ import {
   AuthorHistoryEntrySchema,
   AuthorProfileSchema,
   AuthorSchema,
+  AuthorTransferSchema,
   ErrorResponseSchema,
   IdParamSchema,
   QueueQuerySchema,
   ReviewNoteOptionalSchema,
   ReviewNoteRequiredSchema,
   SubmissionPayloadSchema,
-  SubmissionSchema
+  SubmissionSchema,
+  TokenParamSchema
 } from "./interfaces";
 import { AuthorsDatabase } from "./authors-database";
 import { SubmissionsDatabase } from "./submissions-database";
@@ -474,6 +476,202 @@ extensionsV2.openapi(upsertOwnAuthorRoute, async (c) => {
       {
         error: {
           message: error?.message ?? "Unable to save developer profile",
+          code: error?.code ?? "DATABASE_ERROR"
+        }
+      },
+      status
+    );
+  }
+
+  return c.json({ result: data }, 200);
+});
+
+function statusFromOwnershipErrorCode(code?: string): 403 | 404 | 500 {
+  if (code === "NOT_FOUND") return 404;
+  if (code === "FORBIDDEN") return 403;
+  return 500;
+}
+
+const initiateTransferRoute = createRoute({
+  method: "post",
+  path: "/authors/{id}/transfer",
+  tags: ["Authors"],
+  summary: "Create a single-use link to hand this profile to another account",
+  security: [{ Bearer: [] }],
+  middleware: [requireAuth()] as const,
+  request: { params: IdParamSchema },
+  responses: {
+    200: {
+      content: {
+        "application/json": {
+          schema: z.object({ result: AuthorTransferSchema })
+        }
+      },
+      description:
+        "Transfer token created; share it out-of-band with the recipient"
+    },
+    401: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Missing or invalid bearer token"
+    },
+    403: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Caller does not own this profile"
+    },
+    404: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "No author with that id"
+    },
+    422: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "id param failed validation"
+    },
+    500: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Database error"
+    }
+  }
+});
+
+extensionsV2.openapi(initiateTransferRoute, async (c) => {
+  const auth = getAuth(c);
+  const { id } = c.req.valid("param");
+  const platform = getPlatform(c);
+  const db = new AuthorsDatabase(platform.getDatabase("DB_EXTENSIONS"));
+
+  const { data, error } = await db.initiateTransfer(id, auth.userId);
+  if (error || !data) {
+    return c.json(
+      {
+        error: {
+          message: error?.message ?? "Unable to create transfer",
+          code: error?.code ?? "DATABASE_ERROR"
+        }
+      },
+      statusFromOwnershipErrorCode(error?.code)
+    );
+  }
+
+  return c.json({ result: data }, 200);
+});
+
+const revokeTransferRoute = createRoute({
+  method: "post",
+  path: "/authors/{id}/transfer/revoke",
+  tags: ["Authors"],
+  summary: "Revoke this profile's pending transfer link, if any",
+  security: [{ Bearer: [] }],
+  middleware: [requireAuth()] as const,
+  request: { params: IdParamSchema },
+  responses: {
+    200: {
+      content: {
+        "application/json": {
+          schema: z.object({
+            result: z.object({ id: z.string(), revoked: z.literal(true) })
+          })
+        }
+      },
+      description: "Any pending transfer for this profile is revoked"
+    },
+    401: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Missing or invalid bearer token"
+    },
+    403: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Caller does not own this profile"
+    },
+    404: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "No author with that id"
+    },
+    422: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "id param failed validation"
+    },
+    500: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Database error"
+    }
+  }
+});
+
+extensionsV2.openapi(revokeTransferRoute, async (c) => {
+  const auth = getAuth(c);
+  const { id } = c.req.valid("param");
+  const platform = getPlatform(c);
+  const db = new AuthorsDatabase(platform.getDatabase("DB_EXTENSIONS"));
+
+  const { data, error } = await db.revokeTransfer(id, auth.userId);
+  if (error || !data) {
+    return c.json(
+      {
+        error: {
+          message: error?.message ?? "Unable to revoke transfer",
+          code: error?.code ?? "DATABASE_ERROR"
+        }
+      },
+      statusFromOwnershipErrorCode(error?.code)
+    );
+  }
+
+  return c.json({ result: data }, 200);
+});
+
+const acceptTransferRoute = createRoute({
+  method: "post",
+  path: "/authors/transfers/{token}/accept",
+  tags: ["Authors"],
+  summary: "Accept a developer profile transfer using its single-use token",
+  security: [{ Bearer: [] }],
+  middleware: [requireAuth()] as const,
+  request: { params: TokenParamSchema },
+  responses: {
+    200: {
+      content: {
+        "application/json": {
+          schema: z.object({ result: AuthorProfileSchema })
+        }
+      },
+      description: "Profile is now owned by the caller"
+    },
+    401: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Missing or invalid bearer token"
+    },
+    404: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Transfer link is invalid, already used, or expired"
+    },
+    409: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Caller already owns a different developer profile"
+    },
+    422: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "token param failed validation"
+    },
+    500: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Database error"
+    }
+  }
+});
+
+extensionsV2.openapi(acceptTransferRoute, async (c) => {
+  const auth = getAuth(c);
+  const { token } = c.req.valid("param");
+  const platform = getPlatform(c);
+  const db = new AuthorsDatabase(platform.getDatabase("DB_EXTENSIONS"));
+
+  const { data, error } = await db.acceptTransfer(token, auth.userId);
+  if (error || !data) {
+    const status = statusFromErrorCode(error?.code);
+    return c.json(
+      {
+        error: {
+          message: error?.message ?? "Unable to accept transfer",
           code: error?.code ?? "DATABASE_ERROR"
         }
       },

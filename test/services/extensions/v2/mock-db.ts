@@ -5,6 +5,7 @@ export interface MockTables {
   extensions: Map<string, Row>;
   extension_submissions: Map<string, Row>;
   author_history: Map<string, Row>;
+  author_transfers: Map<string, Row>;
   users: Map<string, Row>;
   // Test-only seam for simulating a write-through failure during approve().
   forceExtensionWriteFailure?: boolean;
@@ -16,6 +17,7 @@ export function createTables(): MockTables {
     extensions: new Map(),
     extension_submissions: new Map(),
     author_history: new Map(),
+    author_transfers: new Map(),
     users: new Map()
   };
 }
@@ -58,8 +60,12 @@ class MockStatement implements D1PreparedStatement {
     throw new Error("not implemented");
   }) as D1PreparedStatement["raw"];
 
+  get normalizedQuery(): string {
+    return this.query.replace(/\s+/g, " ").trim();
+  }
+
   private execute(): Row[] {
-    const q = this.query.replace(/\s+/g, " ").trim();
+    const q = this.normalizedQuery;
     const p = this.params;
 
     // v1's SELECT_EXTENSIONS join (database.ts), for cross-service verification
@@ -232,6 +238,146 @@ class MockStatement implements D1PreparedStatement {
         .sort((a, b) =>
           String(b.changed_at).localeCompare(String(a.changed_at))
         );
+    }
+
+    if (
+      q.startsWith(
+        "UPDATE author_transfers SET revoked_at = CURRENT_TIMESTAMP WHERE author_id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND EXISTS"
+      )
+    ) {
+      const [author_id, owner_user_id] = p;
+      const author = this.tables.authors.get(String(author_id));
+      let changes = 0;
+      if (author?.owner_user_id === owner_user_id) {
+        for (const row of this.tables.author_transfers.values()) {
+          if (
+            row.author_id === author_id &&
+            row.accepted_at === null &&
+            row.revoked_at === null
+          ) {
+            row.revoked_at = new Date().toISOString();
+            changes++;
+          }
+        }
+      }
+      this.changes = changes;
+      return [];
+    }
+
+    if (
+      q.startsWith(
+        "INSERT INTO author_transfers (id, author_id, token_hash, created_by, expires_at) SELECT ?, ?, ?, ?, ? WHERE EXISTS"
+      )
+    ) {
+      const [
+        id,
+        author_id,
+        token_hash,
+        created_by,
+        expires_at,
+        checkAuthorId,
+        owner_user_id
+      ] = p;
+      const author = this.tables.authors.get(String(checkAuthorId));
+      if (author?.owner_user_id === owner_user_id) {
+        this.tables.author_transfers.set(String(id), {
+          id,
+          author_id,
+          token_hash,
+          created_by,
+          created_at: new Date().toISOString(),
+          expires_at,
+          accepted_by: null,
+          accepted_at: null,
+          revoked_at: null
+        });
+        this.changes = 1;
+      } else {
+        this.changes = 0;
+      }
+      return [];
+    }
+
+    if (
+      q.startsWith(
+        "UPDATE author_transfers SET accepted_at = CURRENT_TIMESTAMP, accepted_by = ? WHERE token_hash = ?"
+      )
+    ) {
+      const [accepted_by, token_hash, owner_user_id] = p;
+      const now = new Date();
+      const ownsAny = [...this.tables.authors.values()].some(
+        (r) => r.owner_user_id === owner_user_id
+      );
+      const row = [...this.tables.author_transfers.values()].find(
+        (r) =>
+          r.token_hash === token_hash &&
+          r.accepted_at === null &&
+          r.revoked_at === null &&
+          new Date(`${String(r.expires_at).replace(" ", "T")}Z`) > now
+      );
+      if (row && !ownsAny) {
+        row.accepted_at = new Date().toISOString();
+        row.accepted_by = accepted_by;
+        this.changes = 1;
+      } else {
+        this.changes = 0;
+      }
+      return [];
+    }
+
+    if (
+      q.startsWith(
+        "SELECT 1 FROM author_transfers WHERE token_hash = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > CURRENT_TIMESTAMP"
+      )
+    ) {
+      const [token_hash] = p;
+      const now = new Date();
+      const row = [...this.tables.author_transfers.values()].find(
+        (r) =>
+          r.token_hash === token_hash &&
+          r.accepted_at === null &&
+          r.revoked_at === null &&
+          new Date(`${String(r.expires_at).replace(" ", "T")}Z`) > now
+      );
+      return row ? [{ "1": 1 }] : [];
+    }
+
+    if (
+      q.startsWith(
+        "SELECT author_id FROM author_transfers WHERE token_hash = ?"
+      )
+    ) {
+      const [token_hash] = p;
+      const row = [...this.tables.author_transfers.values()].find(
+        (r) => r.token_hash === token_hash
+      );
+      return row ? [{ author_id: row.author_id }] : [];
+    }
+
+    if (
+      q.startsWith(
+        "UPDATE authors SET owner_user_id = ?, approved_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE changes() = 1 AND id = ( SELECT author_id FROM author_transfers"
+      )
+    ) {
+      const [owner_user_id, token_hash, accepted_by] = p;
+      const transfer = [...this.tables.author_transfers.values()].find(
+        (r) =>
+          r.token_hash === token_hash &&
+          r.accepted_by === accepted_by &&
+          r.accepted_at !== null
+      );
+      const row = transfer
+        ? this.tables.authors.get(String(transfer.author_id))
+        : undefined;
+      if (row) {
+        row.owner_user_id = owner_user_id;
+        row.approved_at = null;
+        row.updated_at = new Date().toISOString();
+        this.changes = 1;
+      } else {
+        this.changes = 0;
+      }
+      return [];
     }
 
     if (
@@ -425,8 +571,23 @@ export function createMockD1(tables: MockTables): D1Database {
       statements: D1PreparedStatement[]
     ): Promise<D1Result<T>[]> {
       const results: D1Result<T>[] = [];
+      // Mirrors SQL's changes(): the mock has no other way to expose "how
+      // many rows did the immediately preceding statement change" across
+      // statements, but acceptTransfer's ownership UPDATE deliberately
+      // gates on changes() = 1 to prove the just-run claim actually fired
+      // (rather than the token having been accepted at some point in the
+      // past) — a statement referencing that gate is skipped here unless
+      // the previous statement's change count was exactly 1.
+      let lastChanges = 0;
       for (const stmt of statements) {
-        results.push(await stmt.run<T>());
+        const query = stmt instanceof MockStatement ? stmt.normalizedQuery : "";
+        if (query.includes("WHERE changes() = 1") && lastChanges !== 1) {
+          results.push(ok<T>([], 0));
+          continue;
+        }
+        const result = await stmt.run<T>();
+        lastChanges = result.meta?.changes ?? 0;
+        results.push(result);
       }
       return results;
     },
