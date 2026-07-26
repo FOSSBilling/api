@@ -591,6 +591,65 @@ extensionsV2.openapi(upsertOwnDeveloperRoute, async (c) => {
   return c.json({ result: data }, 200);
 });
 
+const deleteOwnDeveloperRoute = createRoute({
+  method: "delete",
+  path: "/developers/me",
+  tags: ["Developers"],
+  summary: "Permanently delete the caller's own developer profile",
+  security: [{ Bearer: [] }],
+  middleware: [requireAuth()] as const,
+  responses: {
+    200: {
+      content: {
+        "application/json": {
+          schema: z.object({
+            result: z.object({ id: z.string(), deleted: z.literal(true) })
+          })
+        }
+      },
+      description: "Profile deleted"
+    },
+    401: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Missing or invalid bearer token"
+    },
+    404: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Caller has no developer profile"
+    },
+    409: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description:
+        "Profile still has published extensions, or has a pending submission awaiting review"
+    },
+    500: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Database error"
+    }
+  }
+});
+
+extensionsV2.openapi(deleteOwnDeveloperRoute, async (c) => {
+  const auth = getAuth(c);
+  const platform = getPlatform(c);
+  const db = new DevelopersDatabase(platform.getDatabase("DB_EXTENSIONS"));
+
+  const { data, error } = await db.deleteOwn(auth.userId);
+  if (error || !data) {
+    return c.json(
+      {
+        error: {
+          message: error?.message ?? "Unable to delete developer profile",
+          code: error?.code ?? "DATABASE_ERROR"
+        }
+      },
+      statusFromErrorCode(error?.code)
+    );
+  }
+
+  return c.json({ result: data }, 200);
+});
+
 function statusFromOwnershipErrorCode(code?: string): 403 | 404 | 500 {
   if (code === "NOT_FOUND") return 404;
   if (code === "FORBIDDEN") return 403;

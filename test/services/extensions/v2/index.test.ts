@@ -137,6 +137,13 @@ async function get(path: string, headers: Record<string, string>) {
   return res;
 }
 
+async function del(path: string, headers: Record<string, string>) {
+  const ctx = createExecutionContext();
+  const res = await app.request(path, { method: "DELETE", headers }, env, ctx);
+  await waitOnExecutionContext(ctx);
+  return res;
+}
+
 async function put(
   path: string,
   headers: Record<string, string>,
@@ -766,6 +773,127 @@ describe("Extensions API v2", () => {
       expect(data.result.bio).toBeUndefined();
       expect(data.result.avatar_url).toBeUndefined();
       expect(data.result.contact_email).toBeUndefined();
+    });
+  });
+
+  describe("DELETE /developers/me", () => {
+    it("deletes a profile with no extensions or pending submissions", async () => {
+      await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        sampleDeveloper()
+      );
+
+      const res = await del(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1")
+      );
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        result: { id: string; deleted: boolean };
+      };
+      expect(body.result).toEqual({ id: "dev-developer", deleted: true });
+
+      const getRes = await get("/extensions/v2/developers/dev-developer", {});
+      expect(getRes.status).toBe(404);
+    });
+
+    it("404s for a caller with no developer profile", async () => {
+      const res = await del(
+        "/extensions/v2/developers/me",
+        await authHeaders("no-profile-user")
+      );
+      expect(res.status).toBe(404);
+      const body = (await res.json()) as { error: { code: string } };
+      expect(body.error.code).toBe("NOT_FOUND");
+    });
+
+    it("409s when the profile still has published extensions", async () => {
+      seedOwnedExtension();
+
+      const res = await del(
+        "/extensions/v2/developers/me",
+        await authHeaders("owner-1")
+      );
+      expect(res.status).toBe(409);
+      const body = (await res.json()) as {
+        error: { code: string; message: string };
+      };
+      expect(body.error.code).toBe("CONFLICT");
+      expect(body.error.message).toContain("1 published extension(s)");
+    });
+
+    it("409s when a submission is pending", async () => {
+      await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        sampleDeveloper()
+      );
+      tables.extension_submissions.set("sub-1", {
+        id: "sub-1",
+        extension_id: null,
+        developer_id: "dev-developer",
+        submitted_by: "user-1",
+        status: "pending",
+        payload: JSON.stringify(samplePayload()),
+        reviewer_id: null,
+        review_note: null,
+        created_at: new Date().toISOString(),
+        reviewed_at: null
+      });
+
+      const res = await del(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1")
+      );
+      expect(res.status).toBe(409);
+      const body = (await res.json()) as { error: { code: string } };
+      expect(body.error.code).toBe("CONFLICT");
+    });
+
+    it("removes transfer tokens and claims but keeps history", async () => {
+      await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        sampleDeveloper()
+      );
+      await post(
+        "/extensions/v2/developers/dev-developer/transfer",
+        await authHeaders("user-1")
+      );
+      tables.developer_claims.set("claim-1", {
+        id: "claim-1",
+        developer_id: "dev-developer",
+        claimant_id: "user-2",
+        status: "rejected",
+        note: null,
+        review_note: "no",
+        reviewer_id: "mod-1",
+        created_at: new Date().toISOString(),
+        reviewed_at: new Date().toISOString()
+      });
+
+      const res = await del(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1")
+      );
+      expect(res.status).toBe(200);
+
+      expect(
+        [...tables.developer_transfers.values()].filter(
+          (r) => r.developer_id === "dev-developer"
+        )
+      ).toHaveLength(0);
+      expect(
+        [...tables.developer_claims.values()].filter(
+          (r) => r.developer_id === "dev-developer"
+        )
+      ).toHaveLength(0);
+      expect(
+        [...tables.developer_history.values()].filter(
+          (r) => r.developer_id === "dev-developer"
+        ).length
+      ).toBeGreaterThan(0);
     });
   });
 

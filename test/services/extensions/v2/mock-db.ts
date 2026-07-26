@@ -161,9 +161,38 @@ class MockStatement implements D1PreparedStatement {
       return row ? [row] : [];
     }
 
+    if (
+      q.startsWith(
+        "SELECT COUNT(*) AS count FROM extensions WHERE author_id = ?"
+      )
+    ) {
+      const count = [...this.tables.extensions.values()].filter(
+        (r) => r.author_id === p[0]
+      ).length;
+      return [{ count }];
+    }
+
+    if (
+      q.startsWith(
+        "SELECT COUNT(*) AS count FROM extension_submissions WHERE developer_id = ? AND status = 'pending'"
+      )
+    ) {
+      const count = [...this.tables.extension_submissions.values()].filter(
+        (r) => r.developer_id === p[0] && r.status === "pending"
+      ).length;
+      return [{ count }];
+    }
+
     if (q.startsWith("SELECT owner_user_id FROM developers WHERE id = ?")) {
       const row = this.tables.developers.get(String(p[0]));
       return row ? [row] : [];
+    }
+
+    if (q.startsWith("SELECT id FROM developers WHERE owner_user_id = ?")) {
+      const row = [...this.tables.developers.values()].find(
+        (r) => r.owner_user_id === p[0]
+      );
+      return row ? [{ id: row.id }] : [];
     }
 
     if (q.startsWith("SELECT * FROM developers WHERE owner_user_id = ?")) {
@@ -769,6 +798,40 @@ class MockStatement implements D1PreparedStatement {
         version,
         download_url
       });
+      return [];
+    }
+
+    if (
+      q.startsWith("DELETE FROM developer_transfers WHERE developer_id = ?")
+    ) {
+      const [developer_id] = p;
+      let changes = 0;
+      for (const [key, row] of this.tables.developer_transfers) {
+        if (row.developer_id === developer_id) {
+          this.tables.developer_transfers.delete(key);
+          changes++;
+        }
+      }
+      this.changes = changes;
+      return [];
+    }
+
+    if (q.startsWith("DELETE FROM developer_claims WHERE developer_id = ?")) {
+      const [developer_id] = p;
+      let changes = 0;
+      for (const [key, row] of this.tables.developer_claims) {
+        if (row.developer_id === developer_id) {
+          this.tables.developer_claims.delete(key);
+          changes++;
+        }
+      }
+      this.changes = changes;
+      return [];
+    }
+
+    if (q.startsWith("DELETE FROM developers WHERE id = ?")) {
+      const [id] = p;
+      this.changes = this.tables.developers.delete(String(id)) ? 1 : 0;
       return [];
     }
 

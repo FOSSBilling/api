@@ -212,6 +212,105 @@ export class DevelopersDatabase {
     }
   }
 
+  // Permanently removes the caller's own developer profile, for a
+  // privacy-focused account-deletion flow. Refuses while anything would be
+  // left dangling in a way that isn't just historical record-keeping:
+  // published extensions (someone still needs to own them) and pending
+  // submissions (nothing left to approve/reject against once the named
+  // developer is gone). developer_history is deliberately left alone —
+  // it's an append-only audit log, moderator-only, never rendered publicly,
+  // and 0009_drop_developer_history_fk.sql dropped its FK to developers(id)
+  // specifically so a deleted developer's history rows can outlive it.
+  async deleteOwn(
+    userId: string
+  ): Promise<DatabaseResult<{ id: string; deleted: true }>> {
+    try {
+      const developer = await this.db
+        .prepare("SELECT id FROM developers WHERE owner_user_id = ?")
+        .bind(userId)
+        .first<{ id: string }>();
+
+      if (!developer) {
+        return {
+          data: null,
+          error: { message: "Developer not found", code: "NOT_FOUND" }
+        };
+      }
+
+      const extensionCount = await this.db
+        .prepare("SELECT COUNT(*) AS count FROM extensions WHERE author_id = ?")
+        .bind(developer.id)
+        .first<{ count: number }>();
+      const extensionsCount = extensionCount?.count ?? 0;
+      if (extensionsCount > 0) {
+        return {
+          data: null,
+          error: {
+            message: `You have ${extensionsCount} published extension(s) under this profile. Transfer ownership or remove them before deleting it.`,
+            code: "CONFLICT"
+          }
+        };
+      }
+
+      const pendingCount = await this.db
+        .prepare(
+          "SELECT COUNT(*) AS count FROM extension_submissions WHERE developer_id = ? AND status = 'pending'"
+        )
+        .bind(developer.id)
+        .first<{ count: number }>();
+      if ((pendingCount?.count ?? 0) > 0) {
+        return {
+          data: null,
+          error: {
+            message:
+              "You have a pending submission under review. Wait for it to be resolved before deleting your profile.",
+            code: "CONFLICT"
+          }
+        };
+      }
+
+      if (!this.db.batch) {
+        return databaseError(
+          "deleteOwn",
+          new Error("Database adapter does not support batch operations")
+        );
+      }
+
+      const deleteTransfersStmt = this.db
+        .prepare("DELETE FROM developer_transfers WHERE developer_id = ?")
+        .bind(developer.id);
+      const deleteClaimsStmt = this.db
+        .prepare("DELETE FROM developer_claims WHERE developer_id = ?")
+        .bind(developer.id);
+      const deleteDeveloperStmt = this.db
+        .prepare("DELETE FROM developers WHERE id = ?")
+        .bind(developer.id);
+
+      let results;
+      try {
+        results = (await this.db.batch([
+          deleteTransfersStmt,
+          deleteClaimsStmt,
+          deleteDeveloperStmt
+        ])) as Array<{ success: boolean; error?: string }>;
+      } catch (error) {
+        return databaseError("deleteOwn", error);
+      }
+
+      const failed = results.find((r) => !r.success);
+      if (failed) {
+        return databaseError(
+          "deleteOwn",
+          new Error(failed.error || "Database write failed")
+        );
+      }
+
+      return { data: { id: developer.id, deleted: true }, error: null };
+    } catch (error) {
+      return databaseError("deleteOwn", error);
+    }
+  }
+
   async getById(id: string): Promise<DatabaseResult<DeveloperProfile>> {
     try {
       const row = await this.db
