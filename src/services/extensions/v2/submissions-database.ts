@@ -4,12 +4,12 @@ import { Submission, SubmissionPayload, SubmissionStatus } from "./interfaces";
 
 interface OwnershipResolution {
   extensionId: string | null;
-  authorId: string;
+  developerId: string;
 }
 
 interface CreateInput {
   extensionId: string | null;
-  authorId: string;
+  developerId: string;
   submittedBy: string;
   payload: SubmissionPayload;
 }
@@ -18,7 +18,7 @@ function parseSubmissionRow(row: Record<string, unknown>): Submission {
   return {
     id: row.id as string,
     extension_id: (row.extension_id as string | null) ?? null,
-    author_id: row.author_id as string,
+    developer_id: row.developer_id as string,
     submitted_by: row.submitted_by as string,
     status: row.status as SubmissionStatus,
     payload: JSON.parse(row.payload as string) as SubmissionPayload,
@@ -36,9 +36,10 @@ export class SubmissionsDatabase {
     this.db = db;
   }
 
-  // Edits require owning the extension's current author; the author named in
-  // the payload (create, or an edit naming a different author) must be owned
-  // by the caller if it already exists, or is free to claim if it doesn't.
+  // Edits require owning the extension's current developer; the developer
+  // named in the payload (create, or an edit naming a different developer)
+  // must be owned by the caller if it already exists, or is free to claim if
+  // it doesn't.
   async resolveOwnership(
     payload: SubmissionPayload,
     callerId: string
@@ -54,16 +55,19 @@ export class SubmissionsDatabase {
       let extensionId: string | null = null;
 
       if (existingExtension) {
-        const existingAuthor = await this.db
-          .prepare("SELECT owner_user_id FROM authors WHERE id = ?")
+        const existingDeveloper = await this.db
+          .prepare("SELECT owner_user_id FROM developers WHERE id = ?")
           .bind(existingExtension.author_id)
           .first<{ owner_user_id: string | null }>();
 
-        if (!existingAuthor || existingAuthor.owner_user_id !== callerId) {
+        if (
+          !existingDeveloper ||
+          existingDeveloper.owner_user_id !== callerId
+        ) {
           return {
             data: null,
             error: {
-              message: "You do not own the author of this extension",
+              message: "You do not own the developer of this extension",
               code: "FORBIDDEN"
             }
           };
@@ -72,24 +76,24 @@ export class SubmissionsDatabase {
         extensionId = existingExtension.id;
       }
 
-      const payloadAuthor = await this.db
-        .prepare("SELECT owner_user_id FROM authors WHERE id = ?")
-        .bind(payload.author.id)
+      const payloadDeveloper = await this.db
+        .prepare("SELECT owner_user_id FROM developers WHERE id = ?")
+        .bind(payload.developer.id)
         .first<{ owner_user_id: string | null }>();
 
-      if (!payloadAuthor || payloadAuthor.owner_user_id !== callerId) {
+      if (!payloadDeveloper || payloadDeveloper.owner_user_id !== callerId) {
         return {
           data: null,
           error: {
             message:
-              "You do not own this author, or it doesn't exist yet — create a developer profile first",
+              "You do not own this developer, or it doesn't exist yet — create a developer profile first",
             code: "FORBIDDEN"
           }
         };
       }
 
       return {
-        data: { extensionId, authorId: payload.author.id },
+        data: { extensionId, developerId: payload.developer.id },
         error: null
       };
     } catch (error) {
@@ -104,13 +108,13 @@ export class SubmissionsDatabase {
     try {
       result = await this.db
         .prepare(
-          `INSERT INTO extension_submissions (id, extension_id, author_id, submitted_by, status, payload)
+          `INSERT INTO extension_submissions (id, extension_id, developer_id, submitted_by, status, payload)
            VALUES (?, ?, ?, ?, 'pending', ?)`
         )
         .bind(
           id,
           input.extensionId,
-          input.authorId,
+          input.developerId,
           input.submittedBy,
           JSON.stringify(input.payload)
         )
@@ -209,9 +213,9 @@ export class SubmissionsDatabase {
 
   // Best-effort compensation: if the write-through after a successful claim
   // fails, put the submission back to 'pending' rather than leaving it
-  // permanently 'approved' with no matching author/extension write. If this
-  // itself fails, the submission is stuck 'approved' and needs manual fixup —
-  // surfaced via the DATABASE_ERROR the caller already returns.
+  // permanently 'approved' with no matching developer/extension write. If
+  // this itself fails, the submission is stuck 'approved' and needs manual
+  // fixup — surfaced via the DATABASE_ERROR the caller already returns.
   private async revertToPending(id: string): Promise<void> {
     try {
       await this.db
@@ -337,7 +341,7 @@ export class SubmissionsDatabase {
 
     // Claim the transition atomically before writing anything through. If
     // this affects no rows, a concurrent approve/reject already won the
-    // race — report CONFLICT without having touched authors/extensions.
+    // race — report CONFLICT without having touched developers/extensions.
     let claim;
     try {
       claim = await this.db
@@ -371,7 +375,7 @@ export class SubmissionsDatabase {
       );
     }
 
-    const { author, extension } = submission.payload;
+    const { developer, extension } = submission.payload;
     // Edits must update the existing row even if it was stored under a
     // different case (e.g. legacy "Example" edited via "example") — using
     // the payload's id here would insert a second row instead.
@@ -379,18 +383,18 @@ export class SubmissionsDatabase {
 
     let results;
     try {
-      const authorStmt = this.db
+      const developerStmt = this.db
         .prepare(
-          `INSERT INTO authors (id, type, name, url, owner_user_id)
+          `INSERT INTO developers (id, type, name, url, owner_user_id)
            VALUES (?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
              type = excluded.type, name = excluded.name, url = excluded.url`
         )
         .bind(
-          author.id,
-          author.type,
-          author.name,
-          author.URL ?? null,
+          developer.id,
+          developer.type,
+          developer.name,
+          developer.URL ?? null,
           submission.submitted_by
         );
 
@@ -409,7 +413,7 @@ export class SubmissionsDatabase {
         .bind(
           extensionId,
           extension.type,
-          author.id,
+          developer.id,
           extension.name,
           extension.description,
           JSON.stringify(extension.releases),
@@ -422,7 +426,7 @@ export class SubmissionsDatabase {
           extension.download_url
         );
 
-      results = (await this.db.batch([authorStmt, extensionStmt])) as Array<{
+      results = (await this.db.batch([developerStmt, extensionStmt])) as Array<{
         success: boolean;
         error?: string;
       }>;

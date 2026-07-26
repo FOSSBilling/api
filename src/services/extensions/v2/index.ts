@@ -6,15 +6,15 @@ import { Scalar } from "@scalar/hono-api-reference";
 import { getPlatform } from "../../../lib/middleware";
 import { getAuth, requireAuth } from "../../../lib/auth";
 import {
-  AuthorClaimSchema,
-  AuthorHistoryEntrySchema,
-  AuthorProfileSchema,
-  AuthorSchema,
-  AuthorTransferSchema,
   ClaimNoteSchema,
+  DeveloperClaimSchema,
+  DeveloperHistoryEntrySchema,
+  DeveloperProfileSchema,
+  DeveloperSchema,
+  DeveloperTransferSchema,
   ErrorResponseSchema,
   IdParamSchema,
-  PendingAuthorClaimSchema,
+  PendingDeveloperClaimSchema,
   QueueQuerySchema,
   ReviewNoteOptionalSchema,
   ReviewNoteRequiredSchema,
@@ -22,7 +22,7 @@ import {
   SubmissionSchema,
   TokenParamSchema
 } from "./interfaces";
-import { AuthorsDatabase } from "./authors-database";
+import { DevelopersDatabase } from "./developers-database";
 import { SubmissionsDatabase } from "./submissions-database";
 import { UsersDatabase } from "./users-database";
 
@@ -110,7 +110,7 @@ const createSubmissionRoute = createRoute({
     },
     403: {
       content: { "application/json": { schema: ErrorResponseSchema } },
-      description: "Caller does not own the target author or extension"
+      description: "Caller does not own the target developer or extension"
     },
     422: {
       content: { "application/json": { schema: ErrorResponseSchema } },
@@ -144,7 +144,7 @@ extensionsV2.openapi(createSubmissionRoute, async (c) => {
 
   const created = await db.create({
     extensionId: ownership.data.extensionId,
-    authorId: ownership.data.authorId,
+    developerId: ownership.data.developerId,
     submittedBy: auth.userId,
     payload
   });
@@ -296,7 +296,7 @@ const approveRoute = createRoute({
         }
       },
       description:
-        "Submission approved and written through to the live extension/author"
+        "Submission approved and written through to the live extension/developer"
     },
     401: {
       content: { "application/json": { schema: ErrorResponseSchema } },
@@ -425,23 +425,23 @@ extensionsV2.openapi(rejectRoute, async (c) => {
   return c.json({ result: data }, 200);
 });
 
-const upsertOwnAuthorRoute = createRoute({
+const upsertOwnDeveloperRoute = createRoute({
   method: "put",
-  path: "/authors/me",
-  tags: ["Authors"],
+  path: "/developers/me",
+  tags: ["Developers"],
   summary: "Create or update the caller's own developer profile",
   security: [{ Bearer: [] }],
   middleware: [requireAuth()] as const,
   request: {
     body: {
-      content: { "application/json": { schema: AuthorSchema } }
+      content: { "application/json": { schema: DeveloperSchema } }
     }
   },
   responses: {
     200: {
       content: {
         "application/json": {
-          schema: z.object({ result: AuthorProfileSchema })
+          schema: z.object({ result: DeveloperProfileSchema })
         }
       },
       description: "Developer profile created or updated and usable immediately"
@@ -453,7 +453,7 @@ const upsertOwnAuthorRoute = createRoute({
     409: {
       content: { "application/json": { schema: ErrorResponseSchema } },
       description:
-        "Author id already taken by someone else, or id was changed on an existing profile"
+        "Developer id already taken by someone else, or id was changed on an existing profile"
     },
     422: {
       content: { "application/json": { schema: ErrorResponseSchema } },
@@ -466,11 +466,11 @@ const upsertOwnAuthorRoute = createRoute({
   }
 });
 
-extensionsV2.openapi(upsertOwnAuthorRoute, async (c) => {
+extensionsV2.openapi(upsertOwnDeveloperRoute, async (c) => {
   const auth = getAuth(c);
   const body = c.req.valid("json");
   const platform = getPlatform(c);
-  const db = new AuthorsDatabase(platform.getDatabase("DB_EXTENSIONS"));
+  const db = new DevelopersDatabase(platform.getDatabase("DB_EXTENSIONS"));
 
   const { data, error } = await db.upsertOwn(auth.userId, body);
   if (error || !data) {
@@ -495,10 +495,10 @@ function statusFromOwnershipErrorCode(code?: string): 403 | 404 | 500 {
   return 500;
 }
 
-const claimAuthorRoute = createRoute({
+const claimDeveloperRoute = createRoute({
   method: "post",
-  path: "/authors/{id}/claim",
-  tags: ["Authors"],
+  path: "/developers/{id}/claim",
+  tags: ["Developers"],
   summary: "Request ownership of an unowned developer profile",
   security: [{ Bearer: [] }],
   middleware: [requireAuth()] as const,
@@ -511,7 +511,9 @@ const claimAuthorRoute = createRoute({
   responses: {
     201: {
       content: {
-        "application/json": { schema: z.object({ result: AuthorClaimSchema }) }
+        "application/json": {
+          schema: z.object({ result: DeveloperClaimSchema })
+        }
       },
       description: "Claim created and pending moderator review"
     },
@@ -521,7 +523,7 @@ const claimAuthorRoute = createRoute({
     },
     404: {
       content: { "application/json": { schema: ErrorResponseSchema } },
-      description: "No author with that id"
+      description: "No developer with that id"
     },
     409: {
       content: { "application/json": { schema: ErrorResponseSchema } },
@@ -539,12 +541,12 @@ const claimAuthorRoute = createRoute({
   }
 });
 
-extensionsV2.openapi(claimAuthorRoute, async (c) => {
+extensionsV2.openapi(claimDeveloperRoute, async (c) => {
   const auth = getAuth(c);
   const { id } = c.req.valid("param");
   const { note } = c.req.valid("json");
   const platform = getPlatform(c);
-  const db = new AuthorsDatabase(platform.getDatabase("DB_EXTENSIONS"));
+  const db = new DevelopersDatabase(platform.getDatabase("DB_EXTENSIONS"));
 
   const { data, error } = await db.claim(id, auth.userId, note);
   if (error || !data) {
@@ -564,8 +566,8 @@ extensionsV2.openapi(claimAuthorRoute, async (c) => {
 
 const myClaimsRoute = createRoute({
   method: "get",
-  path: "/authors/claims/mine",
-  tags: ["Authors"],
+  path: "/developers/claims/mine",
+  tags: ["Developers"],
   summary: "List the caller's own profile claims, in any status",
   security: [{ Bearer: [] }],
   middleware: [requireAuth()] as const,
@@ -573,7 +575,7 @@ const myClaimsRoute = createRoute({
     200: {
       content: {
         "application/json": {
-          schema: z.object({ result: z.array(AuthorClaimSchema) })
+          schema: z.object({ result: z.array(DeveloperClaimSchema) })
         }
       },
       description: "The caller's claims"
@@ -592,7 +594,7 @@ const myClaimsRoute = createRoute({
 extensionsV2.openapi(myClaimsRoute, async (c) => {
   const auth = getAuth(c);
   const platform = getPlatform(c);
-  const db = new AuthorsDatabase(platform.getDatabase("DB_EXTENSIONS"));
+  const db = new DevelopersDatabase(platform.getDatabase("DB_EXTENSIONS"));
 
   const { data, error } = await db.listMyClaims(auth.userId);
   if (error || !data) {
@@ -612,7 +614,7 @@ extensionsV2.openapi(myClaimsRoute, async (c) => {
 
 const pendingClaimsRoute = createRoute({
   method: "get",
-  path: "/authors/claims",
+  path: "/developers/claims",
   tags: ["Moderation"],
   summary: "List pending profile claims",
   security: [{ Bearer: [] }],
@@ -621,7 +623,7 @@ const pendingClaimsRoute = createRoute({
     200: {
       content: {
         "application/json": {
-          schema: z.object({ result: z.array(PendingAuthorClaimSchema) })
+          schema: z.object({ result: z.array(PendingDeveloperClaimSchema) })
         }
       },
       description: "Claims awaiting moderator review"
@@ -643,7 +645,7 @@ const pendingClaimsRoute = createRoute({
 
 extensionsV2.openapi(pendingClaimsRoute, async (c) => {
   const platform = getPlatform(c);
-  const db = new AuthorsDatabase(platform.getDatabase("DB_EXTENSIONS"));
+  const db = new DevelopersDatabase(platform.getDatabase("DB_EXTENSIONS"));
 
   const { data, error } = await db.listPendingClaims();
   if (error || !data) {
@@ -663,7 +665,7 @@ extensionsV2.openapi(pendingClaimsRoute, async (c) => {
 
 const approveClaimRoute = createRoute({
   method: "post",
-  path: "/authors/claims/{id}/approve",
+  path: "/developers/claims/{id}/approve",
   tags: ["Moderation"],
   summary: "Approve a pending profile claim",
   security: [{ Bearer: [] }],
@@ -673,7 +675,7 @@ const approveClaimRoute = createRoute({
     200: {
       content: {
         "application/json": {
-          schema: z.object({ result: AuthorProfileSchema })
+          schema: z.object({ result: DeveloperProfileSchema })
         }
       },
       description:
@@ -689,7 +691,7 @@ const approveClaimRoute = createRoute({
     },
     404: {
       content: { "application/json": { schema: ErrorResponseSchema } },
-      description: "No claim or author with that id"
+      description: "No claim or developer with that id"
     },
     409: {
       content: { "application/json": { schema: ErrorResponseSchema } },
@@ -711,7 +713,7 @@ extensionsV2.openapi(approveClaimRoute, async (c) => {
   const auth = getAuth(c);
   const { id } = c.req.valid("param");
   const platform = getPlatform(c);
-  const db = new AuthorsDatabase(platform.getDatabase("DB_EXTENSIONS"));
+  const db = new DevelopersDatabase(platform.getDatabase("DB_EXTENSIONS"));
 
   const { data, error } = await db.approveClaim(id, auth.userId);
   if (error || !data) {
@@ -731,7 +733,7 @@ extensionsV2.openapi(approveClaimRoute, async (c) => {
 
 const rejectClaimRoute = createRoute({
   method: "post",
-  path: "/authors/claims/{id}/reject",
+  path: "/developers/claims/{id}/reject",
   tags: ["Moderation"],
   summary: "Reject a pending profile claim",
   security: [{ Bearer: [] }],
@@ -745,7 +747,9 @@ const rejectClaimRoute = createRoute({
   responses: {
     200: {
       content: {
-        "application/json": { schema: z.object({ result: AuthorClaimSchema }) }
+        "application/json": {
+          schema: z.object({ result: DeveloperClaimSchema })
+        }
       },
       description: "Claim rejected"
     },
@@ -777,7 +781,7 @@ extensionsV2.openapi(rejectClaimRoute, async (c) => {
   const { id } = c.req.valid("param");
   const { review_note } = c.req.valid("json");
   const platform = getPlatform(c);
-  const db = new AuthorsDatabase(platform.getDatabase("DB_EXTENSIONS"));
+  const db = new DevelopersDatabase(platform.getDatabase("DB_EXTENSIONS"));
 
   const { data, error } = await db.rejectClaim(id, auth.userId, review_note);
   if (error || !data) {
@@ -798,8 +802,8 @@ extensionsV2.openapi(rejectClaimRoute, async (c) => {
 
 const initiateTransferRoute = createRoute({
   method: "post",
-  path: "/authors/{id}/transfer",
-  tags: ["Authors"],
+  path: "/developers/{id}/transfer",
+  tags: ["Developers"],
   summary: "Create a single-use link to hand this profile to another account",
   security: [{ Bearer: [] }],
   middleware: [requireAuth()] as const,
@@ -808,7 +812,7 @@ const initiateTransferRoute = createRoute({
     200: {
       content: {
         "application/json": {
-          schema: z.object({ result: AuthorTransferSchema })
+          schema: z.object({ result: DeveloperTransferSchema })
         }
       },
       description:
@@ -824,7 +828,7 @@ const initiateTransferRoute = createRoute({
     },
     404: {
       content: { "application/json": { schema: ErrorResponseSchema } },
-      description: "No author with that id"
+      description: "No developer with that id"
     },
     422: {
       content: { "application/json": { schema: ErrorResponseSchema } },
@@ -841,7 +845,7 @@ extensionsV2.openapi(initiateTransferRoute, async (c) => {
   const auth = getAuth(c);
   const { id } = c.req.valid("param");
   const platform = getPlatform(c);
-  const db = new AuthorsDatabase(platform.getDatabase("DB_EXTENSIONS"));
+  const db = new DevelopersDatabase(platform.getDatabase("DB_EXTENSIONS"));
 
   const { data, error } = await db.initiateTransfer(id, auth.userId);
   if (error || !data) {
@@ -861,8 +865,8 @@ extensionsV2.openapi(initiateTransferRoute, async (c) => {
 
 const revokeTransferRoute = createRoute({
   method: "post",
-  path: "/authors/{id}/transfer/revoke",
-  tags: ["Authors"],
+  path: "/developers/{id}/transfer/revoke",
+  tags: ["Developers"],
   summary: "Revoke this profile's pending transfer link, if any",
   security: [{ Bearer: [] }],
   middleware: [requireAuth()] as const,
@@ -888,7 +892,7 @@ const revokeTransferRoute = createRoute({
     },
     404: {
       content: { "application/json": { schema: ErrorResponseSchema } },
-      description: "No author with that id"
+      description: "No developer with that id"
     },
     422: {
       content: { "application/json": { schema: ErrorResponseSchema } },
@@ -905,7 +909,7 @@ extensionsV2.openapi(revokeTransferRoute, async (c) => {
   const auth = getAuth(c);
   const { id } = c.req.valid("param");
   const platform = getPlatform(c);
-  const db = new AuthorsDatabase(platform.getDatabase("DB_EXTENSIONS"));
+  const db = new DevelopersDatabase(platform.getDatabase("DB_EXTENSIONS"));
 
   const { data, error } = await db.revokeTransfer(id, auth.userId);
   if (error || !data) {
@@ -925,8 +929,8 @@ extensionsV2.openapi(revokeTransferRoute, async (c) => {
 
 const acceptTransferRoute = createRoute({
   method: "post",
-  path: "/authors/transfers/{token}/accept",
-  tags: ["Authors"],
+  path: "/developers/transfers/{token}/accept",
+  tags: ["Developers"],
   summary: "Accept a developer profile transfer using its single-use token",
   security: [{ Bearer: [] }],
   middleware: [requireAuth()] as const,
@@ -935,7 +939,7 @@ const acceptTransferRoute = createRoute({
     200: {
       content: {
         "application/json": {
-          schema: z.object({ result: AuthorProfileSchema })
+          schema: z.object({ result: DeveloperProfileSchema })
         }
       },
       description: "Profile is now owned by the caller"
@@ -967,7 +971,7 @@ extensionsV2.openapi(acceptTransferRoute, async (c) => {
   const auth = getAuth(c);
   const { token } = c.req.valid("param");
   const platform = getPlatform(c);
-  const db = new AuthorsDatabase(platform.getDatabase("DB_EXTENSIONS"));
+  const db = new DevelopersDatabase(platform.getDatabase("DB_EXTENSIONS"));
 
   const { data, error } = await db.acceptTransfer(token, auth.userId);
   if (error || !data) {
@@ -986,9 +990,9 @@ extensionsV2.openapi(acceptTransferRoute, async (c) => {
   return c.json({ result: data }, 200);
 });
 
-const allAuthorsRoute = createRoute({
+const allDevelopersRoute = createRoute({
   method: "get",
-  path: "/authors",
+  path: "/developers",
   tags: ["Moderation"],
   summary: "List every developer profile, approved or not",
   security: [{ Bearer: [] }],
@@ -997,7 +1001,7 @@ const allAuthorsRoute = createRoute({
     200: {
       content: {
         "application/json": {
-          schema: z.object({ result: z.array(AuthorProfileSchema) })
+          schema: z.object({ result: z.array(DeveloperProfileSchema) })
         }
       },
       description: "All developer profiles"
@@ -1017,16 +1021,16 @@ const allAuthorsRoute = createRoute({
   }
 });
 
-extensionsV2.openapi(allAuthorsRoute, async (c) => {
+extensionsV2.openapi(allDevelopersRoute, async (c) => {
   const platform = getPlatform(c);
-  const db = new AuthorsDatabase(platform.getDatabase("DB_EXTENSIONS"));
+  const db = new DevelopersDatabase(platform.getDatabase("DB_EXTENSIONS"));
 
   const { data, error } = await db.listAll();
   if (error || !data) {
     return c.json(
       {
         error: {
-          message: error?.message ?? "Unable to load authors",
+          message: error?.message ?? "Unable to load developers",
           code: "DATABASE_ERROR"
         }
       },
@@ -1037,9 +1041,9 @@ extensionsV2.openapi(allAuthorsRoute, async (c) => {
   return c.json({ result: data }, 200);
 });
 
-const unapprovedAuthorsRoute = createRoute({
+const unapprovedDevelopersRoute = createRoute({
   method: "get",
-  path: "/authors/unapproved",
+  path: "/developers/unapproved",
   tags: ["Moderation"],
   summary: "List developer profiles awaiting moderator review",
   security: [{ Bearer: [] }],
@@ -1048,7 +1052,7 @@ const unapprovedAuthorsRoute = createRoute({
     200: {
       content: {
         "application/json": {
-          schema: z.object({ result: z.array(AuthorProfileSchema) })
+          schema: z.object({ result: z.array(DeveloperProfileSchema) })
         }
       },
       description: "Developer profiles not yet approved"
@@ -1068,16 +1072,16 @@ const unapprovedAuthorsRoute = createRoute({
   }
 });
 
-extensionsV2.openapi(unapprovedAuthorsRoute, async (c) => {
+extensionsV2.openapi(unapprovedDevelopersRoute, async (c) => {
   const platform = getPlatform(c);
-  const db = new AuthorsDatabase(platform.getDatabase("DB_EXTENSIONS"));
+  const db = new DevelopersDatabase(platform.getDatabase("DB_EXTENSIONS"));
 
   const { data, error } = await db.listUnapproved();
   if (error || !data) {
     return c.json(
       {
         error: {
-          message: error?.message ?? "Unable to load unapproved authors",
+          message: error?.message ?? "Unable to load unapproved developers",
           code: "DATABASE_ERROR"
         }
       },
@@ -1088,9 +1092,9 @@ extensionsV2.openapi(unapprovedAuthorsRoute, async (c) => {
   return c.json({ result: data }, 200);
 });
 
-const approveAuthorRoute = createRoute({
+const approveDeveloperRoute = createRoute({
   method: "post",
-  path: "/authors/{id}/approve",
+  path: "/developers/{id}/approve",
   tags: ["Moderation"],
   summary: "Mark a developer profile as reviewed/approved",
   security: [{ Bearer: [] }],
@@ -1117,7 +1121,7 @@ const approveAuthorRoute = createRoute({
     },
     404: {
       content: { "application/json": { schema: ErrorResponseSchema } },
-      description: "No author with that id"
+      description: "No developer with that id"
     },
     422: {
       content: { "application/json": { schema: ErrorResponseSchema } },
@@ -1130,10 +1134,10 @@ const approveAuthorRoute = createRoute({
   }
 });
 
-extensionsV2.openapi(approveAuthorRoute, async (c) => {
+extensionsV2.openapi(approveDeveloperRoute, async (c) => {
   const { id } = c.req.valid("param");
   const platform = getPlatform(c);
-  const db = new AuthorsDatabase(platform.getDatabase("DB_EXTENSIONS"));
+  const db = new DevelopersDatabase(platform.getDatabase("DB_EXTENSIONS"));
 
   const { data, error } = await db.approve(id);
   if (error || !data) {
@@ -1141,7 +1145,7 @@ extensionsV2.openapi(approveAuthorRoute, async (c) => {
     return c.json(
       {
         error: {
-          message: error?.message ?? "Unable to approve author",
+          message: error?.message ?? "Unable to approve developer",
           code: error?.code ?? "DATABASE_ERROR"
         }
       },
@@ -1152,9 +1156,9 @@ extensionsV2.openapi(approveAuthorRoute, async (c) => {
   return c.json({ result: data }, 200);
 });
 
-const authorHistoryRoute = createRoute({
+const developerHistoryRoute = createRoute({
   method: "get",
-  path: "/authors/{id}/history",
+  path: "/developers/{id}/history",
   tags: ["Moderation"],
   summary: "List the write history of a developer profile",
   security: [{ Bearer: [] }],
@@ -1164,7 +1168,7 @@ const authorHistoryRoute = createRoute({
     200: {
       content: {
         "application/json": {
-          schema: z.object({ result: z.array(AuthorHistoryEntrySchema) })
+          schema: z.object({ result: z.array(DeveloperHistoryEntrySchema) })
         }
       },
       description: "Snapshots of the profile, newest first"
@@ -1188,17 +1192,17 @@ const authorHistoryRoute = createRoute({
   }
 });
 
-extensionsV2.openapi(authorHistoryRoute, async (c) => {
+extensionsV2.openapi(developerHistoryRoute, async (c) => {
   const { id } = c.req.valid("param");
   const platform = getPlatform(c);
-  const db = new AuthorsDatabase(platform.getDatabase("DB_EXTENSIONS"));
+  const db = new DevelopersDatabase(platform.getDatabase("DB_EXTENSIONS"));
 
   const { data, error } = await db.listHistory(id);
   if (error || !data) {
     return c.json(
       {
         error: {
-          message: error?.message ?? "Unable to load author history",
+          message: error?.message ?? "Unable to load developer history",
           code: error?.code ?? "DATABASE_ERROR"
         }
       },
