@@ -1100,16 +1100,37 @@ export class DevelopersDatabase {
         .first<{ type: Developer["type"] }>();
 
       if (developer) {
-        // Always re-verified here, even for a claimant retrying an
-        // already-pending claim: skipping this based on a point-in-time read
-        // of the pending row is unsafe — if that row resolves (especially
-        // "rejected", which doesn't transfer ownership) between the read and
-        // the INSERT below, the retry would otherwise create a brand-new,
-        // wholly unverified claim, including for a claimant whose GitHub
-        // identity doesn't even match. The INSERT's own unique-constraint
-        // guard still returns CONFLICT for a retry that's still genuinely
-        // pending, so this costs an extra GitHub lookup on replay, never
-        // correctness.
+        // Cheap short-circuit ahead of the GitHub lookup below: a claimant
+        // replaying an already-pending claim on this id would otherwise
+        // trigger a fresh GitHub API call every time, purely to be told the
+        // INSERT's own guard rejects it as a duplicate — letting one caller
+        // burn through the shared service-level GitHub quota for free. This
+        // is safe precisely because it only ever *returns* here when the
+        // read observes `pending` — it never falls through to verification
+        // or the INSERT in that case, so it can't itself create an
+        // unverified claim. Anything else (no claim yet, or one already
+        // resolved to approved/rejected) always continues through full
+        // verification below. A pending claim that resolves between this
+        // read and the response going out can make the message stale
+        // relative to that instant, but never lets a row get created
+        // without verification.
+        const hasPendingClaim = await this.db
+          .prepare(
+            "SELECT 1 FROM developer_claims WHERE developer_id = ? AND claimant_id = ? AND status = 'pending'"
+          )
+          .bind(developerId, claimantId)
+          .first();
+
+        if (hasPendingClaim) {
+          return {
+            data: null,
+            error: {
+              code: "CONFLICT",
+              message: "You already have a pending claim on this profile"
+            }
+          };
+        }
+
         const check = await this.verifyGithubOwnership(
           developerId,
           developer.type,

@@ -580,6 +580,20 @@ class MockStatement implements D1PreparedStatement {
 
     if (
       q.startsWith(
+        "SELECT 1 FROM developer_claims WHERE developer_id = ? AND claimant_id = ? AND status = 'pending'"
+      )
+    ) {
+      const row = [...this.tables.developer_claims.values()].find(
+        (r) =>
+          r.developer_id === p[0] &&
+          r.claimant_id === p[1] &&
+          r.status === "pending"
+      );
+      return row ? [{ "1": 1 }] : [];
+    }
+
+    if (
+      q.startsWith(
         "INSERT INTO developer_claims (id, developer_id, claimant_id, note, github_org_verified, github_verification_note) SELECT ?, ?, ?, ?, ?, ? WHERE EXISTS"
       )
     ) {

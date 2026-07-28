@@ -1871,6 +1871,27 @@ describe("Extensions API v2", () => {
       expect(tables.developer_claims.size).toBe(1);
     });
 
+    it("does not re-check GitHub when replaying an already-pending claim", async () => {
+      seedUnownedDeveloper("legacy-developer");
+
+      await post(
+        "/extensions/v2/developers/legacy-developer/claim",
+        await authHeaders("user-1"),
+        {}
+      );
+      const callsAfterFirst = vi.mocked(ghRequest).mock.calls.length;
+      expect(callsAfterFirst).toBeGreaterThan(0);
+
+      const second = await post(
+        "/extensions/v2/developers/legacy-developer/claim",
+        await authHeaders("user-1"),
+        {}
+      );
+
+      expect(second.status).toBe(409);
+      expect(vi.mocked(ghRequest).mock.calls.length).toBe(callsAfterFirst);
+    });
+
     it("still verifies GitHub ownership on a retry after the prior claim was rejected", async () => {
       seedUnownedDeveloper("legacy-developer");
       tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
