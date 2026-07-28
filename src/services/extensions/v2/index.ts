@@ -1529,8 +1529,37 @@ extensionsV2.get(
   "/docs",
   Scalar({
     url: "/extensions/v2/openapi.json",
-    pageTitle: "FOSSBilling Extensions API (v2)"
-  })
+    pageTitle: "FOSSBilling Extensions API (v2)",
+    agent: {
+      disabled: true
+    },
+    documentDownloadType: 'none',
+    hideClientButton: true,
+    hideModels: true,
+    hiddenClients: {
+      c: true,
+      clojure: true,
+      csharp: true,
+      dart: true,
+      fsharp: true,
+      go: true,
+      java: true,
+      js: ["axios", "jquery", "ofetch"],
+      kotlin: true,
+      node: ['axios', 'ofetch', 'undici'],
+      objc: true,
+      ocaml: true,
+      php: ['guzzle', 'laravel'],
+      powershell: true,
+      python: true,
+      r: true,
+      ruby: true,
+      rust: true,
+      shell: ['httpie'],
+      swift: true,
+    },
+    telemetry: false
+  }),
 );
 
 export default extensionsV2;
