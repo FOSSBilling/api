@@ -1,5 +1,6 @@
 import { DatabaseResult, IDatabase } from "../../../lib/interfaces";
 import { databaseError } from "./errors";
+import { checkGithubEntityType, matchesClaimant } from "./github-verification";
 import {
   Developer,
   DeveloperClaim,
@@ -8,6 +9,7 @@ import {
   DeveloperTransfer,
   PendingDeveloperClaim
 } from "./interfaces";
+import { UsersDatabase } from "./users-database";
 
 // Matches the SQLite/D1 message for the idx_developers_owner_unique
 // violation, which is how a lost race between two concurrent first-time PUT
@@ -73,7 +75,13 @@ function parseClaimRow(row: Record<string, unknown>): DeveloperClaim {
     review_note: (row.review_note as string | null) ?? undefined,
     reviewer_id: (row.reviewer_id as string | null) ?? undefined,
     created_at: row.created_at as string,
-    reviewed_at: (row.reviewed_at as string | null) ?? undefined
+    reviewed_at: (row.reviewed_at as string | null) ?? undefined,
+    github_org_verified:
+      row.github_org_verified === null || row.github_org_verified === undefined
+        ? undefined
+        : row.github_org_verified === 1,
+    github_verification_note:
+      (row.github_verification_note as string | null) ?? undefined
   };
 }
 
@@ -948,12 +956,71 @@ export class DevelopersDatabase {
     };
   }
 
+  // githubToken authenticates the GitHub entity-existence lookup only (a
+  // service-level credential, raises the public rate limit) — it is never
+  // the claimant's own token, which never leaves the auth service. See
+  // github-verification.ts for the full decision matrix this implements: a
+  // positive mismatch between the claimant's linked GitHub identity and the
+  // developer id is rejected outright (GITHUB_MISMATCH, no row written);
+  // anything else (no real GitHub org/user for this id, or the claimant
+  // hasn't linked GitHub yet) falls back to today's manual moderator review.
   async claim(
     developerId: string,
     claimantId: string,
-    note?: string
+    note?: string,
+    githubToken?: string
   ): Promise<DatabaseResult<DeveloperClaim>> {
     try {
+      let githubOrgVerified: number | null = null;
+      let githubVerificationNote: string | null = null;
+
+      const developer = await this.db
+        .prepare(
+          "SELECT type FROM developers WHERE id = ? AND owner_user_id IS NULL"
+        )
+        .bind(developerId)
+        .first<{ type: Developer["type"] }>();
+
+      if (developer) {
+        const githubEntityType = await checkGithubEntityType(
+          developerId,
+          githubToken ?? ""
+        );
+
+        if (githubEntityType === null || githubEntityType !== developer.type) {
+          githubVerificationNote =
+            "No matching GitHub org/user found for this id — reviewed manually.";
+        } else {
+          const identity = await new UsersDatabase(this.db).getGithubIdentity(
+            claimantId
+          );
+          const claimantIdentity = identity.data ?? {
+            githubLogin: null,
+            githubOrgs: []
+          };
+
+          if (!claimantIdentity.githubLogin) {
+            githubVerificationNote =
+              "Claimant has no linked GitHub identity yet — reviewed manually.";
+          } else if (
+            matchesClaimant(developer.type, developerId, claimantIdentity)
+          ) {
+            githubOrgVerified = 1;
+            githubVerificationNote =
+              "Verified: claimant's linked GitHub identity matches.";
+          } else {
+            return {
+              data: null,
+              error: {
+                code: "GITHUB_MISMATCH",
+                message:
+                  "Your linked GitHub account doesn't match this developer's GitHub organization or username, so it can't be claimed automatically. Make sure you're signed in with the right GitHub account, then try again."
+              }
+            };
+          }
+        }
+      }
+
       const id = crypto.randomUUID();
       let result;
       try {
@@ -961,11 +1028,13 @@ export class DevelopersDatabase {
         // than a separate SELECT beforehand — a caller who loses eligibility
         // (developer gets claimed/transferred, or the caller picks up a
         // different profile) between an up-front check and the write could
-        // otherwise still slip a stale claim through.
+        // otherwise still slip a stale claim through. (The SELECT above is
+        // only used to decide the GitHub verification signal, and is always
+        // re-checked here — it can't itself grant eligibility.)
         result = await this.db
           .prepare(
-            `INSERT INTO developer_claims (id, developer_id, claimant_id, note)
-             SELECT ?, ?, ?, ?
+            `INSERT INTO developer_claims (id, developer_id, claimant_id, note, github_org_verified, github_verification_note)
+             SELECT ?, ?, ?, ?, ?, ?
              WHERE EXISTS (SELECT 1 FROM developers WHERE id = ? AND owner_user_id IS NULL)
                AND NOT EXISTS (SELECT 1 FROM developers WHERE owner_user_id = ?)`
           )
@@ -974,6 +1043,8 @@ export class DevelopersDatabase {
             developerId,
             claimantId,
             note ?? null,
+            githubOrgVerified,
+            githubVerificationNote,
             developerId,
             claimantId
           )

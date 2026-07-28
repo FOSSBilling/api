@@ -729,6 +729,11 @@ const claimDeveloperRoute = createRoute({
       content: { "application/json": { schema: ErrorResponseSchema } },
       description: "No developer with that id"
     },
+    403: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description:
+        "Caller's linked GitHub account doesn't match this developer's GitHub organization or username"
+    },
     409: {
       content: { "application/json": { schema: ErrorResponseSchema } },
       description:
@@ -752,7 +757,12 @@ extensionsV2.openapi(claimDeveloperRoute, async (c) => {
   const platform = getPlatform(c);
   const db = new DevelopersDatabase(platform.getDatabase("DB_EXTENSIONS"));
 
-  const { data, error } = await db.claim(id, auth.userId, note);
+  const { data, error } = await db.claim(
+    id,
+    auth.userId,
+    note,
+    platform.getEnv("GITHUB_TOKEN")
+  );
   if (error || !data) {
     return c.json(
       {
@@ -761,7 +771,7 @@ extensionsV2.openapi(claimDeveloperRoute, async (c) => {
           code: error?.code ?? "DATABASE_ERROR"
         }
       },
-      statusFromErrorCode(error?.code)
+      error?.code === "GITHUB_MISMATCH" ? 403 : statusFromErrorCode(error?.code)
     );
   }
 

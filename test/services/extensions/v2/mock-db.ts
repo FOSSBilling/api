@@ -216,6 +216,15 @@ class MockStatement implements D1PreparedStatement {
       return row ? [row] : [];
     }
 
+    if (
+      q.startsWith(
+        "SELECT type FROM developers WHERE id = ? AND owner_user_id IS NULL"
+      )
+    ) {
+      const row = this.tables.developers.get(String(p[0]));
+      return row && row.owner_user_id === null ? [{ type: row.type }] : [];
+    }
+
     if (q.startsWith("SELECT id FROM developers WHERE owner_user_id = ?")) {
       const row = [...this.tables.developers.values()].find(
         (r) => r.owner_user_id === p[0]
@@ -556,7 +565,7 @@ class MockStatement implements D1PreparedStatement {
 
     if (
       q.startsWith(
-        "INSERT INTO developer_claims (id, developer_id, claimant_id, note) SELECT ?, ?, ?, ? WHERE EXISTS"
+        "INSERT INTO developer_claims (id, developer_id, claimant_id, note, github_org_verified, github_verification_note) SELECT ?, ?, ?, ?, ?, ? WHERE EXISTS"
       )
     ) {
       const [
@@ -564,6 +573,8 @@ class MockStatement implements D1PreparedStatement {
         developer_id,
         claimant_id,
         note,
+        github_org_verified,
+        github_verification_note,
         checkDeveloperId,
         checkClaimantId
       ] = p;
@@ -597,7 +608,9 @@ class MockStatement implements D1PreparedStatement {
         review_note: null,
         reviewer_id: null,
         created_at: now,
-        reviewed_at: null
+        reviewed_at: null,
+        github_org_verified,
+        github_verification_note
       });
       this.changes = 1;
       return [];
@@ -736,6 +749,13 @@ class MockStatement implements D1PreparedStatement {
     }
 
     if (q.startsWith("SELECT is_moderator FROM users WHERE id = ?")) {
+      const row = this.tables.users.get(String(p[0]));
+      return row ? [row] : [];
+    }
+
+    if (
+      q.startsWith("SELECT github_login, github_orgs FROM users WHERE id = ?")
+    ) {
       const row = this.tables.users.get(String(p[0]));
       return row ? [row] : [];
     }

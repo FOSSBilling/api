@@ -287,7 +287,14 @@ export const DeveloperClaimSchema = z
     review_note: z.string().optional(),
     reviewer_id: z.string().optional(),
     created_at: z.string(),
-    reviewed_at: z.string().optional()
+    reviewed_at: z.string().optional(),
+    // Server-computed at claim() time only — never accepted from the
+    // client (see ClaimNoteSchema below). Undefined when there was no
+    // verifiable GitHub org/user for this id, or the claimant had no linked
+    // GitHub identity yet; both fall back to manual moderator review rather
+    // than gating anything.
+    github_org_verified: z.boolean().optional(),
+    github_verification_note: z.string().optional()
   })
   .openapi("DeveloperClaim");
 

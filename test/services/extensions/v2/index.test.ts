@@ -1,12 +1,43 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
   createExecutionContext,
   waitOnExecutionContext
 } from "cloudflare:test";
 import { env } from "cloudflare:workers";
+
+// Mocked so DevelopersDatabase.claim()'s GitHub entity-existence check never
+// makes a real network call. Defaults to "not found" (matching classifyGitHubError's
+// NotFoundError check in github-verification.ts), which makes claim() fall
+// back to today's unverified/manual-review path — the same behavior these
+// pre-existing tests expect. Individual tests override this to exercise the
+// verified/mismatch paths.
+vi.mock("@octokit/request", () => {
+  const endpoint = { DEFAULTS: {} };
+  const derivedFn = Object.assign(vi.fn(), { defaults: vi.fn(), endpoint });
+  const request = Object.assign(vi.fn(), {
+    defaults: vi.fn().mockReturnValue(derivedFn),
+    endpoint
+  });
+  return { request };
+});
+
+import { request as ghRequest } from "@octokit/request";
 import app from "../../../../src/app";
 import { createMockD1, createTables, MockTables } from "./mock-db";
 import { signAssertion } from "../../../lib/auth/assertion-helper";
+import { MockGitHubRequest } from "../../../utils/test-types";
+
+function mockGithubEntityNotFound(): void {
+  (vi.mocked(ghRequest) as MockGitHubRequest).mockImplementation(async () => {
+    throw Object.assign(new Error("Not Found"), { status: 404 });
+  });
+}
+
+function mockGithubEntity(type: "User" | "Organization"): void {
+  (vi.mocked(ghRequest) as MockGitHubRequest).mockImplementation(async () => ({
+    data: { type }
+  }));
+}
 
 // Matches the ASSERTION_SIGNING_SECRET binding configured in vitest.config.ts.
 const SECRET = "test-assertion-signing-secret";
@@ -16,6 +47,8 @@ let tables: MockTables;
 beforeEach(() => {
   tables = createTables();
   env.DB_EXTENSIONS = createMockD1(tables);
+  vi.clearAllMocks();
+  mockGithubEntityNotFound();
 });
 
 async function authHeaders(sub: string): Promise<Record<string, string>> {
@@ -1831,6 +1864,119 @@ describe("Extensions API v2", () => {
       expect(
         tables.developers.get("legacy-developer")?.owner_user_id
       ).toBeNull();
+    });
+
+    it("verifies a claim when the claimant's linked GitHub org matches the developer id", async () => {
+      tables.developers.set("legacy-developer", {
+        id: "legacy-developer",
+        type: "organization",
+        name: "Legacy Developer",
+        url: null,
+        owner_user_id: null
+      });
+      mockGithubEntity("Organization");
+      tables.users.set("user-1", {
+        id: "user-1",
+        github_login: "someone",
+        github_orgs: JSON.stringify(["legacy-developer"])
+      });
+
+      const res = await post(
+        "/extensions/v2/developers/legacy-developer/claim",
+        await authHeaders("user-1"),
+        {}
+      );
+      expect(res.status).toBe(201);
+      const created = (await res.json()) as {
+        result: { github_org_verified?: boolean };
+      };
+      expect(created.result.github_org_verified).toBe(true);
+    });
+
+    it("verifies a claim when the claimant's linked GitHub login matches a user-type developer id", async () => {
+      tables.developers.set("legacy-user", {
+        id: "legacy-user",
+        type: "user",
+        name: "Legacy User",
+        url: null,
+        owner_user_id: null
+      });
+      mockGithubEntity("User");
+      tables.users.set("user-1", {
+        id: "user-1",
+        github_login: "legacy-user",
+        github_orgs: JSON.stringify([])
+      });
+
+      const res = await post(
+        "/extensions/v2/developers/legacy-user/claim",
+        await authHeaders("user-1"),
+        {}
+      );
+      expect(res.status).toBe(201);
+      const created = (await res.json()) as {
+        result: { github_org_verified?: boolean };
+      };
+      expect(created.result.github_org_verified).toBe(true);
+    });
+
+    it("blocks a claim outright when the claimant's linked GitHub identity doesn't match", async () => {
+      tables.developers.set("legacy-developer", {
+        id: "legacy-developer",
+        type: "organization",
+        name: "Legacy Developer",
+        url: null,
+        owner_user_id: null
+      });
+      mockGithubEntity("Organization");
+      tables.users.set("user-1", {
+        id: "user-1",
+        github_login: "someone",
+        github_orgs: JSON.stringify(["some-other-org"])
+      });
+
+      const res = await post(
+        "/extensions/v2/developers/legacy-developer/claim",
+        await authHeaders("user-1"),
+        {}
+      );
+      expect(res.status).toBe(403);
+      const body = (await res.json()) as { error: { code: string } };
+      expect(body.error.code).toBe("GITHUB_MISMATCH");
+      expect(tables.developer_claims.size).toBe(0);
+    });
+
+    it("falls back to unverified manual review when the claimant has no linked GitHub identity", async () => {
+      seedUnownedDeveloper("legacy-developer"); // type: "user"
+      mockGithubEntity("User");
+      // No row in tables.users for user-1 — never linked GitHub.
+
+      const res = await post(
+        "/extensions/v2/developers/legacy-developer/claim",
+        await authHeaders("user-1"),
+        {}
+      );
+      expect(res.status).toBe(201);
+      const created = (await res.json()) as {
+        result: { github_org_verified?: boolean };
+      };
+      expect(created.result.github_org_verified).toBeUndefined();
+    });
+
+    it("falls back to unverified manual review when no matching GitHub org/user exists for the id", async () => {
+      seedUnownedDeveloper("legacy-developer");
+      mockGithubEntityNotFound();
+
+      const res = await post(
+        "/extensions/v2/developers/legacy-developer/claim",
+        await authHeaders("user-1"),
+        {}
+      );
+      expect(res.status).toBe(201);
+      const created = (await res.json()) as {
+        result: { github_org_verified?: boolean };
+      };
+      expect(created.result.github_org_verified).toBeUndefined();
     });
 
     it("blocks non-moderators from the claims queue and review routes", async () => {
