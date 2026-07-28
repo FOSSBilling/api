@@ -9,11 +9,15 @@ import {
 } from "drizzle-orm/sqlite-core";
 
 // Owned by the sibling FOSSBilling/extensions repo (src/lib/db/users.sql
-// there), not this repo. Only the column v2 actually joins/references (id)
-// is modeled here - re-check against that repo's schema before trusting
-// anything beyond it, since it can change out from under this repo.
+// there), not this repo. Only the columns v2 actually reads (id, plus what
+// users-database.ts selects) are modeled here - re-check against that
+// repo's schema before trusting anything beyond these, since it can change
+// out from under this repo.
 export const users = sqliteTable("users", {
-  id: text("id").primaryKey()
+  id: text("id").primaryKey(),
+  isModerator: integer("is_moderator"),
+  githubLogin: text("github_login"),
+  githubOrgs: text("github_orgs")
 });
 
 // Owned by v1 (../../v1/db/schema.sql) - v1 only ever reads this table, v2

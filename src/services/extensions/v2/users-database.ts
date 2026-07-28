@@ -1,4 +1,7 @@
-import { DatabaseResult, IDatabase } from "../../../lib/interfaces";
+import { eq } from "drizzle-orm";
+import { DatabaseResult } from "../../../lib/interfaces";
+import { ExtensionsDb } from "../../../lib/db";
+import { users } from "./db/schema";
 import { databaseError } from "./errors";
 
 export type GithubIdentity = {
@@ -12,19 +15,15 @@ export type GithubIdentity = {
 // columns used here: users.id (TEXT, = auth `sub` claim), users.is_moderator
 // (INTEGER 0/1), users.github_login (TEXT), users.github_orgs (TEXT, JSON array).
 export class UsersDatabase {
-  private db: IDatabase;
-
-  constructor(db: IDatabase) {
-    this.db = db;
-  }
+  constructor(private db: ExtensionsDb) {}
 
   async isModerator(userId: string): Promise<DatabaseResult<boolean>> {
     try {
-      const row = await this.db
-        .prepare("SELECT is_moderator FROM users WHERE id = ?")
-        .bind(userId)
-        .first<{ is_moderator: number }>();
-      return { data: row?.is_moderator === 1, error: null };
+      const [row] = await this.db
+        .select({ isModerator: users.isModerator })
+        .from(users)
+        .where(eq(users.id, userId));
+      return { data: row?.isModerator === 1, error: null };
     } catch (error) {
       return databaseError("isModerator", error);
     }
@@ -37,15 +36,18 @@ export class UsersDatabase {
   // resolve to "no linked identity" rather than throwing.
   async getGithubIdentity(userId: string): Promise<DatabaseResult<GithubIdentity>> {
     try {
-      const row = await this.db
-        .prepare("SELECT github_login, github_orgs FROM users WHERE id = ?")
-        .bind(userId)
-        .first<{ github_login: string | null; github_orgs: string | null }>();
+      const [row] = await this.db
+        .select({
+          githubLogin: users.githubLogin,
+          githubOrgs: users.githubOrgs
+        })
+        .from(users)
+        .where(eq(users.id, userId));
 
       let githubOrgs: string[] = [];
-      if (row?.github_orgs) {
+      if (row?.githubOrgs) {
         try {
-          const parsed = JSON.parse(row.github_orgs);
+          const parsed = JSON.parse(row.githubOrgs);
           if (Array.isArray(parsed)) githubOrgs = parsed;
         } catch {
           // Malformed JSON is treated the same as "no orgs recorded" —
@@ -54,7 +56,7 @@ export class UsersDatabase {
       }
 
       return {
-        data: { githubLogin: row?.github_login ?? null, githubOrgs },
+        data: { githubLogin: row?.githubLogin ?? null, githubOrgs },
         error: null
       };
     } catch (error) {
