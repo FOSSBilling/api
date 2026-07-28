@@ -792,6 +792,66 @@ extensionsV2.openapi(claimDeveloperRoute, async (c) => {
   return c.json({ result: data }, 201);
 });
 
+const cancelClaimRoute = createRoute({
+  method: "post",
+  path: "/developers/claims/{id}/cancel",
+  tags: ["Developers"],
+  summary: "Withdraw the caller's own pending profile claim",
+  security: [{ Bearer: [] }],
+  middleware: [requireAuth()] as const,
+  request: { params: IdParamSchema },
+  responses: {
+    200: {
+      content: {
+        "application/json": {
+          schema: z.object({
+            result: z.object({ id: z.string(), cancelled: z.literal(true) })
+          })
+        }
+      },
+      description: "Claim withdrawn"
+    },
+    401: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Missing or invalid bearer token"
+    },
+    404: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "No pending claim with that id owned by the caller"
+    },
+    422: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "id param failed validation"
+    },
+    500: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Database error"
+    }
+  }
+});
+
+extensionsV2.openapi(cancelClaimRoute, async (c) => {
+  const auth = getAuth(c);
+  const { id } = c.req.valid("param");
+  const platform = getPlatform(c);
+  const db = new DevelopersDatabase(platform.getDatabase("DB_EXTENSIONS"));
+
+  const { data, error } = await db.cancelClaim(id, auth.userId);
+  if (error || !data) {
+    return c.json(
+      {
+        error: {
+          message: error?.message ?? "Unable to cancel claim",
+          code: error?.code ?? "DATABASE_ERROR"
+        }
+      },
+      statusFromErrorCode(error?.code)
+    );
+  }
+
+  return c.json({ result: { id: data.id, cancelled: true as const } }, 200);
+});
+
 const myClaimsRoute = createRoute({
   method: "get",
   path: "/developers/claims/mine",
