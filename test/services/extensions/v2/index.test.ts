@@ -890,6 +890,64 @@ describe("Extensions API v2", () => {
       expect(res.status).toBe(409);
     });
 
+    it("verifies a new profile when the creator's linked GitHub org matches the id", async () => {
+      mockGithubEntity("Organization");
+      tables.users.set("user-1", {
+        id: "user-1",
+        github_login: "someone",
+        github_orgs: JSON.stringify(["acme-org"])
+      });
+
+      const res = await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        { id: "acme-org", type: "organization", name: "Acme Org" }
+      );
+
+      expect(res.status).toBe(200);
+      const created = (await res.json()) as {
+        result: { github_org_verified?: boolean };
+      };
+      expect(created.result.github_org_verified).toBe(true);
+    });
+
+    it("blocks creating a profile whose id matches a real GitHub org/user the creator doesn't control", async () => {
+      mockGithubEntity("Organization");
+      tables.users.set("user-1", {
+        id: "user-1",
+        github_login: "someone",
+        github_orgs: JSON.stringify(["some-other-org"])
+      });
+
+      const res = await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        { id: "acme-org", type: "organization", name: "Acme Org" }
+      );
+
+      expect(res.status).toBe(403);
+      const body = (await res.json()) as { error: { code: string } };
+      expect(body.error.code).toBe("GITHUB_MISMATCH");
+      expect(tables.developers.has("acme-org")).toBe(false);
+    });
+
+    it("falls back to unverified creation when the creator has no linked GitHub identity", async () => {
+      mockGithubEntity("Organization");
+      // No row in tables.users for user-1 — never linked GitHub.
+
+      const res = await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        { id: "acme-org", type: "organization", name: "Acme Org" }
+      );
+
+      expect(res.status).toBe(200);
+      const created = (await res.json()) as {
+        result: { github_org_verified?: boolean };
+      };
+      expect(created.result.github_org_verified).toBeUndefined();
+    });
+
     it.each(["claims", "unapproved"])(
       "rejects the reserved id %s",
       async (id) => {

@@ -61,7 +61,13 @@ function parseDeveloperRow(row: Record<string, unknown>): DeveloperProfile {
       row.approved_at !== undefined &&
       (row.approved_revision == null ||
         Number(row.approved_revision) === Number(row.content_revision ?? 1)),
-    content_revision: Number(row.content_revision ?? 1)
+    content_revision: Number(row.content_revision ?? 1),
+    github_org_verified:
+      row.github_org_verified === null || row.github_org_verified === undefined
+        ? undefined
+        : row.github_org_verified === 1,
+    github_verification_note:
+      (row.github_verification_note as string | null) ?? undefined
   };
 }
 
@@ -92,9 +98,16 @@ export class DevelopersDatabase {
     this.db = db;
   }
 
+  // githubToken — see the comment on verifyGithubOwnership(). Only consulted
+  // when creating a brand-new profile (developer.id is immutable once
+  // owned, so an update can't need re-verifying); guards against squatting
+  // on an id that matches a real GitHub org/user the caller doesn't control,
+  // the one gap claim() alone can't close since it only ever applies to
+  // rows that already exist unowned.
   async upsertOwn(
     userId: string,
-    developer: Developer
+    developer: Developer,
+    githubToken?: string
   ): Promise<DatabaseResult<DeveloperProfile>> {
     try {
       const existingOwn = await this.db
@@ -107,6 +120,9 @@ export class DevelopersDatabase {
         .bind(developer.id)
         .first<Record<string, unknown>>();
 
+      let githubOrgVerified: number | null = null;
+      let githubVerificationNote: string | null = null;
+
       let mainStmt;
       if (!existingOwn) {
         if (existingById) {
@@ -116,10 +132,31 @@ export class DevelopersDatabase {
           };
         }
 
+        const check = await this.verifyGithubOwnership(
+          developer.id,
+          developer.type,
+          userId,
+          githubToken
+        );
+
+        if (check.mismatch) {
+          return {
+            data: null,
+            error: {
+              code: "GITHUB_MISMATCH",
+              message:
+                "This id matches a real GitHub organization or username that isn't linked to your account, so it can't be used automatically. Make sure you're signed in with the right GitHub account, or choose a different id."
+            }
+          };
+        }
+
+        githubOrgVerified = check.githubOrgVerified;
+        githubVerificationNote = check.note;
+
         mainStmt = this.db
           .prepare(
-            `INSERT INTO developers (id, type, name, url, avatar_url, contact_email, owner_user_id, approved_at, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+            `INSERT INTO developers (id, type, name, url, avatar_url, contact_email, owner_user_id, approved_at, github_org_verified, github_verification_note, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
           )
           .bind(
             developer.id,
@@ -128,7 +165,9 @@ export class DevelopersDatabase {
             developer.URL ?? null,
             developer.avatar_url ?? null,
             developer.contact_email ?? null,
-            userId
+            userId,
+            githubOrgVerified,
+            githubVerificationNote
           );
       } else {
         if (developer.id !== existingOwn.id) {
@@ -958,12 +997,62 @@ export class DevelopersDatabase {
 
   // githubToken authenticates the GitHub entity-existence lookup only (a
   // service-level credential, raises the public rate limit) — it is never
-  // the claimant's own token, which never leaves the auth service. See
-  // github-verification.ts for the full decision matrix this implements: a
-  // positive mismatch between the claimant's linked GitHub identity and the
-  // developer id is rejected outright (GITHUB_MISMATCH, no row written);
-  // anything else (no real GitHub org/user for this id, or the claimant
-  // hasn't linked GitHub yet) falls back to today's manual moderator review.
+  // the claimant's own token, which never leaves the auth service. Shared by
+  // claim() and upsertOwn(): both need the same question answered — does a
+  // real GitHub org/user exist for this id, and if so, does the caller's own
+  // linked GitHub identity match it? A positive mismatch is the only outcome
+  // that ever blocks; no real GitHub entity for this id, or the caller
+  // having no linked GitHub identity yet, both fall back to unverified
+  // (manual moderator review), never to a block.
+  private async verifyGithubOwnership(
+    developerId: string,
+    developerType: Developer["type"],
+    callerId: string,
+    githubToken?: string
+  ): Promise<
+    | { mismatch: true }
+    | { mismatch: false; githubOrgVerified: number | null; note: string | null }
+  > {
+    const githubEntityType = await checkGithubEntityType(
+      developerId,
+      githubToken ?? ""
+    );
+
+    if (githubEntityType === null || githubEntityType !== developerType) {
+      return {
+        mismatch: false,
+        githubOrgVerified: null,
+        note: "No matching GitHub org/user found for this id — reviewed manually."
+      };
+    }
+
+    const identity = await new UsersDatabase(this.db).getGithubIdentity(
+      callerId
+    );
+    const callerIdentity = identity.data ?? {
+      githubLogin: null,
+      githubOrgs: []
+    };
+
+    if (!callerIdentity.githubLogin) {
+      return {
+        mismatch: false,
+        githubOrgVerified: null,
+        note: "Caller has no linked GitHub identity yet — reviewed manually."
+      };
+    }
+
+    if (matchesClaimant(developerType, developerId, callerIdentity)) {
+      return {
+        mismatch: false,
+        githubOrgVerified: 1,
+        note: "Verified: caller's linked GitHub identity matches."
+      };
+    }
+
+    return { mismatch: true };
+  }
+
   async claim(
     developerId: string,
     claimantId: string,
@@ -982,43 +1071,26 @@ export class DevelopersDatabase {
         .first<{ type: Developer["type"] }>();
 
       if (developer) {
-        const githubEntityType = await checkGithubEntityType(
+        const check = await this.verifyGithubOwnership(
           developerId,
-          githubToken ?? ""
+          developer.type,
+          claimantId,
+          githubToken
         );
 
-        if (githubEntityType === null || githubEntityType !== developer.type) {
-          githubVerificationNote =
-            "No matching GitHub org/user found for this id — reviewed manually.";
-        } else {
-          const identity = await new UsersDatabase(this.db).getGithubIdentity(
-            claimantId
-          );
-          const claimantIdentity = identity.data ?? {
-            githubLogin: null,
-            githubOrgs: []
+        if (check.mismatch) {
+          return {
+            data: null,
+            error: {
+              code: "GITHUB_MISMATCH",
+              message:
+                "Your linked GitHub account doesn't match this developer's GitHub organization or username, so it can't be claimed automatically. Make sure you're signed in with the right GitHub account, then try again."
+            }
           };
-
-          if (!claimantIdentity.githubLogin) {
-            githubVerificationNote =
-              "Claimant has no linked GitHub identity yet — reviewed manually.";
-          } else if (
-            matchesClaimant(developer.type, developerId, claimantIdentity)
-          ) {
-            githubOrgVerified = 1;
-            githubVerificationNote =
-              "Verified: claimant's linked GitHub identity matches.";
-          } else {
-            return {
-              data: null,
-              error: {
-                code: "GITHUB_MISMATCH",
-                message:
-                  "Your linked GitHub account doesn't match this developer's GitHub organization or username, so it can't be claimed automatically. Make sure you're signed in with the right GitHub account, then try again."
-              }
-            };
-          }
         }
+
+        githubOrgVerified = check.githubOrgVerified;
+        githubVerificationNote = check.note;
       }
 
       const id = crypto.randomUUID();

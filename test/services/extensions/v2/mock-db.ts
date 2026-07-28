@@ -273,10 +273,20 @@ class MockStatement implements D1PreparedStatement {
 
     if (
       q.startsWith(
-        "INSERT INTO developers (id, type, name, url, avatar_url, contact_email, owner_user_id, approved_at, created_at, updated_at)"
+        "INSERT INTO developers (id, type, name, url, avatar_url, contact_email, owner_user_id, approved_at, github_org_verified, github_verification_note, created_at, updated_at)"
       )
     ) {
-      const [id, type, name, url, avatar_url, contact_email, owner_user_id] = p;
+      const [
+        id,
+        type,
+        name,
+        url,
+        avatar_url,
+        contact_email,
+        owner_user_id,
+        github_org_verified,
+        github_verification_note
+      ] = p;
       // Mirrors idx_developers_owner_unique: one profile per non-null owner.
       const ownerTaken = [...this.tables.developers.values()].some(
         (r) => owner_user_id !== null && r.owner_user_id === owner_user_id
@@ -296,6 +306,8 @@ class MockStatement implements D1PreparedStatement {
         contact_email,
         owner_user_id,
         approved_at: null,
+        github_org_verified,
+        github_verification_note,
         ownership_epoch: 1,
         content_revision: 1,
         approved_revision: null,

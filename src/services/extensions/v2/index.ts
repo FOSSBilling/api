@@ -595,6 +595,11 @@ const upsertOwnDeveloperRoute = createRoute({
       content: { "application/json": { schema: ErrorResponseSchema } },
       description: "Missing or invalid bearer token"
     },
+    403: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description:
+        "This id matches a real GitHub organization or username that isn't linked to the caller's account"
+    },
     409: {
       content: { "application/json": { schema: ErrorResponseSchema } },
       description:
@@ -617,9 +622,18 @@ extensionsV2.openapi(upsertOwnDeveloperRoute, async (c) => {
   const platform = getPlatform(c);
   const db = new DevelopersDatabase(platform.getDatabase("DB_EXTENSIONS"));
 
-  const { data, error } = await db.upsertOwn(auth.userId, body);
+  const { data, error } = await db.upsertOwn(
+    auth.userId,
+    body,
+    platform.getEnv("GITHUB_TOKEN")
+  );
   if (error || !data) {
-    const status = error?.code === "CONFLICT" ? 409 : 500;
+    const status =
+      error?.code === "GITHUB_MISMATCH"
+        ? 403
+        : error?.code === "CONFLICT"
+          ? 409
+          : 500;
     return c.json(
       {
         error: {

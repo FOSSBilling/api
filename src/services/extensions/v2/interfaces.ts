@@ -144,17 +144,25 @@ export type SubmissionPayload = z.infer<typeof SubmissionPayloadSchema>;
 
 export const DeveloperProfileSchema = DeveloperSchema.extend({
   approved: z.boolean(),
-  content_revision: z.number().int().positive()
+  content_revision: z.number().int().positive(),
+  // Server-computed at creation time only — see
+  // DevelopersDatabase.verifyGithubOwnership(). Never part of the
+  // client-supplied DeveloperSchema.
+  github_org_verified: z.boolean().optional(),
+  github_verification_note: z.string().optional()
 }).openapi("DeveloperProfile");
 
 export type DeveloperProfile = z.infer<typeof DeveloperProfileSchema>;
 
 // The publicly-readable view of a developer profile: everything in
-// DeveloperProfile except contact_email, which exists for moderator/owner
-// communication and was never meant to be broadcast to anonymous callers.
+// DeveloperProfile except contact_email/content_revision (moderator/owner
+// only) and the GitHub verification signal (a moderator-review aid, not
+// meant for public consumption).
 export const PublicDeveloperSchema = DeveloperProfileSchema.omit({
   contact_email: true,
-  content_revision: true
+  content_revision: true,
+  github_org_verified: true,
+  github_verification_note: true
 }).openapi("PublicDeveloper");
 
 export type PublicDeveloper = z.infer<typeof PublicDeveloperSchema>;
