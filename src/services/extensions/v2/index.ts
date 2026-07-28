@@ -631,7 +631,7 @@ extensionsV2.openapi(upsertOwnDeveloperRoute, async (c) => {
     const status =
       error?.code === "GITHUB_MISMATCH"
         ? 403
-        : error?.code === "CONFLICT"
+        : error?.code === "CONFLICT" || error?.code === "DEVELOPER_ID_TAKEN"
           ? 409
           : 500;
     return c.json(

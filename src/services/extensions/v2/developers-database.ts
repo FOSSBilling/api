@@ -130,9 +130,16 @@ export class DevelopersDatabase {
       let mainStmt;
       if (!existingOwn) {
         if (existingById) {
+          // Distinct from the generic CONFLICT used elsewhere in this file —
+          // consumers (the extensions repo's create-profile form) need to
+          // reliably detect this specific case to point the user at the
+          // claim flow, which a shared, message-string-matched code can't do.
           return {
             data: null,
-            error: { message: "Developer id already exists", code: "CONFLICT" }
+            error: {
+              message: "Developer id already exists",
+              code: "DEVELOPER_ID_TAKEN"
+            }
           };
         }
 
