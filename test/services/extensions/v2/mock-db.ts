@@ -1061,6 +1061,16 @@ class MockStatement implements D1PreparedStatement {
       return [];
     }
 
+    if (q.startsWith("DELETE FROM developer_claims WHERE id = ?")) {
+      const [id, claimant_id] = p;
+      const row = this.tables.developer_claims.get(String(id));
+      const eligible =
+        !!row && row.claimant_id === claimant_id && row.status === "pending";
+      if (eligible) this.tables.developer_claims.delete(String(id));
+      this.changes = eligible ? 1 : 0;
+      return [];
+    }
+
     if (q.startsWith("DELETE FROM developer_claims WHERE developer_id = ?")) {
       const [developer_id, owner_user_id] = p;
       let changes = 0;
