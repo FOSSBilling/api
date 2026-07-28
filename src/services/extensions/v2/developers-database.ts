@@ -1018,12 +1018,21 @@ export class DevelopersDatabase {
       githubToken ?? ""
     );
 
-    if (githubEntityType === null || githubEntityType !== developerType) {
+    if (githubEntityType === null) {
       return {
         mismatch: false,
         githubOrgVerified: null,
         note: "No matching GitHub org/user found for this id — reviewed manually."
       };
+    }
+
+    // A real GitHub entity exists for this id, just under the other type
+    // (e.g. a real org submitted as a "user") — this is a confirmed
+    // disagreement with GitHub, not an unknown, so it must block rather than
+    // fall back to unverified. Otherwise a caller could take a real org/user's
+    // id unverified simply by submitting the wrong type for it.
+    if (githubEntityType !== developerType) {
+      return { mismatch: true };
     }
 
     const identity = await new UsersDatabase(this.db).getGithubIdentity(

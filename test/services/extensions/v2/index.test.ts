@@ -931,6 +931,26 @@ describe("Extensions API v2", () => {
       expect(tables.developers.has("acme-org")).toBe(false);
     });
 
+    it("blocks creating a profile whose id matches a real GitHub entity of the opposite type", async () => {
+      mockGithubEntity("Organization");
+      tables.users.set("user-1", {
+        id: "user-1",
+        github_login: "someone",
+        github_orgs: JSON.stringify(["acme-org"])
+      });
+
+      const res = await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        { id: "acme-org", type: "user", name: "Acme Org" }
+      );
+
+      expect(res.status).toBe(403);
+      const body = (await res.json()) as { error: { code: string } };
+      expect(body.error.code).toBe("GITHUB_MISMATCH");
+      expect(tables.developers.has("acme-org")).toBe(false);
+    });
+
     it("falls back to unverified creation when the creator has no linked GitHub identity", async () => {
       mockGithubEntity("Organization");
       // No row in tables.users for user-1 — never linked GitHub.
