@@ -5,6 +5,7 @@ import { MiddlewareHandler } from "hono";
 import { Scalar } from "@scalar/hono-api-reference";
 import { getPlatform } from "../../../lib/middleware";
 import { getAuth, requireAuth } from "../../../lib/auth";
+import { getExtensionsDb } from "../../../lib/db";
 import {
   ClaimNoteSchema,
   DeveloperClaimSchema,
@@ -68,8 +69,7 @@ function statusFromErrorCode(code?: string): 404 | 409 | 500 {
 function requireModerator(): MiddlewareHandler {
   return async (c, next) => {
     const auth = getAuth(c);
-    const platform = getPlatform(c);
-    const users = new UsersDatabase(platform.getDatabase("DB_EXTENSIONS"));
+    const users = new UsersDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
 
     const { data: isModerator, error } = await users.isModerator(auth.userId);
     if (error) {
@@ -117,8 +117,7 @@ const listExtensionsRoute = createRoute({
 
 extensionsV2.openapi(listExtensionsRoute, async (c) => {
   const { type, developer_id } = c.req.valid("query");
-  const platform = getPlatform(c);
-  const db = new ExtensionsDatabase(platform.getDatabase("DB_EXTENSIONS"));
+  const db = new ExtensionsDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
 
   const { data, error } = await db.list({ type, developerId: developer_id });
   if (error || !data) {
@@ -166,8 +165,7 @@ const getExtensionRoute = createRoute({
 
 extensionsV2.openapi(getExtensionRoute, async (c) => {
   const { id } = c.req.valid("param");
-  const platform = getPlatform(c);
-  const db = new ExtensionsDatabase(platform.getDatabase("DB_EXTENSIONS"));
+  const db = new ExtensionsDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
 
   const { data, error } = await db.getById(id);
   if (error || !data) {
@@ -236,8 +234,7 @@ const createSubmissionRoute = createRoute({
 extensionsV2.openapi(createSubmissionRoute, async (c) => {
   const auth = getAuth(c);
   const payload = c.req.valid("json");
-  const platform = getPlatform(c);
-  const db = new SubmissionsDatabase(platform.getDatabase("DB_EXTENSIONS"));
+  const db = new SubmissionsDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
 
   const ownership = await db.resolveOwnership(payload, auth.userId);
   if (ownership.error || !ownership.data) {
@@ -315,8 +312,7 @@ const mineRoute = createRoute({
 extensionsV2.openapi(mineRoute, async (c) => {
   const auth = getAuth(c);
   const { limit, cursor } = c.req.valid("query");
-  const platform = getPlatform(c);
-  const db = new SubmissionsDatabase(platform.getDatabase("DB_EXTENSIONS"));
+  const db = new SubmissionsDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
 
   const { data, error } = await db.listBySubmitter(auth.userId, limit, cursor);
   if (error || !data) {
@@ -384,8 +380,7 @@ const queueRoute = createRoute({
 });
 
 extensionsV2.openapi(queueRoute, async (c) => {
-  const platform = getPlatform(c);
-  const db = new SubmissionsDatabase(platform.getDatabase("DB_EXTENSIONS"));
+  const db = new SubmissionsDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
 
   const { status, limit, cursor } = c.req.valid("query");
 
@@ -475,8 +470,7 @@ extensionsV2.openapi(approveRoute, async (c) => {
   const auth = getAuth(c);
   const { id } = c.req.valid("param");
   const { review_note } = c.req.valid("json");
-  const platform = getPlatform(c);
-  const db = new SubmissionsDatabase(platform.getDatabase("DB_EXTENSIONS"));
+  const db = new SubmissionsDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
 
   const { data, error } = await db.approve(id, auth.userId, review_note);
   if (error || !data) {
@@ -550,8 +544,7 @@ extensionsV2.openapi(rejectRoute, async (c) => {
   const auth = getAuth(c);
   const { id } = c.req.valid("param");
   const { review_note } = c.req.valid("json");
-  const platform = getPlatform(c);
-  const db = new SubmissionsDatabase(platform.getDatabase("DB_EXTENSIONS"));
+  const db = new SubmissionsDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
 
   const { data, error } = await db.reject(id, auth.userId, review_note);
   if (error || !data) {
@@ -620,7 +613,7 @@ extensionsV2.openapi(upsertOwnDeveloperRoute, async (c) => {
   const auth = getAuth(c);
   const body = c.req.valid("json");
   const platform = getPlatform(c);
-  const db = new DevelopersDatabase(platform.getDatabase("DB_EXTENSIONS"));
+  const db = new DevelopersDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
 
   const { data, error } = await db.upsertOwn(
     auth.userId,
@@ -688,8 +681,7 @@ const deleteOwnDeveloperRoute = createRoute({
 
 extensionsV2.openapi(deleteOwnDeveloperRoute, async (c) => {
   const auth = getAuth(c);
-  const platform = getPlatform(c);
-  const db = new DevelopersDatabase(platform.getDatabase("DB_EXTENSIONS"));
+  const db = new DevelopersDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
 
   const { data, error } = await db.deleteOwn(auth.userId);
   if (error || !data) {
@@ -769,7 +761,7 @@ extensionsV2.openapi(claimDeveloperRoute, async (c) => {
   const { id } = c.req.valid("param");
   const { note } = c.req.valid("json");
   const platform = getPlatform(c);
-  const db = new DevelopersDatabase(platform.getDatabase("DB_EXTENSIONS"));
+  const db = new DevelopersDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
 
   const { data, error } = await db.claim(
     id,
@@ -821,8 +813,7 @@ const myClaimsRoute = createRoute({
 
 extensionsV2.openapi(myClaimsRoute, async (c) => {
   const auth = getAuth(c);
-  const platform = getPlatform(c);
-  const db = new DevelopersDatabase(platform.getDatabase("DB_EXTENSIONS"));
+  const db = new DevelopersDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
 
   const { data, error } = await db.listMyClaims(auth.userId);
   if (error || !data) {
@@ -872,8 +863,7 @@ const pendingClaimsRoute = createRoute({
 });
 
 extensionsV2.openapi(pendingClaimsRoute, async (c) => {
-  const platform = getPlatform(c);
-  const db = new DevelopersDatabase(platform.getDatabase("DB_EXTENSIONS"));
+  const db = new DevelopersDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
 
   const { data, error } = await db.listPendingClaims();
   if (error || !data) {
@@ -940,8 +930,7 @@ const approveClaimRoute = createRoute({
 extensionsV2.openapi(approveClaimRoute, async (c) => {
   const auth = getAuth(c);
   const { id } = c.req.valid("param");
-  const platform = getPlatform(c);
-  const db = new DevelopersDatabase(platform.getDatabase("DB_EXTENSIONS"));
+  const db = new DevelopersDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
 
   const { data, error } = await db.approveClaim(id, auth.userId);
   if (error || !data) {
@@ -1008,8 +997,7 @@ extensionsV2.openapi(rejectClaimRoute, async (c) => {
   const auth = getAuth(c);
   const { id } = c.req.valid("param");
   const { review_note } = c.req.valid("json");
-  const platform = getPlatform(c);
-  const db = new DevelopersDatabase(platform.getDatabase("DB_EXTENSIONS"));
+  const db = new DevelopersDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
 
   const { data, error } = await db.rejectClaim(id, auth.userId, review_note);
   if (error || !data) {
@@ -1072,8 +1060,7 @@ const initiateTransferRoute = createRoute({
 extensionsV2.openapi(initiateTransferRoute, async (c) => {
   const auth = getAuth(c);
   const { id } = c.req.valid("param");
-  const platform = getPlatform(c);
-  const db = new DevelopersDatabase(platform.getDatabase("DB_EXTENSIONS"));
+  const db = new DevelopersDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
 
   const { data, error } = await db.initiateTransfer(id, auth.userId);
   if (error || !data) {
@@ -1136,8 +1123,7 @@ const revokeTransferRoute = createRoute({
 extensionsV2.openapi(revokeTransferRoute, async (c) => {
   const auth = getAuth(c);
   const { id } = c.req.valid("param");
-  const platform = getPlatform(c);
-  const db = new DevelopersDatabase(platform.getDatabase("DB_EXTENSIONS"));
+  const db = new DevelopersDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
 
   const { data, error } = await db.revokeTransfer(id, auth.userId);
   if (error || !data) {
@@ -1202,8 +1188,7 @@ const acceptTransferRoute = createRoute({
 extensionsV2.openapi(acceptTransferRoute, async (c) => {
   const auth = getAuth(c);
   const { token } = c.req.valid("json");
-  const platform = getPlatform(c);
-  const db = new DevelopersDatabase(platform.getDatabase("DB_EXTENSIONS"));
+  const db = new DevelopersDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
 
   const { data, error } = await db.acceptTransfer(token, auth.userId);
   if (error || !data) {
@@ -1254,8 +1239,7 @@ const allDevelopersRoute = createRoute({
 });
 
 extensionsV2.openapi(allDevelopersRoute, async (c) => {
-  const platform = getPlatform(c);
-  const db = new DevelopersDatabase(platform.getDatabase("DB_EXTENSIONS"));
+  const db = new DevelopersDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
 
   const { data, error } = await db.listAll();
   if (error || !data) {
@@ -1305,8 +1289,7 @@ const unapprovedDevelopersRoute = createRoute({
 });
 
 extensionsV2.openapi(unapprovedDevelopersRoute, async (c) => {
-  const platform = getPlatform(c);
-  const db = new DevelopersDatabase(platform.getDatabase("DB_EXTENSIONS"));
+  const db = new DevelopersDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
 
   const { data, error } = await db.listUnapproved();
   if (error || !data) {
@@ -1362,8 +1345,7 @@ const getDeveloperRoute = createRoute({
 
 extensionsV2.openapi(getDeveloperRoute, async (c) => {
   const { id } = c.req.valid("param");
-  const platform = getPlatform(c);
-  const db = new DevelopersDatabase(platform.getDatabase("DB_EXTENSIONS"));
+  const db = new DevelopersDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
 
   const { data, error } = await db.getById(id);
   if (error || !data) {
@@ -1437,8 +1419,7 @@ extensionsV2.openapi(approveDeveloperRoute, async (c) => {
   const auth = getAuth(c);
   const { id } = c.req.valid("param");
   const { expected_revision } = c.req.valid("json");
-  const platform = getPlatform(c);
-  const db = new DevelopersDatabase(platform.getDatabase("DB_EXTENSIONS"));
+  const db = new DevelopersDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
 
   const { data, error } = await db.approve(id, expected_revision, auth.userId);
   if (error || !data) {
@@ -1495,8 +1476,7 @@ const developerHistoryRoute = createRoute({
 
 extensionsV2.openapi(developerHistoryRoute, async (c) => {
   const { id } = c.req.valid("param");
-  const platform = getPlatform(c);
-  const db = new DevelopersDatabase(platform.getDatabase("DB_EXTENSIONS"));
+  const db = new DevelopersDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
 
   const { data, error } = await db.listHistory(id);
   if (error || !data) {

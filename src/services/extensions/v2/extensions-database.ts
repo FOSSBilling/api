@@ -1,4 +1,7 @@
-import { DatabaseResult, IDatabase } from "../../../lib/interfaces";
+import { and, eq, sql } from "drizzle-orm";
+import { DatabaseResult } from "../../../lib/interfaces";
+import { ExtensionsDb } from "../../../lib/db";
+import { extensions, developers } from "./db/schema";
 import { databaseError } from "./errors";
 import {
   Extension,
@@ -9,21 +12,52 @@ import {
 } from "./interfaces";
 
 // LEFT JOIN so an extension whose developer row is missing (author_id
-// pointing nowhere) still lists — author_id isn't a hard FK (see
-// 0001_add_v2_tables.sql). COALESCE keeps developer_id non-null in that
-// case: e.author_id is itself NOT NULL, so the id half of the embedded
-// developer is never lost even when every other field falls back to a
-// default in parseExtensionRow below.
-const SELECT_EXTENSIONS = `
-  SELECT e.id, e.type, e.name, e.description, e.releases, e.website, e.license,
-         e.icon_url, e.readme, e.source, e.version, e.download_url,
-         COALESCE(d.id, e.author_id) AS developer_id,
-         d.type AS developer_type, d.name AS developer_name,
-         d.url AS developer_url,
-         d.avatar_url AS developer_avatar_url, d.approved_at AS developer_approved_at
-  FROM extensions e
-  LEFT JOIN developers d ON e.author_id = d.id
-`;
+// pointing nowhere) still lists - author_id isn't a hard FK (see
+// 0001_add_v2_tables.sql). COALESCE keeps developerId non-null in that
+// case: extensions.authorId is itself NOT NULL, so the id half of the
+// embedded developer is never lost even when every other field falls back
+// to a default in parseExtensionRow below.
+const EXTENSION_COLUMNS = {
+  id: extensions.id,
+  type: extensions.type,
+  name: extensions.name,
+  description: extensions.description,
+  releases: extensions.releases,
+  website: extensions.website,
+  license: extensions.license,
+  iconUrl: extensions.iconUrl,
+  readme: extensions.readme,
+  source: extensions.source,
+  version: extensions.version,
+  downloadUrl: extensions.downloadUrl,
+  developerId: sql<string>`COALESCE(${developers.id}, ${extensions.authorId})`,
+  developerType: developers.type,
+  developerName: developers.name,
+  developerUrl: developers.url,
+  developerAvatarUrl: developers.avatarUrl,
+  developerApprovedAt: developers.approvedAt
+};
+
+interface ExtensionRow {
+  id: string;
+  type: string;
+  name: string;
+  description: string;
+  releases: string;
+  website: string;
+  license: string;
+  iconUrl: string | null;
+  readme: string;
+  source: string;
+  version: string;
+  downloadUrl: string;
+  developerId: string;
+  developerType: string | null;
+  developerName: string | null;
+  developerUrl: string | null;
+  developerAvatarUrl: string | null;
+  developerApprovedAt: string | null;
+}
 
 export interface ExtensionListFilters {
   type?: string;
@@ -31,63 +65,43 @@ export interface ExtensionListFilters {
 }
 
 export class ExtensionsDatabase {
-  private db: IDatabase;
-
-  constructor(db: IDatabase) {
-    this.db = db;
-  }
+  constructor(private db: ExtensionsDb) {}
 
   async list(
     filters: ExtensionListFilters = {}
   ): Promise<DatabaseResult<Extension[]>> {
-    const conditions: string[] = [];
-    const params: unknown[] = [];
-    if (filters.type) {
-      conditions.push("e.type = ?");
-      params.push(filters.type);
-    }
-    if (filters.developerId) {
-      conditions.push("e.author_id = ?");
-      params.push(filters.developerId);
-    }
-    const query = conditions.length
-      ? `${SELECT_EXTENSIONS} WHERE ${conditions.join(" AND ")}`
-      : SELECT_EXTENSIONS;
+    const conditions = [];
+    if (filters.type) conditions.push(eq(extensions.type, filters.type));
+    if (filters.developerId)
+      conditions.push(eq(extensions.authorId, filters.developerId));
 
-    let result;
+    let rows: ExtensionRow[];
     try {
-      result = await this.db
-        .prepare(query)
-        .bind(...params)
-        .all<Record<string, unknown>>();
+      const query = this.db
+        .select(EXTENSION_COLUMNS)
+        .from(extensions)
+        .leftJoin(developers, eq(extensions.authorId, developers.id));
+      rows = conditions.length ? await query.where(and(...conditions)) : await query;
     } catch (error) {
       return databaseError("list", error);
     }
 
-    if (!result.success) {
-      return databaseError(
-        "list",
-        new Error(result.error || "Database query failed")
-      );
-    }
-
-    return {
-      data: (result.results ?? []).map(parseExtensionRow),
-      error: null
-    };
+    return { data: rows.map(parseExtensionRow), error: null };
   }
 
   async getById(id: string): Promise<DatabaseResult<Extension>> {
-    let row;
+    let rows: ExtensionRow[];
     try {
-      row = await this.db
-        .prepare(`${SELECT_EXTENSIONS} WHERE LOWER(e.id) = LOWER(?)`)
-        .bind(id)
-        .first<Record<string, unknown>>();
+      rows = await this.db
+        .select(EXTENSION_COLUMNS)
+        .from(extensions)
+        .leftJoin(developers, eq(extensions.authorId, developers.id))
+        .where(sql`LOWER(${extensions.id}) = LOWER(${id})`);
     } catch (error) {
       return databaseError("getById", error);
     }
 
+    const row = rows[0];
     if (!row) {
       return {
         data: null,
@@ -113,34 +127,28 @@ function parseJSON<T>(value: unknown, fallback: T): T {
   return value !== undefined && value !== null ? (value as T) : fallback;
 }
 
-function parseExtensionRow(row: Record<string, unknown>): Extension {
+function parseExtensionRow(row: ExtensionRow): Extension {
   const releases = parseJSON<Release[]>(row.releases, []);
   return {
-    id: row.id as string,
+    id: row.id,
     type: row.type as Extension["type"],
-    name: row.name as string,
-    description: row.description as string,
+    name: row.name,
+    description: row.description,
     releases: sortReleasesDescending(releases),
-    website: row.website as string,
+    website: row.website,
     license: parseJSON<License>(row.license, { name: "" }),
-    icon_url: typeof row.icon_url === "string" ? row.icon_url : undefined,
-    readme: row.readme as string,
+    icon_url: row.iconUrl ?? undefined,
+    readme: row.readme,
     source: parseJSON<Repository>(row.source, { type: "custom", repo: "" }),
-    version: row.version as string,
-    download_url: row.download_url as string,
+    version: row.version,
+    download_url: row.downloadUrl,
     developer: {
-      id: row.developer_id as string,
-      type: (row.developer_type as "user" | "organization") ?? "user",
-      name: (row.developer_name as string) ?? "",
-      URL:
-        typeof row.developer_url === "string" ? row.developer_url : undefined,
-      avatar_url:
-        typeof row.developer_avatar_url === "string"
-          ? row.developer_avatar_url
-          : undefined,
-      approved:
-        row.developer_approved_at !== null &&
-        row.developer_approved_at !== undefined
+      id: row.developerId,
+      type: (row.developerType as "user" | "organization") ?? "user",
+      name: row.developerName ?? "",
+      URL: row.developerUrl ?? undefined,
+      avatar_url: row.developerAvatarUrl ?? undefined,
+      approved: row.developerApprovedAt !== null
     }
   };
 }
