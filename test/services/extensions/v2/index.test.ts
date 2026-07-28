@@ -1871,51 +1871,44 @@ describe("Extensions API v2", () => {
       expect(tables.developer_claims.size).toBe(1);
     });
 
-    it("does not re-check GitHub when replaying an already-pending claim", async () => {
+    it("still verifies GitHub ownership on a retry after the prior claim was rejected", async () => {
       seedUnownedDeveloper("legacy-developer");
+      tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
 
+      const first = await post(
+        "/extensions/v2/developers/legacy-developer/claim",
+        await authHeaders("user-1"),
+        {}
+      );
+      const claimId = ((await first.json()) as { result: { id: string } })
+        .result.id;
       await post(
-        "/extensions/v2/developers/legacy-developer/claim",
-        await authHeaders("user-1"),
-        {}
-      );
-      const callsAfterFirst = vi.mocked(ghRequest).mock.calls.length;
-      expect(callsAfterFirst).toBeGreaterThan(0);
-
-      const second = await post(
-        "/extensions/v2/developers/legacy-developer/claim",
-        await authHeaders("user-1"),
-        {}
+        `/extensions/v2/developers/claims/${claimId}/reject`,
+        await authHeaders("mod-1"),
+        { review_note: "Not enough evidence" }
       );
 
-      expect(second.status).toBe(409);
-      expect(vi.mocked(ghRequest).mock.calls.length).toBe(callsAfterFirst);
-    });
+      // Retrying now, with a GitHub identity that doesn't match: this must
+      // still be blocked rather than silently creating an unverified claim
+      // just because the prior (now-rejected) row cleared the pending guard.
+      mockGithubEntity("Organization");
+      tables.users.set("user-1", {
+        id: "user-1",
+        github_login: "someone",
+        github_orgs: JSON.stringify(["some-other-org"])
+      });
 
-    it("reflects the claim's true final state, not a stale pending message, when it's approved mid-request", async () => {
-      seedUnownedDeveloper("legacy-developer");
-
-      await post(
-        "/extensions/v2/developers/legacy-developer/claim",
-        await authHeaders("user-1"),
-        {}
-      );
-      const callsAfterFirst = vi.mocked(ghRequest).mock.calls.length;
-
-      // Simulates a moderator approving user-1's pending claim in the window
-      // between the replay's pending-claim pre-check and its guarded INSERT.
-      tables.raceClaimResolvedTo = "approved";
-
-      const replay = await post(
+      const claimCountBefore = tables.developer_claims.size;
+      const retry = await post(
         "/extensions/v2/developers/legacy-developer/claim",
         await authHeaders("user-1"),
         {}
       );
 
-      expect(replay.status).toBe(409);
-      const body = (await replay.json()) as { error: { message: string } };
-      expect(body.error.message).toBe("This profile is already owned");
-      expect(vi.mocked(ghRequest).mock.calls.length).toBe(callsAfterFirst);
+      expect(retry.status).toBe(403);
+      const body = (await retry.json()) as { error: { code: string } };
+      expect(body.error.code).toBe("GITHUB_MISMATCH");
+      expect(tables.developer_claims.size).toBe(claimCountBefore);
     });
 
     it("rejects a claim from a user who already owns a different profile", async () => {
