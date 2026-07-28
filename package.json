@@ -27,6 +27,7 @@
     "@octokit/request": "^10.0.2",
     "@scalar/hono-api-reference": "^0.11.11",
     "badge-maker": "^6.0.0",
+    "drizzle-orm": "^0.45.2",
     "hono": "^4.11.4",
     "semver": "^7.7.2",
     "zod": "^4.4.3"
@@ -39,6 +40,7 @@
     "@typescript-eslint/eslint-plugin": "8.65.0",
     "@typescript-eslint/parser": "8.65.0",
     "@vitest/coverage-istanbul": "4.1.10",
+    "drizzle-kit": "^0.31.10",
     "eslint": "10.8.0",
     "eslint-config-prettier": "10.1.8",
     "eslint-plugin-jest": "29.16.0",

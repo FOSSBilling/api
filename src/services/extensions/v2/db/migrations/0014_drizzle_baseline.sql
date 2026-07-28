@@ -1,0 +1,28 @@
+-- This is a drizzle-kit baseline marker, not a real schema change.
+--
+-- drizzle-kit generate has no knowledge of migrations 0001-0013 (they
+-- predate drizzle-kit adoption in this repo and were hand-written, applied
+-- via `wrangler d1 migrations apply`, with no drizzle journal of their
+-- own). The first `drizzle-kit generate` run against schema.ts therefore
+-- produced a full "CREATE TABLE ..." migration recreating every table
+-- those 13 migrations already built - every local/remote DB_EXTENSIONS
+-- database already has these tables, so running that SQL for real here
+-- would fail with "table already exists".
+--
+-- This file's body was verified (see the schema-diff script referenced
+-- below) to be structurally equivalent to the cumulative effect of
+-- 0001-0013, then intentionally emptied to a no-op: applying it via
+-- `wrangler d1 migrations apply` just records it as applied in Wrangler's
+-- `d1_migrations` bookkeeping table without touching the schema, bringing
+-- every environment (which already has 0001-0013 applied for real) in
+-- sync with drizzle-kit's own journal/snapshot state
+-- (meta/_journal.json idx 14, meta/0014_snapshot.json). Every migration
+-- after this one is a genuine, drizzle-kit-generated schema diff.
+--
+-- One intentional, verified divergence from the original migrations: the
+-- generated snapshot models extension_submissions.created_at/reviewed_at
+-- as TEXT (schema.ts's text()) rather than the original migration's
+-- DATETIME declared type. Both are NUMERIC/TEXT-affinity-compatible and
+-- CURRENT_TIMESTAMP inserts an identical TEXT value either way - this
+-- just makes the declared type consistent with every other timestamp
+-- column in the schema, which already use TEXT.
