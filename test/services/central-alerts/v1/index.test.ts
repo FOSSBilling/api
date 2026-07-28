@@ -1,18 +1,19 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
 import {
   createExecutionContext,
   waitOnExecutionContext
 } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import app from "../../../../src/app";
-import { mockD1Database } from "../../../utils/d1-mock";
 import type { CentralAlertsResponse } from "../../../utils/test-types";
+import { applyTestMigrations } from "../../../utils/apply-migrations";
 
+// No fixture-insertion setup needed beyond migrations: migrations already
+// seed exactly the row these tests assert on (see
+// src/services/central-alerts/v1/db/migrations/0001_seed_initial_alert.sql)
+// against the real local D1.
 describe("Central Alerts API v1", () => {
-  beforeEach(() => {
-    // Mock the D1 database binding
-    env.DB_CENTRAL_ALERTS = mockD1Database;
-  });
+  beforeAll(applyTestMigrations);
 
   describe("GET /list", () => {
     it("should return list of central alerts", async () => {

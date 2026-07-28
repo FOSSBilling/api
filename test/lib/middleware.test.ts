@@ -2,10 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { Hono, Context } from "hono";
 import { platformMiddleware, getPlatform } from "../../src/lib/middleware";
 import { createPlatformContext } from "../../src/lib/context";
-import {
-  IPlatformBindings,
-  IPreparedStatement
-} from "../../src/lib/interfaces";
+import { IPlatformBindings } from "../../src/lib/interfaces";
 
 describe("Middleware", () => {
   let app: Hono;
@@ -15,19 +12,6 @@ describe("Middleware", () => {
     app = new Hono();
 
     mockBindings = {
-      databases: {
-        testDb: {
-          prepare: () => {
-            const mockStmt: IPreparedStatement = {
-              bind: () => mockStmt,
-              all: async () => ({ results: [], success: true }),
-              first: async () => null,
-              run: async () => ({ success: true })
-            };
-            return mockStmt;
-          }
-        }
-      },
       caches: {
         testCache: {
           get: async () => null,
@@ -55,21 +39,6 @@ describe("Middleware", () => {
       const data = (await response.json()) as { hasPlatform: boolean };
 
       expect(data.hasPlatform).toBe(true);
-    });
-
-    it("should allow access to database through platform context", async () => {
-      app.use("*", platformMiddleware(mockBindings));
-
-      app.get("/test", (c) => {
-        const platform = c.get("platform");
-        const db = platform.getDatabase("testDb");
-        return c.json({ hasDatabase: !!db });
-      });
-
-      const response = await app.request("/test");
-      const data = (await response.json()) as { hasDatabase: boolean };
-
-      expect(data.hasDatabase).toBe(true);
     });
 
     it("should allow access to cache through platform context", async () => {
@@ -164,7 +133,7 @@ describe("Middleware", () => {
       const platform = getPlatform(mockHonoContext);
 
       expect(platform).toBeDefined();
-      expect(platform.getDatabase("testDb")).toBeDefined();
+      expect(platform.getCache("testCache")).toBeDefined();
     });
 
     it("should throw error when platform context not found", () => {
@@ -227,7 +196,7 @@ describe("Middleware", () => {
 
       app.get("/test1", (c) => {
         const platform = c.get("platform");
-        return c.json({ contextType: typeof platform.getDatabase });
+        return c.json({ contextType: typeof platform.getEnv });
       });
 
       app.get("/test2", (c) => {

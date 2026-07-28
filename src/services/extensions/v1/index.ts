@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { trimTrailingSlash } from "hono/trailing-slash";
 import { makeBadge } from "badge-maker";
-import { getPlatform } from "../../../lib/middleware";
+import { getExtensionsDb } from "../../../lib/db";
 import { ExtensionsDatabase } from "./database";
 import { getLatestRelease, sortReleasesDescending } from "./interfaces";
 
@@ -12,8 +12,7 @@ extensionsV1.use("/*", cors({ origin: "*" }));
 extensionsV1.use("/*", trimTrailingSlash());
 
 extensionsV1.get("/list", async (c) => {
-  const platform = getPlatform(c);
-  const db = new ExtensionsDatabase(platform.getDatabase("DB_EXTENSIONS"));
+  const db = new ExtensionsDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
   const type = c.req.query("type");
 
   const { data, error } = await db.getAllExtensions(type);
@@ -28,8 +27,7 @@ extensionsV1.get("/:id/badges/:type", async (c) => {
   const id = c.req.param("id");
   const badgeType = c.req.param("type");
 
-  const platform = getPlatform(c);
-  const db = new ExtensionsDatabase(platform.getDatabase("DB_EXTENSIONS"));
+  const db = new ExtensionsDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
 
   const { data: extension, error } = await db.getExtensionById(id);
   if (error || !extension) {
@@ -78,8 +76,7 @@ extensionsV1.get("/:id/badges/:type", async (c) => {
 extensionsV1.get("/:id/version", async (c) => {
   const id = c.req.param("id");
 
-  const platform = getPlatform(c);
-  const db = new ExtensionsDatabase(platform.getDatabase("DB_EXTENSIONS"));
+  const db = new ExtensionsDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
 
   const { data: extension, error } = await db.getExtensionById(id);
   if (error || !extension) {
@@ -101,8 +98,7 @@ extensionsV1.get("/:id/version", async (c) => {
 extensionsV1.get("/:id", async (c) => {
   const id = c.req.param("id");
 
-  const platform = getPlatform(c);
-  const db = new ExtensionsDatabase(platform.getDatabase("DB_EXTENSIONS"));
+  const db = new ExtensionsDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
 
   const { data: extension, error } = await db.getExtensionById(id);
   if (error || !extension) {

@@ -7,9 +7,6 @@ const SECRET = "test-secret";
 
 function platformWithSecret(secret: string | undefined): PlatformContext {
   return {
-    getDatabase: () => {
-      throw new Error("not implemented");
-    },
     getCache: () => {
       throw new Error("not implemented");
     },

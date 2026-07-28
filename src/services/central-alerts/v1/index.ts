@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { trimTrailingSlash } from "hono/trailing-slash";
 import { CentralAlertsDatabase } from "./database";
-import { getPlatform } from "../../../lib/middleware";
+import { getCentralAlertsDb } from "../../../lib/db";
 import { logError } from "../../../lib/logger";
 
 const centralAlertsV1 = new Hono<{ Bindings: CloudflareBindings }>();
@@ -10,9 +10,8 @@ const centralAlertsV1 = new Hono<{ Bindings: CloudflareBindings }>();
 centralAlertsV1.use("/*", cors({ origin: "*" }), trimTrailingSlash());
 
 centralAlertsV1.get("/list", async (c) => {
-  const platform = getPlatform(c);
   const db = new CentralAlertsDatabase(
-    platform.getDatabase("DB_CENTRAL_ALERTS")
+    getCentralAlertsDb(c.env.DB_CENTRAL_ALERTS)
   );
   const { data, error } = await db.getAllAlerts();
 

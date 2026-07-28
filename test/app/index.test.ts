@@ -4,14 +4,13 @@
  * @license AGPL-3.0
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import { env } from "cloudflare:workers";
 import {
   createExecutionContext,
   waitOnExecutionContext
 } from "cloudflare:test";
 import app from "../../src/app/index";
-import { mockD1Database } from "../utils/d1-mock";
 import {
   ApiResponse,
   CentralAlertsResponse,
@@ -20,6 +19,7 @@ import {
   VersionInfo,
   VersionsResponse
 } from "../utils/test-types";
+import { applyTestMigrations } from "../utils/apply-migrations";
 
 vi.mock("@octokit/request", () => {
   const endpoint = { DEFAULTS: {} };
@@ -67,6 +67,8 @@ const mockComposerJson = {
 };
 
 describe("FOSSBilling API Worker - Main App", () => {
+  beforeAll(applyTestMigrations);
+
   beforeEach(async () => {
     // Clear KV cache before each test
     await env.CACHE_KV.delete("gh-fossbilling-releases");
@@ -75,9 +77,6 @@ describe("FOSSBilling API Worker - Main App", () => {
     // Set up UPDATE_TOKEN in AUTH_KV storage for tests
     const testUpdateToken = "test-update-token-12345";
     await env.AUTH_KV.put("UPDATE_TOKEN", testUpdateToken);
-
-    // Mock D1 database binding for central alerts
-    env.DB_CENTRAL_ALERTS = mockD1Database;
 
     // Reset all mocks
     vi.clearAllMocks();

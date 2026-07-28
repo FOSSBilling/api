@@ -26,3 +26,10 @@
 -- CURRENT_TIMESTAMP inserts an identical TEXT value either way - this
 -- just makes the declared type consistent with every other timestamp
 -- column in the schema, which already use TEXT.
+--
+-- A genuine (harmless) statement is required below - a comment-only file
+-- parses as one "statement" that's pure comment text, which some D1
+-- tooling (e.g. @cloudflare/vitest-pool-workers' applyD1Migrations, used
+-- in tests) rejects with "SQL code did not contain a statement" when it
+-- tries to prepare() that string directly.
+SELECT 1;

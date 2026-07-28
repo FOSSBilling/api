@@ -1,38 +1,19 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach } from "vitest";
 import {
   createExecutionContext,
   waitOnExecutionContext
 } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import app from "../../../../src/app";
+import { getExtensionsDb } from "../../../../src/lib/db";
+import { developers, extensions } from "../../../../src/services/extensions/v2/db/schema";
+import { applyTestMigrations } from "../../../utils/apply-migrations";
 
-type ExtensionRow = {
-  id: string;
-  type: string;
-  author_id: string;
-  author_type: string;
-  author_name: string;
-  author_url: string | null;
-  name: string;
-  description: string;
-  releases: string;
-  website: string;
-  license: string;
-  icon_url?: string;
-  readme: string;
-  source: string;
-  version: string;
-  download_url: string;
-};
-
-const testExtensions: ExtensionRow[] = [
+const testExtensionRows = [
   {
     id: "Example",
-    type: "mod",
-    author_id: "fossbilling",
-    author_type: "organization",
-    author_name: "fossbilling",
-    author_url: "https://fossbilling.org",
+    type: "mod" as const,
+    authorId: "fossbilling",
     name: "Example Module",
     description: "An example module for developers.",
     releases: JSON.stringify([
@@ -56,21 +37,25 @@ const testExtensions: ExtensionRow[] = [
       }
     ]),
     website: "https://fossbilling.org",
-    license: JSON.stringify({ name: "Apache 2.0", URL: "https://www.apache.org/licenses/LICENSE-2.0" }),
-    icon_url: "https://raw.githubusercontent.com/FOSSBilling/example-module/main/src/icon.svg",
+    license: JSON.stringify({
+      name: "Apache 2.0",
+      URL: "https://www.apache.org/licenses/LICENSE-2.0"
+    }),
+    iconUrl:
+      "https://raw.githubusercontent.com/FOSSBilling/example-module/main/src/icon.svg",
     readme: "# Example module\n\nThis is an example module.",
-    source: JSON.stringify({ type: "github", repo: "FOSSBilling/example-module" }),
+    source: JSON.stringify({
+      type: "github",
+      repo: "FOSSBilling/example-module"
+    }),
     version: "0.0.5",
-    download_url:
+    downloadUrl:
       "https://github.com/FOSSBilling/example-module/releases/download/0.0.5/Example.zip"
   },
   {
     id: "TestTheme",
-    type: "theme",
-    author_id: "fossbilling",
-    author_type: "organization",
-    author_name: "fossbilling",
-    author_url: "https://fossbilling.org",
+    type: "theme" as const,
+    authorId: "fossbilling",
     name: "Test Theme",
     description: "A test theme.",
     releases: JSON.stringify([
@@ -86,96 +71,25 @@ const testExtensions: ExtensionRow[] = [
     readme: "# Test Theme",
     source: JSON.stringify({ type: "github", repo: "FOSSBilling/test-theme" }),
     version: "1.0.0",
-    download_url: "https://example.com/TestTheme.zip"
+    downloadUrl: "https://example.com/TestTheme.zip"
   }
 ];
 
-function makeD1Mock(): D1Database {
-  return {
-    prepare(query: string): D1PreparedStatement {
-      let boundParams: unknown[] = [];
-
-      const stmt: D1PreparedStatement = {
-        bind(...params: unknown[]) {
-          boundParams = params;
-          return stmt;
-        },
-
-        async all<T = unknown>(): Promise<D1Result<T>> {
-          let rows = [...testExtensions];
-
-          if (query.includes("WHERE e.type = ?") && boundParams[0]) {
-            rows = rows.filter((r) => r.type === boundParams[0]);
-          }
-
-          return {
-            success: true,
-            results: rows as unknown as T[],
-            meta: {
-              duration: 0,
-              last_row_id: 0,
-              changes: 0,
-              served_by: "mock",
-              size_after: 0,
-              rows_read: rows.length,
-              rows_written: 0,
-              changed_db: false
-            }
-          };
-        },
-
-        async first<T = unknown>(): Promise<T | null> {
-          if (query.includes("LOWER(e.id) = LOWER(?)") && boundParams[0]) {
-            const id = String(boundParams[0]).toLowerCase();
-            const found = testExtensions.find(
-              (r) => r.id.toLowerCase() === id
-            );
-            return (found as unknown as T) ?? null;
-          }
-          return null;
-        },
-
-        raw: (() => { throw new Error("not implemented"); }) as D1PreparedStatement["raw"],
-
-        async run<T = Record<string, unknown>>(): Promise<D1Result<T>> {
-          return {
-            success: true,
-            results: [],
-            meta: {
-              duration: 0,
-              last_row_id: 0,
-              changes: 0,
-              served_by: "mock",
-              size_after: 0,
-              rows_read: 0,
-              rows_written: 0,
-              changed_db: false
-            }
-          };
-        }
-      };
-
-      return stmt;
-    },
-
-    dump(): Promise<ArrayBuffer> {
-      throw new Error("not implemented");
-    },
-    batch<T = unknown>(_statements: D1PreparedStatement[]): Promise<D1Result<T>[]> {
-      throw new Error("not implemented");
-    },
-    exec(_query: string): Promise<D1ExecResult> {
-      throw new Error("not implemented");
-    },
-    withSession(_constraintOrBookmark?: string): D1DatabaseSession {
-      throw new Error("not implemented");
-    }
-  };
-}
-
 describe("Extensions API v1", () => {
-  beforeEach(() => {
-    env.DB_EXTENSIONS = makeD1Mock();
+  beforeAll(applyTestMigrations);
+
+  beforeEach(async () => {
+    const db = getExtensionsDb(env.DB_EXTENSIONS);
+    await db.delete(extensions);
+    await db.delete(developers);
+
+    await db.insert(developers).values({
+      id: "fossbilling",
+      type: "organization",
+      name: "fossbilling",
+      url: "https://fossbilling.org"
+    });
+    await db.insert(extensions).values(testExtensionRows);
   });
 
   describe("GET /list", () => {
@@ -185,18 +99,23 @@ describe("Extensions API v1", () => {
       await waitOnExecutionContext(ctx);
 
       expect(res.status).toBe(200);
-      const data = await res.json() as { result: unknown[] };
+      const data = (await res.json()) as { result: unknown[] };
       expect(Array.isArray(data.result)).toBe(true);
       expect(data.result.length).toBe(2);
     });
 
     it("should filter by type", async () => {
       const ctx = createExecutionContext();
-      const res = await app.request("/extensions/v1/list?type=mod", {}, env, ctx);
+      const res = await app.request(
+        "/extensions/v1/list?type=mod",
+        {},
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       expect(res.status).toBe(200);
-      const data = await res.json() as { result: Array<{ type: string }> };
+      const data = (await res.json()) as { result: Array<{ type: string }> };
       expect(data.result.every((e) => e.type === "mod")).toBe(true);
       expect(data.result.length).toBe(1);
     });
@@ -214,7 +133,9 @@ describe("Extensions API v1", () => {
       const res = await app.request("/extensions/v1/list", {}, env, ctx);
       await waitOnExecutionContext(ctx);
 
-      const data = await res.json() as { result: Array<{ id: string; releases: Array<{ tag: string }> }> };
+      const data = (await res.json()) as {
+        result: Array<{ id: string; releases: Array<{ tag: string }> }>;
+      };
       const example = data.result.find((e) => e.id === "Example");
       expect(example).toBeTruthy();
       expect(example!.releases[0].tag).toBe("0.0.5");
@@ -228,7 +149,9 @@ describe("Extensions API v1", () => {
       await waitOnExecutionContext(ctx);
 
       expect(res.status).toBe(200);
-      const data = await res.json() as { result: { id: string; name: string } };
+      const data = (await res.json()) as {
+        result: { id: string; name: string };
+      };
       expect(data.result.id).toBe("Example");
       expect(data.result.name).toBe("Example Module");
     });
@@ -239,17 +162,22 @@ describe("Extensions API v1", () => {
       await waitOnExecutionContext(ctx);
 
       expect(res.status).toBe(200);
-      const data = await res.json() as { result: { id: string } };
+      const data = (await res.json()) as { result: { id: string } };
       expect(data.result.id).toBe("Example");
     });
 
     it("should return 404 for unknown extension", async () => {
       const ctx = createExecutionContext();
-      const res = await app.request("/extensions/v1/nonexistent", {}, env, ctx);
+      const res = await app.request(
+        "/extensions/v1/nonexistent",
+        {},
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       expect(res.status).toBe(404);
-      const data = await res.json() as { error: { message: string } };
+      const data = (await res.json()) as { error: { message: string } };
       expect(data.error.message).toContain("nonexistent");
     });
 
@@ -258,7 +186,9 @@ describe("Extensions API v1", () => {
       const res = await app.request("/extensions/v1/Example", {}, env, ctx);
       await waitOnExecutionContext(ctx);
 
-      const data = await res.json() as { result: { author: { name: string } } };
+      const data = (await res.json()) as {
+        result: { author: { name: string } };
+      };
       expect(data.result.author.name).toBe("fossbilling");
     });
   });
@@ -266,7 +196,12 @@ describe("Extensions API v1", () => {
   describe("GET /:id/version", () => {
     it("should return plain text version", async () => {
       const ctx = createExecutionContext();
-      const res = await app.request("/extensions/v1/Example/version", {}, env, ctx);
+      const res = await app.request(
+        "/extensions/v1/Example/version",
+        {},
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       expect(res.status).toBe(200);
@@ -277,7 +212,12 @@ describe("Extensions API v1", () => {
 
     it("should return 404 for unknown extension", async () => {
       const ctx = createExecutionContext();
-      const res = await app.request("/extensions/v1/nonexistent/version", {}, env, ctx);
+      const res = await app.request(
+        "/extensions/v1/nonexistent/version",
+        {},
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       expect(res.status).toBe(404);
@@ -287,7 +227,12 @@ describe("Extensions API v1", () => {
   describe("GET /:id/badges/:type", () => {
     it("should return SVG for version badge", async () => {
       const ctx = createExecutionContext();
-      const res = await app.request("/extensions/v1/Example/badges/version", {}, env, ctx);
+      const res = await app.request(
+        "/extensions/v1/Example/badges/version",
+        {},
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       expect(res.status).toBe(200);
@@ -299,7 +244,12 @@ describe("Extensions API v1", () => {
 
     it("should return SVG for license badge", async () => {
       const ctx = createExecutionContext();
-      const res = await app.request("/extensions/v1/Example/badges/license", {}, env, ctx);
+      const res = await app.request(
+        "/extensions/v1/Example/badges/license",
+        {},
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       expect(res.status).toBe(200);
@@ -309,7 +259,12 @@ describe("Extensions API v1", () => {
 
     it("should return red SVG for unknown badge type", async () => {
       const ctx = createExecutionContext();
-      const res = await app.request("/extensions/v1/Example/badges/unknown_type", {}, env, ctx);
+      const res = await app.request(
+        "/extensions/v1/Example/badges/unknown_type",
+        {},
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       expect(res.status).toBe(200);
