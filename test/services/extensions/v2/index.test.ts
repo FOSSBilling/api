@@ -1892,6 +1892,32 @@ describe("Extensions API v2", () => {
       expect(vi.mocked(ghRequest).mock.calls.length).toBe(callsAfterFirst);
     });
 
+    it("reflects the claim's true final state, not a stale pending message, when it's approved mid-request", async () => {
+      seedUnownedDeveloper("legacy-developer");
+
+      await post(
+        "/extensions/v2/developers/legacy-developer/claim",
+        await authHeaders("user-1"),
+        {}
+      );
+      const callsAfterFirst = vi.mocked(ghRequest).mock.calls.length;
+
+      // Simulates a moderator approving user-1's pending claim in the window
+      // between the replay's pending-claim pre-check and its guarded INSERT.
+      tables.raceClaimResolvedTo = "approved";
+
+      const replay = await post(
+        "/extensions/v2/developers/legacy-developer/claim",
+        await authHeaders("user-1"),
+        {}
+      );
+
+      expect(replay.status).toBe(409);
+      const body = (await replay.json()) as { error: { message: string } };
+      expect(body.error.message).toBe("This profile is already owned");
+      expect(vi.mocked(ghRequest).mock.calls.length).toBe(callsAfterFirst);
+    });
+
     it("rejects a claim from a user who already owns a different profile", async () => {
       seedUnownedDeveloper("legacy-developer");
       await put(

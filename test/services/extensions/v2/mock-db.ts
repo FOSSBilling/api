@@ -21,6 +21,12 @@ export interface MockTables {
   // Test-only seam for simulating a DB/schema failure while looking up the
   // caller's linked GitHub identity during claim()/upsertOwn() verification.
   forceGithubIdentityLookupFailure?: boolean;
+  // Test-only seam for simulating a moderator resolving a pending claim in
+  // the window between claim()'s pending-claim pre-check and its guarded
+  // INSERT — fires (once) the first time that pre-check runs, mutating the
+  // claim (and, for "approved", the developer's ownership) so the INSERT
+  // sees a different state than the pre-check did.
+  raceClaimResolvedTo?: "approved" | "rejected";
 }
 
 export function createTables(): MockTables {
@@ -589,7 +595,18 @@ class MockStatement implements D1PreparedStatement {
           r.claimant_id === p[1] &&
           r.status === "pending"
       );
-      return row ? [{ "1": 1 }] : [];
+      const wasPending = !!row;
+      if (row && this.tables.raceClaimResolvedTo !== undefined) {
+        row.status = this.tables.raceClaimResolvedTo;
+        if (this.tables.raceClaimResolvedTo === "approved") {
+          const developer = this.tables.developers.get(
+            String(row.developer_id)
+          );
+          if (developer) developer.owner_user_id = row.claimant_id;
+        }
+        this.tables.raceClaimResolvedTo = undefined;
+      }
+      return wasPending ? [{ "1": 1 }] : [];
     }
 
     if (

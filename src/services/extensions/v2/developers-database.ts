@@ -1104,10 +1104,12 @@ export class DevelopersDatabase {
         // replaying an already-pending claim on this id would otherwise
         // trigger a fresh GitHub API call every time, purely to be told the
         // INSERT's own guard rejects it as a duplicate — letting one caller
-        // burn through the shared service-level GitHub quota for free. The
-        // INSERT's WHERE NOT EXISTS guard below remains the sole source of
-        // truth for eligibility; this only ever short-circuits to the same
-        // CONFLICT outcome it would already reach, never grants anything.
+        // burn through the shared service-level GitHub quota for free. This
+        // only ever decides whether to *skip the GitHub call*; it never
+        // itself produces the response. The pending claim could resolve
+        // (get approved/rejected) between this read and the INSERT below,
+        // so only the INSERT's own guard — atomic, checked at write time —
+        // is trusted to report the actual outcome.
         const hasPendingClaim = await this.db
           .prepare(
             "SELECT 1 FROM developer_claims WHERE developer_id = ? AND claimant_id = ? AND status = 'pending'"
@@ -1115,40 +1117,32 @@ export class DevelopersDatabase {
           .bind(developerId, claimantId)
           .first();
 
-        if (hasPendingClaim) {
-          return {
-            data: null,
-            error: {
-              code: "CONFLICT",
-              message: "You already have a pending claim on this profile"
-            }
-          };
+        if (!hasPendingClaim) {
+          const check = await this.verifyGithubOwnership(
+            developerId,
+            developer.type,
+            claimantId,
+            githubToken
+          );
+
+          if ("error" in check) {
+            return { data: null, error: check.error };
+          }
+
+          if (check.mismatch) {
+            return {
+              data: null,
+              error: {
+                code: "GITHUB_MISMATCH",
+                message:
+                  "Your linked GitHub account doesn't match this developer's GitHub organization or username, so it can't be claimed automatically. Make sure you're signed in with the right GitHub account, then try again."
+              }
+            };
+          }
+
+          githubOrgVerified = check.githubOrgVerified;
+          githubVerificationNote = check.note;
         }
-
-        const check = await this.verifyGithubOwnership(
-          developerId,
-          developer.type,
-          claimantId,
-          githubToken
-        );
-
-        if ("error" in check) {
-          return { data: null, error: check.error };
-        }
-
-        if (check.mismatch) {
-          return {
-            data: null,
-            error: {
-              code: "GITHUB_MISMATCH",
-              message:
-                "Your linked GitHub account doesn't match this developer's GitHub organization or username, so it can't be claimed automatically. Make sure you're signed in with the right GitHub account, then try again."
-            }
-          };
-        }
-
-        githubOrgVerified = check.githubOrgVerified;
-        githubVerificationNote = check.note;
       }
 
       const id = crypto.randomUUID();
