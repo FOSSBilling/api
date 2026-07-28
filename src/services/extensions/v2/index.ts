@@ -838,6 +838,7 @@ extensionsV2.openapi(cancelClaimRoute, async (c) => {
 
   const { data, error } = await db.cancelClaim(id, auth.userId);
   if (error || !data) {
+    const status = error?.code === "NOT_FOUND" ? 404 : 500;
     return c.json(
       {
         error: {
@@ -845,7 +846,7 @@ extensionsV2.openapi(cancelClaimRoute, async (c) => {
           code: error?.code ?? "DATABASE_ERROR"
         }
       },
-      statusFromErrorCode(error?.code)
+      status
     );
   }
 

@@ -2163,6 +2163,70 @@ describe("Extensions API v2", () => {
       );
       expect(reject.status).toBe(403);
     });
+
+    it("lets a claimant cancel their own pending claim", async () => {
+      seedUnownedDeveloper("legacy-developer");
+      const claim = await post(
+        "/extensions/v2/developers/legacy-developer/claim",
+        await authHeaders("user-1"),
+        {}
+      );
+      const claimId = ((await claim.json()) as { result: { id: string } })
+        .result.id;
+
+      const cancel = await post(
+        `/extensions/v2/developers/claims/${claimId}/cancel`,
+        await authHeaders("user-1")
+      );
+      expect(cancel.status).toBe(200);
+      const cancelled = (await cancel.json()) as {
+        result: { id: string; cancelled: boolean };
+      };
+      expect(cancelled.result).toEqual({ id: claimId, cancelled: true });
+      expect(tables.developer_claims.has(claimId)).toBe(false);
+    });
+
+    it("rejects cancelling a claim that belongs to someone else", async () => {
+      seedUnownedDeveloper("legacy-developer");
+      const claim = await post(
+        "/extensions/v2/developers/legacy-developer/claim",
+        await authHeaders("user-1"),
+        {}
+      );
+      const claimId = ((await claim.json()) as { result: { id: string } })
+        .result.id;
+
+      const cancel = await post(
+        `/extensions/v2/developers/claims/${claimId}/cancel`,
+        await authHeaders("user-2")
+      );
+      expect(cancel.status).toBe(404);
+      expect(tables.developer_claims.has(claimId)).toBe(true);
+    });
+
+    it("rejects cancelling a claim that is no longer pending", async () => {
+      seedUnownedDeveloper("legacy-developer");
+      tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
+      const claim = await post(
+        "/extensions/v2/developers/legacy-developer/claim",
+        await authHeaders("user-1"),
+        {}
+      );
+      const claimId = ((await claim.json()) as { result: { id: string } })
+        .result.id;
+      await post(
+        `/extensions/v2/developers/claims/${claimId}/reject`,
+        await authHeaders("mod-1"),
+        { review_note: "no" }
+      );
+
+      const cancel = await post(
+        `/extensions/v2/developers/claims/${claimId}/cancel`,
+        await authHeaders("user-1")
+      );
+      expect(cancel.status).toBe(404);
+      expect(tables.developer_claims.get(claimId)?.status).toBe("rejected");
+    });
   });
 
   describe("GET /developers/{id}", () => {
@@ -2331,6 +2395,7 @@ describe("Extensions API v2", () => {
           "/developers/{id}/transfer/revoke",
           "/developers/transfers/accept",
           "/developers/{id}/claim",
+          "/developers/claims/{id}/cancel",
           "/developers/claims/mine",
           "/developers/claims",
           "/developers/claims/{id}/approve",
