@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { DatabaseResult } from "../../../lib/interfaces";
 import { ExtensionsDb } from "../../../lib/db";
-import { users } from "./db/schema";
+import { users } from "./db/external-tables";
 import { databaseError } from "./errors";
 
 export type GithubIdentity = {
