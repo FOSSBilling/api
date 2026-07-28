@@ -1,5 +1,10 @@
-import { DatabaseResult, IDatabase } from "../../../lib/interfaces";
+import {
+  DatabaseError,
+  DatabaseResult,
+  IDatabase
+} from "../../../lib/interfaces";
 import { databaseError } from "./errors";
+import { checkGithubEntityType, matchesClaimant } from "./github-verification";
 import {
   Developer,
   DeveloperClaim,
@@ -8,6 +13,7 @@ import {
   DeveloperTransfer,
   PendingDeveloperClaim
 } from "./interfaces";
+import { UsersDatabase } from "./users-database";
 
 // Matches the SQLite/D1 message for the idx_developers_owner_unique
 // violation, which is how a lost race between two concurrent first-time PUT
@@ -59,7 +65,13 @@ function parseDeveloperRow(row: Record<string, unknown>): DeveloperProfile {
       row.approved_at !== undefined &&
       (row.approved_revision == null ||
         Number(row.approved_revision) === Number(row.content_revision ?? 1)),
-    content_revision: Number(row.content_revision ?? 1)
+    content_revision: Number(row.content_revision ?? 1),
+    github_org_verified:
+      row.github_org_verified === null || row.github_org_verified === undefined
+        ? undefined
+        : row.github_org_verified === 1,
+    github_verification_note:
+      (row.github_verification_note as string | null) ?? undefined
   };
 }
 
@@ -73,7 +85,13 @@ function parseClaimRow(row: Record<string, unknown>): DeveloperClaim {
     review_note: (row.review_note as string | null) ?? undefined,
     reviewer_id: (row.reviewer_id as string | null) ?? undefined,
     created_at: row.created_at as string,
-    reviewed_at: (row.reviewed_at as string | null) ?? undefined
+    reviewed_at: (row.reviewed_at as string | null) ?? undefined,
+    github_org_verified:
+      row.github_org_verified === null || row.github_org_verified === undefined
+        ? undefined
+        : row.github_org_verified === 1,
+    github_verification_note:
+      (row.github_verification_note as string | null) ?? undefined
   };
 }
 
@@ -84,9 +102,16 @@ export class DevelopersDatabase {
     this.db = db;
   }
 
+  // githubToken — see the comment on verifyGithubOwnership(). Only consulted
+  // when creating a brand-new profile (developer.id is immutable once
+  // owned, so an update can't need re-verifying); guards against squatting
+  // on an id that matches a real GitHub org/user the caller doesn't control,
+  // the one gap claim() alone can't close since it only ever applies to
+  // rows that already exist unowned.
   async upsertOwn(
     userId: string,
-    developer: Developer
+    developer: Developer,
+    githubToken?: string
   ): Promise<DatabaseResult<DeveloperProfile>> {
     try {
       const existingOwn = await this.db
@@ -99,6 +124,9 @@ export class DevelopersDatabase {
         .bind(developer.id)
         .first<Record<string, unknown>>();
 
+      let githubOrgVerified: number | null = null;
+      let githubVerificationNote: string | null = null;
+
       let mainStmt;
       if (!existingOwn) {
         if (existingById) {
@@ -108,10 +136,35 @@ export class DevelopersDatabase {
           };
         }
 
+        const check = await this.verifyGithubOwnership(
+          developer.id,
+          developer.type,
+          userId,
+          githubToken
+        );
+
+        if ("error" in check) {
+          return { data: null, error: check.error };
+        }
+
+        if (check.mismatch) {
+          return {
+            data: null,
+            error: {
+              code: "GITHUB_MISMATCH",
+              message:
+                "This id matches a real GitHub organization or username that isn't linked to your account, so it can't be used automatically. Make sure you're signed in with the right GitHub account, or choose a different id."
+            }
+          };
+        }
+
+        githubOrgVerified = check.githubOrgVerified;
+        githubVerificationNote = check.note;
+
         mainStmt = this.db
           .prepare(
-            `INSERT INTO developers (id, type, name, url, avatar_url, contact_email, owner_user_id, approved_at, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+            `INSERT INTO developers (id, type, name, url, avatar_url, contact_email, owner_user_id, approved_at, github_org_verified, github_verification_note, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
           )
           .bind(
             developer.id,
@@ -120,7 +173,9 @@ export class DevelopersDatabase {
             developer.URL ?? null,
             developer.avatar_url ?? null,
             developer.contact_email ?? null,
-            userId
+            userId,
+            githubOrgVerified,
+            githubVerificationNote
           );
       } else {
         if (developer.id !== existingOwn.id) {
@@ -948,12 +1003,160 @@ export class DevelopersDatabase {
     };
   }
 
+  // githubToken authenticates the GitHub entity-existence lookup only (a
+  // service-level credential, raises the public rate limit) — it is never
+  // the claimant's own token, which never leaves the auth service. Shared by
+  // claim() and upsertOwn(): both need the same question answered — does a
+  // real GitHub org/user exist for this id, and if so, does the caller's own
+  // linked GitHub identity match it? A positive mismatch is the only outcome
+  // that ever blocks; no real GitHub entity for this id, or the caller
+  // having no linked GitHub identity yet, both fall back to unverified
+  // (manual moderator review), never to a block.
+  private async verifyGithubOwnership(
+    developerId: string,
+    developerType: Developer["type"],
+    callerId: string,
+    githubToken?: string
+  ): Promise<
+    | { mismatch: true }
+    | { mismatch: false; githubOrgVerified: number | null; note: string | null }
+    | { error: DatabaseError }
+  > {
+    const githubEntityType = await checkGithubEntityType(
+      developerId,
+      githubToken ?? ""
+    );
+
+    if (githubEntityType === null) {
+      // Also covers a failed lookup (rate limit, network, auth error) —
+      // checkGithubEntityType can't tell "confirmed absent" from "couldn't
+      // check", so the note can't claim to know no matching entity exists.
+      return {
+        mismatch: false,
+        githubOrgVerified: null,
+        note: "GitHub entity was not verified automatically — reviewed manually."
+      };
+    }
+
+    // A real GitHub entity exists for this id, just under the other type
+    // (e.g. a real org submitted as a "user") — this is a confirmed
+    // disagreement with GitHub, not an unknown, so it must block rather than
+    // fall back to unverified. Otherwise a caller could take a real org/user's
+    // id unverified simply by submitting the wrong type for it.
+    if (githubEntityType !== developerType) {
+      return { mismatch: true };
+    }
+
+    const identity = await new UsersDatabase(this.db).getGithubIdentity(
+      callerId
+    );
+    // A real DB/schema failure here is not the same as "caller has no linked
+    // GitHub identity" — swallowing it would silently let creation/claiming
+    // proceed unverified during an outage instead of surfacing the error.
+    if (identity.error || !identity.data) {
+      return {
+        error: identity.error ?? {
+          message: "Failed to load caller's GitHub identity",
+          code: "DATABASE_ERROR"
+        }
+      };
+    }
+    const callerIdentity = identity.data;
+
+    if (!callerIdentity.githubLogin) {
+      return {
+        mismatch: false,
+        githubOrgVerified: null,
+        note: "Caller has no linked GitHub identity yet — reviewed manually."
+      };
+    }
+
+    if (matchesClaimant(developerType, developerId, callerIdentity)) {
+      return {
+        mismatch: false,
+        githubOrgVerified: 1,
+        note: "Verified: caller's linked GitHub identity matches."
+      };
+    }
+
+    return { mismatch: true };
+  }
+
   async claim(
     developerId: string,
     claimantId: string,
-    note?: string
+    note?: string,
+    githubToken?: string
   ): Promise<DatabaseResult<DeveloperClaim>> {
     try {
+      let githubOrgVerified: number | null = null;
+      let githubVerificationNote: string | null = null;
+
+      const developer = await this.db
+        .prepare(
+          "SELECT type FROM developers WHERE id = ? AND owner_user_id IS NULL"
+        )
+        .bind(developerId)
+        .first<{ type: Developer["type"] }>();
+
+      if (developer) {
+        // Cheap short-circuit ahead of the GitHub lookup below: a claimant
+        // replaying an already-pending claim on this id would otherwise
+        // trigger a fresh GitHub API call every time, purely to be told the
+        // INSERT's own guard rejects it as a duplicate — letting one caller
+        // burn through the shared service-level GitHub quota for free. This
+        // is safe precisely because it only ever *returns* here when the
+        // read observes `pending` — it never falls through to verification
+        // or the INSERT in that case, so it can't itself create an
+        // unverified claim. Anything else (no claim yet, or one already
+        // resolved to approved/rejected) always continues through full
+        // verification below. A pending claim that resolves between this
+        // read and the response going out can make the message stale
+        // relative to that instant, but never lets a row get created
+        // without verification.
+        const hasPendingClaim = await this.db
+          .prepare(
+            "SELECT 1 FROM developer_claims WHERE developer_id = ? AND claimant_id = ? AND status = 'pending'"
+          )
+          .bind(developerId, claimantId)
+          .first();
+
+        if (hasPendingClaim) {
+          return {
+            data: null,
+            error: {
+              code: "CONFLICT",
+              message: "You already have a pending claim on this profile"
+            }
+          };
+        }
+
+        const check = await this.verifyGithubOwnership(
+          developerId,
+          developer.type,
+          claimantId,
+          githubToken
+        );
+
+        if ("error" in check) {
+          return { data: null, error: check.error };
+        }
+
+        if (check.mismatch) {
+          return {
+            data: null,
+            error: {
+              code: "GITHUB_MISMATCH",
+              message:
+                "Your linked GitHub account doesn't match this developer's GitHub organization or username, so it can't be claimed automatically. Make sure you're signed in with the right GitHub account, then try again."
+            }
+          };
+        }
+
+        githubOrgVerified = check.githubOrgVerified;
+        githubVerificationNote = check.note;
+      }
+
       const id = crypto.randomUUID();
       let result;
       try {
@@ -961,11 +1164,13 @@ export class DevelopersDatabase {
         // than a separate SELECT beforehand — a caller who loses eligibility
         // (developer gets claimed/transferred, or the caller picks up a
         // different profile) between an up-front check and the write could
-        // otherwise still slip a stale claim through.
+        // otherwise still slip a stale claim through. (The SELECT above is
+        // only used to decide the GitHub verification signal, and is always
+        // re-checked here — it can't itself grant eligibility.)
         result = await this.db
           .prepare(
-            `INSERT INTO developer_claims (id, developer_id, claimant_id, note)
-             SELECT ?, ?, ?, ?
+            `INSERT INTO developer_claims (id, developer_id, claimant_id, note, github_org_verified, github_verification_note)
+             SELECT ?, ?, ?, ?, ?, ?
              WHERE EXISTS (SELECT 1 FROM developers WHERE id = ? AND owner_user_id IS NULL)
                AND NOT EXISTS (SELECT 1 FROM developers WHERE owner_user_id = ?)`
           )
@@ -974,6 +1179,8 @@ export class DevelopersDatabase {
             developerId,
             claimantId,
             note ?? null,
+            githubOrgVerified,
+            githubVerificationNote,
             developerId,
             claimantId
           )

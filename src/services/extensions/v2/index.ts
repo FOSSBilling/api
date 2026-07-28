@@ -595,6 +595,11 @@ const upsertOwnDeveloperRoute = createRoute({
       content: { "application/json": { schema: ErrorResponseSchema } },
       description: "Missing or invalid bearer token"
     },
+    403: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description:
+        "This id matches a real GitHub organization or username that isn't linked to the caller's account"
+    },
     409: {
       content: { "application/json": { schema: ErrorResponseSchema } },
       description:
@@ -617,9 +622,18 @@ extensionsV2.openapi(upsertOwnDeveloperRoute, async (c) => {
   const platform = getPlatform(c);
   const db = new DevelopersDatabase(platform.getDatabase("DB_EXTENSIONS"));
 
-  const { data, error } = await db.upsertOwn(auth.userId, body);
+  const { data, error } = await db.upsertOwn(
+    auth.userId,
+    body,
+    platform.getEnv("GITHUB_TOKEN")
+  );
   if (error || !data) {
-    const status = error?.code === "CONFLICT" ? 409 : 500;
+    const status =
+      error?.code === "GITHUB_MISMATCH"
+        ? 403
+        : error?.code === "CONFLICT"
+          ? 409
+          : 500;
     return c.json(
       {
         error: {
@@ -729,6 +743,11 @@ const claimDeveloperRoute = createRoute({
       content: { "application/json": { schema: ErrorResponseSchema } },
       description: "No developer with that id"
     },
+    403: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description:
+        "Caller's linked GitHub account doesn't match this developer's GitHub organization or username"
+    },
     409: {
       content: { "application/json": { schema: ErrorResponseSchema } },
       description:
@@ -752,7 +771,12 @@ extensionsV2.openapi(claimDeveloperRoute, async (c) => {
   const platform = getPlatform(c);
   const db = new DevelopersDatabase(platform.getDatabase("DB_EXTENSIONS"));
 
-  const { data, error } = await db.claim(id, auth.userId, note);
+  const { data, error } = await db.claim(
+    id,
+    auth.userId,
+    note,
+    platform.getEnv("GITHUB_TOKEN")
+  );
   if (error || !data) {
     return c.json(
       {
@@ -761,7 +785,7 @@ extensionsV2.openapi(claimDeveloperRoute, async (c) => {
           code: error?.code ?? "DATABASE_ERROR"
         }
       },
-      statusFromErrorCode(error?.code)
+      error?.code === "GITHUB_MISMATCH" ? 403 : statusFromErrorCode(error?.code)
     );
   }
 

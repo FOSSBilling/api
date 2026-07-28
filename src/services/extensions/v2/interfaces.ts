@@ -144,17 +144,25 @@ export type SubmissionPayload = z.infer<typeof SubmissionPayloadSchema>;
 
 export const DeveloperProfileSchema = DeveloperSchema.extend({
   approved: z.boolean(),
-  content_revision: z.number().int().positive()
+  content_revision: z.number().int().positive(),
+  // Server-computed at creation time only — see
+  // DevelopersDatabase.verifyGithubOwnership(). Never part of the
+  // client-supplied DeveloperSchema.
+  github_org_verified: z.boolean().optional(),
+  github_verification_note: z.string().optional()
 }).openapi("DeveloperProfile");
 
 export type DeveloperProfile = z.infer<typeof DeveloperProfileSchema>;
 
 // The publicly-readable view of a developer profile: everything in
-// DeveloperProfile except contact_email, which exists for moderator/owner
-// communication and was never meant to be broadcast to anonymous callers.
+// DeveloperProfile except contact_email/content_revision (moderator/owner
+// only) and the GitHub verification signal (a moderator-review aid, not
+// meant for public consumption).
 export const PublicDeveloperSchema = DeveloperProfileSchema.omit({
   contact_email: true,
-  content_revision: true
+  content_revision: true,
+  github_org_verified: true,
+  github_verification_note: true
 }).openapi("PublicDeveloper");
 
 export type PublicDeveloper = z.infer<typeof PublicDeveloperSchema>;
@@ -287,7 +295,14 @@ export const DeveloperClaimSchema = z
     review_note: z.string().optional(),
     reviewer_id: z.string().optional(),
     created_at: z.string(),
-    reviewed_at: z.string().optional()
+    reviewed_at: z.string().optional(),
+    // Server-computed at claim() time only — never accepted from the
+    // client (see ClaimNoteSchema below). Undefined when there was no
+    // verifiable GitHub org/user for this id, or the claimant had no linked
+    // GitHub identity yet; both fall back to manual moderator review rather
+    // than gating anything.
+    github_org_verified: z.boolean().optional(),
+    github_verification_note: z.string().optional()
   })
   .openapi("DeveloperClaim");
 
