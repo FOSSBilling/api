@@ -872,6 +872,8 @@ describe("Extensions API v2", () => {
       );
 
       expect(res.status).toBe(409);
+      const body = (await res.json()) as { error: { code: string } };
+      expect(body.error.code).toBe("DEVELOPER_ID_TAKEN");
     });
 
     it("rejects changing the id on an existing profile", async () => {
