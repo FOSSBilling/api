@@ -968,6 +968,20 @@ describe("Extensions API v2", () => {
       expect(created.result.github_org_verified).toBeUndefined();
     });
 
+    it("fails creation rather than falling back to unverified when the caller's GitHub identity lookup errors", async () => {
+      mockGithubEntity("Organization");
+      tables.forceGithubIdentityLookupFailure = true;
+
+      const res = await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        { id: "acme-org", type: "organization", name: "Acme Org" }
+      );
+
+      expect(res.status).toBe(500);
+      expect(tables.developers.has("acme-org")).toBe(false);
+    });
+
     it.each(["claims", "unapproved"])(
       "rejects the reserved id %s",
       async (id) => {
@@ -1855,6 +1869,27 @@ describe("Extensions API v2", () => {
       );
       expect(second.status).toBe(409);
       expect(tables.developer_claims.size).toBe(1);
+    });
+
+    it("does not re-check GitHub when replaying an already-pending claim", async () => {
+      seedUnownedDeveloper("legacy-developer");
+
+      await post(
+        "/extensions/v2/developers/legacy-developer/claim",
+        await authHeaders("user-1"),
+        {}
+      );
+      const callsAfterFirst = vi.mocked(ghRequest).mock.calls.length;
+      expect(callsAfterFirst).toBeGreaterThan(0);
+
+      const second = await post(
+        "/extensions/v2/developers/legacy-developer/claim",
+        await authHeaders("user-1"),
+        {}
+      );
+
+      expect(second.status).toBe(409);
+      expect(vi.mocked(ghRequest).mock.calls.length).toBe(callsAfterFirst);
     });
 
     it("rejects a claim from a user who already owns a different profile", async () => {

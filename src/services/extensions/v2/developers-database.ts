@@ -1,4 +1,8 @@
-import { DatabaseResult, IDatabase } from "../../../lib/interfaces";
+import {
+  DatabaseError,
+  DatabaseResult,
+  IDatabase
+} from "../../../lib/interfaces";
 import { databaseError } from "./errors";
 import { checkGithubEntityType, matchesClaimant } from "./github-verification";
 import {
@@ -138,6 +142,10 @@ export class DevelopersDatabase {
           userId,
           githubToken
         );
+
+        if ("error" in check) {
+          return { data: null, error: check.error };
+        }
 
         if (check.mismatch) {
           return {
@@ -1012,6 +1020,7 @@ export class DevelopersDatabase {
   ): Promise<
     | { mismatch: true }
     | { mismatch: false; githubOrgVerified: number | null; note: string | null }
+    | { error: DatabaseError }
   > {
     const githubEntityType = await checkGithubEntityType(
       developerId,
@@ -1019,10 +1028,13 @@ export class DevelopersDatabase {
     );
 
     if (githubEntityType === null) {
+      // Also covers a failed lookup (rate limit, network, auth error) —
+      // checkGithubEntityType can't tell "confirmed absent" from "couldn't
+      // check", so the note can't claim to know no matching entity exists.
       return {
         mismatch: false,
         githubOrgVerified: null,
-        note: "No matching GitHub org/user found for this id — reviewed manually."
+        note: "GitHub entity was not verified automatically — reviewed manually."
       };
     }
 
@@ -1038,10 +1050,18 @@ export class DevelopersDatabase {
     const identity = await new UsersDatabase(this.db).getGithubIdentity(
       callerId
     );
-    const callerIdentity = identity.data ?? {
-      githubLogin: null,
-      githubOrgs: []
-    };
+    // A real DB/schema failure here is not the same as "caller has no linked
+    // GitHub identity" — swallowing it would silently let creation/claiming
+    // proceed unverified during an outage instead of surfacing the error.
+    if (identity.error || !identity.data) {
+      return {
+        error: identity.error ?? {
+          message: "Failed to load caller's GitHub identity",
+          code: "DATABASE_ERROR"
+        }
+      };
+    }
+    const callerIdentity = identity.data;
 
     if (!callerIdentity.githubLogin) {
       return {
@@ -1080,12 +1100,41 @@ export class DevelopersDatabase {
         .first<{ type: Developer["type"] }>();
 
       if (developer) {
+        // Cheap pre-check ahead of the GitHub lookup below: a claimant
+        // replaying an already-pending claim on this id would otherwise
+        // trigger a fresh GitHub API call every time, purely to be told the
+        // INSERT's own guard rejects it as a duplicate — letting one caller
+        // burn through the shared service-level GitHub quota for free. The
+        // INSERT's WHERE NOT EXISTS guard below remains the sole source of
+        // truth for eligibility; this only ever short-circuits to the same
+        // CONFLICT outcome it would already reach, never grants anything.
+        const hasPendingClaim = await this.db
+          .prepare(
+            "SELECT 1 FROM developer_claims WHERE developer_id = ? AND claimant_id = ? AND status = 'pending'"
+          )
+          .bind(developerId, claimantId)
+          .first();
+
+        if (hasPendingClaim) {
+          return {
+            data: null,
+            error: {
+              code: "CONFLICT",
+              message: "You already have a pending claim on this profile"
+            }
+          };
+        }
+
         const check = await this.verifyGithubOwnership(
           developerId,
           developer.type,
           claimantId,
           githubToken
         );
+
+        if ("error" in check) {
+          return { data: null, error: check.error };
+        }
 
         if (check.mismatch) {
           return {
