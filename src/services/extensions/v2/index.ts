@@ -22,6 +22,7 @@ import {
   PaginationSchema,
   PublicDeveloperSchema,
   QueueQuerySchema,
+  ReverifyQuerySchema,
   ReviewNoteOptionalSchema,
   ReviewNoteRequiredSchema,
   SubmissionPayloadSchema,
@@ -707,6 +708,7 @@ const reverifyOwnDeveloperRoute = createRoute({
     "Re-check the caller's linked GitHub identity against their own developer profile",
   security: [{ Bearer: [] }],
   middleware: [requireAuth()] as const,
+  request: { query: ReverifyQuerySchema },
   responses: {
     200: {
       content: {
@@ -737,9 +739,15 @@ const reverifyOwnDeveloperRoute = createRoute({
 
 extensionsV2.openapi(reverifyOwnDeveloperRoute, async (c) => {
   const auth = getAuth(c);
+  const { check_url } = c.req.valid("query");
+  const platform = getPlatform(c);
   const db = new DevelopersDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
 
-  const { data, error } = await db.reverifyOwn(auth.userId);
+  const { data, error } = await db.reverifyOwn(
+    auth.userId,
+    check_url,
+    platform.getEnv("GITHUB_TOKEN")
+  );
   if (error || !data) {
     const status =
       error?.code === "NOT_FOUND"

@@ -155,6 +155,15 @@ export const DeveloperProfileSchema = DeveloperSchema.extend({
   // Set whenever github_org_verified is last (re-)computed to a definitive
   // true/false — see reverifyOwn(). Absent/stale on an inconclusive check.
   github_verified_at: z.string().nullable().optional(),
+  // Whether Publisher URL matches GitHub's own on-file website for this
+  // org/user — see verifyGithubOwnership()'s urlMatchesGithubBlog() call.
+  // Only ever true or absent (never false): GitHub's website field is
+  // optional and often unset, so "doesn't match" isn't itself meaningful —
+  // there's nothing to flag, unlike github_org_verified's identity check.
+  // Computed at creation, and re-checked by the owner's own "Re-verify"
+  // action (never by the opportunistic per-login re-check, which stays
+  // GitHub-API-free by design).
+  github_url_verified: z.boolean().optional(),
   // Only populated by the moderator listAll/listUnapproved queries (see
   // DevelopersDatabase.listAll/listUnapproved) — other DeveloperProfile
   // producers (getById, create/update/claim/transfer results) don't join
@@ -183,6 +192,7 @@ export const PublicDeveloperSchema = DeveloperProfileSchema.omit({
   github_org_verified: true,
   github_verification_note: true,
   github_verified_at: true,
+  github_url_verified: true,
   unclaimed: true,
   owner_name: true,
   owner_github_login: true
@@ -351,6 +361,15 @@ export const ClaimNoteSchema = z
     note: z.string().max(500).optional()
   })
   .openapi("ClaimNote");
+
+// check_url — opt-in because it costs an extra GitHub API call (see
+// DevelopersDatabase.reverifyOwn()); only the owner's own manual "Re-verify"
+// button sets this, never the opportunistic per-login re-check.
+export const ReverifyQuerySchema = z.object({
+  check_url: z.coerce.boolean().optional().openapi({
+    param: { name: "check_url", in: "query" }
+  })
+});
 
 export const QueueQuerySchema = z.object({
   status: SubmissionStatusSchema.optional().openapi({
