@@ -60,6 +60,16 @@ export function wrapD1WithHook(real: D1Database, hook: Hook): D1Database {
     async batch<T = unknown>(
       statements: D1PreparedStatement[]
     ): Promise<D1Result<T>[]> {
+      // D1's real batch() is one opaque, atomic round-trip - there's no way
+      // for a client-side wrapper to observe or inject a fault "between"
+      // individual statements inside it, since they're never executed
+      // one-at-a-time from the caller's perspective. So every statement's
+      // hook necessarily fires before the batch is sent, not interleaved
+      // with its (real, all-or-nothing) execution. That's sufficient for
+      // faults meant to land before the batch starts (e.g. a concurrent
+      // mutation racing a guarded write), but it can't simulate "the first
+      // N statements committed, then the batch failed" - real D1 batches
+      // don't have partial commits for a hook to reproduce in the first place.
       const hooked = statements as unknown as HookedStatement[];
       for (const statement of hooked) {
         await hook(statement.sqlText);

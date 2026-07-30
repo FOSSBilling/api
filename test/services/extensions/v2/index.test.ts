@@ -647,7 +647,7 @@ describe("Extensions API v2", () => {
       expect(await countExtensions(db)).toBe(0);
     });
 
-    it("reverts to pending if the write-through fails after a successful claim", async () => {
+    it("leaves the submission pending if the extension write-through fails mid-batch", async () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await seedDeveloper("new-developer", "user-1");
 
@@ -658,6 +658,12 @@ describe("Extensions API v2", () => {
       );
       const { result } = (await created.json()) as { result: { id: string } };
 
+      // approve()'s three statements (submission status, developer, extension)
+      // run as one atomic db.batch() call, so D1 itself rolls back the whole
+      // thing on any failure - there's no app-level "revert" to test, and no
+      // way to make the earlier statements really commit before this one
+      // fails (see db-interceptor.ts). This verifies that guarantee end to
+      // end: a failure on the last statement still leaves nothing committed.
       env.DB_EXTENSIONS = wrapD1WithHook(db, (sql) => {
         if (
           sql.includes("INSERT INTO") &&
