@@ -80,7 +80,12 @@ export const developers = sqliteTable(
     approvedRevision: integer("approved_revision"),
     approvedBy: text("approved_by"),
     githubOrgVerified: integer("github_org_verified"),
-    githubVerificationNote: text("github_verification_note")
+    githubVerificationNote: text("github_verification_note"),
+    // Set whenever githubOrgVerified is (re-)computed to a definitive 0/1 —
+    // see DevelopersDatabase.reverifyOwn(). Left null/stale on an
+    // inconclusive check (no linked GitHub identity), same as
+    // githubOrgVerified itself.
+    githubVerifiedAt: text("github_verified_at")
   },
   (table) => [
     uniqueIndex("idx_developers_owner_unique").on(table.ownerUserId),

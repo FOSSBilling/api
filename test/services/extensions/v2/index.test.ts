@@ -1362,6 +1362,104 @@ describe("Extensions API v2", () => {
     });
   });
 
+  describe("POST /developers/me/reverify", () => {
+    it("re-verifies and refreshes the timestamp when the owner's GitHub org still matches", async () => {
+      await insertDeveloper(db, {
+        id: "dev-developer",
+        type: "organization",
+        name: "Dev",
+        url: null,
+        owner_user_id: "user-1",
+        github_org_verified: 1,
+        github_verification_note: "Verified: caller's linked GitHub identity matches.",
+        github_verified_at: "2020-01-01T00:00:00.000Z"
+      });
+      await insertUser(db, {
+        id: "user-1",
+        github_login: "someone",
+        github_orgs: JSON.stringify(["dev-developer"])
+      });
+
+      const res = await post(
+        "/extensions/v2/developers/me/reverify",
+        await authHeaders("user-1")
+      );
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        result: { github_org_verified?: boolean; github_verified_at?: string };
+      };
+      expect(body.result.github_org_verified).toBe(true);
+      expect(body.result.github_verified_at).not.toBe("2020-01-01T00:00:00.000Z");
+    });
+
+    it("flips to unverified when the owner's GitHub org membership no longer matches", async () => {
+      await insertDeveloper(db, {
+        id: "dev-developer",
+        type: "organization",
+        name: "Dev",
+        url: null,
+        owner_user_id: "user-1",
+        github_org_verified: 1,
+        github_verification_note: "Verified: caller's linked GitHub identity matches.",
+        github_verified_at: "2020-01-01T00:00:00.000Z"
+      });
+      // No longer a member of dev-developer's org.
+      await insertUser(db, {
+        id: "user-1",
+        github_login: "someone",
+        github_orgs: JSON.stringify([])
+      });
+
+      const res = await post(
+        "/extensions/v2/developers/me/reverify",
+        await authHeaders("user-1")
+      );
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        result: { github_org_verified?: boolean; github_verification_note?: string };
+      };
+      expect(body.result.github_org_verified).toBe(false);
+      expect(body.result.github_verification_note).toBe(
+        "No longer verified: caller's linked GitHub identity no longer matches."
+      );
+    });
+
+    it("verifies for the first time on re-check when the caller now has a matching linked GitHub identity", async () => {
+      await insertDeveloper(db, {
+        id: "dev-developer",
+        type: "organization",
+        name: "Dev",
+        url: null,
+        owner_user_id: "user-1"
+        // github_org_verified left null — never checked before (e.g. created
+        // before this feature existed, or the token was down at claim time).
+      });
+      await insertUser(db, {
+        id: "user-1",
+        github_login: "someone",
+        github_orgs: JSON.stringify(["dev-developer"])
+      });
+
+      const res = await post(
+        "/extensions/v2/developers/me/reverify",
+        await authHeaders("user-1")
+      );
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        result: { github_org_verified?: boolean };
+      };
+      expect(body.result.github_org_verified).toBe(true);
+    });
+
+    it("404s when the caller doesn't own a developer profile", async () => {
+      const res = await post(
+        "/extensions/v2/developers/me/reverify",
+        await authHeaders("user-1")
+      );
+      expect(res.status).toBe(404);
+    });
+  });
+
   describe("developer moderation", () => {
     it("binds approval to the exact profile revision reviewed", async () => {
       await put(
@@ -2076,6 +2174,46 @@ describe("Extensions API v2", () => {
       expect(rejectedClaim?.review_note).toBe(
         "Another claim on this profile was approved"
       );
+    });
+
+    it("copies the claim's GitHub verification onto the developer row it transfers ownership to", async () => {
+      await insertDeveloper(db, {
+        id: "legacy-developer",
+        type: "organization",
+        name: "Legacy Developer",
+        url: null,
+        owner_user_id: null
+      });
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      mockGithubEntity("Organization");
+      await insertUser(db, {
+        id: "user-1",
+        github_login: "someone",
+        github_orgs: JSON.stringify(["legacy-developer"])
+      });
+
+      const claim = await post(
+        "/extensions/v2/developers/legacy-developer/claim",
+        await authHeaders("user-1"),
+        {}
+      );
+      const claimId = ((await claim.json()) as { result: { id: string } })
+        .result.id;
+      const claimRow = await getDeveloperClaim(db, claimId);
+      expect(claimRow?.github_org_verified).toBe(1);
+
+      const approve = await post(
+        `/extensions/v2/developers/claims/${claimId}/approve`,
+        await authHeaders("mod-1")
+      );
+      expect(approve.status).toBe(200);
+
+      const developerRow = await getDeveloper(db, "legacy-developer");
+      expect(developerRow?.github_org_verified).toBe(1);
+      expect(developerRow?.github_verification_note).toBe(
+        "Verified: caller's linked GitHub identity matches."
+      );
+      expect(developerRow?.github_verified_at).toBe(claimRow?.created_at);
     });
 
     it("lets a moderator reject a claim with a review note, leaving the developer unowned", async () => {

@@ -1,0 +1,1 @@
+ALTER TABLE `developers` ADD `github_verified_at` text;

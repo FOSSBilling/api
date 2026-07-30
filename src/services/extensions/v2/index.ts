@@ -699,6 +699,58 @@ extensionsV2.openapi(deleteOwnDeveloperRoute, async (c) => {
   return c.json({ result: data }, 200);
 });
 
+const reverifyOwnDeveloperRoute = createRoute({
+  method: "post",
+  path: "/developers/me/reverify",
+  tags: ["Developers"],
+  summary:
+    "Re-check the caller's linked GitHub identity against their own developer profile",
+  security: [{ Bearer: [] }],
+  middleware: [requireAuth()] as const,
+  responses: {
+    200: {
+      content: {
+        "application/json": {
+          schema: z.object({ result: DeveloperProfileSchema })
+        }
+      },
+      description: "Verification re-checked (result may be verified or not)"
+    },
+    401: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Missing or invalid bearer token"
+    },
+    404: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Caller has no developer profile"
+    },
+    500: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Database error"
+    }
+  }
+});
+
+extensionsV2.openapi(reverifyOwnDeveloperRoute, async (c) => {
+  const auth = getAuth(c);
+  const db = new DevelopersDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
+
+  const { data, error } = await db.reverifyOwn(auth.userId);
+  if (error || !data) {
+    return c.json(
+      {
+        error: {
+          message: error?.message ?? "Unable to re-verify developer profile",
+          code: error?.code ?? "DATABASE_ERROR"
+        }
+      },
+      error?.code === "NOT_FOUND" ? 404 : 500
+    );
+  }
+
+  return c.json({ result: data }, 200);
+});
+
 function statusFromOwnershipErrorCode(code?: string): 403 | 404 | 500 {
   if (code === "NOT_FOUND") return 404;
   if (code === "FORBIDDEN") return 403;
