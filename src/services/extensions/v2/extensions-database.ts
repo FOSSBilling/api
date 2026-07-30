@@ -8,7 +8,8 @@ import {
   License,
   Release,
   Repository,
-  sortReleasesDescending
+  sortReleasesDescending,
+  parseJSON
 } from "./interfaces";
 
 // LEFT JOIN so an extension whose developer row is missing (author_id
@@ -116,17 +117,6 @@ export class ExtensionsDatabase {
 
     return { data: parseExtensionRow(row), error: null };
   }
-}
-
-function parseJSON<T>(value: unknown, fallback: T): T {
-  if (typeof value === "string") {
-    try {
-      return JSON.parse(value) as T;
-    } catch {
-      return fallback;
-    }
-  }
-  return value !== undefined && value !== null ? (value as T) : fallback;
 }
 
 function parseExtensionRow(row: ExtensionRow): Extension {

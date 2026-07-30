@@ -1,7 +1,8 @@
 import { z } from "@hono/zod-openapi";
 import { sortReleasesDescending } from "../../../lib/releases";
+import { parseJSON } from "../../../lib/json";
 
-export { sortReleasesDescending };
+export { sortReleasesDescending, parseJSON };
 
 export const EXTENSION_TYPES = [
   "mod",
