@@ -91,6 +91,12 @@ beforeEach(async () => {
   await resetExtensionsDb(db);
   vi.clearAllMocks();
   mockGithubEntityNotFound();
+
+  // check_url's rate-limit key (see reverifyOwnDeveloperRoute) would
+  // otherwise leak across tests that reuse "user-1" — CACHE_KV isn't reset
+  // by resetExtensionsDb since it isn't part of the D1 database.
+  const { keys } = await env.CACHE_KV.list();
+  await Promise.all(keys.map((key) => env.CACHE_KV.delete(key.name)));
 });
 
 afterEach(() => {
@@ -1751,6 +1757,104 @@ describe("Extensions API v2", () => {
         result: { github_url_verified?: boolean };
       };
       expect(body.result.github_url_verified).toBe(true);
+    });
+
+    it("rate-limits repeated ?check_url=true calls from the same caller", async () => {
+      mockGithubEntity("Organization", "https://acme.example");
+      await insertDeveloper(db, {
+        id: "dev-developer",
+        type: "organization",
+        name: "Dev",
+        url: "https://acme.example",
+        owner_user_id: "user-1"
+      });
+      await insertUser(db, {
+        id: "user-1",
+        github_login: "someone",
+        github_orgs: JSON.stringify(["dev-developer"])
+      });
+
+      const first = await post(
+        "/extensions/v2/developers/me/reverify?check_url=true",
+        await authHeaders("user-1")
+      );
+      expect(first.status).toBe(200);
+      vi.clearAllMocks();
+
+      const second = await post(
+        "/extensions/v2/developers/me/reverify?check_url=true",
+        await authHeaders("user-1")
+      );
+      expect(second.status).toBe(429);
+      const body = (await second.json()) as { error: { code: string } };
+      expect(body.error.code).toBe("RATE_LIMITED");
+      // The whole point — no GitHub API call for the blocked attempt.
+      expect(ghRequest).not.toHaveBeenCalled();
+    });
+
+    it("doesn't rate-limit reverify calls that don't use ?check_url", async () => {
+      await insertDeveloper(db, {
+        id: "dev-developer",
+        type: "organization",
+        name: "Dev",
+        url: "https://acme.example",
+        owner_user_id: "user-1"
+      });
+      await insertUser(db, {
+        id: "user-1",
+        github_login: "someone",
+        github_orgs: JSON.stringify(["dev-developer"])
+      });
+
+      const first = await post(
+        "/extensions/v2/developers/me/reverify",
+        await authHeaders("user-1")
+      );
+      const second = await post(
+        "/extensions/v2/developers/me/reverify",
+        await authHeaders("user-1")
+      );
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(200);
+    });
+
+    it("rate-limits ?check_url=true per caller, not globally", async () => {
+      mockGithubEntity("Organization", "https://acme.example");
+      await insertDeveloper(db, {
+        id: "dev-developer",
+        type: "organization",
+        name: "Dev",
+        url: "https://acme.example",
+        owner_user_id: "user-1"
+      });
+      await insertDeveloper(db, {
+        id: "other-developer",
+        type: "organization",
+        name: "Other",
+        url: "https://acme.example",
+        owner_user_id: "user-2"
+      });
+      await insertUser(db, {
+        id: "user-1",
+        github_login: "someone",
+        github_orgs: JSON.stringify(["dev-developer"])
+      });
+      await insertUser(db, {
+        id: "user-2",
+        github_login: "someone-else",
+        github_orgs: JSON.stringify(["other-developer"])
+      });
+
+      const first = await post(
+        "/extensions/v2/developers/me/reverify?check_url=true",
+        await authHeaders("user-1")
+      );
+      const second = await post(
+        "/extensions/v2/developers/me/reverify?check_url=true",
+        await authHeaders("user-2")
+      );
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(200);
     });
 
     it("clears a previously-verified Publisher URL when identity no longer matches", async () => {
