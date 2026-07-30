@@ -364,11 +364,16 @@ export const ClaimNoteSchema = z
 
 // check_url — opt-in because it costs an extra GitHub API call (see
 // DevelopersDatabase.reverifyOwn()); only the owner's own manual "Re-verify"
-// button sets this, never the opportunistic per-login re-check.
+// button sets this, never the opportunistic per-login re-check. Not
+// z.coerce.boolean(): that coerces the non-empty string "false" to true.
 export const ReverifyQuerySchema = z.object({
-  check_url: z.coerce.boolean().optional().openapi({
-    param: { name: "check_url", in: "query" }
-  })
+  check_url: z
+    .enum(["true", "false"])
+    .optional()
+    .transform((value) => value === "true")
+    .openapi({
+      param: { name: "check_url", in: "query" }
+    })
 });
 
 export const QueueQuerySchema = z.object({

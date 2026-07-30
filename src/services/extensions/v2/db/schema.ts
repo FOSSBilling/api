@@ -107,9 +107,13 @@ export const developers = sqliteTable(
       "developers_github_org_verified_check",
       sql`${table.githubOrgVerified} IN (0, 1)`
     ),
+    // = 1 rather than IN (0, 1): this column is documented to only ever be
+    // 1 or NULL, never 0 (see interfaces.ts's DeveloperProfileSchema
+    // comment) — SQLite's CHECK already treats NULL as satisfying `= 1`, so
+    // this enforces that invariant instead of just validating it's a 0/1.
     check(
       "developers_github_url_verified_check",
-      sql`${table.githubUrlVerified} IN (0, 1)`
+      sql`${table.githubUrlVerified} = 1`
     )
   ]
 );

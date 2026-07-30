@@ -234,13 +234,25 @@ export class DevelopersDatabase {
         // values for that. The one exception: a profile that's currently
         // GitHub org/user verified keeps its approval across edits — that
         // verification is an independently-computed identity signal (this
-        // write never touches githubOrgVerified) strong enough on its own
-        // that re-queuing for manual review on every edit isn't worth the
-        // moderator load.
+        // write never touches githubOrgVerified, except when the id's type
+        // changes below) strong enough on its own that re-queuing for
+        // manual review on every edit isn't worth the moderator load.
         // approvedRevision is bumped in lockstep with contentRevision in
         // that branch so the existing approval keeps matching (see
         // parseDeveloperRow) instead of silently going stale.
-        const keepsApproval = existingOwn.githubOrgVerified === 1;
+        //
+        // A type change invalidates the existing GitHub verification
+        // outright — matchesClaimant() compares differently per type (org
+        // membership vs. username), so a signal computed for the old type
+        // says nothing about the new one. Falls back to approval clearing
+        // and manual review, same as any other unverified edit.
+        const typeChanged = developer.type !== existingOwn.type;
+        // A URL change invalidates only the URL signal, not identity —
+        // github_url_verified describes whether *this* URL matches GitHub's
+        // on-file website, so a stale URL can't still be "verified" once
+        // it's no longer the URL being served.
+        const urlChanged = (developer.URL ?? null) !== existingOwn.url;
+        const keepsApproval = !typeChanged && existingOwn.githubOrgVerified === 1;
 
         mainStmt = this.db
           .update(developers)
@@ -254,6 +266,16 @@ export class DevelopersDatabase {
             ...(keepsApproval
               ? { approvedRevision: sql`content_revision + 1` }
               : { approvedAt: null, approvedRevision: null, approvedBy: null }),
+            ...(typeChanged
+              ? {
+                  githubOrgVerified: null,
+                  githubVerificationNote: null,
+                  githubVerifiedAt: null,
+                  githubUrlVerified: null
+                }
+              : urlChanged
+                ? { githubUrlVerified: null }
+                : {}),
             updatedAt: sql`CURRENT_TIMESTAMP`
           })
           .where(
@@ -1122,17 +1144,29 @@ export class DevelopersDatabase {
 
       // Only bothers with the extra GitHub API call when the identity match
       // above still holds — a URL "verified" against an entity the caller no
-      // longer controls wouldn't mean anything. matches:false below clears
-      // any previously-set githubUrlVerified for the same reason.
+      // longer controls wouldn't mean anything. When identity no longer
+      // matches, any previously-set githubUrlVerified is cleared below
+      // (cheap — no API call needed, same as githubOrgVerified itself).
       let githubUrlVerified: number | null = null;
-      if (checkUrl && matches) {
+      let writeUrlVerified = false;
+      if (!matches) {
+        writeUrlVerified = true;
+      } else if (checkUrl) {
         const entity = await checkGithubEntity(row.id, githubToken ?? "");
-        githubUrlVerified = urlMatchesGithubBlog(
-          row.url ?? undefined,
-          entity?.blog ?? null
-        )
-          ? 1
-          : null;
+        // A failed lookup (rate limit, network, auth error) is inconclusive,
+        // not a disproof — checkGithubEntity can't tell the two apart (see
+        // its own docstring) — so it leaves the stored signal untouched
+        // rather than clearing a real prior verification over a transient
+        // failure. Only a successful lookup, of the entity type the profile
+        // itself claims, gets to overwrite it.
+        if (entity) {
+          writeUrlVerified = true;
+          githubUrlVerified =
+            entity.type === row.type &&
+            urlMatchesGithubBlog(row.url ?? undefined, entity.blog)
+              ? 1
+              : null;
+        }
       }
 
       // Re-asserts ownership in the write itself (not just the lookup
@@ -1144,7 +1178,7 @@ export class DevelopersDatabase {
         .update(developers)
         .set({
           githubOrgVerified: matches ? 1 : 0,
-          ...(checkUrl ? { githubUrlVerified } : {}),
+          ...(writeUrlVerified ? { githubUrlVerified } : {}),
           githubVerificationNote: matches
             ? "Verified: caller's linked GitHub identity matches."
             : "No longer verified: caller's linked GitHub identity no longer matches.",

@@ -60,7 +60,9 @@ export async function checkGithubEntity(
 
 // Loose match on host + path, ignoring scheme/www/trailing slash — GitHub's
 // own `blog` field is freeform text (often missing a scheme, e.g.
-// "example.com"), so an exact string compare would miss real matches.
+// "example.com"), so an exact string compare would miss real matches. Host
+// is compared case-insensitively (including port, since a non-default port
+// is a different site) and path case-sensitively, per URL semantics.
 export function urlMatchesGithubBlog(
   publisherUrl: string | undefined,
   blog: string | null
@@ -69,17 +71,15 @@ export function urlMatchesGithubBlog(
   const normalize = (value: string) => {
     try {
       const url = new URL(/^https?:\/\//i.test(value) ? value : `https://${value}`);
-      return `${url.hostname.replace(/^www\./i, "")}${url.pathname}`.replace(
-        /\/$/,
-        ""
-      );
+      const host = url.host.replace(/^www\./i, "").toLowerCase();
+      return `${host}${url.pathname}`.replace(/\/$/, "");
     } catch {
       return null;
     }
   };
   const a = normalize(publisherUrl);
   const b = normalize(blog);
-  return a !== null && a.toLowerCase() === b?.toLowerCase();
+  return a !== null && a === b;
 }
 
 // developerId/claimant.githubOrgs are already lowercase (developerId() and

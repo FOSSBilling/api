@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "c29f670e-ac1b-4862-8c5e-02e76da09f7c",
+  "id": "8586d529-d397-4f43-a85b-512b5cec826a",
   "prevId": "c53ca3ad-a28f-48ec-887e-5c0e8096f6c0",
   "tables": {
     "developer_claims": {
@@ -569,7 +569,7 @@
         },
         "developers_github_url_verified_check": {
           "name": "developers_github_url_verified_check",
-          "value": "\"developers\".\"github_url_verified\" IN (0, 1)"
+          "value": "\"developers\".\"github_url_verified\" = 1"
         }
       }
     },
