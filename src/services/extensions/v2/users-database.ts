@@ -34,7 +34,9 @@ export class UsersDatabase {
   // only populated once the claimant has signed in via GitHub since the
   // auth service started requesting the read:org scope; absent columns/rows
   // resolve to "no linked identity" rather than throwing.
-  async getGithubIdentity(userId: string): Promise<DatabaseResult<GithubIdentity>> {
+  async getGithubIdentity(
+    userId: string
+  ): Promise<DatabaseResult<GithubIdentity>> {
     try {
       const [row] = await this.db
         .select({

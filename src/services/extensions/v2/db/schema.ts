@@ -71,12 +71,8 @@ export const developers = sqliteTable(
     // (see developers-database.ts) - the literal default is never actually
     // read, but it's part of the real column definition so it's kept here
     // for baseline-diff fidelity against the existing database.
-    createdAt: text("created_at")
-      .notNull()
-      .default("1970-01-01T00:00:00.000Z"),
-    updatedAt: text("updated_at")
-      .notNull()
-      .default("1970-01-01T00:00:00.000Z"),
+    createdAt: text("created_at").notNull().default("1970-01-01T00:00:00.000Z"),
+    updatedAt: text("updated_at").notNull().default("1970-01-01T00:00:00.000Z"),
     avatarUrl: text("avatar_url"),
     contactEmail: text("contact_email"),
     ownershipEpoch: integer("ownership_epoch").notNull().default(1),
@@ -120,7 +116,9 @@ export const extensionSubmissions = sqliteTable(
     payload: text("payload").notNull(),
     reviewerId: text("reviewer_id").references(() => users.id),
     reviewNote: text("review_note"),
-    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
     reviewedAt: text("reviewed_at"),
     ownershipEpoch: integer("ownership_epoch").notNull().default(1),
     targetKey: text("target_key")
@@ -177,7 +175,9 @@ export const developerHistory = sqliteTable(
     changedBy: text("changed_by")
       .notNull()
       .references(() => users.id),
-    changedAt: text("changed_at").notNull().default(sql`CURRENT_TIMESTAMP`)
+    changedAt: text("changed_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`)
   },
   (table) => [
     index("idx_developer_history_developer_changed_at").on(
@@ -198,7 +198,9 @@ export const developerTransfers = sqliteTable(
     createdBy: text("created_by")
       .notNull()
       .references(() => users.id),
-    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
     expiresAt: text("expires_at").notNull(),
     acceptedBy: text("accepted_by").references(() => users.id),
     acceptedAt: text("accepted_at"),
@@ -227,7 +229,9 @@ export const developerClaims = sqliteTable(
     note: text("note"),
     reviewNote: text("review_note"),
     reviewerId: text("reviewer_id").references(() => users.id),
-    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
     reviewedAt: text("reviewed_at"),
     githubOrgVerified: integer("github_org_verified"),
     githubVerificationNote: text("github_verification_note")

@@ -1,4 +1,12 @@
-import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  beforeEach,
+  afterEach,
+  vi
+} from "vitest";
 import {
   createExecutionContext,
   waitOnExecutionContext
@@ -1323,7 +1331,10 @@ describe("Extensions API v2", () => {
       // deleteTransfersStmt is the first statement in deleteOwn's batch, so
       // firing this before it reproduces the race exactly.
       env.DB_EXTENSIONS = wrapD1WithHook(db, async (sql) => {
-        if (sql.includes("DELETE FROM") && sql.includes("developer_transfers")) {
+        if (
+          sql.includes("DELETE FROM") &&
+          sql.includes("developer_transfers")
+        ) {
           await bumpDeveloperOwnership(db, "dev-developer", "user-2");
         }
       });

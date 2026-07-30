@@ -6,7 +6,10 @@ import {
 import { env } from "cloudflare:workers";
 import app from "../../../../src/app";
 import { getExtensionsDb } from "../../../../src/lib/db";
-import { developers, extensions } from "../../../../src/services/extensions/v2/db/schema";
+import {
+  developers,
+  extensions
+} from "../../../../src/services/extensions/v2/db/schema";
 import { applyTestMigrations } from "../../../utils/apply-migrations";
 
 const testExtensionRows = [
@@ -168,12 +171,7 @@ describe("Extensions API v1", () => {
 
     it("should return 404 for unknown extension", async () => {
       const ctx = createExecutionContext();
-      const res = await app.request(
-        "/extensions/v1/nonexistent",
-        {},
-        env,
-        ctx
-      );
+      const res = await app.request("/extensions/v1/nonexistent", {}, env, ctx);
       await waitOnExecutionContext(ctx);
 
       expect(res.status).toBe(404);

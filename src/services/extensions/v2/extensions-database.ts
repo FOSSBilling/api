@@ -81,7 +81,9 @@ export class ExtensionsDatabase {
         .select(EXTENSION_COLUMNS)
         .from(extensions)
         .leftJoin(developers, eq(extensions.authorId, developers.id));
-      rows = conditions.length ? await query.where(and(...conditions)) : await query;
+      rows = conditions.length
+        ? await query.where(and(...conditions))
+        : await query;
     } catch (error) {
       return databaseError("list", error);
     }

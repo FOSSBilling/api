@@ -1513,7 +1513,7 @@ extensionsV2.get(
     agent: {
       disabled: true
     },
-    documentDownloadType: 'none',
+    documentDownloadType: "none",
     hideClientButton: true,
     hideModels: true,
     hiddenClients: {
@@ -1526,20 +1526,20 @@ extensionsV2.get(
       java: true,
       js: ["axios", "jquery", "ofetch"],
       kotlin: true,
-      node: ['axios', 'ofetch', 'undici'],
+      node: ["axios", "ofetch", "undici"],
       objc: true,
       ocaml: true,
-      php: ['guzzle', 'laravel'],
+      php: ["guzzle", "laravel"],
       powershell: true,
       python: true,
       r: true,
       ruby: true,
       rust: true,
-      shell: ['httpie'],
-      swift: true,
+      shell: ["httpie"],
+      swift: true
     },
     telemetry: false
-  }),
+  })
 );
 
 export default extensionsV2;

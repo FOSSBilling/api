@@ -96,8 +96,12 @@ export interface DeveloperHistoryRow {
 // which is fine here since this only ever runs against a test-local D1,
 // never anywhere the append-only guarantee actually matters.
 async function clearDeveloperHistory(db: D1Database): Promise<void> {
-  await db.prepare("DROP TRIGGER IF EXISTS trg_developer_history_no_update").run();
-  await db.prepare("DROP TRIGGER IF EXISTS trg_developer_history_no_delete").run();
+  await db
+    .prepare("DROP TRIGGER IF EXISTS trg_developer_history_no_update")
+    .run();
+  await db
+    .prepare("DROP TRIGGER IF EXISTS trg_developer_history_no_delete")
+    .run();
   await db.prepare("DELETE FROM developer_history").run();
   await db
     .prepare(
@@ -168,7 +172,10 @@ export async function insertUser(
 // Satisfies a users(id) FK minimally, without clobbering a richer row
 // insertUser() may set up separately (before or after this runs).
 export async function ensureUser(db: D1Database, id: string): Promise<void> {
-  await db.prepare("INSERT OR IGNORE INTO users (id) VALUES (?)").bind(id).run();
+  await db
+    .prepare("INSERT OR IGNORE INTO users (id) VALUES (?)")
+    .bind(id)
+    .run();
 }
 
 export async function insertDeveloper(
@@ -327,7 +334,9 @@ export async function hasDeveloper(
 }
 
 export async function listDevelopers(db: D1Database): Promise<DeveloperRow[]> {
-  const result = await db.prepare("SELECT * FROM developers").all<DeveloperRow>();
+  const result = await db
+    .prepare("SELECT * FROM developers")
+    .all<DeveloperRow>();
   return result.results ?? [];
 }
 
@@ -355,7 +364,9 @@ export async function countSubmissions(db: D1Database): Promise<number> {
   return row?.count ?? 0;
 }
 
-export async function listSubmissions(db: D1Database): Promise<SubmissionRow[]> {
+export async function listSubmissions(
+  db: D1Database
+): Promise<SubmissionRow[]> {
   const result = await db
     .prepare("SELECT * FROM extension_submissions")
     .all<SubmissionRow>();
@@ -418,7 +429,9 @@ export async function listDeveloperHistory(
 
 // Used by the expired-token test in place of directly mutating a stored
 // row object (there's no in-memory row to mutate against real D1).
-export async function expireAllDeveloperTransfers(db: D1Database): Promise<void> {
+export async function expireAllDeveloperTransfers(
+  db: D1Database
+): Promise<void> {
   await db
     .prepare("UPDATE developer_transfers SET expires_at = ?")
     .bind("2000-01-01 00:00:00")

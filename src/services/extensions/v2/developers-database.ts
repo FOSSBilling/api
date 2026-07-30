@@ -280,7 +280,10 @@ export class DevelopersDatabase {
         .select()
         .from(developers)
         .where(
-          and(eq(developers.id, developer.id), eq(developers.ownerUserId, userId))
+          and(
+            eq(developers.id, developer.id),
+            eq(developers.ownerUserId, userId)
+          )
         );
       if (!current) {
         return {
@@ -488,7 +491,10 @@ export class DevelopersDatabase {
   async listAll(): Promise<DatabaseResult<DeveloperProfile[]>> {
     let rows;
     try {
-      rows = await this.db.select().from(developers).orderBy(asc(developers.name));
+      rows = await this.db
+        .select()
+        .from(developers)
+        .orderBy(asc(developers.name));
     } catch (error) {
       return databaseError("listAll", error);
     }
@@ -526,7 +532,10 @@ export class DevelopersDatabase {
           approvedBy: reviewerId
         })
         .where(
-          and(eq(developers.id, id), eq(developers.contentRevision, expectedRevision))
+          and(
+            eq(developers.id, id),
+            eq(developers.contentRevision, expectedRevision)
+          )
         );
     } catch (error) {
       return databaseError("approve", error);
@@ -1078,9 +1087,7 @@ export class DevelopersDatabase {
                AND NOT EXISTS (SELECT 1 FROM ${developers} WHERE owner_user_id = ${claimantId})
         `);
       } catch (error) {
-        if (
-          isPendingClaimConflict(error)
-        ) {
+        if (isPendingClaimConflict(error)) {
           return {
             data: null,
             error: {
@@ -1143,7 +1150,8 @@ export class DevelopersDatabase {
       data: rows.map((row) => ({
         ...parseClaimRow(row.claim),
         developer_name: row.developerName,
-        developer_type: row.developerType as PendingDeveloperClaim["developer_type"]
+        developer_type:
+          row.developerType as PendingDeveloperClaim["developer_type"]
       })),
       error: null
     };
@@ -1227,9 +1235,16 @@ export class DevelopersDatabase {
     try {
       claimResult = await this.db
         .update(developerClaims)
-        .set({ status: "approved", reviewerId, reviewedAt: sql`CURRENT_TIMESTAMP` })
+        .set({
+          status: "approved",
+          reviewerId,
+          reviewedAt: sql`CURRENT_TIMESTAMP`
+        })
         .where(
-          and(eq(developerClaims.id, claimId), eq(developerClaims.status, "pending"))
+          and(
+            eq(developerClaims.id, claimId),
+            eq(developerClaims.status, "pending")
+          )
         );
     } catch (error) {
       return databaseError("approveClaim", error);
@@ -1268,7 +1283,10 @@ export class DevelopersDatabase {
           updatedAt: sql`CURRENT_TIMESTAMP`
         })
         .where(
-          and(eq(developers.id, claim.developer_id), isNull(developers.ownerUserId))
+          and(
+            eq(developers.id, claim.developer_id),
+            isNull(developers.ownerUserId)
+          )
         );
       const rejectOthersStmt = toD1Statement(this.db.$client, {
         sql: `UPDATE developer_claims SET status = 'rejected', reviewer_id = ?, reviewed_at = CURRENT_TIMESTAMP,
@@ -1317,7 +1335,10 @@ export class DevelopersDatabase {
           reviewedAt: sql`CURRENT_TIMESTAMP`
         })
         .where(
-          and(eq(developerClaims.id, claimId), eq(developerClaims.status, "pending"))
+          and(
+            eq(developerClaims.id, claimId),
+            eq(developerClaims.status, "pending")
+          )
         );
     } catch (error) {
       return databaseError("rejectClaim", error);

@@ -100,24 +100,17 @@
       "indexes": {
         "idx_central_alerts_type": {
           "name": "idx_central_alerts_type",
-          "columns": [
-            "type"
-          ],
+          "columns": ["type"],
           "isUnique": false
         },
         "idx_central_alerts_version_range": {
           "name": "idx_central_alerts_version_range",
-          "columns": [
-            "min_fossbilling_version",
-            "max_fossbilling_version"
-          ],
+          "columns": ["min_fossbilling_version", "max_fossbilling_version"],
           "isUnique": false
         },
         "idx_central_alerts_datetime": {
           "name": "idx_central_alerts_datetime",
-          "columns": [
-            "datetime"
-          ],
+          "columns": ["datetime"],
           "isUnique": false
         }
       },

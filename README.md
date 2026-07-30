@@ -71,10 +71,11 @@ npm install
    GITHUB_TOKEN="your-token"
    ```
 
-2. Initialize the local D1 database:
+2. Apply migrations to the local D1 databases:
 
    ```bash
-   npm run init:db
+   npm run migrate:extensions-v2:local
+   npm run migrate:central-alerts:local
    ```
 
 3. (Optional) Store an update token in KV for `/versions/v1/update`:

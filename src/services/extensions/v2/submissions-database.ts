@@ -1,11 +1,7 @@
 import { and, asc, desc, eq, gt, lt, or, sql } from "drizzle-orm";
 import { DatabaseResult } from "../../../lib/interfaces";
 import { ExtensionsDb } from "../../../lib/db";
-import {
-  extensionSubmissions,
-  developers,
-  extensions
-} from "./db/schema";
+import { extensionSubmissions, developers, extensions } from "./db/schema";
 import { databaseError, errorMessageChain } from "./errors";
 import { toD1Statement } from "./d1-batch";
 import { Submission, SubmissionPayload, SubmissionStatus } from "./interfaces";
@@ -135,10 +131,7 @@ export class SubmissionsDatabase {
           .from(developers)
           .where(eq(developers.id, existingExtension.authorId));
 
-        if (
-          !existingDeveloper ||
-          existingDeveloper.ownerUserId !== callerId
-        ) {
+        if (!existingDeveloper || existingDeveloper.ownerUserId !== callerId) {
           return {
             data: null,
             error: {
@@ -268,7 +261,10 @@ export class SubmissionsDatabase {
         .select(SUBMISSION_COLUMNS)
         .from(extensionSubmissions)
         .where(and(...conditions))
-        .orderBy(desc(extensionSubmissions.createdAt), desc(extensionSubmissions.id))
+        .orderBy(
+          desc(extensionSubmissions.createdAt),
+          desc(extensionSubmissions.id)
+        )
         .limit(limit + 1);
     } catch (error) {
       return databaseError("listBySubmitter", error);
@@ -320,7 +316,10 @@ export class SubmissionsDatabase {
         .select(SUBMISSION_COLUMNS)
         .from(extensionSubmissions)
         .where(and(...conditions))
-        .orderBy(asc(extensionSubmissions.createdAt), asc(extensionSubmissions.id))
+        .orderBy(
+          asc(extensionSubmissions.createdAt),
+          asc(extensionSubmissions.id)
+        )
         .limit(limit + 1);
     } catch (error) {
       return databaseError("listQueue", error);

@@ -1,5 +1,11 @@
 import { sql } from "drizzle-orm";
-import { sqliteTable, text, integer, index, check } from "drizzle-orm/sqlite-core";
+import {
+  sqliteTable,
+  text,
+  integer,
+  index,
+  check
+} from "drizzle-orm/sqlite-core";
 
 // Bootstrapped historically via db/init.sql + scripts/init-db.ts
 // (`wrangler d1 execute --file`), not wrangler's migrations mechanism.
