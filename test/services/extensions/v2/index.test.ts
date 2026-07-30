@@ -91,12 +91,6 @@ beforeEach(async () => {
   await resetExtensionsDb(db);
   vi.clearAllMocks();
   mockGithubEntityNotFound();
-
-  // check_url's rate-limit key (see reverifyOwnDeveloperRoute) would
-  // otherwise leak across tests that reuse "user-1" — CACHE_KV isn't reset
-  // by resetExtensionsDb since it isn't part of the D1 database.
-  const { keys } = await env.CACHE_KV.list();
-  await Promise.all(keys.map((key) => env.CACHE_KV.delete(key.name)));
 });
 
 afterEach(() => {
@@ -1857,6 +1851,74 @@ describe("Extensions API v2", () => {
       expect(second.status).toBe(200);
     });
 
+    it("only lets one of two concurrent ?check_url=true requests through", async () => {
+      mockGithubEntity("Organization", "https://acme.example");
+      await insertDeveloper(db, {
+        id: "dev-developer",
+        type: "organization",
+        name: "Dev",
+        url: "https://acme.example",
+        owner_user_id: "user-1"
+      });
+      await insertUser(db, {
+        id: "user-1",
+        github_login: "someone",
+        github_orgs: JSON.stringify(["dev-developer"])
+      });
+
+      const headers = await authHeaders("user-1");
+      const [first, second] = await Promise.all([
+        post("/extensions/v2/developers/me/reverify?check_url=true", headers),
+        post("/extensions/v2/developers/me/reverify?check_url=true", headers)
+      ]);
+
+      const statuses = [first.status, second.status].sort();
+      expect(statuses).toEqual([200, 429]);
+    });
+
+    it("does not persist a URL verification computed against a stale URL", async () => {
+      mockGithubEntity("Organization", "https://acme.example");
+      await insertDeveloper(db, {
+        id: "dev-developer",
+        type: "organization",
+        name: "Dev",
+        url: "https://acme.example",
+        owner_user_id: "user-1"
+      });
+      await insertUser(db, {
+        id: "user-1",
+        github_login: "someone",
+        github_orgs: JSON.stringify(["dev-developer"])
+      });
+
+      // Fires just before reverifyOwn's final write (identified by
+      // touching github_verified_at, which only that statement sets) — the
+      // Publisher URL changes between the check and the write, same shape
+      // as the existing ownership-race test above.
+      env.DB_EXTENSIONS = wrapD1WithHook(db, async (sql) => {
+        if (sql.includes("developers") && sql.includes("github_verified_at")) {
+          await db
+            .prepare("UPDATE developers SET url = ? WHERE id = ?")
+            .bind("https://different.example", "dev-developer")
+            .run();
+        }
+      });
+
+      const res = await post(
+        "/extensions/v2/developers/me/reverify?check_url=true",
+        await authHeaders("user-1")
+      );
+      env.DB_EXTENSIONS = db;
+
+      expect(res.status).toBe(409);
+      expect((await getDeveloper(db, "dev-developer"))?.github_url_verified).toBe(
+        null
+      );
+      expect((await getDeveloper(db, "dev-developer"))?.url).toBe(
+        "https://different.example"
+      );
+    });
+
     it("clears a previously-verified Publisher URL when identity no longer matches", async () => {
       mockGithubEntity("Organization", "https://acme.example");
       await insertDeveloper(db, {
@@ -1944,9 +2006,20 @@ describe("Extensions API v2", () => {
       );
       expect(res.status).toBe(200);
       const body = (await res.json()) as {
-        result: { github_url_verified?: boolean };
+        result: {
+          github_org_verified?: boolean;
+          github_url_verified?: boolean;
+          github_verification_note?: string;
+        };
       };
       expect(body.result.github_url_verified).toBeUndefined();
+      // The same discrepancy that rules out the URL match also undermines
+      // the identity match itself — matchesClaimant() alone can't catch
+      // this since it never queries GitHub's actual current entity type.
+      expect(body.result.github_org_verified).toBe(false);
+      expect(body.result.github_verification_note).toBe(
+        "No longer verified: GitHub's on-file entity type no longer matches this profile."
+      );
     });
 
     it("preserves an existing Publisher URL verification when the GitHub lookup fails", async () => {

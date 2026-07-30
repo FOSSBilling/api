@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, or, sql } from "drizzle-orm";
 import { DatabaseError, DatabaseResult } from "../../../lib/interfaces";
 import { ExtensionsDb } from "../../../lib/db";
 import {
@@ -26,6 +26,14 @@ import {
   PendingDeveloperClaim
 } from "./interfaces";
 import { UsersDatabase } from "./users-database";
+
+// How often reverifyOwn's check_url path is allowed to spend a real GitHub
+// API call per caller — that call uses the shared service-level
+// GITHUB_TOKEN (see verifyGithubOwnership's comment), so an unbounded
+// number of clicks from one caller could crowd out everyone else's
+// GitHub-dependent requests. See reverifyOwn's own comment for how this is
+// enforced atomically.
+const URL_CHECK_COOLDOWN_SECONDS = 60;
 
 // Matches the SQLite/D1 message for the idx_developers_owner_unique
 // violation, which is how a lost race between two concurrent first-time PUT
@@ -1116,6 +1124,39 @@ export class DevelopersDatabase {
         };
       }
 
+      if (checkUrl) {
+        // Atomic conditional UPDATE, not a read-then-write — the WHERE
+        // clause only matches (and thus only "wins") when the cooldown is
+        // absent or already expired, so two concurrent check_url requests
+        // can't both pass. This is the only reason check_url spends a real
+        // GitHub API call, so it's the only path that needs this.
+        const cooldown = await this.db
+          .update(developers)
+          .set({
+            urlCheckCooldownUntil: sql`datetime('now', ${`+${URL_CHECK_COOLDOWN_SECONDS} seconds`})`
+          })
+          .where(
+            and(
+              eq(developers.id, row.id),
+              eq(developers.ownerUserId, userId),
+              or(
+                isNull(developers.urlCheckCooldownUntil),
+                sql`${developers.urlCheckCooldownUntil} < CURRENT_TIMESTAMP`
+              )
+            )
+          );
+        if (!cooldown.meta?.changes) {
+          return {
+            data: null,
+            error: {
+              message:
+                "Please wait a minute before re-checking your Publisher URL again.",
+              code: "RATE_LIMITED"
+            }
+          };
+        }
+      }
+
       const identity = await new UsersDatabase(this.db).getGithubIdentity(
         userId
       );
@@ -1149,6 +1190,14 @@ export class DevelopersDatabase {
       // (cheap — no API call needed, same as githubOrgVerified itself).
       let githubUrlVerified: number | null = null;
       let writeUrlVerified = false;
+      // Set when a fresh lookup (only possible when checkUrl actually ran)
+      // finds GitHub's *current* entity type no longer matches the
+      // profile's own type — matchesClaimant() above only compares
+      // login/org membership, it never confirms the entity is still the
+      // type the profile claims, unlike creation-time verification. This
+      // downgrades the identity signal too, not just the URL one, since the
+      // same discrepancy undermines both.
+      let identityTypeContradicted = false;
       if (!matches) {
         writeUrlVerified = true;
       } else if (checkUrl) {
@@ -1157,42 +1206,63 @@ export class DevelopersDatabase {
         // not a disproof — checkGithubEntity can't tell the two apart (see
         // its own docstring) — so it leaves the stored signal untouched
         // rather than clearing a real prior verification over a transient
-        // failure. Only a successful lookup, of the entity type the profile
-        // itself claims, gets to overwrite it.
+        // failure. Only a successful lookup gets to overwrite it.
         if (entity) {
           writeUrlVerified = true;
-          githubUrlVerified =
-            entity.type === row.type &&
-            urlMatchesGithubBlog(row.url ?? undefined, entity.blog)
+          if (entity.type !== row.type) {
+            identityTypeContradicted = true;
+          } else {
+            githubUrlVerified = urlMatchesGithubBlog(
+              row.url ?? undefined,
+              entity.blog
+            )
               ? 1
               : null;
+          }
         }
       }
+      const verified = matches && !identityTypeContradicted;
 
       // Re-asserts ownership in the write itself (not just the lookup
       // above) — otherwise a transfer/claim landing in between would let
       // this write a result computed from the *former* owner's GitHub
       // identity onto the profile after it's changed hands. Same guard as
-      // upsertOwn's update branch.
+      // upsertOwn's update branch. Also re-asserts the URL is still the one
+      // just checked — otherwise a concurrent Publisher URL edit landing in
+      // between would let a stale URL comparison get written as if it
+      // described the new URL.
       const result = await this.db
         .update(developers)
         .set({
-          githubOrgVerified: matches ? 1 : 0,
+          githubOrgVerified: verified ? 1 : 0,
           ...(writeUrlVerified ? { githubUrlVerified } : {}),
-          githubVerificationNote: matches
+          githubVerificationNote: verified
             ? "Verified: caller's linked GitHub identity matches."
-            : "No longer verified: caller's linked GitHub identity no longer matches.",
+            : identityTypeContradicted
+              ? "No longer verified: GitHub's on-file entity type no longer matches this profile."
+              : "No longer verified: caller's linked GitHub identity no longer matches.",
           githubVerifiedAt: sql`CURRENT_TIMESTAMP`
         })
         .where(
-          and(eq(developers.id, row.id), eq(developers.ownerUserId, userId))
+          and(
+            eq(developers.id, row.id),
+            eq(developers.ownerUserId, userId),
+            ...(writeUrlVerified
+              ? [
+                  row.url === null
+                    ? isNull(developers.url)
+                    : eq(developers.url, row.url)
+                ]
+              : [])
+          )
         );
 
       if (!result.meta?.changes) {
         return {
           data: null,
           error: {
-            message: "Developer ownership changed while re-verifying",
+            message:
+              "Developer ownership or Publisher URL changed while re-verifying",
             code: "CONFLICT"
           }
         };

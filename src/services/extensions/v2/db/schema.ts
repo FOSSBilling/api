@@ -90,7 +90,12 @@ export const developers = sqliteTable(
     // github-verification.ts's urlMatchesGithubBlog(). Only ever 1 or null,
     // never 0 (see the schema comment on interfaces.ts's
     // DeveloperProfileSchema.github_url_verified for why).
-    githubUrlVerified: integer("github_url_verified")
+    githubUrlVerified: integer("github_url_verified"),
+    // Atomic per-owner cooldown gating reverifyOwn()'s check_url path (the
+    // one that spends a real GitHub API call) — set via a conditional
+    // UPDATE, not read-then-write, so concurrent requests can't both pass.
+    // Null until the first check_url reverify.
+    urlCheckCooldownUntil: text("url_check_cooldown_until")
   },
   (table) => [
     uniqueIndex("idx_developers_owner_unique").on(table.ownerUserId),

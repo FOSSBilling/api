@@ -741,39 +741,11 @@ const reverifyOwnDeveloperRoute = createRoute({
   }
 });
 
-// How often the owner's own manual "Re-verify" button is allowed to spend
-// an extra GitHub API call on the URL check — that call uses the shared
-// service-level GITHUB_TOKEN (see verifyGithubOwnership's comment), so an
-// unbounded number of clicks from one caller could crowd out everyone
-// else's GitHub-dependent requests. The opportunistic per-login path never
-// hits this since it never sets check_url.
-const CHECK_URL_COOLDOWN_SECONDS = 60;
-
 extensionsV2.openapi(reverifyOwnDeveloperRoute, async (c) => {
   const auth = getAuth(c);
   const { check_url } = c.req.valid("query");
   const platform = getPlatform(c);
   const db = new DevelopersDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
-
-  if (check_url) {
-    const cache = platform.getCache("CACHE_KV");
-    const rateLimitKey = `reverify-url-check:${auth.userId}`;
-    if (await cache.get(rateLimitKey)) {
-      return c.json(
-        {
-          error: {
-            message:
-              "Please wait a minute before re-checking your Publisher URL again.",
-            code: "RATE_LIMITED"
-          }
-        },
-        429
-      );
-    }
-    await cache.put(rateLimitKey, "1", {
-      expirationTtl: CHECK_URL_COOLDOWN_SECONDS
-    });
-  }
 
   const { data, error } = await db.reverifyOwn(
     auth.userId,
@@ -786,7 +758,9 @@ extensionsV2.openapi(reverifyOwnDeveloperRoute, async (c) => {
         ? 404
         : error?.code === "CONFLICT"
           ? 409
-          : 500;
+          : error?.code === "RATE_LIMITED"
+            ? 429
+            : 500;
     return c.json(
       {
         error: {
