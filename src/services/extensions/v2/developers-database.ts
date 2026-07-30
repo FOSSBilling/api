@@ -1,9 +1,16 @@
+import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
+import { DatabaseError, DatabaseResult } from "../../../lib/interfaces";
+import { ExtensionsDb } from "../../../lib/db";
 import {
-  DatabaseError,
-  DatabaseResult,
-  IDatabase
-} from "../../../lib/interfaces";
-import { databaseError } from "./errors";
+  developers,
+  developerHistory,
+  developerTransfers,
+  developerClaims,
+  extensions,
+  extensionSubmissions
+} from "./db/schema";
+import { databaseError, errorMessageChain } from "./errors";
+import { toD1Statement } from "./d1-batch";
 import { checkGithubEntityType, matchesClaimant } from "./github-verification";
 import {
   Developer,
@@ -18,16 +25,18 @@ import { UsersDatabase } from "./users-database";
 // Matches the SQLite/D1 message for the idx_developers_owner_unique
 // violation, which is how a lost race between two concurrent first-time PUT
 // /developers/me requests (same caller, different ids) surfaces.
-function isOwnerConflict(message: string | undefined): boolean {
-  return !!message && /UNIQUE constraint failed.*owner_user_id/i.test(message);
+function isOwnerConflict(error: unknown): boolean {
+  return /UNIQUE constraint failed.*owner_user_id/i.test(
+    errorMessageChain(error)
+  );
 }
 
 // Matches the SQLite/D1 message for the idx_developer_claims_pending_unique
 // violation, which is how a duplicate claim() call while one is already
 // pending surfaces.
-function isPendingClaimConflict(message: string | undefined): boolean {
-  return (
-    !!message && /UNIQUE constraint failed.*developer_claims/i.test(message)
+function isPendingClaimConflict(error: unknown): boolean {
+  return /UNIQUE constraint failed.*developer_claims/i.test(
+    errorMessageChain(error)
   );
 }
 
@@ -52,55 +61,52 @@ function toSqliteDatetime(date: Date): string {
   return date.toISOString().slice(0, 19).replace("T", " ");
 }
 
-function parseDeveloperRow(row: Record<string, unknown>): DeveloperProfile {
+type DeveloperRow = typeof developers.$inferSelect;
+type ClaimRow = typeof developerClaims.$inferSelect;
+
+function parseDeveloperRow(row: DeveloperRow): DeveloperProfile {
   return {
-    id: row.id as string,
+    id: row.id,
     type: row.type as DeveloperProfile["type"],
-    name: row.name as string,
-    URL: (row.url as string | null) ?? undefined,
-    avatar_url: (row.avatar_url as string | null) ?? undefined,
-    contact_email: (row.contact_email as string | null) ?? undefined,
+    name: row.name,
+    URL: row.url ?? undefined,
+    avatar_url: row.avatarUrl ?? undefined,
+    contact_email: row.contactEmail ?? undefined,
     approved:
-      row.approved_at !== null &&
-      row.approved_at !== undefined &&
-      (row.approved_revision == null ||
-        Number(row.approved_revision) === Number(row.content_revision ?? 1)),
-    content_revision: Number(row.content_revision ?? 1),
+      row.approvedAt !== null &&
+      row.approvedAt !== undefined &&
+      (row.approvedRevision == null ||
+        Number(row.approvedRevision) === Number(row.contentRevision ?? 1)),
+    content_revision: Number(row.contentRevision ?? 1),
     github_org_verified:
-      row.github_org_verified === null || row.github_org_verified === undefined
+      row.githubOrgVerified === null || row.githubOrgVerified === undefined
         ? undefined
-        : row.github_org_verified === 1,
-    github_verification_note:
-      (row.github_verification_note as string | null) ?? undefined
+        : row.githubOrgVerified === 1,
+    github_verification_note: row.githubVerificationNote ?? undefined
   };
 }
 
-function parseClaimRow(row: Record<string, unknown>): DeveloperClaim {
+function parseClaimRow(row: ClaimRow): DeveloperClaim {
   return {
-    id: row.id as string,
-    developer_id: row.developer_id as string,
-    claimant_id: row.claimant_id as string,
+    id: row.id,
+    developer_id: row.developerId,
+    claimant_id: row.claimantId,
     status: row.status as DeveloperClaim["status"],
-    note: (row.note as string | null) ?? undefined,
-    review_note: (row.review_note as string | null) ?? undefined,
-    reviewer_id: (row.reviewer_id as string | null) ?? undefined,
-    created_at: row.created_at as string,
-    reviewed_at: (row.reviewed_at as string | null) ?? undefined,
+    note: row.note ?? undefined,
+    review_note: row.reviewNote ?? undefined,
+    reviewer_id: row.reviewerId ?? undefined,
+    created_at: row.createdAt,
+    reviewed_at: row.reviewedAt ?? undefined,
     github_org_verified:
-      row.github_org_verified === null || row.github_org_verified === undefined
+      row.githubOrgVerified === null || row.githubOrgVerified === undefined
         ? undefined
-        : row.github_org_verified === 1,
-    github_verification_note:
-      (row.github_verification_note as string | null) ?? undefined
+        : row.githubOrgVerified === 1,
+    github_verification_note: row.githubVerificationNote ?? undefined
   };
 }
 
 export class DevelopersDatabase {
-  private db: IDatabase;
-
-  constructor(db: IDatabase) {
-    this.db = db;
-  }
+  constructor(private db: ExtensionsDb) {}
 
   // githubToken — see the comment on verifyGithubOwnership(). Only consulted
   // when creating a brand-new profile (developer.id is immutable once
@@ -114,15 +120,15 @@ export class DevelopersDatabase {
     githubToken?: string
   ): Promise<DatabaseResult<DeveloperProfile>> {
     try {
-      const existingOwn = await this.db
-        .prepare("SELECT * FROM developers WHERE owner_user_id = ?")
-        .bind(userId)
-        .first<Record<string, unknown>>();
+      const [existingOwn] = await this.db
+        .select()
+        .from(developers)
+        .where(eq(developers.ownerUserId, userId));
 
-      const existingById = await this.db
-        .prepare("SELECT * FROM developers WHERE id = ?")
-        .bind(developer.id)
-        .first<Record<string, unknown>>();
+      const [existingById] = await this.db
+        .select()
+        .from(developers)
+        .where(eq(developers.id, developer.id));
 
       let githubOrgVerified: number | null = null;
       let githubVerificationNote: string | null = null;
@@ -168,22 +174,20 @@ export class DevelopersDatabase {
         githubOrgVerified = check.githubOrgVerified;
         githubVerificationNote = check.note;
 
-        mainStmt = this.db
-          .prepare(
-            `INSERT INTO developers (id, type, name, url, avatar_url, contact_email, owner_user_id, approved_at, github_org_verified, github_verification_note, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
-          )
-          .bind(
-            developer.id,
-            developer.type,
-            developer.name,
-            developer.URL ?? null,
-            developer.avatar_url ?? null,
-            developer.contact_email ?? null,
-            userId,
-            githubOrgVerified,
-            githubVerificationNote
-          );
+        mainStmt = this.db.insert(developers).values({
+          id: developer.id,
+          type: developer.type,
+          name: developer.name,
+          url: developer.URL ?? null,
+          avatarUrl: developer.avatar_url ?? null,
+          contactEmail: developer.contact_email ?? null,
+          ownerUserId: userId,
+          approvedAt: null,
+          githubOrgVerified,
+          githubVerificationNote,
+          createdAt: sql`CURRENT_TIMESTAMP`,
+          updatedAt: sql`CURRENT_TIMESTAMP`
+        });
       } else {
         if (developer.id !== existingOwn.id) {
           return {
@@ -199,56 +203,58 @@ export class DevelopersDatabase {
         // changed — the reviewed content just got overwritten, so the old
         // approval no longer applies. Not worth diffing old vs. new values.
         mainStmt = this.db
-          .prepare(
-            `UPDATE developers
-             SET type = ?, name = ?, url = ?, avatar_url = ?, contact_email = ?,
-                 content_revision = content_revision + 1,
-                 approved_at = NULL, approved_revision = NULL, approved_by = NULL,
-                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = ? AND owner_user_id = ?`
-          )
-          .bind(
-            developer.type,
-            developer.name,
-            developer.URL ?? null,
-            developer.avatar_url ?? null,
-            developer.contact_email ?? null,
-            developer.id,
-            userId
+          .update(developers)
+          .set({
+            type: developer.type,
+            name: developer.name,
+            url: developer.URL ?? null,
+            avatarUrl: developer.avatar_url ?? null,
+            contactEmail: developer.contact_email ?? null,
+            contentRevision: sql`content_revision + 1`,
+            approvedAt: null,
+            approvedRevision: null,
+            approvedBy: null,
+            updatedAt: sql`CURRENT_TIMESTAMP`
+          })
+          .where(
+            and(
+              eq(developers.id, developer.id),
+              eq(developers.ownerUserId, userId)
+            )
           );
       }
 
-      if (!this.db.batch) {
-        return databaseError(
-          "upsertOwn",
-          new Error("Database adapter does not support batch operations")
-        );
-      }
-
-      const historyStmt = this.db
-        .prepare(
-          `INSERT INTO developer_history (id, developer_id, type, name, url, changed_by, changed_at)
-           SELECT ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP
-           WHERE changes() = 1`
-        )
-        .bind(
+      // Batched via the raw D1 client ($client - see toD1Statement's
+      // comment): drizzle-orm 0.45.2's D1 batch() throws
+      // "Cannot read properties of undefined (reading 'bind')" for any
+      // db.run(sql\`...\`) item that has bound params (confirmed via an
+      // isolated repro against real D1 - its prepared-query wrapper for
+      // raw sql lacks the .stmt property batch() unconditionally reads).
+      // Gated on changes() = 1 (the immediately preceding batch statement)
+      // rather than a query-builder insert, since there's no FROM table to
+      // build this against - it's a conditional literal-values insert.
+      const historyStmt = toD1Statement(this.db.$client, {
+        sql: `INSERT INTO developer_history (id, developer_id, type, name, url, changed_by, changed_at)
+              SELECT ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP
+              WHERE changes() = 1`,
+        params: [
           crypto.randomUUID(),
           developer.id,
           developer.type,
           developer.name,
           developer.URL ?? null,
           userId
-        );
+        ]
+      });
 
       let results;
       try {
-        results = (await this.db.batch([mainStmt, historyStmt])) as Array<{
-          success: boolean;
-          error?: string;
-          meta?: { changes?: number };
-        }>;
+        results = await this.db.$client.batch([
+          toD1Statement(this.db.$client, mainStmt.toSQL()),
+          historyStmt
+        ]);
       } catch (error) {
-        if (isOwnerConflict(error instanceof Error ? error.message : "")) {
+        if (isOwnerConflict(error)) {
           return {
             data: null,
             error: {
@@ -258,23 +264,6 @@ export class DevelopersDatabase {
           };
         }
         return databaseError("upsertOwn", error);
-      }
-
-      const failed = results.find((r) => !r.success);
-      if (failed) {
-        if (isOwnerConflict(failed.error)) {
-          return {
-            data: null,
-            error: {
-              message: "You already have a developer profile",
-              code: "CONFLICT"
-            }
-          };
-        }
-        return databaseError(
-          "upsertOwn",
-          new Error(failed.error || "Database write failed")
-        );
       }
 
       if (!results[0]?.meta?.changes) {
@@ -287,10 +276,12 @@ export class DevelopersDatabase {
         };
       }
 
-      const current = await this.db
-        .prepare("SELECT * FROM developers WHERE id = ? AND owner_user_id = ?")
-        .bind(developer.id, userId)
-        .first<Record<string, unknown>>();
+      const [current] = await this.db
+        .select()
+        .from(developers)
+        .where(
+          and(eq(developers.id, developer.id), eq(developers.ownerUserId, userId))
+        );
       if (!current) {
         return {
           data: null,
@@ -313,19 +304,19 @@ export class DevelopersDatabase {
     developerId: string,
     userId: string
   ): Promise<{ code: "NOT_FOUND" | "CONFLICT"; message: string }> {
-    const developer = await this.db
-      .prepare("SELECT owner_user_id FROM developers WHERE id = ?")
-      .bind(developerId)
-      .first<{ owner_user_id: string | null }>();
+    const [developer] = await this.db
+      .select({ ownerUserId: developers.ownerUserId })
+      .from(developers)
+      .where(eq(developers.id, developerId));
 
-    if (!developer || developer.owner_user_id !== userId) {
+    if (!developer || developer.ownerUserId !== userId) {
       return { code: "NOT_FOUND", message: "Developer not found" };
     }
 
-    const extensionCount = await this.db
-      .prepare("SELECT COUNT(*) AS count FROM extensions WHERE author_id = ?")
-      .bind(developerId)
-      .first<{ count: number }>();
+    const [extensionCount] = await this.db
+      .select({ count: sql<number>`COUNT(*)` })
+      .from(extensions)
+      .where(eq(extensions.authorId, developerId));
     const extensionsCount = extensionCount?.count ?? 0;
     if (extensionsCount > 0) {
       return {
@@ -334,12 +325,15 @@ export class DevelopersDatabase {
       };
     }
 
-    const pendingCount = await this.db
-      .prepare(
-        "SELECT COUNT(*) AS count FROM extension_submissions WHERE developer_id = ? AND status = 'pending'"
-      )
-      .bind(developerId)
-      .first<{ count: number }>();
+    const [pendingCount] = await this.db
+      .select({ count: sql<number>`COUNT(*)` })
+      .from(extensionSubmissions)
+      .where(
+        and(
+          eq(extensionSubmissions.developerId, developerId),
+          eq(extensionSubmissions.status, "pending")
+        )
+      );
     if ((pendingCount?.count ?? 0) > 0) {
       return {
         code: "CONFLICT",
@@ -372,23 +366,16 @@ export class DevelopersDatabase {
     userId: string
   ): Promise<DatabaseResult<{ id: string; deleted: true }>> {
     try {
-      const developer = await this.db
-        .prepare("SELECT id FROM developers WHERE owner_user_id = ?")
-        .bind(userId)
-        .first<{ id: string }>();
+      const [developer] = await this.db
+        .select({ id: developers.id })
+        .from(developers)
+        .where(eq(developers.ownerUserId, userId));
 
       if (!developer) {
         return {
           data: null,
           error: { message: "Developer not found", code: "NOT_FOUND" }
         };
-      }
-
-      if (!this.db.batch) {
-        return databaseError(
-          "deleteOwn",
-          new Error("Database adapter does not support batch operations")
-        );
       }
 
       // Every statement re-checks eligibility (still owned by this caller,
@@ -400,78 +387,67 @@ export class DevelopersDatabase {
       // repeated on all three statements — not just the last — so they're
       // all-or-nothing: if it fails, nothing here is touched, instead of
       // transfers/claims being deleted out from under a profile whose own
-      // deletion then gets blocked.
-      const deleteTransfersStmt = this.db
-        .prepare(
-          `DELETE FROM developer_transfers
-           WHERE developer_id = ?
-             AND EXISTS (
-               SELECT 1 FROM developers
-               WHERE developers.id = developer_transfers.developer_id
-                 AND developers.owner_user_id = ?
-                 AND NOT EXISTS (SELECT 1 FROM extensions WHERE extensions.author_id = developers.id)
-                 AND NOT EXISTS (
-                   SELECT 1 FROM extension_submissions
-                   WHERE extension_submissions.developer_id = developers.id
-                     AND extension_submissions.status = 'pending'
-                 )
-             )`
-        )
-        .bind(developer.id, userId);
+      // deletion then gets blocked. Kept as raw sql via $client (see
+      // toD1Statement): the correlated EXISTS subqueries reference the
+      // outer statement's own table name, which the query builder can't
+      // express, and this batch needs the raw-D1 escape hatch regardless
+      // (see upsertOwn's historyStmt comment).
+      const deleteTransfersStmt = toD1Statement(this.db.$client, {
+        sql: `DELETE FROM developer_transfers
+              WHERE developer_id = ?
+                AND EXISTS (
+                  SELECT 1 FROM developers
+                  WHERE developers.id = developer_transfers.developer_id
+                    AND developers.owner_user_id = ?
+                    AND NOT EXISTS (SELECT 1 FROM extensions WHERE extensions.author_id = developers.id)
+                    AND NOT EXISTS (
+                      SELECT 1 FROM extension_submissions
+                      WHERE extension_submissions.developer_id = developers.id
+                        AND extension_submissions.status = 'pending'
+                    )
+                )`,
+        params: [developer.id, userId]
+      });
 
-      const deleteClaimsStmt = this.db
-        .prepare(
-          `DELETE FROM developer_claims
-           WHERE developer_id = ?
-             AND EXISTS (
-               SELECT 1 FROM developers
-               WHERE developers.id = developer_claims.developer_id
-                 AND developers.owner_user_id = ?
-                 AND NOT EXISTS (SELECT 1 FROM extensions WHERE extensions.author_id = developers.id)
-                 AND NOT EXISTS (
-                   SELECT 1 FROM extension_submissions
-                   WHERE extension_submissions.developer_id = developers.id
-                     AND extension_submissions.status = 'pending'
-                 )
-             )`
-        )
-        .bind(developer.id, userId);
+      const deleteClaimsStmt = toD1Statement(this.db.$client, {
+        sql: `DELETE FROM developer_claims
+              WHERE developer_id = ?
+                AND EXISTS (
+                  SELECT 1 FROM developers
+                  WHERE developers.id = developer_claims.developer_id
+                    AND developers.owner_user_id = ?
+                    AND NOT EXISTS (SELECT 1 FROM extensions WHERE extensions.author_id = developers.id)
+                    AND NOT EXISTS (
+                      SELECT 1 FROM extension_submissions
+                      WHERE extension_submissions.developer_id = developers.id
+                        AND extension_submissions.status = 'pending'
+                    )
+                )`,
+        params: [developer.id, userId]
+      });
 
-      const deleteDeveloperStmt = this.db
-        .prepare(
-          `DELETE FROM developers
-           WHERE id = ?
-             AND owner_user_id = ?
-             AND NOT EXISTS (SELECT 1 FROM extensions WHERE extensions.author_id = developers.id)
-             AND NOT EXISTS (
-               SELECT 1 FROM extension_submissions
-               WHERE extension_submissions.developer_id = developers.id
-                 AND extension_submissions.status = 'pending'
-             )`
-        )
-        .bind(developer.id, userId);
+      const deleteDeveloperStmt = toD1Statement(this.db.$client, {
+        sql: `DELETE FROM developers
+              WHERE id = ?
+                AND owner_user_id = ?
+                AND NOT EXISTS (SELECT 1 FROM extensions WHERE extensions.author_id = developers.id)
+                AND NOT EXISTS (
+                  SELECT 1 FROM extension_submissions
+                  WHERE extension_submissions.developer_id = developers.id
+                    AND extension_submissions.status = 'pending'
+                )`,
+        params: [developer.id, userId]
+      });
 
       let results;
       try {
-        results = (await this.db.batch([
+        results = await this.db.$client.batch([
           deleteTransfersStmt,
           deleteClaimsStmt,
           deleteDeveloperStmt
-        ])) as Array<{
-          success: boolean;
-          error?: string;
-          meta?: { changes?: number };
-        }>;
+        ]);
       } catch (error) {
         return databaseError("deleteOwn", error);
-      }
-
-      const failed = results.find((r) => !r.success);
-      if (failed) {
-        return databaseError(
-          "deleteOwn",
-          new Error(failed.error || "Database write failed")
-        );
       }
 
       const [, , developerResult] = results;
@@ -490,10 +466,10 @@ export class DevelopersDatabase {
 
   async getById(id: string): Promise<DatabaseResult<DeveloperProfile>> {
     try {
-      const row = await this.db
-        .prepare("SELECT * FROM developers WHERE id = ?")
-        .bind(id)
-        .first<Record<string, unknown>>();
+      const [row] = await this.db
+        .select()
+        .from(developers)
+        .where(eq(developers.id, id));
       if (!row) {
         return {
           data: null,
@@ -510,51 +486,29 @@ export class DevelopersDatabase {
   }
 
   async listAll(): Promise<DatabaseResult<DeveloperProfile[]>> {
-    let result;
+    let rows;
     try {
-      result = await this.db
-        .prepare("SELECT * FROM developers ORDER BY name")
-        .all<Record<string, unknown>>();
+      rows = await this.db.select().from(developers).orderBy(asc(developers.name));
     } catch (error) {
       return databaseError("listAll", error);
     }
 
-    if (!result.success) {
-      return databaseError(
-        "listAll",
-        new Error(result.error || "Database query failed")
-      );
-    }
-
-    return {
-      data: (result.results ?? []).map(parseDeveloperRow),
-      error: null
-    };
+    return { data: rows.map(parseDeveloperRow), error: null };
   }
 
   async listUnapproved(): Promise<DatabaseResult<DeveloperProfile[]>> {
-    let result;
+    let rows;
     try {
-      result = await this.db
-        .prepare(
-          "SELECT * FROM developers WHERE approved_at IS NULL ORDER BY created_at ASC"
-        )
-        .all<Record<string, unknown>>();
+      rows = await this.db
+        .select()
+        .from(developers)
+        .where(isNull(developers.approvedAt))
+        .orderBy(asc(developers.createdAt));
     } catch (error) {
       return databaseError("listUnapproved", error);
     }
 
-    if (!result.success) {
-      return databaseError(
-        "listUnapproved",
-        new Error(result.error || "Database query failed")
-      );
-    }
-
-    return {
-      data: (result.results ?? []).map(parseDeveloperRow),
-      error: null
-    };
+    return { data: rows.map(parseDeveloperRow), error: null };
   }
 
   async approve(
@@ -565,24 +519,17 @@ export class DevelopersDatabase {
     let result;
     try {
       result = await this.db
-        .prepare(
-          `UPDATE developers
-           SET approved_at = CURRENT_TIMESTAMP,
-               approved_revision = content_revision,
-               approved_by = ?
-           WHERE id = ? AND content_revision = ?`
-        )
-        .bind(reviewerId, id, expectedRevision)
-        .run();
+        .update(developers)
+        .set({
+          approvedAt: sql`CURRENT_TIMESTAMP`,
+          approvedRevision: sql`content_revision`,
+          approvedBy: reviewerId
+        })
+        .where(
+          and(eq(developers.id, id), eq(developers.contentRevision, expectedRevision))
+        );
     } catch (error) {
       return databaseError("approve", error);
-    }
-
-    if (!result.success) {
-      return databaseError(
-        "approve",
-        new Error(result.error || "Database query failed")
-      );
     }
 
     if (!result.meta?.changes) {
@@ -611,38 +558,36 @@ export class DevelopersDatabase {
   async listHistory(
     developerId: string
   ): Promise<DatabaseResult<DeveloperHistoryEntry[]>> {
-    let result;
+    let rows;
     try {
-      result = await this.db
-        .prepare(
-          // CURRENT_TIMESTAMP has only second resolution, so two writes in
-          // the same second tie on changed_at; rowid (insertion order)
-          // breaks the tie so "newest first" is never ambiguous.
-          `SELECT developer_id, type, name, url, changed_by, changed_at
-           FROM developer_history WHERE developer_id = ?
-           ORDER BY changed_at DESC, rowid DESC`
-        )
-        .bind(developerId)
-        .all<Record<string, unknown>>();
+      rows = await this.db
+        .select({
+          developerId: developerHistory.developerId,
+          type: developerHistory.type,
+          name: developerHistory.name,
+          url: developerHistory.url,
+          changedBy: developerHistory.changedBy,
+          changedAt: developerHistory.changedAt
+        })
+        .from(developerHistory)
+        .where(eq(developerHistory.developerId, developerId))
+        // CURRENT_TIMESTAMP has only second resolution, so two writes in
+        // the same second tie on changed_at; rowid (insertion order,
+        // implicit - not a declared schema column) breaks the tie so
+        // "newest first" is never ambiguous.
+        .orderBy(desc(developerHistory.changedAt), sql`rowid DESC`);
     } catch (error) {
       return databaseError("listHistory", error);
     }
 
-    if (!result.success) {
-      return databaseError(
-        "listHistory",
-        new Error(result.error || "Database query failed")
-      );
-    }
-
     return {
-      data: (result.results ?? []).map((row) => ({
-        developer_id: row.developer_id as string,
+      data: rows.map((row) => ({
+        developer_id: row.developerId,
         type: row.type as DeveloperHistoryEntry["type"],
-        name: row.name as string,
-        URL: (row.url as string | null) ?? undefined,
-        changed_by: row.changed_by as string,
-        changed_at: row.changed_at as string
+        name: row.name,
+        URL: row.url ?? undefined,
+        changed_by: row.changedBy,
+        changed_at: row.changedAt
       })),
       error: null
     };
@@ -654,15 +599,15 @@ export class DevelopersDatabase {
     developerId: string,
     userId: string
   ): Promise<{ code: "NOT_FOUND" | "FORBIDDEN"; message: string } | null> {
-    const owner = await this.db
-      .prepare("SELECT owner_user_id FROM developers WHERE id = ?")
-      .bind(developerId)
-      .first<{ owner_user_id: string | null }>();
+    const [owner] = await this.db
+      .select({ ownerUserId: developers.ownerUserId })
+      .from(developers)
+      .where(eq(developers.id, developerId));
 
     if (!owner) {
       return { code: "NOT_FOUND", message: "Developer not found" };
     }
-    if (owner.owner_user_id !== userId) {
+    if (owner.ownerUserId !== userId) {
       return { code: "FORBIDDEN", message: "You don't own this profile" };
     }
     return null;
@@ -679,34 +624,27 @@ export class DevelopersDatabase {
       const tokenHash = await sha256Hex(token);
       const expiresAt = toSqliteDatetime(new Date(Date.now() + 60 * 60 * 1000));
 
-      if (!this.db.batch) {
-        return databaseError(
-          "initiateTransfer",
-          new Error("Database adapter does not support batch operations")
-        );
-      }
-
       // Both writes are conditioned on current ownership in the same
       // statement, rather than a separate SELECT beforehand — a caller who
       // loses ownership between an up-front check and the write could
       // otherwise still slip the write through. Superseding any existing
       // pending transfer (rather than stacking up) keeps
       // idx_developer_transfers_pending satisfied without a separate cleanup
-      // pass.
-      const revokeStmt = this.db
-        .prepare(
-          `UPDATE developer_transfers SET revoked_at = CURRENT_TIMESTAMP
-           WHERE developer_id = ? AND accepted_at IS NULL AND revoked_at IS NULL
-             AND EXISTS (SELECT 1 FROM developers WHERE developers.id = developer_transfers.developer_id AND developers.owner_user_id = ?)`
-        )
-        .bind(developerId, userId);
-      const insertStmt = this.db
-        .prepare(
-          `INSERT INTO developer_transfers (id, developer_id, token_hash, created_by, expires_at)
-           SELECT ?, ?, ?, ?, ?
-           WHERE EXISTS (SELECT 1 FROM developers WHERE id = ? AND owner_user_id = ?)`
-        )
-        .bind(
+      // pass. Kept as raw sql via $client (see toD1Statement): the EXISTS
+      // subqueries are correlated against the outer table's own name, and
+      // this batch needs the raw-D1 escape hatch regardless (see
+      // upsertOwn's historyStmt comment).
+      const revokeStmt = toD1Statement(this.db.$client, {
+        sql: `UPDATE developer_transfers SET revoked_at = CURRENT_TIMESTAMP
+              WHERE developer_id = ? AND accepted_at IS NULL AND revoked_at IS NULL
+                AND EXISTS (SELECT 1 FROM developers WHERE developers.id = developer_transfers.developer_id AND developers.owner_user_id = ?)`,
+        params: [developerId, userId]
+      });
+      const insertStmt = toD1Statement(this.db.$client, {
+        sql: `INSERT INTO developer_transfers (id, developer_id, token_hash, created_by, expires_at)
+              SELECT ?, ?, ?, ?, ?
+              WHERE EXISTS (SELECT 1 FROM developers WHERE id = ? AND owner_user_id = ?)`,
+        params: [
           crypto.randomUUID(),
           developerId,
           tokenHash,
@@ -714,20 +652,10 @@ export class DevelopersDatabase {
           expiresAt,
           developerId,
           userId
-        );
+        ]
+      });
 
-      const results = (await this.db.batch([revokeStmt, insertStmt])) as Array<{
-        success: boolean;
-        error?: string;
-        meta?: { changes?: number };
-      }>;
-      const failed = results.find((r) => !r.success);
-      if (failed) {
-        return databaseError(
-          "initiateTransfer",
-          new Error(failed.error || "Database write failed")
-        );
-      }
+      const results = await this.db.$client.batch([revokeStmt, insertStmt]);
 
       // The INSERT only writes a row when the ownership guard above passes,
       // so zero rows written means the caller doesn't currently own this
@@ -755,21 +683,11 @@ export class DevelopersDatabase {
     userId: string
   ): Promise<DatabaseResult<{ id: string; revoked: true }>> {
     try {
-      const result = await this.db
-        .prepare(
-          `UPDATE developer_transfers SET revoked_at = CURRENT_TIMESTAMP
-           WHERE developer_id = ? AND accepted_at IS NULL AND revoked_at IS NULL
-             AND EXISTS (SELECT 1 FROM developers WHERE developers.id = developer_transfers.developer_id AND developers.owner_user_id = ?)`
-        )
-        .bind(developerId, userId)
-        .run();
-
-      if (!result.success) {
-        return databaseError(
-          "revokeTransfer",
-          new Error(result.error || "Database write failed")
-        );
-      }
+      const result = await this.db.run(sql`
+        UPDATE ${developerTransfers} SET revoked_at = CURRENT_TIMESTAMP
+           WHERE developer_id = ${developerId} AND accepted_at IS NULL AND revoked_at IS NULL
+             AND EXISTS (SELECT 1 FROM ${developers} WHERE developers.id = developer_transfers.developer_id AND developers.owner_user_id = ${userId})
+      `);
 
       // Zero rows changed is ambiguous by itself (no pending transfer vs.
       // not the owner vs. no such developer), since the ownership guard is
@@ -795,13 +713,6 @@ export class DevelopersDatabase {
   ): Promise<DatabaseResult<DeveloperProfile>> {
     try {
       const tokenHash = await sha256Hex(token);
-
-      if (!this.db.batch) {
-        return databaseError(
-          "acceptTransfer",
-          new Error("Database adapter does not support batch operations")
-        );
-      }
 
       // Claim the transfer and move ownership in the same atomic batch,
       // rather than as two separate writes. Splitting them would leave a
@@ -832,57 +743,53 @@ export class DevelopersDatabase {
       // plain check-then-act (SELECT the row, decide, then write) would let
       // two concurrent accepts both read it as valid before either one
       // wrote to it, making the token usable more than once.
-      const claimStmt = this.db
-        .prepare(
-          `UPDATE developer_transfers SET accepted_at = CURRENT_TIMESTAMP, accepted_by = ?
-           WHERE token_hash = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > CURRENT_TIMESTAMP
-             AND NOT EXISTS (SELECT 1 FROM developers WHERE owner_user_id = ?)`
-        )
-        .bind(userId, tokenHash, userId);
-      const updateDeveloperStmt = this.db
-        .prepare(
-          `UPDATE developers
-           SET owner_user_id = ?,
-               ownership_epoch = ownership_epoch + 1,
-               content_revision = content_revision + 1,
-               approved_at = NULL, approved_revision = NULL, approved_by = NULL,
-               updated_at = CURRENT_TIMESTAMP
-           WHERE changes() = 1
-             AND id = (
-               SELECT developer_id FROM developer_transfers
-               WHERE token_hash = ? AND accepted_by = ? AND accepted_at IS NOT NULL
-             )`
-        )
-        .bind(userId, tokenHash, userId);
+      // Kept as raw sql via $client (see toD1Statement): correlated
+      // subqueries plus the changes()=1 gates need the raw-D1 escape hatch
+      // (see upsertOwn's historyStmt comment).
+      const claimStmt = toD1Statement(this.db.$client, {
+        sql: `UPDATE developer_transfers SET accepted_at = CURRENT_TIMESTAMP, accepted_by = ?
+              WHERE token_hash = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > CURRENT_TIMESTAMP
+                AND NOT EXISTS (SELECT 1 FROM developers WHERE owner_user_id = ?)`,
+        params: [userId, tokenHash, userId]
+      });
+      const updateDeveloperStmt = toD1Statement(this.db.$client, {
+        sql: `UPDATE developers
+              SET owner_user_id = ?,
+                  ownership_epoch = ownership_epoch + 1,
+                  content_revision = content_revision + 1,
+                  approved_at = NULL, approved_revision = NULL, approved_by = NULL,
+                  updated_at = CURRENT_TIMESTAMP
+              WHERE changes() = 1
+                AND id = (
+                  SELECT developer_id FROM developer_transfers
+                  WHERE token_hash = ? AND accepted_by = ? AND accepted_at IS NOT NULL
+                )`,
+        params: [userId, tokenHash, userId]
+      });
 
-      const rejectPendingStmt = this.db
-        .prepare(
-          `UPDATE extension_submissions
-           SET status = 'rejected',
-               review_note = 'Ownership changed before review',
-               reviewed_at = CURRENT_TIMESTAMP
-           WHERE changes() = 1
-             AND developer_id = (
-               SELECT developer_id FROM developer_transfers
-               WHERE token_hash = ? AND accepted_by = ? AND accepted_at IS NOT NULL
-             )
-             AND status = 'pending'`
-        )
-        .bind(tokenHash, userId);
+      const rejectPendingStmt = toD1Statement(this.db.$client, {
+        sql: `UPDATE extension_submissions
+              SET status = 'rejected',
+                  review_note = 'Ownership changed before review',
+                  reviewed_at = CURRENT_TIMESTAMP
+              WHERE changes() = 1
+                AND developer_id = (
+                  SELECT developer_id FROM developer_transfers
+                  WHERE token_hash = ? AND accepted_by = ? AND accepted_at IS NOT NULL
+                )
+                AND status = 'pending'`,
+        params: [tokenHash, userId]
+      });
 
       let results;
       try {
-        results = (await this.db.batch([
+        results = await this.db.$client.batch([
           claimStmt,
           updateDeveloperStmt,
           rejectPendingStmt
-        ])) as Array<{
-          success: boolean;
-          error?: string;
-          meta?: { changes?: number };
-        }>;
+        ]);
       } catch (error) {
-        if (isOwnerConflict(error instanceof Error ? error.message : "")) {
+        if (isOwnerConflict(error)) {
           return {
             data: null,
             error: {
@@ -895,36 +802,22 @@ export class DevelopersDatabase {
         return databaseError("acceptTransfer", error);
       }
 
-      const failed = results.find((r) => !r.success);
-      if (failed) {
-        if (isOwnerConflict(failed.error)) {
-          return {
-            data: null,
-            error: {
-              code: "CONFLICT",
-              message:
-                "You already have a developer profile — remove or transfer it before accepting a new one"
-            }
-          };
-        }
-        return databaseError(
-          "acceptTransfer",
-          new Error(failed.error || "Database write failed")
-        );
-      }
-
       const [claim] = results;
       if (!claim.meta?.changes) {
         // The claim can fail either because the token itself is bad (used,
         // revoked, expired, unknown) or because it's still valid but the
         // ownership guard rejected it — check which, for an accurate error.
-        const stillPending = await this.db
-          .prepare(
-            `SELECT 1 FROM developer_transfers
-             WHERE token_hash = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > CURRENT_TIMESTAMP`
-          )
-          .bind(tokenHash)
-          .first();
+        const [stillPending] = await this.db
+          .select({ one: sql`1` })
+          .from(developerTransfers)
+          .where(
+            and(
+              eq(developerTransfers.tokenHash, tokenHash),
+              isNull(developerTransfers.acceptedAt),
+              isNull(developerTransfers.revokedAt),
+              sql`${developerTransfers.expiresAt} > CURRENT_TIMESTAMP`
+            )
+          );
 
         if (stillPending) {
           return {
@@ -945,12 +838,10 @@ export class DevelopersDatabase {
         };
       }
 
-      const transfer = await this.db
-        .prepare(
-          "SELECT developer_id FROM developer_transfers WHERE token_hash = ?"
-        )
-        .bind(tokenHash)
-        .first<{ developer_id: string }>();
+      const [transfer] = await this.db
+        .select({ developerId: developerTransfers.developerId })
+        .from(developerTransfers)
+        .where(eq(developerTransfers.tokenHash, tokenHash));
       if (!transfer) {
         return databaseError(
           "acceptTransfer",
@@ -958,7 +849,7 @@ export class DevelopersDatabase {
         );
       }
 
-      return this.getById(transfer.developer_id);
+      return this.getById(transfer.developerId);
     } catch (error) {
       return databaseError("acceptTransfer", error);
     }
@@ -968,10 +859,10 @@ export class DevelopersDatabase {
     id: string
   ): Promise<DatabaseResult<DeveloperClaim>> {
     try {
-      const row = await this.db
-        .prepare("SELECT * FROM developer_claims WHERE id = ?")
-        .bind(id)
-        .first<Record<string, unknown>>();
+      const [row] = await this.db
+        .select()
+        .from(developerClaims)
+        .where(eq(developerClaims.id, id));
       if (!row) {
         return {
           data: null,
@@ -994,14 +885,14 @@ export class DevelopersDatabase {
   private async claimIneligibilityError(
     developerId: string
   ): Promise<{ code: "NOT_FOUND" | "CONFLICT"; message: string }> {
-    const developer = await this.db
-      .prepare("SELECT owner_user_id FROM developers WHERE id = ?")
-      .bind(developerId)
-      .first<{ owner_user_id: string | null }>();
+    const [developer] = await this.db
+      .select({ ownerUserId: developers.ownerUserId })
+      .from(developers)
+      .where(eq(developers.id, developerId));
     if (!developer) {
       return { code: "NOT_FOUND", message: "Developer not found" };
     }
-    if (developer.owner_user_id !== null) {
+    if (developer.ownerUserId !== null) {
       return { code: "CONFLICT", message: "This profile is already owned" };
     }
     return {
@@ -1099,12 +990,12 @@ export class DevelopersDatabase {
       let githubOrgVerified: number | null = null;
       let githubVerificationNote: string | null = null;
 
-      const developer = await this.db
-        .prepare(
-          "SELECT type FROM developers WHERE id = ? AND owner_user_id IS NULL"
-        )
-        .bind(developerId)
-        .first<{ type: Developer["type"] }>();
+      const [developer] = await this.db
+        .select({ type: developers.type })
+        .from(developers)
+        .where(
+          and(eq(developers.id, developerId), isNull(developers.ownerUserId))
+        );
 
       if (developer) {
         // Cheap short-circuit ahead of the GitHub lookup below: a claimant
@@ -1121,12 +1012,16 @@ export class DevelopersDatabase {
         // read and the response going out can make the message stale
         // relative to that instant, but never lets a row get created
         // without verification.
-        const hasPendingClaim = await this.db
-          .prepare(
-            "SELECT 1 FROM developer_claims WHERE developer_id = ? AND claimant_id = ? AND status = 'pending'"
-          )
-          .bind(developerId, claimantId)
-          .first();
+        const [hasPendingClaim] = await this.db
+          .select({ one: sql`1` })
+          .from(developerClaims)
+          .where(
+            and(
+              eq(developerClaims.developerId, developerId),
+              eq(developerClaims.claimantId, claimantId),
+              eq(developerClaims.status, "pending")
+            )
+          );
 
         if (hasPendingClaim) {
           return {
@@ -1140,7 +1035,7 @@ export class DevelopersDatabase {
 
         const check = await this.verifyGithubOwnership(
           developerId,
-          developer.type,
+          developer.type as Developer["type"],
           claimantId,
           githubToken
         );
@@ -1173,28 +1068,18 @@ export class DevelopersDatabase {
         // different profile) between an up-front check and the write could
         // otherwise still slip a stale claim through. (The SELECT above is
         // only used to decide the GitHub verification signal, and is always
-        // re-checked here — it can't itself grant eligibility.)
-        result = await this.db
-          .prepare(
-            `INSERT INTO developer_claims (id, developer_id, claimant_id, note, github_org_verified, github_verification_note)
-             SELECT ?, ?, ?, ?, ?, ?
-             WHERE EXISTS (SELECT 1 FROM developers WHERE id = ? AND owner_user_id IS NULL)
-               AND NOT EXISTS (SELECT 1 FROM developers WHERE owner_user_id = ?)`
-          )
-          .bind(
-            id,
-            developerId,
-            claimantId,
-            note ?? null,
-            githubOrgVerified,
-            githubVerificationNote,
-            developerId,
-            claimantId
-          )
-          .run();
+        // re-checked here — it can't itself grant eligibility.) Kept as raw
+        // sql: an INSERT...SELECT...WHERE EXISTS isn't expressible via
+        // .insert().values().
+        result = await this.db.run(sql`
+          INSERT INTO ${developerClaims} (id, developer_id, claimant_id, note, github_org_verified, github_verification_note)
+             SELECT ${id}, ${developerId}, ${claimantId}, ${note ?? null}, ${githubOrgVerified}, ${githubVerificationNote}
+             WHERE EXISTS (SELECT 1 FROM ${developers} WHERE id = ${developerId} AND owner_user_id IS NULL)
+               AND NOT EXISTS (SELECT 1 FROM ${developers} WHERE owner_user_id = ${claimantId})
+        `);
       } catch (error) {
         if (
-          isPendingClaimConflict(error instanceof Error ? error.message : "")
+          isPendingClaimConflict(error)
         ) {
           return {
             data: null,
@@ -1205,13 +1090,6 @@ export class DevelopersDatabase {
           };
         }
         return databaseError("claim", error);
-      }
-
-      if (!result.success) {
-        return databaseError(
-          "claim",
-          new Error(result.error || "Database write failed")
-        );
       }
 
       if (!result.meta?.changes) {
@@ -1230,58 +1108,42 @@ export class DevelopersDatabase {
   async listMyClaims(
     claimantId: string
   ): Promise<DatabaseResult<DeveloperClaim[]>> {
-    let result;
+    let rows;
     try {
-      result = await this.db
-        .prepare(
-          "SELECT * FROM developer_claims WHERE claimant_id = ? ORDER BY created_at DESC"
-        )
-        .bind(claimantId)
-        .all<Record<string, unknown>>();
+      rows = await this.db
+        .select()
+        .from(developerClaims)
+        .where(eq(developerClaims.claimantId, claimantId))
+        .orderBy(desc(developerClaims.createdAt));
     } catch (error) {
       return databaseError("listMyClaims", error);
     }
 
-    if (!result.success) {
-      return databaseError(
-        "listMyClaims",
-        new Error(result.error || "Database query failed")
-      );
-    }
-
-    return {
-      data: (result.results ?? []).map(parseClaimRow),
-      error: null
-    };
+    return { data: rows.map(parseClaimRow), error: null };
   }
 
   async listPendingClaims(): Promise<DatabaseResult<PendingDeveloperClaim[]>> {
-    let result;
+    let rows;
     try {
-      result = await this.db
-        .prepare(
-          `SELECT c.*, d.name AS developer_name, d.type AS developer_type
-           FROM developer_claims c JOIN developers d ON d.id = c.developer_id
-           WHERE c.status = 'pending' ORDER BY c.created_at ASC`
-        )
-        .all<Record<string, unknown>>();
+      rows = await this.db
+        .select({
+          claim: developerClaims,
+          developerName: developers.name,
+          developerType: developers.type
+        })
+        .from(developerClaims)
+        .innerJoin(developers, eq(developers.id, developerClaims.developerId))
+        .where(eq(developerClaims.status, "pending"))
+        .orderBy(asc(developerClaims.createdAt));
     } catch (error) {
       return databaseError("listPendingClaims", error);
     }
 
-    if (!result.success) {
-      return databaseError(
-        "listPendingClaims",
-        new Error(result.error || "Database query failed")
-      );
-    }
-
     return {
-      data: (result.results ?? []).map((row) => ({
-        ...parseClaimRow(row),
-        developer_name: row.developer_name as string,
-        developer_type:
-          row.developer_type as PendingDeveloperClaim["developer_type"]
+      data: rows.map((row) => ({
+        ...parseClaimRow(row.claim),
+        developer_name: row.developerName,
+        developer_type: row.developerType as PendingDeveloperClaim["developer_type"]
       })),
       error: null
     };
@@ -1293,12 +1155,9 @@ export class DevelopersDatabase {
   private async revertClaimToPending(id: string): Promise<void> {
     try {
       await this.db
-        .prepare(
-          `UPDATE developer_claims SET status = 'pending', reviewer_id = NULL, reviewed_at = NULL
-           WHERE id = ?`
-        )
-        .bind(id)
-        .run();
+        .update(developerClaims)
+        .set({ status: "pending", reviewerId: null, reviewedAt: null })
+        .where(eq(developerClaims.id, id));
     } catch {
       // best-effort only
     }
@@ -1327,35 +1186,28 @@ export class DevelopersDatabase {
       };
     }
 
-    if (!this.db.batch) {
-      return databaseError(
-        "approveClaim",
-        new Error("Database adapter does not support batch operations")
-      );
-    }
-
     try {
-      const developer = await this.db
-        .prepare("SELECT owner_user_id FROM developers WHERE id = ?")
-        .bind(claim.developer_id)
-        .first<{ owner_user_id: string | null }>();
+      const [developer] = await this.db
+        .select({ ownerUserId: developers.ownerUserId })
+        .from(developers)
+        .where(eq(developers.id, claim.developer_id));
       if (!developer) {
         return {
           data: null,
           error: { message: "Developer not found", code: "NOT_FOUND" }
         };
       }
-      if (developer.owner_user_id !== null) {
+      if (developer.ownerUserId !== null) {
         return {
           data: null,
           error: { message: "This profile is already owned", code: "CONFLICT" }
         };
       }
 
-      const conflict = await this.db
-        .prepare("SELECT 1 FROM developers WHERE owner_user_id = ?")
-        .bind(claim.claimant_id)
-        .first();
+      const [conflict] = await this.db
+        .select({ one: sql`1` })
+        .from(developers)
+        .where(eq(developers.ownerUserId, claim.claimant_id));
       if (conflict) {
         return {
           data: null,
@@ -1374,22 +1226,15 @@ export class DevelopersDatabase {
     let claimResult;
     try {
       claimResult = await this.db
-        .prepare(
-          `UPDATE developer_claims SET status = 'approved', reviewer_id = ?, reviewed_at = CURRENT_TIMESTAMP
-           WHERE id = ? AND status = 'pending'`
-        )
-        .bind(reviewerId, claimId)
-        .run();
+        .update(developerClaims)
+        .set({ status: "approved", reviewerId, reviewedAt: sql`CURRENT_TIMESTAMP` })
+        .where(
+          and(eq(developerClaims.id, claimId), eq(developerClaims.status, "pending"))
+        );
     } catch (error) {
       return databaseError("approveClaim", error);
     }
 
-    if (!claimResult.success) {
-      return databaseError(
-        "approveClaim",
-        new Error(claimResult.error || "Database query failed")
-      );
-    }
     if (!claimResult.meta?.changes) {
       return {
         data: null,
@@ -1405,47 +1250,40 @@ export class DevelopersDatabase {
     // caught below. rejectOthersStmt is gated on that same win via
     // `changes() = 1`, so competing claims are only auto-rejected once
     // ownership has actually moved, not whenever this batch merely runs.
+    // Both batched via the raw D1 client (see toD1Statement / upsertOwn's
+    // historyStmt comment) - rejectOthersStmt's changes()=1 gate needs it
+    // regardless, and mixing a query builder item with a raw one in the
+    // same batch hits the same drizzle-orm bug either way.
     let results;
     try {
       const developerStmt = this.db
-        .prepare(
-          `UPDATE developers
-           SET owner_user_id = ?,
-               ownership_epoch = ownership_epoch + 1,
-               content_revision = content_revision + 1,
-               approved_at = NULL, approved_revision = NULL, approved_by = NULL,
-               updated_at = CURRENT_TIMESTAMP
-           WHERE id = ? AND owner_user_id IS NULL`
-        )
-        .bind(claim.claimant_id, claim.developer_id);
-      const rejectOthersStmt = this.db
-        .prepare(
-          `UPDATE developer_claims SET status = 'rejected', reviewer_id = ?, reviewed_at = CURRENT_TIMESTAMP,
-             review_note = 'Another claim on this profile was approved'
-           WHERE changes() = 1 AND developer_id = ? AND status = 'pending' AND id != ?`
-        )
-        .bind(reviewerId, claim.developer_id, claimId);
+        .update(developers)
+        .set({
+          ownerUserId: claim.claimant_id,
+          ownershipEpoch: sql`ownership_epoch + 1`,
+          contentRevision: sql`content_revision + 1`,
+          approvedAt: null,
+          approvedRevision: null,
+          approvedBy: null,
+          updatedAt: sql`CURRENT_TIMESTAMP`
+        })
+        .where(
+          and(eq(developers.id, claim.developer_id), isNull(developers.ownerUserId))
+        );
+      const rejectOthersStmt = toD1Statement(this.db.$client, {
+        sql: `UPDATE developer_claims SET status = 'rejected', reviewer_id = ?, reviewed_at = CURRENT_TIMESTAMP,
+                review_note = 'Another claim on this profile was approved'
+              WHERE changes() = 1 AND developer_id = ? AND status = 'pending' AND id != ?`,
+        params: [reviewerId, claim.developer_id, claimId]
+      });
 
-      results = (await this.db.batch([
-        developerStmt,
+      results = await this.db.$client.batch([
+        toD1Statement(this.db.$client, developerStmt.toSQL()),
         rejectOthersStmt
-      ])) as Array<{
-        success: boolean;
-        error?: string;
-        meta?: { changes?: number };
-      }>;
+      ]);
     } catch (error) {
       await this.revertClaimToPending(claimId);
       return databaseError("approveClaim", error);
-    }
-
-    const failed = results.find((r) => !r.success);
-    if (failed) {
-      await this.revertClaimToPending(claimId);
-      return databaseError(
-        "approveClaim",
-        new Error(failed.error || "Database write failed")
-      );
     }
 
     const [developerResult] = results;
@@ -1471,21 +1309,18 @@ export class DevelopersDatabase {
     let result;
     try {
       result = await this.db
-        .prepare(
-          `UPDATE developer_claims SET status = 'rejected', reviewer_id = ?, review_note = ?, reviewed_at = CURRENT_TIMESTAMP
-           WHERE id = ? AND status = 'pending'`
-        )
-        .bind(reviewerId, reviewNote, claimId)
-        .run();
+        .update(developerClaims)
+        .set({
+          status: "rejected",
+          reviewerId,
+          reviewNote,
+          reviewedAt: sql`CURRENT_TIMESTAMP`
+        })
+        .where(
+          and(eq(developerClaims.id, claimId), eq(developerClaims.status, "pending"))
+        );
     } catch (error) {
       return databaseError("rejectClaim", error);
-    }
-
-    if (!result.success) {
-      return databaseError(
-        "rejectClaim",
-        new Error(result.error || "Database query failed")
-      );
     }
 
     if (!result.meta?.changes) {

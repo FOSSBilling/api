@@ -6,7 +6,8 @@ import {
   developers,
   extensions
 } from "./db/schema";
-import { databaseError } from "./errors";
+import { databaseError, errorMessageChain } from "./errors";
+import { toD1Statement } from "./d1-batch";
 import { Submission, SubmissionPayload, SubmissionStatus } from "./interfaces";
 
 interface OwnershipResolution {
@@ -36,9 +37,8 @@ interface StoredSubmission extends Submission {
 const MAX_PENDING_SUBMISSIONS_PER_USER = 10;
 
 function isPendingTargetConflict(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    /UNIQUE constraint failed.*extension_submissions/i.test(error.message)
+  return /UNIQUE constraint failed.*extension_submissions/i.test(
+    errorMessageChain(error)
   );
 }
 
@@ -446,64 +446,95 @@ export class SubmissionsDatabase {
     const { developer, extension } = submission.payload;
     const extensionId = submission.extension_id ?? extension.id;
 
-    // Kept as raw sql (rather than the query builder) on purpose: D1's
-    // batch() executes these three statements as one transaction, and the
-    // developer/extension statements are deliberately gated on
-    // `changes() = 1` from the immediately-preceding statement (SQLite's
-    // per-connection changes() function) so a race or ownership/target
-    // change caught by the first statement's WHERE also blocks the other
-    // two - a guarantee that's easy to silently lose by rewriting this as
-    // three independent query-builder calls.
+    // Kept as raw sql via the raw D1 client (see toD1Statement) rather than
+    // the query builder: D1's batch() executes these three statements as
+    // one transaction, and the developer/extension statements are
+    // deliberately gated on `changes() = 1` from the immediately-preceding
+    // statement (SQLite's per-connection changes() function) so a race or
+    // ownership/target change caught by the first statement's WHERE also
+    // blocks the other two - a guarantee that's easy to silently lose by
+    // rewriting this as three independent query-builder calls. Also works
+    // around a drizzle-orm 0.45.2 bug where db.run(sql) with bound params
+    // can't be used inside db.batch() at all (confirmed via an isolated
+    // repro against real D1).
     let results;
     try {
-      const claimStmt = this.db.run(sql`
-        UPDATE ${extensionSubmissions}
-           SET status = 'approved', reviewer_id = ${reviewerId}, review_note = ${reviewNote ?? null}, reviewed_at = CURRENT_TIMESTAMP
-           WHERE id = ${id} AND status = 'pending'
-             AND EXISTS (
-               SELECT 1 FROM ${developers} d
-               WHERE d.id = extension_submissions.developer_id
-                 AND d.owner_user_id = extension_submissions.submitted_by
-                 AND d.ownership_epoch = extension_submissions.ownership_epoch
-             )
-             AND (
-               (extension_id IS NULL AND NOT EXISTS (
-                 SELECT 1 FROM ${extensions} e
-                 WHERE LOWER(e.id) = LOWER(${extension.id})
-               ))
-               OR
-               (extension_id IS NOT NULL AND EXISTS (
-                 SELECT 1 FROM ${extensions} e
-                 WHERE e.id = extension_submissions.extension_id
-                   AND e.author_id = extension_submissions.developer_id
-               ))
-             )
-      `);
+      const claimStmt = toD1Statement(this.db.$client, {
+        sql: `UPDATE extension_submissions
+              SET status = 'approved', reviewer_id = ?, review_note = ?, reviewed_at = CURRENT_TIMESTAMP
+              WHERE id = ? AND status = 'pending'
+                AND EXISTS (
+                  SELECT 1 FROM developers d
+                  WHERE d.id = extension_submissions.developer_id
+                    AND d.owner_user_id = extension_submissions.submitted_by
+                    AND d.ownership_epoch = extension_submissions.ownership_epoch
+                )
+                AND (
+                  (extension_id IS NULL AND NOT EXISTS (
+                    SELECT 1 FROM extensions e
+                    WHERE LOWER(e.id) = LOWER(?)
+                  ))
+                  OR
+                  (extension_id IS NOT NULL AND EXISTS (
+                    SELECT 1 FROM extensions e
+                    WHERE e.id = extension_submissions.extension_id
+                      AND e.author_id = extension_submissions.developer_id
+                  ))
+                )`,
+        params: [reviewerId, reviewNote ?? null, id, extension.id]
+      });
 
-      const developerStmt = this.db.run(sql`
-        UPDATE ${developers}
-           SET type = ${developer.type}, name = ${developer.name}, url = ${developer.URL ?? null},
-               content_revision = content_revision + 1,
-               approved_at = NULL, approved_revision = NULL, approved_by = NULL,
-               updated_at = CURRENT_TIMESTAMP
-           WHERE changes() = 1 AND id = ${developer.id} AND owner_user_id = ${submission.submitted_by}
-             AND ownership_epoch = ${submission.ownershipEpoch}
-      `);
+      const developerStmt = toD1Statement(this.db.$client, {
+        sql: `UPDATE developers
+              SET type = ?, name = ?, url = ?,
+                  content_revision = content_revision + 1,
+                  approved_at = NULL, approved_revision = NULL, approved_by = NULL,
+                  updated_at = CURRENT_TIMESTAMP
+              WHERE changes() = 1 AND id = ? AND owner_user_id = ?
+                AND ownership_epoch = ?`,
+        params: [
+          developer.type,
+          developer.name,
+          developer.URL ?? null,
+          developer.id,
+          submission.submitted_by,
+          submission.ownershipEpoch
+        ]
+      });
 
-      const extensionStmt = this.db.run(sql`
-        INSERT INTO ${extensions} (id, type, author_id, name, description, releases, website, license, icon_url, readme, source, version, download_url)
-           SELECT ${extensionId}, ${extension.type}, ${developer.id}, ${extension.name}, ${extension.description}, ${JSON.stringify(extension.releases)}, ${extension.website}, ${JSON.stringify(extension.license)}, ${extension.icon_url ?? null}, ${extension.readme}, ${JSON.stringify(extension.source)}, ${extension.version}, ${extension.download_url}
-           WHERE changes() = 1
-           ON CONFLICT(id) DO UPDATE SET
-             type = excluded.type, author_id = excluded.author_id, name = excluded.name,
-             description = excluded.description, releases = excluded.releases,
-             website = excluded.website, license = excluded.license,
-             icon_url = excluded.icon_url, readme = excluded.readme,
-             source = excluded.source, version = excluded.version,
-             download_url = excluded.download_url
-      `);
+      const extensionStmt = toD1Statement(this.db.$client, {
+        sql: `INSERT INTO extensions (id, type, author_id, name, description, releases, website, license, icon_url, readme, source, version, download_url)
+              SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+              WHERE changes() = 1
+              ON CONFLICT(id) DO UPDATE SET
+                type = excluded.type, author_id = excluded.author_id, name = excluded.name,
+                description = excluded.description, releases = excluded.releases,
+                website = excluded.website, license = excluded.license,
+                icon_url = excluded.icon_url, readme = excluded.readme,
+                source = excluded.source, version = excluded.version,
+                download_url = excluded.download_url`,
+        params: [
+          extensionId,
+          extension.type,
+          developer.id,
+          extension.name,
+          extension.description,
+          JSON.stringify(extension.releases),
+          extension.website,
+          JSON.stringify(extension.license),
+          extension.icon_url ?? null,
+          extension.readme,
+          JSON.stringify(extension.source),
+          extension.version,
+          extension.download_url
+        ]
+      });
 
-      results = await this.db.batch([claimStmt, developerStmt, extensionStmt]);
+      results = await this.db.$client.batch([
+        claimStmt,
+        developerStmt,
+        extensionStmt
+      ]);
     } catch (error) {
       return databaseError("approve", error);
     }
