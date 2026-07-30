@@ -852,12 +852,24 @@ export class DevelopersDatabase {
         // whichever user currently owns this row, so left unchanged it
         // would rate-limit the *new* owner's first check_url reverify for
         // whatever's left of the *previous* owner's cooldown window.
+        //
+        // github_org_verified/github_url_verified/github_verification_note/
+        // github_verified_at are cleared for the same underlying reason:
+        // they describe whether the *previous* owner's linked GitHub
+        // identity matched this profile — a fact that says nothing about
+        // the new owner, who was never checked. Unlike approveClaim() (the
+        // other ownership-transfer path), there's no claim-time
+        // verification to carry over here — a transfer is a bare handoff,
+        // not a claim — so this can only ever fall back to null/unverified,
+        // same as a brand-new profile with no GitHub identity yet.
         sql: `UPDATE developers
               SET owner_user_id = ?,
                   ownership_epoch = ownership_epoch + 1,
                   content_revision = content_revision + 1,
                   approved_at = NULL, approved_revision = NULL, approved_by = NULL,
                   url_check_cooldown_until = NULL,
+                  github_org_verified = NULL, github_url_verified = NULL,
+                  github_verification_note = NULL, github_verified_at = NULL,
                   updated_at = CURRENT_TIMESTAMP
               WHERE changes() = 1
                 AND id = (

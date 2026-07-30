@@ -2491,6 +2491,43 @@ describe("Extensions API v2", () => {
       expect(res.status).toBe(200);
     });
 
+    it("clears GitHub verification on transfer — it described the previous owner's identity, not the new owner's", async () => {
+      mockGithubEntity("User", "https://acme.example");
+      await insertUser(db, {
+        id: "user-1",
+        github_login: "dev-developer",
+        github_orgs: JSON.stringify([])
+      });
+      const created = await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        { ...sampleDeveloper(), URL: "https://acme.example" }
+      );
+      const createdBody = (await created.json()) as {
+        result: { github_org_verified?: boolean; github_url_verified?: boolean };
+      };
+      expect(createdBody.result.github_org_verified).toBe(true);
+      expect(createdBody.result.github_url_verified).toBe(true);
+
+      const initiate = await post(
+        "/extensions/v2/developers/dev-developer/transfer",
+        await authHeaders("user-1")
+      );
+      const token = ((await initiate.json()) as { result: { token: string } })
+        .result.token;
+      const accept = await post(
+        "/extensions/v2/developers/transfers/accept",
+        await authHeaders("user-2"),
+        { token }
+      );
+      expect(accept.status).toBe(200);
+      const accepted = (await accept.json()) as {
+        result: { github_org_verified?: boolean; github_url_verified?: boolean };
+      };
+      expect(accepted.result.github_org_verified).toBeUndefined();
+      expect(accepted.result.github_url_verified).toBeUndefined();
+    });
+
     it("does not let replaying an already-used token reassign ownership away from a later owner", async () => {
       await put(
         "/extensions/v2/developers/me",
