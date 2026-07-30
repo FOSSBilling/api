@@ -1112,6 +1112,41 @@ export class DevelopersDatabase {
     }
   }
 
+  // Lets a claimant withdraw their own pending claim — scoped to
+  // claimant_id so this can't be used to cancel someone else's, and to
+  // status = 'pending' so a moderator's decision can't be undone by it.
+  async cancelClaim(
+    claimId: string,
+    claimantId: string
+  ): Promise<DatabaseResult<{ id: string }>> {
+    let result;
+    try {
+      result = await this.db
+        .delete(developerClaims)
+        .where(
+          and(
+            eq(developerClaims.id, claimId),
+            eq(developerClaims.claimantId, claimantId),
+            eq(developerClaims.status, "pending")
+          )
+        );
+    } catch (error) {
+      return databaseError("cancelClaim", error);
+    }
+
+    if (!result.meta?.changes) {
+      return {
+        data: null,
+        error: {
+          message: `Cannot find pending claim by id: ${claimId}`,
+          code: "NOT_FOUND"
+        }
+      };
+    }
+
+    return { data: { id: claimId }, error: null };
+  }
+
   async listMyClaims(
     claimantId: string
   ): Promise<DatabaseResult<DeveloperClaim[]>> {
