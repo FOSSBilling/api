@@ -146,24 +146,46 @@ export type SubmissionPayload = z.infer<typeof SubmissionPayloadSchema>;
 export const DeveloperProfileSchema = DeveloperSchema.extend({
   approved: z.boolean(),
   content_revision: z.number().int().positive(),
-  // Server-computed at creation time only — see
-  // DevelopersDatabase.verifyGithubOwnership(). Never part of the
+  // Server-computed — see DevelopersDatabase.verifyGithubOwnership() (at
+  // claim/creation time) and reverifyOwn() (opportunistic re-check on
+  // login, or the owner's own "Re-verify" action). Never part of the
   // client-supplied DeveloperSchema.
   github_org_verified: z.boolean().optional(),
-  github_verification_note: z.string().optional()
+  github_verification_note: z.string().optional(),
+  // Set whenever github_org_verified is last (re-)computed to a definitive
+  // true/false — see reverifyOwn(). Absent/stale on an inconclusive check.
+  github_verified_at: z.string().nullable().optional(),
+  // Only populated by the moderator listAll/listUnapproved queries (see
+  // DevelopersDatabase.listAll/listUnapproved) — other DeveloperProfile
+  // producers (getById, create/update/claim/transfer results) don't join
+  // for it, so it's absent rather than null there. `unclaimed` is the
+  // authoritative "has an owner" signal (owner_user_id IS NULL) — don't
+  // infer ownership from owner_name being present, since a real owner can
+  // still have a null name (e.g. their auth provider never supplied one).
+  // Owner identity is never exposed publicly — see PublicDeveloperSchema
+  // below and the README's note on not leaking owner identity.
+  unclaimed: z.boolean().optional(),
+  owner_name: z.string().nullable().optional(),
+  owner_github_login: z.string().nullable().optional()
 }).openapi("DeveloperProfile");
 
 export type DeveloperProfile = z.infer<typeof DeveloperProfileSchema>;
 
 // The publicly-readable view of a developer profile: everything in
 // DeveloperProfile except contact_email/content_revision (moderator/owner
-// only) and the GitHub verification signal (a moderator-review aid, not
-// meant for public consumption).
+// only), the GitHub verification signal (a moderator-review aid, not meant
+// for public consumption), and the owner's identity (only ever an
+// `unclaimed` boolean is public — see src/lib/database.ts in the extensions
+// repo).
 export const PublicDeveloperSchema = DeveloperProfileSchema.omit({
   contact_email: true,
   content_revision: true,
   github_org_verified: true,
-  github_verification_note: true
+  github_verification_note: true,
+  github_verified_at: true,
+  unclaimed: true,
+  owner_name: true,
+  owner_github_login: true
 }).openapi("PublicDeveloper");
 
 export type PublicDeveloper = z.infer<typeof PublicDeveloperSchema>;
@@ -207,6 +229,9 @@ export const DeveloperHistoryEntrySchema = z
     name: z.string(),
     URL: httpUrl().optional(),
     changed_by: z.string(),
+    // The editor's account name at read time — null if the auth provider
+    // never gave one, or the users row was since deleted.
+    changed_by_name: z.string().nullable(),
     changed_at: z.string()
   })
   .openapi("DeveloperHistoryEntry");
@@ -311,7 +336,12 @@ export type DeveloperClaim = z.infer<typeof DeveloperClaimSchema>;
 
 export const PendingDeveloperClaimSchema = DeveloperClaimSchema.extend({
   developer_name: z.string(),
-  developer_type: z.enum(["user", "organization"])
+  developer_type: z.enum(["user", "organization"]),
+  // The claimant's own account name/GitHub handle, so the moderator sees
+  // who's asking instead of just their opaque id. Null if the auth
+  // provider never gave a name, or the claimant hasn't linked GitHub yet.
+  claimant_name: z.string().nullable(),
+  claimant_github_login: z.string().nullable()
 }).openapi("PendingDeveloperClaim");
 
 export type PendingDeveloperClaim = z.infer<typeof PendingDeveloperClaimSchema>;

@@ -10,6 +10,7 @@ import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
 // - if the sibling repo's columns change, update both.
 export const users = sqliteTable("users", {
   id: text("id").primaryKey(),
+  name: text("name"),
   isModerator: integer("is_moderator"),
   githubLogin: text("github_login"),
   githubOrgs: text("github_orgs")

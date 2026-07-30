@@ -9,6 +9,7 @@ import {
   extensions,
   extensionSubmissions
 } from "./db/schema";
+import { users as externalUsers } from "./db/external-tables";
 import { databaseError, errorMessageChain } from "./errors";
 import { toD1Statement } from "./d1-batch";
 import { checkGithubEntityType, matchesClaimant } from "./github-verification";
@@ -82,7 +83,25 @@ function parseDeveloperRow(row: DeveloperRow): DeveloperProfile {
       row.githubOrgVerified === null || row.githubOrgVerified === undefined
         ? undefined
         : row.githubOrgVerified === 1,
-    github_verification_note: row.githubVerificationNote ?? undefined
+    github_verification_note: row.githubVerificationNote ?? undefined,
+    github_verified_at: row.githubVerifiedAt ?? undefined
+  };
+}
+
+// Used by listAll/listUnapproved, whose queries left-join externalUsers on
+// developers.owner_user_id to save the moderator a lookup per row (see
+// PendingDeveloperClaim's claimant_name/claimant_github_login for the same
+// pattern on the claims queue).
+function parseDeveloperRowWithOwner(row: {
+  developer: DeveloperRow;
+  ownerName: string | null;
+  ownerGithubLogin: string | null;
+}): DeveloperProfile {
+  return {
+    ...parseDeveloperRow(row.developer),
+    unclaimed: row.developer.ownerUserId === null,
+    owner_name: row.ownerName,
+    owner_github_login: row.ownerGithubLogin
   };
 }
 
@@ -185,6 +204,7 @@ export class DevelopersDatabase {
           approvedAt: null,
           githubOrgVerified,
           githubVerificationNote,
+          githubVerifiedAt: githubOrgVerified !== null ? sql`CURRENT_TIMESTAMP` : null,
           createdAt: sql`CURRENT_TIMESTAMP`,
           updatedAt: sql`CURRENT_TIMESTAMP`
         });
@@ -492,29 +512,39 @@ export class DevelopersDatabase {
     let rows;
     try {
       rows = await this.db
-        .select()
+        .select({
+          developer: developers,
+          ownerName: externalUsers.name,
+          ownerGithubLogin: externalUsers.githubLogin
+        })
         .from(developers)
+        .leftJoin(externalUsers, eq(externalUsers.id, developers.ownerUserId))
         .orderBy(asc(developers.name));
     } catch (error) {
       return databaseError("listAll", error);
     }
 
-    return { data: rows.map(parseDeveloperRow), error: null };
+    return { data: rows.map(parseDeveloperRowWithOwner), error: null };
   }
 
   async listUnapproved(): Promise<DatabaseResult<DeveloperProfile[]>> {
     let rows;
     try {
       rows = await this.db
-        .select()
+        .select({
+          developer: developers,
+          ownerName: externalUsers.name,
+          ownerGithubLogin: externalUsers.githubLogin
+        })
         .from(developers)
+        .leftJoin(externalUsers, eq(externalUsers.id, developers.ownerUserId))
         .where(isNull(developers.approvedAt))
         .orderBy(asc(developers.createdAt));
     } catch (error) {
       return databaseError("listUnapproved", error);
     }
 
-    return { data: rows.map(parseDeveloperRow), error: null };
+    return { data: rows.map(parseDeveloperRowWithOwner), error: null };
   }
 
   async approve(
@@ -576,15 +606,20 @@ export class DevelopersDatabase {
           name: developerHistory.name,
           url: developerHistory.url,
           changedBy: developerHistory.changedBy,
+          changedByName: externalUsers.name,
           changedAt: developerHistory.changedAt
         })
         .from(developerHistory)
+        .leftJoin(externalUsers, eq(externalUsers.id, developerHistory.changedBy))
         .where(eq(developerHistory.developerId, developerId))
         // CURRENT_TIMESTAMP has only second resolution, so two writes in
         // the same second tie on changed_at; rowid (insertion order,
         // implicit - not a declared schema column) breaks the tie so
         // "newest first" is never ambiguous.
-        .orderBy(desc(developerHistory.changedAt), sql`rowid DESC`);
+        .orderBy(
+          desc(developerHistory.changedAt),
+          sql`"developer_history".rowid DESC`
+        );
     } catch (error) {
       return databaseError("listHistory", error);
     }
@@ -596,6 +631,7 @@ export class DevelopersDatabase {
         name: row.name,
         URL: row.url ?? undefined,
         changed_by: row.changedBy,
+        changed_by_name: row.changedByName,
         changed_at: row.changedAt
       })),
       error: null
@@ -989,6 +1025,91 @@ export class DevelopersDatabase {
     return { mismatch: true };
   }
 
+  // Re-runs the same identity match verifyGithubOwnership() does for a
+  // brand-new claim/creation, but for a profile the caller already owns —
+  // no GitHub API call needed. checkGithubEntityType() (the GitHub call
+  // verifyGithubOwnership() makes) only exists to confirm a *new* id isn't
+  // squatting on a real GitHub org/user; that doesn't apply once ownership
+  // already exists, so this only re-derives the match from the caller's
+  // own already-synced github_login/github_orgs. Called opportunistically
+  // on every login for a developer-owning user, and by the owner's own
+  // "Re-verify" action — both share this one method.
+  async reverifyOwn(userId: string): Promise<DatabaseResult<DeveloperProfile>> {
+    try {
+      const [row] = await this.db
+        .select({ id: developers.id, type: developers.type })
+        .from(developers)
+        .where(eq(developers.ownerUserId, userId));
+      if (!row) {
+        return {
+          data: null,
+          error: {
+            message: "You don't own a developer profile",
+            code: "NOT_FOUND"
+          }
+        };
+      }
+
+      const identity = await new UsersDatabase(this.db).getGithubIdentity(
+        userId
+      );
+      if (identity.error || !identity.data) {
+        return {
+          data: null,
+          error: identity.error ?? {
+            message: "Failed to load caller's GitHub identity",
+            code: "DATABASE_ERROR"
+          }
+        };
+      }
+
+      // No linked GitHub identity at all shouldn't be reachable in practice
+      // (GitHub is this system's sole login provider), but stays a no-op
+      // rather than writing a misleading "unverified" result over it.
+      if (!identity.data.githubLogin) {
+        return this.getById(row.id);
+      }
+
+      const matches = matchesClaimant(
+        row.type as Developer["type"],
+        row.id,
+        identity.data
+      );
+
+      // Re-asserts ownership in the write itself (not just the lookup
+      // above) — otherwise a transfer/claim landing in between would let
+      // this write a result computed from the *former* owner's GitHub
+      // identity onto the profile after it's changed hands. Same guard as
+      // upsertOwn's update branch.
+      const result = await this.db
+        .update(developers)
+        .set({
+          githubOrgVerified: matches ? 1 : 0,
+          githubVerificationNote: matches
+            ? "Verified: caller's linked GitHub identity matches."
+            : "No longer verified: caller's linked GitHub identity no longer matches.",
+          githubVerifiedAt: sql`CURRENT_TIMESTAMP`
+        })
+        .where(
+          and(eq(developers.id, row.id), eq(developers.ownerUserId, userId))
+        );
+
+      if (!result.meta?.changes) {
+        return {
+          data: null,
+          error: {
+            message: "Developer ownership changed while re-verifying",
+            code: "CONFLICT"
+          }
+        };
+      }
+
+      return this.getById(row.id);
+    } catch (error) {
+      return databaseError("reverifyOwn", error);
+    }
+  }
+
   async claim(
     developerId: string,
     claimantId: string,
@@ -1171,10 +1292,13 @@ export class DevelopersDatabase {
         .select({
           claim: developerClaims,
           developerName: developers.name,
-          developerType: developers.type
+          developerType: developers.type,
+          claimantName: externalUsers.name,
+          claimantGithubLogin: externalUsers.githubLogin
         })
         .from(developerClaims)
         .innerJoin(developers, eq(developers.id, developerClaims.developerId))
+        .leftJoin(externalUsers, eq(externalUsers.id, developerClaims.claimantId))
         .where(eq(developerClaims.status, "pending"))
         .orderBy(asc(developerClaims.createdAt));
     } catch (error) {
@@ -1186,7 +1310,9 @@ export class DevelopersDatabase {
         ...parseClaimRow(row.claim),
         developer_name: row.developerName,
         developer_type:
-          row.developerType as PendingDeveloperClaim["developer_type"]
+          row.developerType as PendingDeveloperClaim["developer_type"],
+        claimant_name: row.claimantName,
+        claimant_github_login: row.claimantGithubLogin
       })),
       error: null
     };
@@ -1315,6 +1441,20 @@ export class DevelopersDatabase {
           approvedAt: null,
           approvedRevision: null,
           approvedBy: null,
+          // Carries the claim's own verification result onto the profile it
+          // just transferred ownership to — verifyGithubOwnership() already
+          // ran once, inside claim() itself, so this isn't a fresh check.
+          // github_verified_at uses the claim's created_at (when that check
+          // actually ran), not this approval time.
+          githubOrgVerified:
+            claim.github_org_verified === undefined
+              ? null
+              : claim.github_org_verified
+                ? 1
+                : 0,
+          githubVerificationNote: claim.github_verification_note ?? null,
+          githubVerifiedAt:
+            claim.github_org_verified === undefined ? null : claim.created_at,
           updatedAt: sql`CURRENT_TIMESTAMP`
         })
         .where(
