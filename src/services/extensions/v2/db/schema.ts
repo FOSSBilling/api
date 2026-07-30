@@ -85,7 +85,17 @@ export const developers = sqliteTable(
     // see DevelopersDatabase.reverifyOwn(). Left null/stale on an
     // inconclusive check (no linked GitHub identity), same as
     // githubOrgVerified itself.
-    githubVerifiedAt: text("github_verified_at")
+    githubVerifiedAt: text("github_verified_at"),
+    // Whether `url` matches GitHub's own on-file website — see
+    // github-verification.ts's urlMatchesGithubBlog(). Only ever 1 or null,
+    // never 0 (see the schema comment on interfaces.ts's
+    // DeveloperProfileSchema.github_url_verified for why).
+    githubUrlVerified: integer("github_url_verified"),
+    // Atomic per-owner cooldown gating reverifyOwn()'s check_url path (the
+    // one that spends a real GitHub API call) — set via a conditional
+    // UPDATE, not read-then-write, so concurrent requests can't both pass.
+    // Null until the first check_url reverify.
+    urlCheckCooldownUntil: text("url_check_cooldown_until")
   },
   (table) => [
     uniqueIndex("idx_developers_owner_unique").on(table.ownerUserId),
@@ -101,6 +111,14 @@ export const developers = sqliteTable(
     check(
       "developers_github_org_verified_check",
       sql`${table.githubOrgVerified} IN (0, 1)`
+    ),
+    // = 1 rather than IN (0, 1): this column is documented to only ever be
+    // 1 or NULL, never 0 (see interfaces.ts's DeveloperProfileSchema
+    // comment) — SQLite's CHECK already treats NULL as satisfying `= 1`, so
+    // this enforces that invariant instead of just validating it's a 0/1.
+    check(
+      "developers_github_url_verified_check",
+      sql`${table.githubUrlVerified} = 1`
     )
   ]
 );

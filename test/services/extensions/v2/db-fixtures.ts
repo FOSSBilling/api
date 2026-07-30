@@ -22,6 +22,7 @@ export interface DeveloperRow {
   github_org_verified: number | null;
   github_verification_note: string | null;
   github_verified_at: string | null;
+  github_url_verified: number | null;
 }
 
 export interface ExtensionRow {
@@ -193,8 +194,8 @@ export async function insertDeveloper(
          (id, type, name, url, owner_user_id, approved_at, created_at, updated_at,
           avatar_url, contact_email, ownership_epoch, content_revision,
           approved_revision, approved_by, github_org_verified, github_verification_note,
-          github_verified_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          github_verified_at, github_url_verified)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .bind(
       row.id,
@@ -213,7 +214,8 @@ export async function insertDeveloper(
       row.approved_by ?? null,
       row.github_org_verified ?? null,
       row.github_verification_note ?? null,
-      row.github_verified_at ?? null
+      row.github_verified_at ?? null,
+      row.github_url_verified ?? null
     )
     .run();
 }

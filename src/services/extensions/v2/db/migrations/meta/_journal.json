@@ -15,6 +15,20 @@
       "when": 1785398492298,
       "tag": "0015_add_developer_github_verified_at",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "6",
+      "when": 1785425233853,
+      "tag": "0016_add_developer_github_url_verified",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1785427859758,
+      "tag": "0017_add_developer_url_check_cooldown",
+      "breakpoints": true
     }
   ]
 }

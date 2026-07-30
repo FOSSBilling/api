@@ -66,9 +66,12 @@ function mockGithubEntityNotFound(): void {
   });
 }
 
-function mockGithubEntity(type: "User" | "Organization"): void {
+function mockGithubEntity(
+  type: "User" | "Organization",
+  blog?: string
+): void {
   (vi.mocked(ghRequest) as MockGitHubRequest).mockImplementation(async () => ({
-    data: { type }
+    data: { type, blog }
   }));
 }
 
@@ -978,6 +981,138 @@ describe("Extensions API v2", () => {
       expect(created.result.github_org_verified).toBe(true);
     });
 
+    it("verifies the Publisher URL when it matches GitHub's on-file website", async () => {
+      mockGithubEntity("Organization", "https://www.acme.example/");
+      await insertUser(db, {
+        id: "user-1",
+        github_login: "someone",
+        github_orgs: JSON.stringify(["acme-org"])
+      });
+
+      const res = await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        {
+          id: "acme-org",
+          type: "organization",
+          name: "Acme Org",
+          URL: "https://acme.example"
+        }
+      );
+
+      expect(res.status).toBe(200);
+      const created = (await res.json()) as {
+        result: { github_org_verified?: boolean; github_url_verified?: boolean };
+      };
+      expect(created.result.github_org_verified).toBe(true);
+      expect(created.result.github_url_verified).toBe(true);
+      const stored = await getDeveloper(db, "acme-org");
+      expect(stored?.github_url_verified).toBe(1);
+    });
+
+    it("doesn't claim a URL match when GitHub's website field differs", async () => {
+      mockGithubEntity("Organization", "https://other.example");
+      await insertUser(db, {
+        id: "user-1",
+        github_login: "someone",
+        github_orgs: JSON.stringify(["acme-org"])
+      });
+
+      const res = await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        {
+          id: "acme-org",
+          type: "organization",
+          name: "Acme Org",
+          URL: "https://acme.example"
+        }
+      );
+
+      expect(res.status).toBe(200);
+      const created = (await res.json()) as {
+        result: { github_url_verified?: boolean };
+      };
+      expect(created.result.github_url_verified).toBeUndefined();
+      const stored = await getDeveloper(db, "acme-org");
+      expect(stored?.github_url_verified).toBeNull();
+    });
+
+    it("matches the Publisher URL to GitHub's website ignoring scheme/www/trailing slash", async () => {
+      mockGithubEntity("Organization", "www.acme.example/");
+      await insertUser(db, {
+        id: "user-1",
+        github_login: "someone",
+        github_orgs: JSON.stringify(["acme-org"])
+      });
+
+      const res = await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        {
+          id: "acme-org",
+          type: "organization",
+          name: "Acme Org",
+          URL: "http://acme.example/"
+        }
+      );
+
+      const created = (await res.json()) as {
+        result: { github_url_verified?: boolean };
+      };
+      expect(created.result.github_url_verified).toBe(true);
+    });
+
+    it("doesn't match Publisher URLs that only differ by port", async () => {
+      mockGithubEntity("Organization", "https://acme.example:8443");
+      await insertUser(db, {
+        id: "user-1",
+        github_login: "someone",
+        github_orgs: JSON.stringify(["acme-org"])
+      });
+
+      const res = await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        {
+          id: "acme-org",
+          type: "organization",
+          name: "Acme Org",
+          URL: "https://acme.example"
+        }
+      );
+
+      const created = (await res.json()) as {
+        result: { github_url_verified?: boolean };
+      };
+      expect(created.result.github_url_verified).toBeUndefined();
+    });
+
+    it("doesn't match Publisher URLs that only differ by path case", async () => {
+      mockGithubEntity("Organization", "https://acme.example/Docs");
+      await insertUser(db, {
+        id: "user-1",
+        github_login: "someone",
+        github_orgs: JSON.stringify(["acme-org"])
+      });
+
+      const res = await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        {
+          id: "acme-org",
+          type: "organization",
+          name: "Acme Org",
+          URL: "https://acme.example/docs"
+        }
+      );
+
+      const created = (await res.json()) as {
+        result: { github_url_verified?: boolean };
+      };
+      expect(created.result.github_url_verified).toBeUndefined();
+    });
+
     it("blocks creating a profile whose id matches a real GitHub org/user the creator doesn't control", async () => {
       mockGithubEntity("Organization");
       await insertUser(db, {
@@ -1094,6 +1229,120 @@ describe("Extensions API v2", () => {
       expect(res.status).toBe(200);
       const data = (await res.json()) as { result: { approved: boolean } };
       expect(data.result.approved).toBe(false);
+    });
+
+    it("keeps approval when a GitHub-verified profile is edited", async () => {
+      mockGithubEntity("User");
+      await insertUser(db, {
+        id: "user-1",
+        github_login: "dev-developer",
+        github_orgs: JSON.stringify([])
+      });
+      const created = await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        sampleDeveloper()
+      );
+      const createdBody = (await created.json()) as {
+        result: { github_org_verified?: boolean };
+      };
+      expect(createdBody.result.github_org_verified).toBe(true);
+
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      const approved = await post(
+        "/extensions/v2/developers/dev-developer/approve",
+        await authHeaders("mod-1"),
+        { expected_revision: 1 }
+      );
+      expect(approved.status).toBe(200);
+
+      const res = await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        sampleDeveloper({ name: "Edited Again" })
+      );
+
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as {
+        result: { approved: boolean; github_org_verified?: boolean };
+      };
+      expect(data.result.approved).toBe(true);
+      expect(data.result.github_org_verified).toBe(true);
+    });
+
+    it("clears approval and GitHub verification when the profile type is changed", async () => {
+      mockGithubEntity("User");
+      await insertUser(db, {
+        id: "user-1",
+        github_login: "dev-developer",
+        github_orgs: JSON.stringify([])
+      });
+      const created = await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        sampleDeveloper()
+      );
+      const createdBody = (await created.json()) as {
+        result: { github_org_verified?: boolean };
+      };
+      expect(createdBody.result.github_org_verified).toBe(true);
+
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await post(
+        "/extensions/v2/developers/dev-developer/approve",
+        await authHeaders("mod-1"),
+        { expected_revision: 1 }
+      );
+
+      const res = await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        { ...sampleDeveloper(), type: "organization" }
+      );
+
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as {
+        result: {
+          approved: boolean;
+          github_org_verified?: boolean;
+          github_url_verified?: boolean;
+        };
+      };
+      expect(data.result.approved).toBe(false);
+      expect(data.result.github_org_verified).toBeUndefined();
+      expect(data.result.github_url_verified).toBeUndefined();
+    });
+
+    it("clears github_url_verified when the Publisher URL is edited, but keeps identity verification", async () => {
+      mockGithubEntity("User", "https://acme.example");
+      await insertUser(db, {
+        id: "user-1",
+        github_login: "dev-developer",
+        github_orgs: JSON.stringify([])
+      });
+      const created = await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        { ...sampleDeveloper(), URL: "https://acme.example" }
+      );
+      const createdBody = (await created.json()) as {
+        result: { github_org_verified?: boolean; github_url_verified?: boolean };
+      };
+      expect(createdBody.result.github_org_verified).toBe(true);
+      expect(createdBody.result.github_url_verified).toBe(true);
+
+      const res = await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        { ...sampleDeveloper(), URL: "https://different.example" }
+      );
+
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as {
+        result: { github_org_verified?: boolean; github_url_verified?: boolean };
+      };
+      expect(data.result.github_org_verified).toBe(true);
+      expect(data.result.github_url_verified).toBeUndefined();
     });
 
     it("does not update a profile after ownership changes mid-request", async () => {
@@ -1449,6 +1698,383 @@ describe("Extensions API v2", () => {
         result: { github_org_verified?: boolean };
       };
       expect(body.result.github_org_verified).toBe(true);
+    });
+
+    it("doesn't check the Publisher URL without ?check_url=true", async () => {
+      mockGithubEntity("Organization", "https://acme.example");
+      await insertDeveloper(db, {
+        id: "dev-developer",
+        type: "organization",
+        name: "Dev",
+        url: "https://acme.example",
+        owner_user_id: "user-1"
+      });
+      await insertUser(db, {
+        id: "user-1",
+        github_login: "someone",
+        github_orgs: JSON.stringify(["dev-developer"])
+      });
+
+      const res = await post(
+        "/extensions/v2/developers/me/reverify",
+        await authHeaders("user-1")
+      );
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        result: { github_url_verified?: boolean };
+      };
+      expect(body.result.github_url_verified).toBeUndefined();
+      expect(ghRequest).not.toHaveBeenCalled();
+    });
+
+    it("checks the Publisher URL when re-verified with ?check_url=true", async () => {
+      mockGithubEntity("Organization", "https://acme.example");
+      await insertDeveloper(db, {
+        id: "dev-developer",
+        type: "organization",
+        name: "Dev",
+        url: "https://acme.example",
+        owner_user_id: "user-1"
+      });
+      await insertUser(db, {
+        id: "user-1",
+        github_login: "someone",
+        github_orgs: JSON.stringify(["dev-developer"])
+      });
+
+      const res = await post(
+        "/extensions/v2/developers/me/reverify?check_url=true",
+        await authHeaders("user-1")
+      );
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        result: { github_url_verified?: boolean };
+      };
+      expect(body.result.github_url_verified).toBe(true);
+    });
+
+    it("rate-limits repeated ?check_url=true calls from the same caller", async () => {
+      mockGithubEntity("Organization", "https://acme.example");
+      await insertDeveloper(db, {
+        id: "dev-developer",
+        type: "organization",
+        name: "Dev",
+        url: "https://acme.example",
+        owner_user_id: "user-1"
+      });
+      await insertUser(db, {
+        id: "user-1",
+        github_login: "someone",
+        github_orgs: JSON.stringify(["dev-developer"])
+      });
+
+      const first = await post(
+        "/extensions/v2/developers/me/reverify?check_url=true",
+        await authHeaders("user-1")
+      );
+      expect(first.status).toBe(200);
+      vi.clearAllMocks();
+
+      const second = await post(
+        "/extensions/v2/developers/me/reverify?check_url=true",
+        await authHeaders("user-1")
+      );
+      expect(second.status).toBe(429);
+      const body = (await second.json()) as { error: { code: string } };
+      expect(body.error.code).toBe("RATE_LIMITED");
+      // The whole point — no GitHub API call for the blocked attempt.
+      expect(ghRequest).not.toHaveBeenCalled();
+    });
+
+    it("doesn't rate-limit reverify calls that don't use ?check_url", async () => {
+      await insertDeveloper(db, {
+        id: "dev-developer",
+        type: "organization",
+        name: "Dev",
+        url: "https://acme.example",
+        owner_user_id: "user-1"
+      });
+      await insertUser(db, {
+        id: "user-1",
+        github_login: "someone",
+        github_orgs: JSON.stringify(["dev-developer"])
+      });
+
+      const first = await post(
+        "/extensions/v2/developers/me/reverify",
+        await authHeaders("user-1")
+      );
+      const second = await post(
+        "/extensions/v2/developers/me/reverify",
+        await authHeaders("user-1")
+      );
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(200);
+    });
+
+    it("rate-limits ?check_url=true per caller, not globally", async () => {
+      mockGithubEntity("Organization", "https://acme.example");
+      await insertDeveloper(db, {
+        id: "dev-developer",
+        type: "organization",
+        name: "Dev",
+        url: "https://acme.example",
+        owner_user_id: "user-1"
+      });
+      await insertDeveloper(db, {
+        id: "other-developer",
+        type: "organization",
+        name: "Other",
+        url: "https://acme.example",
+        owner_user_id: "user-2"
+      });
+      await insertUser(db, {
+        id: "user-1",
+        github_login: "someone",
+        github_orgs: JSON.stringify(["dev-developer"])
+      });
+      await insertUser(db, {
+        id: "user-2",
+        github_login: "someone-else",
+        github_orgs: JSON.stringify(["other-developer"])
+      });
+
+      const first = await post(
+        "/extensions/v2/developers/me/reverify?check_url=true",
+        await authHeaders("user-1")
+      );
+      const second = await post(
+        "/extensions/v2/developers/me/reverify?check_url=true",
+        await authHeaders("user-2")
+      );
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(200);
+    });
+
+    it("only lets one of two concurrent ?check_url=true requests through", async () => {
+      mockGithubEntity("Organization", "https://acme.example");
+      await insertDeveloper(db, {
+        id: "dev-developer",
+        type: "organization",
+        name: "Dev",
+        url: "https://acme.example",
+        owner_user_id: "user-1"
+      });
+      await insertUser(db, {
+        id: "user-1",
+        github_login: "someone",
+        github_orgs: JSON.stringify(["dev-developer"])
+      });
+
+      const headers = await authHeaders("user-1");
+      const [first, second] = await Promise.all([
+        post("/extensions/v2/developers/me/reverify?check_url=true", headers),
+        post("/extensions/v2/developers/me/reverify?check_url=true", headers)
+      ]);
+
+      const statuses = [first.status, second.status].sort();
+      expect(statuses).toEqual([200, 429]);
+    });
+
+    it("does not persist a URL verification computed against a stale URL", async () => {
+      mockGithubEntity("Organization", "https://acme.example");
+      await insertDeveloper(db, {
+        id: "dev-developer",
+        type: "organization",
+        name: "Dev",
+        url: "https://acme.example",
+        owner_user_id: "user-1"
+      });
+      await insertUser(db, {
+        id: "user-1",
+        github_login: "someone",
+        github_orgs: JSON.stringify(["dev-developer"])
+      });
+
+      // Fires just before reverifyOwn's final write (identified by
+      // touching github_verified_at, which only that statement sets) — the
+      // Publisher URL changes between the check and the write, same shape
+      // as the existing ownership-race test above.
+      env.DB_EXTENSIONS = wrapD1WithHook(db, async (sql) => {
+        if (sql.includes("developers") && sql.includes("github_verified_at")) {
+          await db
+            .prepare("UPDATE developers SET url = ? WHERE id = ?")
+            .bind("https://different.example", "dev-developer")
+            .run();
+        }
+      });
+
+      const res = await post(
+        "/extensions/v2/developers/me/reverify?check_url=true",
+        await authHeaders("user-1")
+      );
+      env.DB_EXTENSIONS = db;
+
+      expect(res.status).toBe(409);
+      expect((await getDeveloper(db, "dev-developer"))?.github_url_verified).toBe(
+        null
+      );
+      expect((await getDeveloper(db, "dev-developer"))?.url).toBe(
+        "https://different.example"
+      );
+    });
+
+    it("clears a previously-verified Publisher URL when identity no longer matches", async () => {
+      mockGithubEntity("Organization", "https://acme.example");
+      await insertDeveloper(db, {
+        id: "dev-developer",
+        type: "organization",
+        name: "Dev",
+        url: "https://acme.example",
+        owner_user_id: "user-1",
+        github_org_verified: 1,
+        github_url_verified: 1
+      });
+      // No longer a member of dev-developer's org.
+      await insertUser(db, {
+        id: "user-1",
+        github_login: "someone",
+        github_orgs: JSON.stringify([])
+      });
+
+      const res = await post(
+        "/extensions/v2/developers/me/reverify?check_url=true",
+        await authHeaders("user-1")
+      );
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        result: { github_org_verified?: boolean; github_url_verified?: boolean };
+      };
+      expect(body.result.github_org_verified).toBe(false);
+      expect(body.result.github_url_verified).toBeUndefined();
+    });
+
+    it("clears a previously-verified Publisher URL when identity no longer matches, even without ?check_url", async () => {
+      await insertDeveloper(db, {
+        id: "dev-developer",
+        type: "organization",
+        name: "Dev",
+        url: "https://acme.example",
+        owner_user_id: "user-1",
+        github_org_verified: 1,
+        github_url_verified: 1
+      });
+      // No longer a member of dev-developer's org.
+      await insertUser(db, {
+        id: "user-1",
+        github_login: "someone",
+        github_orgs: JSON.stringify([])
+      });
+
+      const res = await post(
+        "/extensions/v2/developers/me/reverify",
+        await authHeaders("user-1")
+      );
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        result: { github_org_verified?: boolean; github_url_verified?: boolean };
+      };
+      expect(body.result.github_org_verified).toBe(false);
+      expect(body.result.github_url_verified).toBeUndefined();
+      // Clearing a stale URL signal on an identity mismatch is a local
+      // comparison, same as the identity check itself — no GitHub API call.
+      expect(ghRequest).not.toHaveBeenCalled();
+    });
+
+    it("doesn't verify the Publisher URL against a GitHub entity of the wrong type", async () => {
+      // The stored profile is a "user", but the GitHub entity currently
+      // found for this id is an "organization" — matchesClaimant() only
+      // compares login/org membership, so this discrepancy has to be
+      // caught separately before trusting the entity's blog field.
+      mockGithubEntity("Organization", "https://acme.example");
+      await insertDeveloper(db, {
+        id: "dev-developer",
+        type: "user",
+        name: "Dev",
+        url: "https://acme.example",
+        owner_user_id: "user-1"
+      });
+      await insertUser(db, {
+        id: "user-1",
+        github_login: "dev-developer",
+        github_orgs: JSON.stringify([])
+      });
+
+      const res = await post(
+        "/extensions/v2/developers/me/reverify?check_url=true",
+        await authHeaders("user-1")
+      );
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        result: {
+          github_org_verified?: boolean;
+          github_url_verified?: boolean;
+          github_verification_note?: string;
+        };
+      };
+      expect(body.result.github_url_verified).toBeUndefined();
+      // The same discrepancy that rules out the URL match also undermines
+      // the identity match itself — matchesClaimant() alone can't catch
+      // this since it never queries GitHub's actual current entity type.
+      expect(body.result.github_org_verified).toBe(false);
+      expect(body.result.github_verification_note).toBe(
+        "No longer verified: GitHub's on-file entity type no longer matches this profile."
+      );
+    });
+
+    it("preserves an existing Publisher URL verification when the GitHub lookup fails", async () => {
+      mockGithubEntityNotFound();
+      await insertDeveloper(db, {
+        id: "dev-developer",
+        type: "organization",
+        name: "Dev",
+        url: "https://acme.example",
+        owner_user_id: "user-1",
+        github_org_verified: 1,
+        github_url_verified: 1
+      });
+      await insertUser(db, {
+        id: "user-1",
+        github_login: "someone",
+        github_orgs: JSON.stringify(["dev-developer"])
+      });
+
+      const res = await post(
+        "/extensions/v2/developers/me/reverify?check_url=true",
+        await authHeaders("user-1")
+      );
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        result: { github_url_verified?: boolean };
+      };
+      expect(body.result.github_url_verified).toBe(true);
+    });
+
+    it("treats ?check_url=false the same as omitting it", async () => {
+      mockGithubEntity("Organization", "https://acme.example");
+      await insertDeveloper(db, {
+        id: "dev-developer",
+        type: "organization",
+        name: "Dev",
+        url: "https://acme.example",
+        owner_user_id: "user-1"
+      });
+      await insertUser(db, {
+        id: "user-1",
+        github_login: "someone",
+        github_orgs: JSON.stringify(["dev-developer"])
+      });
+
+      const res = await post(
+        "/extensions/v2/developers/me/reverify?check_url=false",
+        await authHeaders("user-1")
+      );
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        result: { github_url_verified?: boolean };
+      };
+      expect(body.result.github_url_verified).toBeUndefined();
+      expect(ghRequest).not.toHaveBeenCalled();
     });
 
     it("404s when the caller doesn't own a developer profile", async () => {
@@ -1828,6 +2454,78 @@ describe("Extensions API v2", () => {
       expect((await getDeveloper(db, "dev-developer"))?.owner_user_id).toBe(
         "user-2"
       );
+    });
+
+    it("doesn't inherit the previous owner's check_url cooldown after a transfer", async () => {
+      await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        sampleDeveloper()
+      );
+
+      const usedCooldown = await post(
+        "/extensions/v2/developers/me/reverify?check_url=true",
+        await authHeaders("user-1")
+      );
+      expect(usedCooldown.status).toBe(200);
+
+      const initiate = await post(
+        "/extensions/v2/developers/dev-developer/transfer",
+        await authHeaders("user-1")
+      );
+      const token = ((await initiate.json()) as { result: { token: string } })
+        .result.token;
+      const accept = await post(
+        "/extensions/v2/developers/transfers/accept",
+        await authHeaders("user-2"),
+        { token }
+      );
+      expect(accept.status).toBe(200);
+
+      // user-2 has never called check_url themselves — the previous
+      // owner's still-active cooldown must not carry over onto them.
+      const res = await post(
+        "/extensions/v2/developers/me/reverify?check_url=true",
+        await authHeaders("user-2")
+      );
+      expect(res.status).toBe(200);
+    });
+
+    it("clears GitHub verification on transfer — it described the previous owner's identity, not the new owner's", async () => {
+      mockGithubEntity("User", "https://acme.example");
+      await insertUser(db, {
+        id: "user-1",
+        github_login: "dev-developer",
+        github_orgs: JSON.stringify([])
+      });
+      const created = await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        { ...sampleDeveloper(), URL: "https://acme.example" }
+      );
+      const createdBody = (await created.json()) as {
+        result: { github_org_verified?: boolean; github_url_verified?: boolean };
+      };
+      expect(createdBody.result.github_org_verified).toBe(true);
+      expect(createdBody.result.github_url_verified).toBe(true);
+
+      const initiate = await post(
+        "/extensions/v2/developers/dev-developer/transfer",
+        await authHeaders("user-1")
+      );
+      const token = ((await initiate.json()) as { result: { token: string } })
+        .result.token;
+      const accept = await post(
+        "/extensions/v2/developers/transfers/accept",
+        await authHeaders("user-2"),
+        { token }
+      );
+      expect(accept.status).toBe(200);
+      const accepted = (await accept.json()) as {
+        result: { github_org_verified?: boolean; github_url_verified?: boolean };
+      };
+      expect(accepted.result.github_org_verified).toBeUndefined();
+      expect(accepted.result.github_url_verified).toBeUndefined();
     });
 
     it("does not let replaying an already-used token reassign ownership away from a later owner", async () => {

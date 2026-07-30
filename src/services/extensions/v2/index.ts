@@ -22,6 +22,7 @@ import {
   PaginationSchema,
   PublicDeveloperSchema,
   QueueQuerySchema,
+  ReverifyQuerySchema,
   ReviewNoteOptionalSchema,
   ReviewNoteRequiredSchema,
   SubmissionPayloadSchema,
@@ -707,6 +708,7 @@ const reverifyOwnDeveloperRoute = createRoute({
     "Re-check the caller's linked GitHub identity against their own developer profile",
   security: [{ Bearer: [] }],
   middleware: [requireAuth()] as const,
+  request: { query: ReverifyQuerySchema },
   responses: {
     200: {
       content: {
@@ -728,6 +730,10 @@ const reverifyOwnDeveloperRoute = createRoute({
       content: { "application/json": { schema: ErrorResponseSchema } },
       description: "Developer ownership changed while re-verifying"
     },
+    429: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "check_url was used again too soon after a previous check"
+    },
     500: {
       content: { "application/json": { schema: ErrorResponseSchema } },
       description: "Database error"
@@ -737,16 +743,24 @@ const reverifyOwnDeveloperRoute = createRoute({
 
 extensionsV2.openapi(reverifyOwnDeveloperRoute, async (c) => {
   const auth = getAuth(c);
+  const { check_url } = c.req.valid("query");
+  const platform = getPlatform(c);
   const db = new DevelopersDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
 
-  const { data, error } = await db.reverifyOwn(auth.userId);
+  const { data, error } = await db.reverifyOwn(
+    auth.userId,
+    check_url,
+    platform.getEnv("GITHUB_TOKEN")
+  );
   if (error || !data) {
     const status =
       error?.code === "NOT_FOUND"
         ? 404
         : error?.code === "CONFLICT"
           ? 409
-          : 500;
+          : error?.code === "RATE_LIMITED"
+            ? 429
+            : 500;
     return c.json(
       {
         error: {

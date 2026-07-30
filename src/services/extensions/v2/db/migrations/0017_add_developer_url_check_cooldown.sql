@@ -1,0 +1,1 @@
+ALTER TABLE `developers` ADD `url_check_cooldown_until` text;
