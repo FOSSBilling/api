@@ -2456,6 +2456,41 @@ describe("Extensions API v2", () => {
       );
     });
 
+    it("doesn't inherit the previous owner's check_url cooldown after a transfer", async () => {
+      await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        sampleDeveloper()
+      );
+
+      const usedCooldown = await post(
+        "/extensions/v2/developers/me/reverify?check_url=true",
+        await authHeaders("user-1")
+      );
+      expect(usedCooldown.status).toBe(200);
+
+      const initiate = await post(
+        "/extensions/v2/developers/dev-developer/transfer",
+        await authHeaders("user-1")
+      );
+      const token = ((await initiate.json()) as { result: { token: string } })
+        .result.token;
+      const accept = await post(
+        "/extensions/v2/developers/transfers/accept",
+        await authHeaders("user-2"),
+        { token }
+      );
+      expect(accept.status).toBe(200);
+
+      // user-2 has never called check_url themselves — the previous
+      // owner's still-active cooldown must not carry over onto them.
+      const res = await post(
+        "/extensions/v2/developers/me/reverify?check_url=true",
+        await authHeaders("user-2")
+      );
+      expect(res.status).toBe(200);
+    });
+
     it("does not let replaying an already-used token reassign ownership away from a later owner", async () => {
       await put(
         "/extensions/v2/developers/me",

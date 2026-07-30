@@ -848,11 +848,16 @@ export class DevelopersDatabase {
         params: [userId, tokenHash, userId]
       });
       const updateDeveloperStmt = toD1Statement(this.db.$client, {
+        // url_check_cooldown_until is reset here too — it's keyed by
+        // whichever user currently owns this row, so left unchanged it
+        // would rate-limit the *new* owner's first check_url reverify for
+        // whatever's left of the *previous* owner's cooldown window.
         sql: `UPDATE developers
               SET owner_user_id = ?,
                   ownership_epoch = ownership_epoch + 1,
                   content_revision = content_revision + 1,
                   approved_at = NULL, approved_revision = NULL, approved_by = NULL,
+                  url_check_cooldown_until = NULL,
                   updated_at = CURRENT_TIMESTAMP
               WHERE changes() = 1
                 AND id = (
@@ -1605,6 +1610,12 @@ export class DevelopersDatabase {
           approvedAt: null,
           approvedRevision: null,
           approvedBy: null,
+          // Not known to be reachable today (claims only ever target
+          // never-owned profiles, so there's no prior owner's cooldown to
+          // inherit), but reset for the same reason as acceptTransfer's
+          // equivalent write — belongs to whichever user currently owns
+          // this row.
+          urlCheckCooldownUntil: null,
           // Carries the claim's own verification result onto the profile it
           // just transferred ownership to — verifyGithubOwnership() already
           // ran once, inside claim() itself, so this isn't a fresh check.
