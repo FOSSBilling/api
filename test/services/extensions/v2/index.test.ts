@@ -1,4 +1,12 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  beforeEach,
+  afterEach,
+  vi
+} from "vitest";
 import {
   createExecutionContext,
   waitOnExecutionContext
@@ -23,9 +31,34 @@ vi.mock("@octokit/request", () => {
 
 import { request as ghRequest } from "@octokit/request";
 import app from "../../../../src/app";
-import { createMockD1, createTables, MockTables } from "./mock-db";
 import { signAssertion } from "../../../lib/auth/assertion-helper";
 import { MockGitHubRequest } from "../../../utils/test-types";
+import { applyTestMigrations } from "../../../utils/apply-migrations";
+import { wrapD1WithHook } from "./db-interceptor";
+import {
+  resetExtensionsDb,
+  ensureUser,
+  insertUser,
+  insertDeveloper,
+  insertExtension,
+  insertSubmission,
+  insertDeveloperClaim,
+  getDeveloper,
+  hasDeveloper,
+  listDevelopers,
+  countExtensions,
+  getExtension,
+  countSubmissions,
+  getSubmission,
+  listSubmissions,
+  countDeveloperClaims,
+  getDeveloperClaim,
+  listDeveloperTransfers,
+  listDeveloperClaims,
+  listDeveloperHistory,
+  expireAllDeveloperTransfers,
+  bumpDeveloperOwnership
+} from "./db-fixtures";
 
 function mockGithubEntityNotFound(): void {
   (vi.mocked(ghRequest) as MockGitHubRequest).mockImplementation(async () => {
@@ -42,16 +75,32 @@ function mockGithubEntity(type: "User" | "Organization"): void {
 // Matches the ASSERTION_SIGNING_SECRET binding configured in vitest.config.ts.
 const SECRET = "test-assertion-signing-secret";
 
-let tables: MockTables;
+// The real D1_EXTENSIONS binding. beforeEach captures it fresh each time and
+// afterEach always restores env.DB_EXTENSIONS to this reference, so the
+// handful of tests that temporarily wrap it (see db-interceptor.ts) for a
+// fault/race injection never leak that wrapper into the next test.
+let db: D1Database;
 
-beforeEach(() => {
-  tables = createTables();
-  env.DB_EXTENSIONS = createMockD1(tables);
+beforeAll(applyTestMigrations);
+
+beforeEach(async () => {
+  db = env.DB_EXTENSIONS;
+  await resetExtensionsDb(db);
   vi.clearAllMocks();
   mockGithubEntityNotFound();
 });
 
+afterEach(() => {
+  env.DB_EXTENSIONS = db;
+});
+
+// In production a caller always already has a `users` row by the time they
+// call this API - the shared auth service that mints the assertion is the
+// same one that populates it. Real D1 enforces developers.owner_user_id
+// (and similar) as a hard FK to users(id), so tests need that precondition
+// too; ensureUser() is a no-op if a richer row already exists for this sub.
 async function authHeaders(sub: string): Promise<Record<string, string>> {
+  await ensureUser(db, sub);
   const token = await signAssertion(SECRET, { sub });
   return {
     Authorization: `Bearer ${token}`,
@@ -95,8 +144,8 @@ function samplePayload(overrides?: {
 
 // Extension submissions now require the named developer to already exist
 // (created via PUT /developers/me) and be owned by the caller.
-function seedDeveloper(id: string, ownerUserId: string): void {
-  tables.developers.set(id, {
+async function seedDeveloper(id: string, ownerUserId: string): Promise<void> {
+  await insertDeveloper(db, {
     id,
     type: "user",
     name: "Developer",
@@ -105,28 +154,28 @@ function seedDeveloper(id: string, ownerUserId: string): void {
   });
 }
 
-function seedUnownedDeveloper(id: string, name = "Legacy Developer"): void {
-  tables.developers.set(id, {
+async function seedUnownedDeveloper(
+  id: string,
+  name = "Legacy Developer"
+): Promise<void> {
+  await insertDeveloper(db, {
     id,
     type: "user",
     name,
     url: null,
-    owner_user_id: null,
-    approved_at: null,
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString()
+    owner_user_id: null
   });
 }
 
-function seedOwnedExtension(): void {
-  tables.developers.set("owner-developer", {
+async function seedOwnedExtension(): Promise<void> {
+  await insertDeveloper(db, {
     id: "owner-developer",
     type: "user",
     name: "Owner",
     url: null,
     owner_user_id: "owner-1"
   });
-  tables.extensions.set("existing-ext", {
+  await insertExtension(db, {
     id: "existing-ext",
     type: "mod",
     author_id: "owner-developer",
@@ -231,7 +280,7 @@ describe("Extensions API v2", () => {
     });
 
     it("rejects profile fields (avatar_url/contact_email) on a submission's developer", async () => {
-      seedDeveloper("new-developer", "user-1");
+      await seedDeveloper("new-developer", "user-1");
       const headers = await authHeaders("user-1");
       const payload = samplePayload();
       const res = await post("/extensions/v2/submissions", headers, {
@@ -243,11 +292,11 @@ describe("Extensions API v2", () => {
       });
 
       expect(res.status).toBe(422);
-      expect(tables.extension_submissions.size).toBe(0);
+      expect(await countSubmissions(db)).toBe(0);
     });
 
     it("creates a pending submission for a brand-new extension under an existing developer", async () => {
-      seedDeveloper("new-developer", "user-1");
+      await seedDeveloper("new-developer", "user-1");
       const headers = await authHeaders("user-1");
       const res = await post(
         "/extensions/v2/submissions",
@@ -260,15 +309,15 @@ describe("Extensions API v2", () => {
         result: { id: string; status: string };
       };
       expect(data.result.status).toBe("pending");
-      expect(tables.extension_submissions.size).toBe(1);
+      expect(await countSubmissions(db)).toBe(1);
 
-      const stored = [...tables.extension_submissions.values()][0];
-      expect(stored.extension_id).toBeNull();
-      expect(stored.submitted_by).toBe("user-1");
+      const stored = await getSubmission(db, data.result.id);
+      expect(stored?.extension_id).toBeNull();
+      expect(stored?.submitted_by).toBe("user-1");
     });
 
     it("rejects editing an extension not owned by the caller", async () => {
-      seedOwnedExtension();
+      await seedOwnedExtension();
       const headers = await authHeaders("intruder");
 
       const res = await post(
@@ -281,11 +330,11 @@ describe("Extensions API v2", () => {
       );
 
       expect(res.status).toBe(403);
-      expect(tables.extension_submissions.size).toBe(0);
+      expect(await countSubmissions(db)).toBe(0);
     });
 
     it("allows editing an extension owned by the caller", async () => {
-      seedOwnedExtension();
+      await seedOwnedExtension();
       const headers = await authHeaders("owner-1");
 
       const res = await post(
@@ -298,12 +347,12 @@ describe("Extensions API v2", () => {
       );
 
       expect(res.status).toBe(201);
-      const stored = [...tables.extension_submissions.values()][0];
+      const [stored] = await listSubmissions(db);
       expect(stored.extension_id).toBe("existing-ext");
     });
 
     it("rejects claiming a developer already owned by someone else", async () => {
-      seedOwnedExtension();
+      await seedOwnedExtension();
       const headers = await authHeaders("intruder");
 
       const res = await post(
@@ -328,11 +377,11 @@ describe("Extensions API v2", () => {
       );
 
       expect(res.status).toBe(403);
-      expect(tables.extension_submissions.size).toBe(0);
+      expect(await countSubmissions(db)).toBe(0);
     });
 
     it("bounds payload size and the number of releases", async () => {
-      seedDeveloper("new-developer", "user-1");
+      await seedDeveloper("new-developer", "user-1");
       const payload = samplePayload();
       const oversized = await post(
         "/extensions/v2/submissions",
@@ -417,7 +466,7 @@ describe("Extensions API v2", () => {
     it("preserves compatibility with stored slug ids over 100 characters", async () => {
       const developerId = "d".repeat(120);
       const extensionId = "e".repeat(120);
-      seedDeveloper(developerId, "user-1");
+      await seedDeveloper(developerId, "user-1");
 
       const res = await post(
         "/extensions/v2/submissions",
@@ -429,7 +478,7 @@ describe("Extensions API v2", () => {
     });
 
     it("rejects duplicate pending targets and caps each user's backlog", async () => {
-      seedDeveloper("new-developer", "user-1");
+      await seedDeveloper("new-developer", "user-1");
       const headers = await authHeaders("user-1");
       expect(
         (await post("/extensions/v2/submissions", headers, samplePayload()))
@@ -440,7 +489,7 @@ describe("Extensions API v2", () => {
           .status
       ).toBe(409);
 
-      seedDeveloper("other-developer", "user-2");
+      await seedDeveloper("other-developer", "user-2");
       expect(
         (
           await post(
@@ -465,14 +514,14 @@ describe("Extensions API v2", () => {
         samplePayload({ extensionId: "new-ext-over-limit" })
       );
       expect(overLimit.status).toBe(409);
-      expect(tables.extension_submissions.size).toBe(10);
+      expect(await countSubmissions(db)).toBe(10);
     });
   });
 
   describe("GET /submissions/mine", () => {
     it("returns only the caller's own submissions", async () => {
-      seedDeveloper("developer-a", "user-1");
-      seedDeveloper("developer-b", "user-2");
+      await seedDeveloper("developer-a", "user-1");
+      await seedDeveloper("developer-b", "user-2");
       await post(
         "/extensions/v2/submissions",
         await authHeaders("user-1"),
@@ -502,7 +551,7 @@ describe("Extensions API v2", () => {
     });
 
     it("paginates deterministically with an opaque cursor", async () => {
-      seedDeveloper("new-developer", "user-1");
+      await seedDeveloper("new-developer", "user-1");
       const headers = await authHeaders("user-1");
       for (const extensionId of ["page-a", "page-b", "page-c"]) {
         expect(
@@ -553,8 +602,8 @@ describe("Extensions API v2", () => {
     });
 
     it("returns pending submissions for a moderator", async () => {
-      tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
-      seedDeveloper("new-developer", "user-1");
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await seedDeveloper("new-developer", "user-1");
       await post(
         "/extensions/v2/submissions",
         await authHeaders("user-1"),
@@ -574,8 +623,8 @@ describe("Extensions API v2", () => {
 
   describe("approve / reject", () => {
     it("does not approve a former owner's payload when ownership changes at approval", async () => {
-      tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
-      seedDeveloper("new-developer", "user-1");
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await seedDeveloper("new-developer", "user-1");
       const created = await post(
         "/extensions/v2/submissions",
         await authHeaders("user-1"),
@@ -583,22 +632,24 @@ describe("Extensions API v2", () => {
       );
       const { result } = (await created.json()) as { result: { id: string } };
 
-      tables.raceOwnerChangeOnSubmissionApprovalTo = "user-2";
+      // ownership_epoch is captured on the submission at creation time and
+      // only compared later, so unlike the deleteOwn/upsertOwn races below,
+      // simply changing ownership before the approve call (rather than
+      // mid-request) reproduces this exactly.
+      await bumpDeveloperOwnership(db, "new-developer", "user-2");
       const approved = await post(
         `/extensions/v2/submissions/${result.id}/approve`,
         await authHeaders("mod-1"),
         {}
       );
       expect(approved.status).toBe(409);
-      expect(tables.extension_submissions.get(result.id)?.status).toBe(
-        "pending"
-      );
-      expect(tables.extensions.size).toBe(0);
+      expect((await getSubmission(db, result.id))?.status).toBe("pending");
+      expect(await countExtensions(db)).toBe(0);
     });
 
-    it("reverts to pending if the write-through fails after a successful claim", async () => {
-      tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
-      seedDeveloper("new-developer", "user-1");
+    it("leaves the submission pending if the extension write-through fails mid-batch", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await seedDeveloper("new-developer", "user-1");
 
       const created = await post(
         "/extensions/v2/submissions",
@@ -607,32 +658,46 @@ describe("Extensions API v2", () => {
       );
       const { result } = (await created.json()) as { result: { id: string } };
 
-      tables.forceExtensionWriteFailure = true;
+      // approve()'s three statements (submission status, developer, extension)
+      // run as one atomic db.batch() call, so D1 itself rolls back the whole
+      // thing on any failure - there's no app-level "revert" to test, and no
+      // way to make the earlier statements really commit before this one
+      // fails (see db-interceptor.ts). This verifies that guarantee end to
+      // end: a failure on the last statement still leaves nothing committed.
+      env.DB_EXTENSIONS = wrapD1WithHook(db, (sql) => {
+        if (
+          sql.includes("INSERT INTO") &&
+          sql.includes("extensions") &&
+          !sql.includes("extension_submissions")
+        ) {
+          throw new Error("simulated write-through failure");
+        }
+      });
       const approved = await post(
         `/extensions/v2/submissions/${result.id}/approve`,
         await authHeaders("mod-1"),
         {}
       );
       expect(approved.status).toBe(500);
-      expect(tables.extensions.size).toBe(0);
+      expect(await countExtensions(db)).toBe(0);
 
-      const stored = tables.extension_submissions.get(result.id);
+      const stored = await getSubmission(db, result.id);
       expect(stored?.status).toBe("pending");
 
       // Recovers cleanly once the underlying failure is gone.
-      tables.forceExtensionWriteFailure = false;
+      env.DB_EXTENSIONS = db;
       const retried = await post(
         `/extensions/v2/submissions/${result.id}/approve`,
         await authHeaders("mod-1"),
         {}
       );
       expect(retried.status).toBe(200);
-      expect(tables.extensions.size).toBe(1);
+      expect(await countExtensions(db)).toBe(1);
     });
 
     it("approves a submission and it becomes visible via the v1 read path", async () => {
-      tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
-      seedDeveloper("new-developer", "user-1");
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await seedDeveloper("new-developer", "user-1");
 
       const created = await post(
         "/extensions/v2/submissions",
@@ -664,7 +729,7 @@ describe("Extensions API v2", () => {
     });
 
     it("blocks non-moderators from approving", async () => {
-      seedDeveloper("new-developer", "user-1");
+      await seedDeveloper("new-developer", "user-1");
       const created = await post(
         "/extensions/v2/submissions",
         await authHeaders("user-1"),
@@ -681,8 +746,8 @@ describe("Extensions API v2", () => {
     });
 
     it("rejects approving a submission that is not pending", async () => {
-      tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
-      seedDeveloper("new-developer", "user-1");
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await seedDeveloper("new-developer", "user-1");
       const created = await post(
         "/extensions/v2/submissions",
         await authHeaders("user-1"),
@@ -702,11 +767,11 @@ describe("Extensions API v2", () => {
       );
       expect(secondApprove.status).toBe(409);
       // The second (raced) approve must not write through again.
-      expect(tables.extensions.size).toBe(1);
+      expect(await countExtensions(db)).toBe(1);
     });
 
     it("updates the existing row instead of duplicating it when an edit's id differs only by case", async () => {
-      tables.developers.set("owner-developer", {
+      await insertDeveloper(db, {
         id: "owner-developer",
         type: "user",
         name: "Owner",
@@ -714,7 +779,7 @@ describe("Extensions API v2", () => {
         owner_user_id: "owner-1"
       });
       // Legacy v1 data can have mixed-case ids; v2 submissions must be lowercase.
-      tables.extensions.set("Existing-Ext", {
+      await insertExtension(db, {
         id: "Existing-Ext",
         type: "mod",
         author_id: "owner-developer",
@@ -729,7 +794,7 @@ describe("Extensions API v2", () => {
         version: "1.0.0",
         download_url: "https://e.com/d.zip"
       });
-      tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
 
       const created = await post(
         "/extensions/v2/submissions",
@@ -748,14 +813,14 @@ describe("Extensions API v2", () => {
       );
       expect(approved.status).toBe(200);
 
-      expect(tables.extensions.size).toBe(1);
-      const stored = tables.extensions.get("Existing-Ext");
+      expect(await countExtensions(db)).toBe(1);
+      const stored = await getExtension(db, "Existing-Ext");
       expect(stored?.name).toBe("New Extension");
     });
 
     it("requires a review_note to reject", async () => {
-      tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
-      seedDeveloper("new-developer", "user-1");
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await seedDeveloper("new-developer", "user-1");
       const created = await post(
         "/extensions/v2/submissions",
         await authHeaders("user-1"),
@@ -772,8 +837,8 @@ describe("Extensions API v2", () => {
     });
 
     it("rejects a submission with a note", async () => {
-      tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
-      seedDeveloper("new-developer", "user-1");
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await seedDeveloper("new-developer", "user-1");
       const created = await post(
         "/extensions/v2/submissions",
         await authHeaders("user-1"),
@@ -789,7 +854,7 @@ describe("Extensions API v2", () => {
       expect(res.status).toBe(200);
       const body = (await res.json()) as { result: { status: string } };
       expect(body.result.status).toBe("rejected");
-      expect(tables.extensions.size).toBe(0);
+      expect(await countExtensions(db)).toBe(0);
     });
   });
 
@@ -805,7 +870,7 @@ describe("Extensions API v2", () => {
       const data = (await res.json()) as { result: { approved: boolean } };
       expect(data.result.approved).toBe(false);
 
-      const stored = tables.developers.get("dev-developer");
+      const stored = await getDeveloper(db, "dev-developer");
       expect(stored).toBeDefined();
       expect(stored?.approved_at).toBeNull();
     });
@@ -829,7 +894,7 @@ describe("Extensions API v2", () => {
       };
       expect(data.result.name).toBe("Renamed Developer");
       expect(data.result.approved).toBe(false);
-      expect(tables.developers.get("dev-developer")?.name).toBe(
+      expect((await getDeveloper(db, "dev-developer"))?.name).toBe(
         "Renamed Developer"
       );
     });
@@ -852,7 +917,7 @@ describe("Extensions API v2", () => {
       const statuses = [resA.status, resB.status].sort();
       expect(statuses).toEqual([200, 409]);
 
-      const ownedDevelopers = [...tables.developers.values()].filter(
+      const ownedDevelopers = (await listDevelopers(db)).filter(
         (a) => a.owner_user_id === "user-1"
       );
       expect(ownedDevelopers).toHaveLength(1);
@@ -894,7 +959,7 @@ describe("Extensions API v2", () => {
 
     it("verifies a new profile when the creator's linked GitHub org matches the id", async () => {
       mockGithubEntity("Organization");
-      tables.users.set("user-1", {
+      await insertUser(db, {
         id: "user-1",
         github_login: "someone",
         github_orgs: JSON.stringify(["acme-org"])
@@ -915,7 +980,7 @@ describe("Extensions API v2", () => {
 
     it("blocks creating a profile whose id matches a real GitHub org/user the creator doesn't control", async () => {
       mockGithubEntity("Organization");
-      tables.users.set("user-1", {
+      await insertUser(db, {
         id: "user-1",
         github_login: "someone",
         github_orgs: JSON.stringify(["some-other-org"])
@@ -930,12 +995,12 @@ describe("Extensions API v2", () => {
       expect(res.status).toBe(403);
       const body = (await res.json()) as { error: { code: string } };
       expect(body.error.code).toBe("GITHUB_MISMATCH");
-      expect(tables.developers.has("acme-org")).toBe(false);
+      expect(await hasDeveloper(db, "acme-org")).toBe(false);
     });
 
     it("blocks creating a profile whose id matches a real GitHub entity of the opposite type", async () => {
       mockGithubEntity("Organization");
-      tables.users.set("user-1", {
+      await insertUser(db, {
         id: "user-1",
         github_login: "someone",
         github_orgs: JSON.stringify(["acme-org"])
@@ -950,12 +1015,12 @@ describe("Extensions API v2", () => {
       expect(res.status).toBe(403);
       const body = (await res.json()) as { error: { code: string } };
       expect(body.error.code).toBe("GITHUB_MISMATCH");
-      expect(tables.developers.has("acme-org")).toBe(false);
+      expect(await hasDeveloper(db, "acme-org")).toBe(false);
     });
 
     it("falls back to unverified creation when the creator has no linked GitHub identity", async () => {
       mockGithubEntity("Organization");
-      // No row in tables.users for user-1 — never linked GitHub.
+      // No row in users for user-1 — never linked GitHub.
 
       const res = await put(
         "/extensions/v2/developers/me",
@@ -972,7 +1037,11 @@ describe("Extensions API v2", () => {
 
     it("fails creation rather than falling back to unverified when the caller's GitHub identity lookup errors", async () => {
       mockGithubEntity("Organization");
-      tables.forceGithubIdentityLookupFailure = true;
+      env.DB_EXTENSIONS = wrapD1WithHook(db, (sql) => {
+        if (sql.includes("github_login") && sql.includes("github_orgs")) {
+          throw new Error("D1_ERROR: simulated database failure");
+        }
+      });
 
       const res = await put(
         "/extensions/v2/developers/me",
@@ -981,7 +1050,8 @@ describe("Extensions API v2", () => {
       );
 
       expect(res.status).toBe(500);
-      expect(tables.developers.has("acme-org")).toBe(false);
+      env.DB_EXTENSIONS = db;
+      expect(await hasDeveloper(db, "acme-org")).toBe(false);
     });
 
     it.each(["claims", "unapproved"])(
@@ -1003,7 +1073,7 @@ describe("Extensions API v2", () => {
         await authHeaders("user-1"),
         sampleDeveloper()
       );
-      tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
       const approved = await post(
         "/extensions/v2/developers/dev-developer/approve",
         await authHeaders("mod-1"),
@@ -1032,23 +1102,38 @@ describe("Extensions API v2", () => {
         await authHeaders("user-1"),
         sampleDeveloper()
       );
-      tables.raceOwnerChangeOnProfileUpdateTo = "user-2";
+
+      // Fires when upsertOwn's existing-profile UPDATE (identified by
+      // touching content_revision but not ownership_epoch, which only the
+      // ownership-transfer statements touch) is about to run - the DB
+      // change lands between existingOwn's read (which still sees user-1
+      // as owner) and this guarded write.
+      env.DB_EXTENSIONS = wrapD1WithHook(db, async (sql) => {
+        if (
+          sql.includes("developers") &&
+          sql.includes("content_revision") &&
+          !sql.includes("ownership_epoch")
+        ) {
+          await bumpDeveloperOwnership(db, "dev-developer", "user-2");
+        }
+      });
 
       const raced = await put(
         "/extensions/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper({ name: "Former owner write" })
       );
+      env.DB_EXTENSIONS = db;
 
       expect(raced.status).toBe(409);
-      expect(tables.developers.get("dev-developer")?.name).toBe(
+      expect((await getDeveloper(db, "dev-developer"))?.name).toBe(
         "Dev Developer"
       );
-      expect(tables.developers.get("dev-developer")?.owner_user_id).toBe(
+      expect((await getDeveloper(db, "dev-developer"))?.owner_user_id).toBe(
         "user-2"
       );
       expect(
-        [...tables.developer_history.values()].filter(
+        (await listDeveloperHistory(db)).filter(
           (row) => row.developer_id === "dev-developer"
         )
       ).toHaveLength(1);
@@ -1072,7 +1157,7 @@ describe("Extensions API v2", () => {
       expect(data.result.avatar_url).toBe("https://example.com/avatar.png");
       expect(data.result.contact_email).toBe("dev@example.com");
 
-      const stored = tables.developers.get("dev-developer");
+      const stored = await getDeveloper(db, "dev-developer");
       expect(stored?.avatar_url).toBe("https://example.com/avatar.png");
       expect(stored?.contact_email).toBe("dev@example.com");
     });
@@ -1101,7 +1186,7 @@ describe("Extensions API v2", () => {
       expect(data.result.avatar_url).toBe("https://example.com/new.png");
       expect(data.result.contact_email).toBe("new@example.com");
 
-      const stored = tables.developers.get("dev-developer");
+      const stored = await getDeveloper(db, "dev-developer");
       expect(stored?.avatar_url).toBe("https://example.com/new.png");
       expect(stored?.contact_email).toBe("new@example.com");
     });
@@ -1158,7 +1243,7 @@ describe("Extensions API v2", () => {
     });
 
     it("409s when the profile still has published extensions", async () => {
-      seedOwnedExtension();
+      await seedOwnedExtension();
 
       const res = await del(
         "/extensions/v2/developers/me",
@@ -1178,17 +1263,13 @@ describe("Extensions API v2", () => {
         await authHeaders("user-1"),
         sampleDeveloper()
       );
-      tables.extension_submissions.set("sub-1", {
+      await insertSubmission(db, {
         id: "sub-1",
         extension_id: null,
         developer_id: "dev-developer",
         submitted_by: "user-1",
         status: "pending",
-        payload: JSON.stringify(samplePayload()),
-        reviewer_id: null,
-        review_note: null,
-        created_at: new Date().toISOString(),
-        reviewed_at: null
+        payload: JSON.stringify(samplePayload())
       });
 
       const res = await del(
@@ -1210,15 +1291,13 @@ describe("Extensions API v2", () => {
         "/extensions/v2/developers/dev-developer/transfer",
         await authHeaders("user-1")
       );
-      tables.developer_claims.set("claim-1", {
+      await insertDeveloperClaim(db, {
         id: "claim-1",
         developer_id: "dev-developer",
         claimant_id: "user-2",
         status: "rejected",
-        note: null,
         review_note: "no",
         reviewer_id: "mod-1",
-        created_at: new Date().toISOString(),
         reviewed_at: new Date().toISOString()
       });
 
@@ -1229,17 +1308,17 @@ describe("Extensions API v2", () => {
       expect(res.status).toBe(200);
 
       expect(
-        [...tables.developer_transfers.values()].filter(
+        (await listDeveloperTransfers(db)).filter(
           (r) => r.developer_id === "dev-developer"
         )
       ).toHaveLength(0);
       expect(
-        [...tables.developer_claims.values()].filter(
+        (await listDeveloperClaims(db)).filter(
           (r) => r.developer_id === "dev-developer"
         )
       ).toHaveLength(0);
       expect(
-        [...tables.developer_history.values()].filter(
+        (await listDeveloperHistory(db)).filter(
           (r) => r.developer_id === "dev-developer"
         ).length
       ).toBeGreaterThan(0);
@@ -1251,16 +1330,26 @@ describe("Extensions API v2", () => {
         await authHeaders("user-1"),
         sampleDeveloper()
       );
-      tables.users.set("user-2", { id: "user-2" });
+      await insertUser(db, { id: "user-2" });
       // Simulates a transfer/claim landing in the window between deleteOwn's
-      // initial "find my profile" lookup and its guarded delete — the
+      // initial "find my profile" lookup and its guarded delete - the
       // delete must re-check ownership at that point, not trust the lookup.
-      tables.raceOwnerChangeTo = "user-2";
+      // deleteTransfersStmt is the first statement in deleteOwn's batch, so
+      // firing this before it reproduces the race exactly.
+      env.DB_EXTENSIONS = wrapD1WithHook(db, async (sql) => {
+        if (
+          sql.includes("DELETE FROM") &&
+          sql.includes("developer_transfers")
+        ) {
+          await bumpDeveloperOwnership(db, "dev-developer", "user-2");
+        }
+      });
 
       const res = await del(
         "/extensions/v2/developers/me",
         await authHeaders("user-1")
       );
+      env.DB_EXTENSIONS = db;
       expect(res.status).toBe(404);
 
       const stillThere = await get(
@@ -1285,7 +1374,7 @@ describe("Extensions API v2", () => {
         await authHeaders("user-1"),
         sampleDeveloper({ name: "Revision two" })
       );
-      tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
 
       const stale = await post(
         "/extensions/v2/developers/dev-developer/approve",
@@ -1307,7 +1396,7 @@ describe("Extensions API v2", () => {
         await authHeaders("user-1"),
         sampleDeveloper()
       );
-      tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
 
       const approve = await post(
         "/extensions/v2/developers/dev-developer/approve",
@@ -1337,7 +1426,7 @@ describe("Extensions API v2", () => {
     });
 
     it("404s approving a nonexistent developer", async () => {
-      tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
 
       const res = await post(
         "/extensions/v2/developers/no-such-developer/approve",
@@ -1366,7 +1455,7 @@ describe("Extensions API v2", () => {
         await authHeaders("user-2"),
         sampleDeveloper({ id: "other-developer", name: "Other Developer" })
       );
-      tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await post(
         "/extensions/v2/developers/dev-developer/approve",
         await authHeaders("mod-1"),
@@ -1424,7 +1513,7 @@ describe("Extensions API v2", () => {
         await authHeaders("user-1"),
         sampleDeveloper()
       );
-      tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
 
       const res = await get(
         "/extensions/v2/developers/dev-developer/history",
@@ -1456,7 +1545,7 @@ describe("Extensions API v2", () => {
         await authHeaders("user-1"),
         sampleDeveloper({ name: "Edited Name" })
       );
-      tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
 
       const res = await get(
         "/extensions/v2/developers/dev-developer/history",
@@ -1473,7 +1562,7 @@ describe("Extensions API v2", () => {
     });
 
     it("returns an empty array for a developer with no history", async () => {
-      tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
 
       const res = await get(
         "/extensions/v2/developers/no-such-developer/history",
@@ -1513,7 +1602,7 @@ describe("Extensions API v2", () => {
       );
       expect(res.status).toBe(409);
 
-      tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
       const history = await get(
         "/extensions/v2/developers/dev-developer/history",
         await authHeaders("mod-1")
@@ -1567,7 +1656,7 @@ describe("Extensions API v2", () => {
         await authHeaders("user-1"),
         sampleDeveloper()
       );
-      tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await post(
         "/extensions/v2/developers/dev-developer/approve",
         await authHeaders("mod-1"),
@@ -1592,7 +1681,7 @@ describe("Extensions API v2", () => {
       };
       expect(accepted.result.id).toBe("dev-developer");
       expect(accepted.result.approved).toBe(false);
-      expect(tables.developers.get("dev-developer")?.owner_user_id).toBe(
+      expect((await getDeveloper(db, "dev-developer"))?.owner_user_id).toBe(
         "user-2"
       );
 
@@ -1602,7 +1691,7 @@ describe("Extensions API v2", () => {
         { token }
       );
       expect(acceptAgain.status).toBe(404);
-      expect(tables.developers.get("dev-developer")?.owner_user_id).toBe(
+      expect((await getDeveloper(db, "dev-developer"))?.owner_user_id).toBe(
         "user-2"
       );
     });
@@ -1627,7 +1716,7 @@ describe("Extensions API v2", () => {
         { token: token1 }
       );
       expect(accept1.status).toBe(200);
-      expect(tables.developers.get("dev-developer")?.owner_user_id).toBe(
+      expect((await getDeveloper(db, "dev-developer"))?.owner_user_id).toBe(
         "user-2"
       );
 
@@ -1644,7 +1733,7 @@ describe("Extensions API v2", () => {
         { token: token2 }
       );
       expect(accept2.status).toBe(200);
-      expect(tables.developers.get("dev-developer")?.owner_user_id).toBe(
+      expect((await getDeveloper(db, "dev-developer"))?.owner_user_id).toBe(
         "user-3"
       );
 
@@ -1656,7 +1745,7 @@ describe("Extensions API v2", () => {
         { token: token1 }
       );
       expect(replay.status).toBe(404);
-      expect(tables.developers.get("dev-developer")?.owner_user_id).toBe(
+      expect((await getDeveloper(db, "dev-developer"))?.owner_user_id).toBe(
         "user-3"
       );
     });
@@ -1675,9 +1764,7 @@ describe("Extensions API v2", () => {
       const token = ((await initiate.json()) as { result: { token: string } })
         .result.token;
 
-      for (const transfer of tables.developer_transfers.values()) {
-        transfer.expires_at = "2000-01-01 00:00:00";
-      }
+      await expireAllDeveloperTransfers(db);
 
       const accept = await post(
         "/extensions/v2/developers/transfers/accept",
@@ -1740,7 +1827,7 @@ describe("Extensions API v2", () => {
         { token }
       );
       expect(accept.status).toBe(409);
-      expect(tables.developers.get("dev-developer")?.owner_user_id).toBe(
+      expect((await getDeveloper(db, "dev-developer"))?.owner_user_id).toBe(
         "user-1"
       );
     });
@@ -1765,7 +1852,7 @@ describe("Extensions API v2", () => {
         { token }
       );
       expect(accept.status).toBe(409);
-      expect(tables.developers.get("dev-developer")?.owner_user_id).toBe(
+      expect((await getDeveloper(db, "dev-developer"))?.owner_user_id).toBe(
         "user-1"
       );
     });
@@ -1805,7 +1892,7 @@ describe("Extensions API v2", () => {
 
   describe("developer claims", () => {
     it("lets a user claim an unowned developer, visible to the claimant and moderators", async () => {
-      seedUnownedDeveloper("legacy-developer");
+      await seedUnownedDeveloper("legacy-developer");
 
       const res = await post(
         "/extensions/v2/developers/legacy-developer/claim",
@@ -1826,7 +1913,7 @@ describe("Extensions API v2", () => {
       expect(mineData.result.map((c) => c.id)).toEqual([created.result.id]);
       expect(mineData.result[0].status).toBe("pending");
 
-      tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
       const pending = await get(
         "/extensions/v2/developers/claims",
         await authHeaders("mod-1")
@@ -1855,7 +1942,7 @@ describe("Extensions API v2", () => {
     });
 
     it("does not create a duplicate row for a second claim while one is already pending", async () => {
-      seedUnownedDeveloper("legacy-developer");
+      await seedUnownedDeveloper("legacy-developer");
 
       const first = await post(
         "/extensions/v2/developers/legacy-developer/claim",
@@ -1870,11 +1957,11 @@ describe("Extensions API v2", () => {
         {}
       );
       expect(second.status).toBe(409);
-      expect(tables.developer_claims.size).toBe(1);
+      expect(await countDeveloperClaims(db)).toBe(1);
     });
 
     it("does not re-check GitHub when replaying an already-pending claim", async () => {
-      seedUnownedDeveloper("legacy-developer");
+      await seedUnownedDeveloper("legacy-developer");
 
       await post(
         "/extensions/v2/developers/legacy-developer/claim",
@@ -1895,8 +1982,8 @@ describe("Extensions API v2", () => {
     });
 
     it("still verifies GitHub ownership on a retry after the prior claim was rejected", async () => {
-      seedUnownedDeveloper("legacy-developer");
-      tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
+      await seedUnownedDeveloper("legacy-developer");
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
 
       const first = await post(
         "/extensions/v2/developers/legacy-developer/claim",
@@ -1915,13 +2002,13 @@ describe("Extensions API v2", () => {
       // still be blocked rather than silently creating an unverified claim
       // just because the prior (now-rejected) row cleared the pending guard.
       mockGithubEntity("Organization");
-      tables.users.set("user-1", {
+      await insertUser(db, {
         id: "user-1",
         github_login: "someone",
         github_orgs: JSON.stringify(["some-other-org"])
       });
 
-      const claimCountBefore = tables.developer_claims.size;
+      const claimCountBefore = await countDeveloperClaims(db);
       const retry = await post(
         "/extensions/v2/developers/legacy-developer/claim",
         await authHeaders("user-1"),
@@ -1931,11 +2018,11 @@ describe("Extensions API v2", () => {
       expect(retry.status).toBe(403);
       const body = (await retry.json()) as { error: { code: string } };
       expect(body.error.code).toBe("GITHUB_MISMATCH");
-      expect(tables.developer_claims.size).toBe(claimCountBefore);
+      expect(await countDeveloperClaims(db)).toBe(claimCountBefore);
     });
 
     it("rejects a claim from a user who already owns a different profile", async () => {
-      seedUnownedDeveloper("legacy-developer");
+      await seedUnownedDeveloper("legacy-developer");
       await put(
         "/extensions/v2/developers/me",
         await authHeaders("user-1"),
@@ -1951,8 +2038,8 @@ describe("Extensions API v2", () => {
     });
 
     it("approving a claim transfers ownership and auto-rejects competing claims", async () => {
-      seedUnownedDeveloper("legacy-developer");
-      tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
+      await seedUnownedDeveloper("legacy-developer");
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
 
       const claim1 = await post(
         "/extensions/v2/developers/legacy-developer/claim",
@@ -1980,11 +2067,11 @@ describe("Extensions API v2", () => {
       };
       expect(approved.result.id).toBe("legacy-developer");
       expect(approved.result.approved).toBe(false);
-      expect(tables.developers.get("legacy-developer")?.owner_user_id).toBe(
+      expect((await getDeveloper(db, "legacy-developer"))?.owner_user_id).toBe(
         "user-1"
       );
 
-      const rejectedClaim = tables.developer_claims.get(claim2Id);
+      const rejectedClaim = await getDeveloperClaim(db, claim2Id);
       expect(rejectedClaim?.status).toBe("rejected");
       expect(rejectedClaim?.review_note).toBe(
         "Another claim on this profile was approved"
@@ -1992,8 +2079,8 @@ describe("Extensions API v2", () => {
     });
 
     it("lets a moderator reject a claim with a review note, leaving the developer unowned", async () => {
-      seedUnownedDeveloper("legacy-developer");
-      tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
+      await seedUnownedDeveloper("legacy-developer");
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
 
       const claim = await post(
         "/extensions/v2/developers/legacy-developer/claim",
@@ -2017,12 +2104,12 @@ describe("Extensions API v2", () => {
         "Not enough evidence of maintainership"
       );
       expect(
-        tables.developers.get("legacy-developer")?.owner_user_id
+        (await getDeveloper(db, "legacy-developer"))?.owner_user_id
       ).toBeNull();
     });
 
     it("verifies a claim when the claimant's linked GitHub org matches the developer id", async () => {
-      tables.developers.set("legacy-developer", {
+      await insertDeveloper(db, {
         id: "legacy-developer",
         type: "organization",
         name: "Legacy Developer",
@@ -2030,7 +2117,7 @@ describe("Extensions API v2", () => {
         owner_user_id: null
       });
       mockGithubEntity("Organization");
-      tables.users.set("user-1", {
+      await insertUser(db, {
         id: "user-1",
         github_login: "someone",
         github_orgs: JSON.stringify(["legacy-developer"])
@@ -2049,7 +2136,7 @@ describe("Extensions API v2", () => {
     });
 
     it("verifies a claim when the claimant's linked GitHub login matches a user-type developer id", async () => {
-      tables.developers.set("legacy-user", {
+      await insertDeveloper(db, {
         id: "legacy-user",
         type: "user",
         name: "Legacy User",
@@ -2057,7 +2144,7 @@ describe("Extensions API v2", () => {
         owner_user_id: null
       });
       mockGithubEntity("User");
-      tables.users.set("user-1", {
+      await insertUser(db, {
         id: "user-1",
         github_login: "legacy-user",
         github_orgs: JSON.stringify([])
@@ -2076,7 +2163,7 @@ describe("Extensions API v2", () => {
     });
 
     it("blocks a claim outright when the claimant's linked GitHub identity doesn't match", async () => {
-      tables.developers.set("legacy-developer", {
+      await insertDeveloper(db, {
         id: "legacy-developer",
         type: "organization",
         name: "Legacy Developer",
@@ -2084,7 +2171,7 @@ describe("Extensions API v2", () => {
         owner_user_id: null
       });
       mockGithubEntity("Organization");
-      tables.users.set("user-1", {
+      await insertUser(db, {
         id: "user-1",
         github_login: "someone",
         github_orgs: JSON.stringify(["some-other-org"])
@@ -2098,13 +2185,13 @@ describe("Extensions API v2", () => {
       expect(res.status).toBe(403);
       const body = (await res.json()) as { error: { code: string } };
       expect(body.error.code).toBe("GITHUB_MISMATCH");
-      expect(tables.developer_claims.size).toBe(0);
+      expect(await countDeveloperClaims(db)).toBe(0);
     });
 
     it("falls back to unverified manual review when the claimant has no linked GitHub identity", async () => {
-      seedUnownedDeveloper("legacy-developer"); // type: "user"
+      await seedUnownedDeveloper("legacy-developer"); // type: "user"
       mockGithubEntity("User");
-      // No row in tables.users for user-1 — never linked GitHub.
+      // No row in users for user-1 — never linked GitHub.
 
       const res = await post(
         "/extensions/v2/developers/legacy-developer/claim",
@@ -2119,7 +2206,7 @@ describe("Extensions API v2", () => {
     });
 
     it("falls back to unverified manual review when no matching GitHub org/user exists for the id", async () => {
-      seedUnownedDeveloper("legacy-developer");
+      await seedUnownedDeveloper("legacy-developer");
       mockGithubEntityNotFound();
 
       const res = await post(
@@ -2135,7 +2222,7 @@ describe("Extensions API v2", () => {
     });
 
     it("blocks non-moderators from the claims queue and review routes", async () => {
-      seedUnownedDeveloper("legacy-developer");
+      await seedUnownedDeveloper("legacy-developer");
       const claim = await post(
         "/extensions/v2/developers/legacy-developer/claim",
         await authHeaders("user-1"),
@@ -2165,7 +2252,7 @@ describe("Extensions API v2", () => {
     });
 
     it("lets a claimant cancel their own pending claim", async () => {
-      seedUnownedDeveloper("legacy-developer");
+      await seedUnownedDeveloper("legacy-developer");
       const claim = await post(
         "/extensions/v2/developers/legacy-developer/claim",
         await authHeaders("user-1"),
@@ -2183,11 +2270,11 @@ describe("Extensions API v2", () => {
         result: { id: string; cancelled: boolean };
       };
       expect(cancelled.result).toEqual({ id: claimId, cancelled: true });
-      expect(tables.developer_claims.has(claimId)).toBe(false);
+      expect(await getDeveloperClaim(db, claimId)).toBeNull();
     });
 
     it("rejects cancelling a claim that belongs to someone else", async () => {
-      seedUnownedDeveloper("legacy-developer");
+      await seedUnownedDeveloper("legacy-developer");
       const claim = await post(
         "/extensions/v2/developers/legacy-developer/claim",
         await authHeaders("user-1"),
@@ -2201,12 +2288,12 @@ describe("Extensions API v2", () => {
         await authHeaders("user-2")
       );
       expect(cancel.status).toBe(404);
-      expect(tables.developer_claims.has(claimId)).toBe(true);
+      expect(await getDeveloperClaim(db, claimId)).not.toBeNull();
     });
 
     it("rejects cancelling a claim that is no longer pending", async () => {
-      seedUnownedDeveloper("legacy-developer");
-      tables.users.set("mod-1", { id: "mod-1", is_moderator: 1 });
+      await seedUnownedDeveloper("legacy-developer");
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
       const claim = await post(
         "/extensions/v2/developers/legacy-developer/claim",
         await authHeaders("user-1"),
@@ -2225,13 +2312,13 @@ describe("Extensions API v2", () => {
         await authHeaders("user-1")
       );
       expect(cancel.status).toBe(404);
-      expect(tables.developer_claims.get(claimId)?.status).toBe("rejected");
+      expect((await getDeveloperClaim(db, claimId))?.status).toBe("rejected");
     });
   });
 
   describe("GET /developers/{id}", () => {
     it("returns a developer's public profile without contact_email, unauthenticated", async () => {
-      tables.developers.set("public-dev", {
+      await insertDeveloper(db, {
         id: "public-dev",
         type: "organization",
         name: "Public Dev",
@@ -2239,9 +2326,7 @@ describe("Extensions API v2", () => {
         avatar_url: "https://example.com/avatar.png",
         contact_email: "private@example.com",
         owner_user_id: "user-1",
-        approved_at: new Date().toISOString(),
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
+        approved_at: new Date().toISOString()
       });
 
       const res = await get("/extensions/v2/developers/public-dev", {});
@@ -2266,7 +2351,7 @@ describe("Extensions API v2", () => {
 
   describe("GET /extensions", () => {
     it("lists published extensions with the developer embedded", async () => {
-      seedOwnedExtension();
+      await seedOwnedExtension();
 
       const res = await get("/extensions/v2/extensions", {});
       expect(res.status).toBe(200);
@@ -2279,7 +2364,7 @@ describe("Extensions API v2", () => {
     });
 
     it("filters by type", async () => {
-      seedOwnedExtension();
+      await seedOwnedExtension();
 
       const matching = await get("/extensions/v2/extensions?type=mod", {});
       const matchingBody = (await matching.json()) as { result: unknown[] };
@@ -2298,7 +2383,7 @@ describe("Extensions API v2", () => {
     });
 
     it("filters by developer_id", async () => {
-      seedOwnedExtension();
+      await seedOwnedExtension();
 
       const matching = await get(
         "/extensions/v2/extensions?developer_id=owner-developer",
@@ -2320,7 +2405,7 @@ describe("Extensions API v2", () => {
 
   describe("GET /extensions/{id}", () => {
     it("gets a single extension, case-insensitively", async () => {
-      seedOwnedExtension();
+      await seedOwnedExtension();
 
       const res = await get("/extensions/v2/extensions/EXISTING-EXT", {});
       expect(res.status).toBe(200);
@@ -2337,36 +2422,14 @@ describe("Extensions API v2", () => {
       expect(res.status).toBe(404);
     });
 
-    it("still returns a usable developer.id when the developer row is missing", async () => {
-      // author_id isn't a hard FK (0001_add_v2_tables.sql), so this can
-      // happen without any application bug — the embedded developer must
-      // still satisfy the schema (id: string) rather than surface a null.
-      tables.extensions.set("orphaned-ext", {
-        id: "orphaned-ext",
-        type: "mod",
-        author_id: "no-such-developer",
-        name: "Orphaned",
-        description: "d",
-        releases: "[]",
-        website: "https://e.com",
-        license: '{"name":"MIT"}',
-        icon_url: null,
-        readme: "r",
-        source: '{"type":"github","repo":"example/orphaned"}',
-        version: "1.0.0",
-        download_url: "https://e.com/d.zip"
-      });
-
-      const res = await get("/extensions/v2/extensions/orphaned-ext", {});
-      expect(res.status).toBe(200);
-      const body = (await res.json()) as { result: { developer: unknown } };
-      expect(body.result.developer).toEqual({
-        id: "no-such-developer",
-        type: "user",
-        name: "",
-        approved: false
-      });
-    });
+    // A test previously lived here asserting parseExtensionRow's fallback
+    // for a "missing developer row" (an extension with an author_id that
+    // doesn't exist). It was deleted: extensions.author_id has always been
+    // a hard FK to developers(id) in the real schema.sql - the old mock
+    // just never enforced it, so that state was never actually reachable
+    // in production. The defensive COALESCE/fallback in
+    // extensions-database.ts is harmless to keep, just untestable this way
+    // against real D1.
   });
 
   describe("OpenAPI docs", () => {

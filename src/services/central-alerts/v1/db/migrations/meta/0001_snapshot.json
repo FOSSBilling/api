@@ -1,0 +1,138 @@
+{
+  "id": "104d2463-6db4-4905-b41f-0ce2ffcbf23d",
+  "prevId": "4b97c5a2-21b4-4949-a981-f94e4dc10964",
+  "version": "6",
+  "dialect": "sqlite",
+  "tables": {
+    "central_alerts": {
+      "name": "central_alerts",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "message": {
+          "name": "message",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "type": {
+          "name": "type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "dismissible": {
+          "name": "dismissible",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "min_fossbilling_version": {
+          "name": "min_fossbilling_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "max_fossbilling_version": {
+          "name": "max_fossbilling_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "include_preview_branch": {
+          "name": "include_preview_branch",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "buttons": {
+          "name": "buttons",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false,
+          "default": "'[]'"
+        },
+        "datetime": {
+          "name": "datetime",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false,
+          "default": "CURRENT_TIMESTAMP"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false,
+          "default": "CURRENT_TIMESTAMP"
+        }
+      },
+      "indexes": {
+        "idx_central_alerts_type": {
+          "name": "idx_central_alerts_type",
+          "columns": ["type"],
+          "isUnique": false
+        },
+        "idx_central_alerts_version_range": {
+          "name": "idx_central_alerts_version_range",
+          "columns": ["min_fossbilling_version", "max_fossbilling_version"],
+          "isUnique": false
+        },
+        "idx_central_alerts_datetime": {
+          "name": "idx_central_alerts_datetime",
+          "columns": ["datetime"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "central_alerts_type_check": {
+          "name": "central_alerts_type_check",
+          "value": "\"central_alerts\".\"type\" IN ('success', 'info', 'warning', 'danger')"
+        }
+      }
+    }
+  },
+  "views": {},
+  "enums": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  },
+  "internal": {
+    "indexes": {}
+  }
+}

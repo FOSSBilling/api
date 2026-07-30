@@ -1,0 +1,838 @@
+{
+  "version": "6",
+  "dialect": "sqlite",
+  "id": "1f723cdd-d2fc-4e13-9f71-a02e3938ccd6",
+  "prevId": "00000000-0000-0000-0000-000000000000",
+  "tables": {
+    "developer_claims": {
+      "name": "developer_claims",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "developer_id": {
+          "name": "developer_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "claimant_id": {
+          "name": "claimant_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'pending'"
+        },
+        "note": {
+          "name": "note",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "review_note": {
+          "name": "review_note",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "reviewer_id": {
+          "name": "reviewer_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "CURRENT_TIMESTAMP"
+        },
+        "reviewed_at": {
+          "name": "reviewed_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "github_org_verified": {
+          "name": "github_org_verified",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "github_verification_note": {
+          "name": "github_verification_note",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "idx_developer_claims_developer": {
+          "name": "idx_developer_claims_developer",
+          "columns": ["developer_id"],
+          "isUnique": false
+        },
+        "idx_developer_claims_claimant": {
+          "name": "idx_developer_claims_claimant",
+          "columns": ["claimant_id"],
+          "isUnique": false
+        },
+        "idx_developer_claims_pending_unique": {
+          "name": "idx_developer_claims_pending_unique",
+          "columns": ["developer_id", "claimant_id"],
+          "isUnique": true,
+          "where": "\"developer_claims\".\"status\" = 'pending'"
+        },
+        "idx_developer_claims_pending_queue": {
+          "name": "idx_developer_claims_pending_queue",
+          "columns": ["created_at"],
+          "isUnique": false,
+          "where": "\"developer_claims\".\"status\" = 'pending'"
+        }
+      },
+      "foreignKeys": {
+        "developer_claims_developer_id_developers_id_fk": {
+          "name": "developer_claims_developer_id_developers_id_fk",
+          "tableFrom": "developer_claims",
+          "tableTo": "developers",
+          "columnsFrom": ["developer_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "developer_claims_claimant_id_users_id_fk": {
+          "name": "developer_claims_claimant_id_users_id_fk",
+          "tableFrom": "developer_claims",
+          "tableTo": "users",
+          "columnsFrom": ["claimant_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "developer_claims_reviewer_id_users_id_fk": {
+          "name": "developer_claims_reviewer_id_users_id_fk",
+          "tableFrom": "developer_claims",
+          "tableTo": "users",
+          "columnsFrom": ["reviewer_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "developer_claims_status_check": {
+          "name": "developer_claims_status_check",
+          "value": "\"developer_claims\".\"status\" IN ('pending', 'approved', 'rejected')"
+        },
+        "developer_claims_github_org_verified_check": {
+          "name": "developer_claims_github_org_verified_check",
+          "value": "\"developer_claims\".\"github_org_verified\" IN (0, 1)"
+        }
+      }
+    },
+    "developer_history": {
+      "name": "developer_history",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "developer_id": {
+          "name": "developer_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "type": {
+          "name": "type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "url": {
+          "name": "url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "changed_by": {
+          "name": "changed_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "changed_at": {
+          "name": "changed_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "CURRENT_TIMESTAMP"
+        }
+      },
+      "indexes": {
+        "idx_developer_history_developer_changed_at": {
+          "name": "idx_developer_history_developer_changed_at",
+          "columns": ["developer_id", "changed_at"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "developer_history_changed_by_users_id_fk": {
+          "name": "developer_history_changed_by_users_id_fk",
+          "tableFrom": "developer_history",
+          "tableTo": "users",
+          "columnsFrom": ["changed_by"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "developer_transfers": {
+      "name": "developer_transfers",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "developer_id": {
+          "name": "developer_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "token_hash": {
+          "name": "token_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "CURRENT_TIMESTAMP"
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "accepted_by": {
+          "name": "accepted_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "accepted_at": {
+          "name": "accepted_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "revoked_at": {
+          "name": "revoked_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "idx_developer_transfers_token": {
+          "name": "idx_developer_transfers_token",
+          "columns": ["token_hash"],
+          "isUnique": true
+        },
+        "idx_developer_transfers_pending": {
+          "name": "idx_developer_transfers_pending",
+          "columns": ["developer_id"],
+          "isUnique": true,
+          "where": "\"developer_transfers\".\"accepted_at\" IS NULL AND \"developer_transfers\".\"revoked_at\" IS NULL"
+        }
+      },
+      "foreignKeys": {
+        "developer_transfers_developer_id_developers_id_fk": {
+          "name": "developer_transfers_developer_id_developers_id_fk",
+          "tableFrom": "developer_transfers",
+          "tableTo": "developers",
+          "columnsFrom": ["developer_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "developer_transfers_created_by_users_id_fk": {
+          "name": "developer_transfers_created_by_users_id_fk",
+          "tableFrom": "developer_transfers",
+          "tableTo": "users",
+          "columnsFrom": ["created_by"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "developer_transfers_accepted_by_users_id_fk": {
+          "name": "developer_transfers_accepted_by_users_id_fk",
+          "tableFrom": "developer_transfers",
+          "tableTo": "users",
+          "columnsFrom": ["accepted_by"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "developers": {
+      "name": "developers",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "type": {
+          "name": "type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "url": {
+          "name": "url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "owner_user_id": {
+          "name": "owner_user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "approved_at": {
+          "name": "approved_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'1970-01-01T00:00:00.000Z'"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'1970-01-01T00:00:00.000Z'"
+        },
+        "avatar_url": {
+          "name": "avatar_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "contact_email": {
+          "name": "contact_email",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "ownership_epoch": {
+          "name": "ownership_epoch",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 1
+        },
+        "content_revision": {
+          "name": "content_revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 1
+        },
+        "approved_revision": {
+          "name": "approved_revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "approved_by": {
+          "name": "approved_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "github_org_verified": {
+          "name": "github_org_verified",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "github_verification_note": {
+          "name": "github_verification_note",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "idx_developers_owner_unique": {
+          "name": "idx_developers_owner_unique",
+          "columns": ["owner_user_id"],
+          "isUnique": true
+        },
+        "idx_developers_approved": {
+          "name": "idx_developers_approved",
+          "columns": ["approved_at"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "developers_owner_user_id_users_id_fk": {
+          "name": "developers_owner_user_id_users_id_fk",
+          "tableFrom": "developers",
+          "tableTo": "users",
+          "columnsFrom": ["owner_user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "developers_ownership_epoch_check": {
+          "name": "developers_ownership_epoch_check",
+          "value": "\"developers\".\"ownership_epoch\" >= 1"
+        },
+        "developers_content_revision_check": {
+          "name": "developers_content_revision_check",
+          "value": "\"developers\".\"content_revision\" >= 1"
+        },
+        "developers_github_org_verified_check": {
+          "name": "developers_github_org_verified_check",
+          "value": "\"developers\".\"github_org_verified\" IN (0, 1)"
+        }
+      }
+    },
+    "extension_submissions": {
+      "name": "extension_submissions",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "extension_id": {
+          "name": "extension_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "developer_id": {
+          "name": "developer_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "submitted_by": {
+          "name": "submitted_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'pending'"
+        },
+        "payload": {
+          "name": "payload",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "reviewer_id": {
+          "name": "reviewer_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "review_note": {
+          "name": "review_note",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "CURRENT_TIMESTAMP"
+        },
+        "reviewed_at": {
+          "name": "reviewed_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "ownership_epoch": {
+          "name": "ownership_epoch",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 1
+        },
+        "target_key": {
+          "name": "target_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "idx_submissions_status": {
+          "name": "idx_submissions_status",
+          "columns": ["status"],
+          "isUnique": false
+        },
+        "idx_submissions_submitted_by": {
+          "name": "idx_submissions_submitted_by",
+          "columns": ["submitted_by"],
+          "isUnique": false
+        },
+        "idx_submissions_developer": {
+          "name": "idx_submissions_developer",
+          "columns": ["developer_id"],
+          "isUnique": false
+        },
+        "idx_submissions_extension": {
+          "name": "idx_submissions_extension",
+          "columns": ["extension_id"],
+          "isUnique": false
+        },
+        "idx_extension_submissions_pending_target": {
+          "name": "idx_extension_submissions_pending_target",
+          "columns": ["target_key"],
+          "isUnique": true,
+          "where": "\"extension_submissions\".\"status\" = 'pending'"
+        },
+        "idx_extension_submissions_submitter_page": {
+          "name": "idx_extension_submissions_submitter_page",
+          "columns": ["submitted_by", "\"created_at\" desc", "\"id\" desc"],
+          "isUnique": false
+        },
+        "idx_extension_submissions_queue_page": {
+          "name": "idx_extension_submissions_queue_page",
+          "columns": ["status", "created_at", "id"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "extension_submissions_extension_id_extensions_id_fk": {
+          "name": "extension_submissions_extension_id_extensions_id_fk",
+          "tableFrom": "extension_submissions",
+          "tableTo": "extensions",
+          "columnsFrom": ["extension_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "extension_submissions_submitted_by_users_id_fk": {
+          "name": "extension_submissions_submitted_by_users_id_fk",
+          "tableFrom": "extension_submissions",
+          "tableTo": "users",
+          "columnsFrom": ["submitted_by"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "extension_submissions_reviewer_id_users_id_fk": {
+          "name": "extension_submissions_reviewer_id_users_id_fk",
+          "tableFrom": "extension_submissions",
+          "tableTo": "users",
+          "columnsFrom": ["reviewer_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "extension_submissions_status_check": {
+          "name": "extension_submissions_status_check",
+          "value": "\"extension_submissions\".\"status\" IN ('pending', 'approved', 'rejected')"
+        },
+        "extension_submissions_ownership_epoch_check": {
+          "name": "extension_submissions_ownership_epoch_check",
+          "value": "\"extension_submissions\".\"ownership_epoch\" >= 1"
+        }
+      }
+    },
+    "extensions": {
+      "name": "extensions",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "type": {
+          "name": "type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "author_id": {
+          "name": "author_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "description": {
+          "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "releases": {
+          "name": "releases",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "website": {
+          "name": "website",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "license": {
+          "name": "license",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "icon_url": {
+          "name": "icon_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "readme": {
+          "name": "readme",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "source": {
+          "name": "source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "version": {
+          "name": "version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "download_url": {
+          "name": "download_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "idx_extensions_type": {
+          "name": "idx_extensions_type",
+          "columns": ["type"],
+          "isUnique": false
+        },
+        "idx_extensions_author": {
+          "name": "idx_extensions_author",
+          "columns": ["author_id"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "extensions_author_id_developers_id_fk": {
+          "name": "extensions_author_id_developers_id_fk",
+          "tableFrom": "extensions",
+          "tableTo": "developers",
+          "columnsFrom": ["author_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "users": {
+      "name": "users",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    }
+  },
+  "views": {},
+  "enums": {},
+  "_meta": {
+    "schemas": {},
+    "tables": {},
+    "columns": {}
+  },
+  "internal": {
+    "indexes": {
+      "idx_extension_submissions_submitter_page": {
+        "columns": {
+          "\"created_at\" desc": {
+            "isExpression": true
+          },
+          "\"id\" desc": {
+            "isExpression": true
+          }
+        }
+      }
+    }
+  }
+}

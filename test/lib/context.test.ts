@@ -1,26 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { Context } from "hono";
 import { createPlatformContext } from "../../src/lib/context";
-import {
-  IPlatformBindings,
-  IPreparedStatement
-} from "../../src/lib/interfaces";
+import { IPlatformBindings } from "../../src/lib/interfaces";
 
 describe("createPlatformContext", () => {
   const mockBindings: IPlatformBindings = {
-    databases: {
-      testDb: {
-        prepare: () => {
-          const mockStmt: IPreparedStatement = {
-            bind: () => mockStmt,
-            all: async () => ({ results: [], success: true }),
-            first: async () => null,
-            run: async () => ({ success: true })
-          };
-          return mockStmt;
-        }
-      }
-    },
     caches: {
       testCache: {
         get: async () => null,
@@ -44,27 +28,9 @@ describe("createPlatformContext", () => {
   it("should create a platform context with all required methods", () => {
     const context = createPlatformContext(mockHonoContext, mockBindings);
 
-    expect(context).toHaveProperty("getDatabase");
     expect(context).toHaveProperty("getCache");
     expect(context).toHaveProperty("getEnv");
     expect(context).toHaveProperty("raw");
-  });
-
-  describe("getDatabase", () => {
-    it("should return the requested database binding", () => {
-      const context = createPlatformContext(mockHonoContext, mockBindings);
-      const db = context.getDatabase("testDb");
-
-      expect(db).toBe(mockBindings.databases.testDb);
-    });
-
-    it("should throw when database binding not found", () => {
-      const context = createPlatformContext(mockHonoContext, mockBindings);
-
-      expect(() => context.getDatabase("nonexistent")).toThrow(
-        "Database binding 'nonexistent' not found"
-      );
-    });
   });
 
   describe("getCache", () => {

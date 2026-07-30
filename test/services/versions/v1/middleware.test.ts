@@ -13,7 +13,10 @@ import {
   suppressConsole,
   setupGitHubApiMock
 } from "../../../utils/mock-helpers";
-import { MockGitHubGraphQL, MockGitHubRequest } from "../../../utils/test-types";
+import {
+  MockGitHubGraphQL,
+  MockGitHubRequest
+} from "../../../utils/test-types";
 
 vi.mock("@octokit/request", () => {
   const endpoint = { DEFAULTS: {} };

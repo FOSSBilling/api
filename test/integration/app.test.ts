@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import {
   createExecutionContext,
   waitOnExecutionContext
@@ -7,7 +7,7 @@ import { env } from "cloudflare:workers";
 import app from "../../src/app/index";
 import { mockGitHubReleases, mockComposerJson } from "../mocks/github-releases";
 import { setupGitHubApiMock } from "../utils/mock-helpers";
-import { mockD1Database } from "../utils/d1-mock";
+import { applyTestMigrations } from "../utils/apply-migrations";
 import {
   ApiResponse,
   CentralAlertsResponse,
@@ -35,12 +35,12 @@ import { graphql } from "@octokit/graphql";
 import { resetUpdateTokenCache } from "../../src/services/versions/v1/index";
 
 describe("FOSSBilling API Worker - Full App Integration", () => {
+  beforeAll(applyTestMigrations);
+
   beforeEach(async () => {
     await env.CACHE_KV.delete("gh-fossbilling-releases");
     resetUpdateTokenCache();
     await env.AUTH_KV.put("UPDATE_TOKEN", "test-update-token-12345");
-
-    env.DB_CENTRAL_ALERTS = mockD1Database;
 
     vi.clearAllMocks();
     setupGitHubApiMock(

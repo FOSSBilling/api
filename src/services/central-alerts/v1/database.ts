@@ -1,33 +1,19 @@
+import { desc } from "drizzle-orm";
 import { CentralAlert } from "./interfaces";
-import { DatabaseResult, IDatabase } from "../../../lib/interfaces";
+import { DatabaseResult } from "../../../lib/interfaces";
+import { CentralAlertsDb } from "../../../lib/db";
+import { centralAlerts } from "./db/schema";
 
 export class CentralAlertsDatabase {
-  private db: IDatabase;
-
-  constructor(db: IDatabase) {
-    this.db = db;
-  }
+  constructor(private db: CentralAlertsDb) {}
 
   async getAllAlerts(): Promise<DatabaseResult<CentralAlert[]>> {
-    const query = `
-      SELECT 
-        id,
-        title,
-        message,
-        type,
-        dismissible,
-        min_fossbilling_version,
-        max_fossbilling_version,
-        include_preview_branch,
-        buttons,
-        "datetime"
-      FROM central_alerts
-      ORDER BY "datetime" DESC
-    `;
-
-    let result;
+    let rows;
     try {
-      result = await this.db.prepare(query).all<Record<string, unknown>>();
+      rows = await this.db
+        .select()
+        .from(centralAlerts)
+        .orderBy(desc(centralAlerts.datetime));
     } catch (error) {
       return {
         data: null,
@@ -38,31 +24,24 @@ export class CentralAlertsDatabase {
       };
     }
 
-    if (!result.success) {
-      return {
-        data: null,
-        error: {
-          message: result.error || "Database query failed",
-          code: "DATABASE_ERROR"
-        }
-      };
-    }
-
-    const alerts = (result.results ?? []).map((alert) => {
-      const alertData = alert as Record<string, unknown>;
-      return {
-        ...alertData,
-        dismissible: Boolean(alertData.dismissible),
-        include_preview_branch: Boolean(alertData.include_preview_branch),
-        buttons: parseButtons(alertData.buttons)
-      };
-    }) as CentralAlert[];
+    const alerts: CentralAlert[] = rows.map((row) => ({
+      id: row.id,
+      title: row.title,
+      message: row.message,
+      type: row.type as CentralAlert["type"],
+      dismissible: row.dismissible,
+      min_fossbilling_version: row.minFossbillingVersion,
+      max_fossbilling_version: row.maxFossbillingVersion,
+      include_preview_branch: row.includePreviewBranch,
+      buttons: parseButtons(row.buttons),
+      datetime: row.datetime
+    }));
 
     return { data: alerts, error: null };
   }
 }
 
-function parseButtons(value: unknown): CentralAlert["buttons"] {
+function parseButtons(value: string | null): CentralAlert["buttons"] {
   if (typeof value === "string") {
     try {
       const parsed = JSON.parse(value);
@@ -70,10 +49,6 @@ function parseButtons(value: unknown): CentralAlert["buttons"] {
     } catch {
       return [];
     }
-  }
-
-  if (Array.isArray(value)) {
-    return value as CentralAlert["buttons"];
   }
 
   return [];

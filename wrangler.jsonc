@@ -28,7 +28,8 @@
   "d1_databases": [
     {
       "binding": "DB_CENTRAL_ALERTS",
-      "database_id": "3a47f7fd-5eda-4754-9594-9de809ad7823"
+      "database_id": "3a47f7fd-5eda-4754-9594-9de809ad7823",
+      "migrations_dir": "src/services/central-alerts/v1/db/migrations"
     },
     {
       "binding": "DB_EXTENSIONS",

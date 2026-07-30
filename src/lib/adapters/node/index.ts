@@ -1,8 +1,11 @@
 import { IPlatformBindings } from "../../interfaces";
 import { createMemoryCache, createFileCache } from "./cache";
 import { NodeEnvironmentAdapter } from "./environment";
-import { createDefaultAdapter } from "./database";
 
+// No database entry here - Drizzle only wraps the real D1 bindings (see
+// src/lib/db.ts); the Node path exists solely to test the cache/environment
+// adapters outside Workers, so it never had a real production consumer for
+// a database binding (only src/app/index.ts's createCloudflareBindings does).
 export function createNodeBindings(cacheDbPath?: string): IPlatformBindings {
   const cacheKv = cacheDbPath
     ? createFileCache(`${normalizePath(cacheDbPath)}.kv`)
@@ -12,9 +15,6 @@ export function createNodeBindings(cacheDbPath?: string): IPlatformBindings {
     : createMemoryCache();
 
   return {
-    databases: {
-      DB_EXTENSIONS: createDefaultAdapter()
-    },
     caches: {
       CACHE_KV: cacheKv,
       AUTH_KV: authKv
@@ -37,9 +37,3 @@ export {
   createFileCache
 } from "./cache";
 export { NodeEnvironmentAdapter } from "./environment";
-export {
-  SQLiteAdapter,
-  createInMemoryDatabase,
-  createFileDatabase,
-  createDefaultAdapter
-} from "./database";

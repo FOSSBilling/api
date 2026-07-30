@@ -1,5 +1,9 @@
-import { DatabaseResult, IDatabase } from "../../../lib/interfaces";
-import { databaseError } from "./errors";
+import { and, asc, desc, eq, gt, lt, or, sql } from "drizzle-orm";
+import { DatabaseResult } from "../../../lib/interfaces";
+import { ExtensionsDb } from "../../../lib/db";
+import { extensionSubmissions, developers, extensions } from "./db/schema";
+import { databaseError, errorMessageChain } from "./errors";
+import { toD1Statement } from "./d1-batch";
 import { Submission, SubmissionPayload, SubmissionStatus } from "./interfaces";
 
 interface OwnershipResolution {
@@ -29,9 +33,8 @@ interface StoredSubmission extends Submission {
 const MAX_PENDING_SUBMISSIONS_PER_USER = 10;
 
 function isPendingTargetConflict(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    /UNIQUE constraint failed.*extension_submissions/i.test(error.message)
+  return /UNIQUE constraint failed.*extension_submissions/i.test(
+    errorMessageChain(error)
   );
 }
 
@@ -52,32 +55,56 @@ function decodeCursor(cursor: string): [string, string] | null {
   }
 }
 
-function parseSubmissionRow(row: Record<string, unknown>): StoredSubmission {
+interface SubmissionRow {
+  id: string;
+  extensionId: string | null;
+  developerId: string;
+  submittedBy: string;
+  status: string;
+  payload: string;
+  reviewerId: string | null;
+  reviewNote: string | null;
+  createdAt: string;
+  reviewedAt: string | null;
+  ownershipEpoch: number;
+}
+
+function parseSubmissionRow(row: SubmissionRow): StoredSubmission {
   const submission = {
-    id: row.id as string,
-    extension_id: (row.extension_id as string | null) ?? null,
-    developer_id: row.developer_id as string,
-    submitted_by: row.submitted_by as string,
+    id: row.id,
+    extension_id: row.extensionId,
+    developer_id: row.developerId,
+    submitted_by: row.submittedBy,
     status: row.status as SubmissionStatus,
-    payload: JSON.parse(row.payload as string) as SubmissionPayload,
-    reviewer_id: (row.reviewer_id as string | null) ?? null,
-    review_note: (row.review_note as string | null) ?? null,
-    created_at: row.created_at as string,
-    reviewed_at: (row.reviewed_at as string | null) ?? null
+    payload: JSON.parse(row.payload) as SubmissionPayload,
+    reviewer_id: row.reviewerId,
+    review_note: row.reviewNote,
+    created_at: row.createdAt,
+    reviewed_at: row.reviewedAt
   } as StoredSubmission;
   Object.defineProperty(submission, "ownershipEpoch", {
-    value: Number(row.ownership_epoch ?? 1),
+    value: Number(row.ownershipEpoch ?? 1),
     enumerable: false
   });
   return submission;
 }
 
-export class SubmissionsDatabase {
-  private db: IDatabase;
+const SUBMISSION_COLUMNS = {
+  id: extensionSubmissions.id,
+  extensionId: extensionSubmissions.extensionId,
+  developerId: extensionSubmissions.developerId,
+  submittedBy: extensionSubmissions.submittedBy,
+  status: extensionSubmissions.status,
+  payload: extensionSubmissions.payload,
+  reviewerId: extensionSubmissions.reviewerId,
+  reviewNote: extensionSubmissions.reviewNote,
+  createdAt: extensionSubmissions.createdAt,
+  reviewedAt: extensionSubmissions.reviewedAt,
+  ownershipEpoch: extensionSubmissions.ownershipEpoch
+};
 
-  constructor(db: IDatabase) {
-    this.db = db;
-  }
+export class SubmissionsDatabase {
+  constructor(private db: ExtensionsDb) {}
 
   // Edits require owning the extension's current developer; the developer
   // named in the payload (create, or an edit naming a different developer)
@@ -88,27 +115,23 @@ export class SubmissionsDatabase {
     callerId: string
   ): Promise<DatabaseResult<OwnershipResolution>> {
     try {
-      const existingExtension = await this.db
-        .prepare(
-          "SELECT id, author_id FROM extensions WHERE LOWER(id) = LOWER(?)"
-        )
-        .bind(payload.extension.id)
-        .first<{ id: string; author_id: string }>();
+      const [existingExtension] = await this.db
+        .select({ id: extensions.id, authorId: extensions.authorId })
+        .from(extensions)
+        .where(sql`LOWER(${extensions.id}) = LOWER(${payload.extension.id})`);
 
       let extensionId: string | null = null;
 
       if (existingExtension) {
-        const existingDeveloper = await this.db
-          .prepare(
-            "SELECT owner_user_id, ownership_epoch FROM developers WHERE id = ?"
-          )
-          .bind(existingExtension.author_id)
-          .first<{ owner_user_id: string | null; ownership_epoch: number }>();
+        const [existingDeveloper] = await this.db
+          .select({
+            ownerUserId: developers.ownerUserId,
+            ownershipEpoch: developers.ownershipEpoch
+          })
+          .from(developers)
+          .where(eq(developers.id, existingExtension.authorId));
 
-        if (
-          !existingDeveloper ||
-          existingDeveloper.owner_user_id !== callerId
-        ) {
+        if (!existingDeveloper || existingDeveloper.ownerUserId !== callerId) {
           return {
             data: null,
             error: {
@@ -121,14 +144,15 @@ export class SubmissionsDatabase {
         extensionId = existingExtension.id;
       }
 
-      const payloadDeveloper = await this.db
-        .prepare(
-          "SELECT owner_user_id, ownership_epoch FROM developers WHERE id = ?"
-        )
-        .bind(payload.developer.id)
-        .first<{ owner_user_id: string | null; ownership_epoch: number }>();
+      const [payloadDeveloper] = await this.db
+        .select({
+          ownerUserId: developers.ownerUserId,
+          ownershipEpoch: developers.ownershipEpoch
+        })
+        .from(developers)
+        .where(eq(developers.id, payload.developer.id));
 
-      if (!payloadDeveloper || payloadDeveloper.owner_user_id !== callerId) {
+      if (!payloadDeveloper || payloadDeveloper.ownerUserId !== callerId) {
         return {
           data: null,
           error: {
@@ -143,7 +167,7 @@ export class SubmissionsDatabase {
         data: {
           extensionId,
           developerId: payload.developer.id,
-          ownershipEpoch: Number(payloadDeveloper.ownership_epoch ?? 1)
+          ownershipEpoch: Number(payloadDeveloper.ownershipEpoch ?? 1)
         },
         error: null
       };
@@ -157,46 +181,27 @@ export class SubmissionsDatabase {
 
     let result;
     try {
-      result = await this.db
-        .prepare(
-          `INSERT INTO extension_submissions
+      result = await this.db.run(sql`
+        INSERT INTO ${extensionSubmissions}
              (id, extension_id, developer_id, submitted_by, status, payload, ownership_epoch, target_key)
-           SELECT ?, ?, ?, ?, 'pending', ?, d.ownership_epoch, LOWER(?)
-           FROM developers d
-           WHERE d.id = ? AND d.owner_user_id = ? AND d.ownership_epoch = ?
+           SELECT ${id}, ${input.extensionId}, ${input.developerId}, ${input.submittedBy}, 'pending', ${JSON.stringify(input.payload)}, d.ownership_epoch, LOWER(${input.payload.extension.id})
+           FROM ${developers} d
+           WHERE d.id = ${input.developerId} AND d.owner_user_id = ${input.submittedBy} AND d.ownership_epoch = ${input.ownershipEpoch}
              AND (
-               SELECT COUNT(*) FROM extension_submissions
-               WHERE submitted_by = ? AND status = 'pending'
-             ) < ?
+               SELECT COUNT(*) FROM ${extensionSubmissions}
+               WHERE submitted_by = ${input.submittedBy} AND status = 'pending'
+             ) < ${MAX_PENDING_SUBMISSIONS_PER_USER}
              AND (
-               (? IS NULL AND NOT EXISTS (
-                 SELECT 1 FROM extensions WHERE LOWER(id) = LOWER(?)
+               (${input.extensionId} IS NULL AND NOT EXISTS (
+                 SELECT 1 FROM ${extensions} WHERE LOWER(id) = LOWER(${input.payload.extension.id})
                ))
                OR
-               (? IS NOT NULL AND EXISTS (
-                 SELECT 1 FROM extensions
-                 WHERE id = ? AND author_id = d.id
+               (${input.extensionId} IS NOT NULL AND EXISTS (
+                 SELECT 1 FROM ${extensions}
+                 WHERE id = ${input.extensionId} AND author_id = d.id
                ))
-             )`
-        )
-        .bind(
-          id,
-          input.extensionId,
-          input.developerId,
-          input.submittedBy,
-          JSON.stringify(input.payload),
-          input.payload.extension.id,
-          input.developerId,
-          input.submittedBy,
-          input.ownershipEpoch,
-          input.submittedBy,
-          MAX_PENDING_SUBMISSIONS_PER_USER,
-          input.extensionId,
-          input.payload.extension.id,
-          input.extensionId,
-          input.extensionId
-        )
-        .run();
+             )
+      `);
     } catch (error) {
       if (isPendingTargetConflict(error)) {
         return {
@@ -208,13 +213,6 @@ export class SubmissionsDatabase {
         };
       }
       return databaseError("create", error);
-    }
-
-    if (!result.success) {
-      return databaseError(
-        "create",
-        new Error(result.error || "Database query failed")
-      );
     }
 
     if (!result.meta?.changes) {
@@ -243,37 +241,35 @@ export class SubmissionsDatabase {
         error: { message: "Invalid pagination cursor", code: "INVALID_CURSOR" }
       };
     }
-    let result;
+
+    let rows: SubmissionRow[];
     try {
-      const statement = decoded
-        ? this.db
-            .prepare(
-              `SELECT * FROM extension_submissions
-               WHERE submitted_by = ?
-                 AND (created_at < ? OR (created_at = ? AND id < ?))
-               ORDER BY created_at DESC, id DESC LIMIT ?`
+      const conditions = [eq(extensionSubmissions.submittedBy, userId)];
+      if (decoded) {
+        const [createdAt, cursorId] = decoded;
+        conditions.push(
+          or(
+            lt(extensionSubmissions.createdAt, createdAt),
+            and(
+              eq(extensionSubmissions.createdAt, createdAt),
+              lt(extensionSubmissions.id, cursorId)
             )
-            .bind(userId, decoded[0], decoded[0], decoded[1], limit + 1)
-        : this.db
-            .prepare(
-              `SELECT * FROM extension_submissions
-               WHERE submitted_by = ?
-               ORDER BY created_at DESC, id DESC LIMIT ?`
-            )
-            .bind(userId, limit + 1);
-      result = await statement.all<Record<string, unknown>>();
+          )!
+        );
+      }
+      rows = await this.db
+        .select(SUBMISSION_COLUMNS)
+        .from(extensionSubmissions)
+        .where(and(...conditions))
+        .orderBy(
+          desc(extensionSubmissions.createdAt),
+          desc(extensionSubmissions.id)
+        )
+        .limit(limit + 1);
     } catch (error) {
       return databaseError("listBySubmitter", error);
     }
 
-    if (!result.success) {
-      return databaseError(
-        "listBySubmitter",
-        new Error(result.error || "Database query failed")
-      );
-    }
-
-    const rows = result.results ?? [];
     const hasMore = rows.length > limit;
     const items = rows.slice(0, limit).map(parseSubmissionRow);
     const last = items.at(-1);
@@ -300,37 +296,35 @@ export class SubmissionsDatabase {
         error: { message: "Invalid pagination cursor", code: "INVALID_CURSOR" }
       };
     }
-    let result;
+
+    let rows: SubmissionRow[];
     try {
-      const statement = decoded
-        ? this.db
-            .prepare(
-              `SELECT * FROM extension_submissions
-               WHERE status = ?
-                 AND (created_at > ? OR (created_at = ? AND id > ?))
-               ORDER BY created_at ASC, id ASC LIMIT ?`
+      const conditions = [eq(extensionSubmissions.status, status)];
+      if (decoded) {
+        const [createdAt, cursorId] = decoded;
+        conditions.push(
+          or(
+            gt(extensionSubmissions.createdAt, createdAt),
+            and(
+              eq(extensionSubmissions.createdAt, createdAt),
+              gt(extensionSubmissions.id, cursorId)
             )
-            .bind(status, decoded[0], decoded[0], decoded[1], limit + 1)
-        : this.db
-            .prepare(
-              `SELECT * FROM extension_submissions
-               WHERE status = ?
-               ORDER BY created_at ASC, id ASC LIMIT ?`
-            )
-            .bind(status, limit + 1);
-      result = await statement.all<Record<string, unknown>>();
+          )!
+        );
+      }
+      rows = await this.db
+        .select(SUBMISSION_COLUMNS)
+        .from(extensionSubmissions)
+        .where(and(...conditions))
+        .orderBy(
+          asc(extensionSubmissions.createdAt),
+          asc(extensionSubmissions.id)
+        )
+        .limit(limit + 1);
     } catch (error) {
       return databaseError("listQueue", error);
     }
 
-    if (!result.success) {
-      return databaseError(
-        "listQueue",
-        new Error(result.error || "Database query failed")
-      );
-    }
-
-    const rows = result.results ?? [];
     const hasMore = rows.length > limit;
     const items = rows.slice(0, limit).map(parseSubmissionRow);
     const last = items.at(-1);
@@ -346,12 +340,12 @@ export class SubmissionsDatabase {
   }
 
   async getById(id: string): Promise<DatabaseResult<StoredSubmission>> {
-    let row;
+    let row: SubmissionRow | undefined;
     try {
-      row = await this.db
-        .prepare("SELECT * FROM extension_submissions WHERE id = ?")
-        .bind(id)
-        .first<Record<string, unknown>>();
+      [row] = await this.db
+        .select(SUBMISSION_COLUMNS)
+        .from(extensionSubmissions)
+        .where(eq(extensionSubmissions.id, id));
     } catch (error) {
       return databaseError("getById", error);
     }
@@ -400,22 +394,21 @@ export class SubmissionsDatabase {
     let result;
     try {
       result = await this.db
-        .prepare(
-          `UPDATE extension_submissions
-           SET status = 'rejected', reviewer_id = ?, review_note = ?, reviewed_at = CURRENT_TIMESTAMP
-           WHERE id = ? AND status = 'pending'`
-        )
-        .bind(reviewerId, reviewNote, id)
-        .run();
+        .update(extensionSubmissions)
+        .set({
+          status: "rejected",
+          reviewerId,
+          reviewNote,
+          reviewedAt: sql`CURRENT_TIMESTAMP`
+        })
+        .where(
+          and(
+            eq(extensionSubmissions.id, id),
+            eq(extensionSubmissions.status, "pending")
+          )
+        );
     } catch (error) {
       return databaseError("reject", error);
-    }
-
-    if (!result.success) {
-      return databaseError(
-        "reject",
-        new Error(result.error || "Database query failed")
-      );
     }
 
     if (!result.meta?.changes) {
@@ -449,80 +442,77 @@ export class SubmissionsDatabase {
       };
     }
 
-    if (!this.db.batch) {
-      return databaseError(
-        "approve",
-        new Error("Database adapter does not support batch operations")
-      );
-    }
-
     const { developer, extension } = submission.payload;
     const extensionId = submission.extension_id ?? extension.id;
 
+    // Kept as raw sql via the raw D1 client (see toD1Statement) rather than
+    // the query builder: D1's batch() executes these three statements as
+    // one transaction, and the developer/extension statements are
+    // deliberately gated on `changes() = 1` from the immediately-preceding
+    // statement (SQLite's per-connection changes() function) so a race or
+    // ownership/target change caught by the first statement's WHERE also
+    // blocks the other two - a guarantee that's easy to silently lose by
+    // rewriting this as three independent query-builder calls. Also works
+    // around a drizzle-orm 0.45.2 bug where db.run(sql) with bound params
+    // can't be used inside db.batch() at all (confirmed via an isolated
+    // repro against real D1).
     let results;
     try {
-      // D1 executes a batch as one transaction. The first statement binds
-      // the moderation transition to the submitter's captured ownership
-      // epoch; transfer and approval therefore cannot interleave.
-      const claimStmt = this.db
-        .prepare(
-          `UPDATE extension_submissions
-           SET status = 'approved', reviewer_id = ?, review_note = ?, reviewed_at = CURRENT_TIMESTAMP
-           WHERE id = ? AND status = 'pending'
-             AND EXISTS (
-               SELECT 1 FROM developers d
-               WHERE d.id = extension_submissions.developer_id
-                 AND d.owner_user_id = extension_submissions.submitted_by
-                 AND d.ownership_epoch = extension_submissions.ownership_epoch
-             )
-             AND (
-               (extension_id IS NULL AND NOT EXISTS (
-                 SELECT 1 FROM extensions e
-                 WHERE LOWER(e.id) = LOWER(?)
-               ))
-               OR
-               (extension_id IS NOT NULL AND EXISTS (
-                 SELECT 1 FROM extensions e
-                 WHERE e.id = extension_submissions.extension_id
-                   AND e.author_id = extension_submissions.developer_id
-               ))
-             )`
-        )
-        .bind(reviewerId, reviewNote ?? null, id, extension.id);
+      const claimStmt = toD1Statement(this.db.$client, {
+        sql: `UPDATE extension_submissions
+              SET status = 'approved', reviewer_id = ?, review_note = ?, reviewed_at = CURRENT_TIMESTAMP
+              WHERE id = ? AND status = 'pending'
+                AND EXISTS (
+                  SELECT 1 FROM developers d
+                  WHERE d.id = extension_submissions.developer_id
+                    AND d.owner_user_id = extension_submissions.submitted_by
+                    AND d.ownership_epoch = extension_submissions.ownership_epoch
+                )
+                AND (
+                  (extension_id IS NULL AND NOT EXISTS (
+                    SELECT 1 FROM extensions e
+                    WHERE LOWER(e.id) = LOWER(?)
+                  ))
+                  OR
+                  (extension_id IS NOT NULL AND EXISTS (
+                    SELECT 1 FROM extensions e
+                    WHERE e.id = extension_submissions.extension_id
+                      AND e.author_id = extension_submissions.developer_id
+                  ))
+                )`,
+        params: [reviewerId, reviewNote ?? null, id, extension.id]
+      });
 
-      const developerStmt = this.db
-        .prepare(
-          `UPDATE developers
-           SET type = ?, name = ?, url = ?,
-               content_revision = content_revision + 1,
-               approved_at = NULL, approved_revision = NULL, approved_by = NULL,
-               updated_at = CURRENT_TIMESTAMP
-           WHERE changes() = 1 AND id = ? AND owner_user_id = ?
-             AND ownership_epoch = ?`
-        )
-        .bind(
+      const developerStmt = toD1Statement(this.db.$client, {
+        sql: `UPDATE developers
+              SET type = ?, name = ?, url = ?,
+                  content_revision = content_revision + 1,
+                  approved_at = NULL, approved_revision = NULL, approved_by = NULL,
+                  updated_at = CURRENT_TIMESTAMP
+              WHERE changes() = 1 AND id = ? AND owner_user_id = ?
+                AND ownership_epoch = ?`,
+        params: [
           developer.type,
           developer.name,
           developer.URL ?? null,
           developer.id,
           submission.submitted_by,
           submission.ownershipEpoch
-        );
+        ]
+      });
 
-      const extensionStmt = this.db
-        .prepare(
-          `INSERT INTO extensions (id, type, author_id, name, description, releases, website, license, icon_url, readme, source, version, download_url)
-           SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-           WHERE changes() = 1
-           ON CONFLICT(id) DO UPDATE SET
-             type = excluded.type, author_id = excluded.author_id, name = excluded.name,
-             description = excluded.description, releases = excluded.releases,
-             website = excluded.website, license = excluded.license,
-             icon_url = excluded.icon_url, readme = excluded.readme,
-             source = excluded.source, version = excluded.version,
-             download_url = excluded.download_url`
-        )
-        .bind(
+      const extensionStmt = toD1Statement(this.db.$client, {
+        sql: `INSERT INTO extensions (id, type, author_id, name, description, releases, website, license, icon_url, readme, source, version, download_url)
+              SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+              WHERE changes() = 1
+              ON CONFLICT(id) DO UPDATE SET
+                type = excluded.type, author_id = excluded.author_id, name = excluded.name,
+                description = excluded.description, releases = excluded.releases,
+                website = excluded.website, license = excluded.license,
+                icon_url = excluded.icon_url, readme = excluded.readme,
+                source = excluded.source, version = excluded.version,
+                download_url = excluded.download_url`,
+        params: [
           extensionId,
           extension.type,
           developer.id,
@@ -536,27 +526,16 @@ export class SubmissionsDatabase {
           JSON.stringify(extension.source),
           extension.version,
           extension.download_url
-        );
+        ]
+      });
 
-      results = (await this.db.batch([
+      results = await this.db.$client.batch([
         claimStmt,
         developerStmt,
         extensionStmt
-      ])) as Array<{
-        success: boolean;
-        error?: string;
-        meta?: { changes?: number };
-      }>;
+      ]);
     } catch (error) {
       return databaseError("approve", error);
-    }
-
-    const failed = results.find((r) => !r.success);
-    if (failed) {
-      return databaseError(
-        "approve",
-        new Error(failed.error || "Database write failed")
-      );
     }
 
     if (!results[0]?.meta?.changes) {

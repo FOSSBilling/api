@@ -1,12 +1,11 @@
 # Test Mocks
 
-This directory contains mock implementations and mock data used across the test suite.
+This directory contains mock data used across the test suite.
 
 ## Contents
 
-- `mock-adapters.ts` - Mock implementations for database, cache, and environment adapters
 - `github-releases.ts` - Mock GitHub API release data
 
 ## Usage
 
-Mock adapters are used in unit tests to simulate Cloudflare Workers bindings (D1, KV, environment variables) without requiring actual Cloudflare infrastructure.
+Database tests run against a real local D1 (see `@cloudflare/vitest-pool-workers` and `test/utils/apply-migrations.ts`) rather than a mock adapter - see `test/services/extensions/v2/db-fixtures.ts` for seed/read helpers and `test/services/extensions/v2/db-interceptor.ts` for the handful of tests that need to inject a fault or a mid-request race.
