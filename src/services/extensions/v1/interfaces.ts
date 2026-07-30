@@ -1,7 +1,8 @@
 import { gt } from "semver";
 import { sortReleasesDescending } from "../../../lib/releases";
+import { parseJSON } from "../../../lib/json";
 
-export { sortReleasesDescending };
+export { sortReleasesDescending, parseJSON };
 
 export type Extension = {
   id: string;
