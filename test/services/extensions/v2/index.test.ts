@@ -1458,6 +1458,42 @@ describe("Extensions API v2", () => {
       );
       expect(res.status).toBe(404);
     });
+
+    it("refuses to overwrite verification if ownership moves away between the lookup and the write", async () => {
+      await insertDeveloper(db, {
+        id: "dev-developer",
+        type: "organization",
+        name: "Dev",
+        url: null,
+        owner_user_id: "user-1"
+      });
+      await insertUser(db, {
+        id: "user-1",
+        github_login: "someone",
+        github_orgs: JSON.stringify(["dev-developer"])
+      });
+      // Simulates a transfer/claim landing in the window between
+      // reverifyOwn's initial "find my profile" lookup and its guarded
+      // write - the write must re-check ownership at that point, not trust
+      // the lookup, or it would write a result computed from the *former*
+      // owner's GitHub identity onto the profile after it's changed hands.
+      env.DB_EXTENSIONS = wrapD1WithHook(db, async (sql) => {
+        if (sql.includes("update") && sql.includes("github_verified_at")) {
+          await bumpDeveloperOwnership(db, "dev-developer", "user-2");
+        }
+      });
+
+      const res = await post(
+        "/extensions/v2/developers/me/reverify",
+        await authHeaders("user-1")
+      );
+      env.DB_EXTENSIONS = db;
+      expect(res.status).toBe(409);
+
+      const developerRow = await getDeveloper(db, "dev-developer");
+      expect(developerRow?.owner_user_id).toBe("user-2");
+      expect(developerRow?.github_org_verified).toBeNull();
+    });
   });
 
   describe("developer moderation", () => {

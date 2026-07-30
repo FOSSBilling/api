@@ -724,6 +724,10 @@ const reverifyOwnDeveloperRoute = createRoute({
       content: { "application/json": { schema: ErrorResponseSchema } },
       description: "Caller has no developer profile"
     },
+    409: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "Developer ownership changed while re-verifying"
+    },
     500: {
       content: { "application/json": { schema: ErrorResponseSchema } },
       description: "Database error"
@@ -737,6 +741,12 @@ extensionsV2.openapi(reverifyOwnDeveloperRoute, async (c) => {
 
   const { data, error } = await db.reverifyOwn(auth.userId);
   if (error || !data) {
+    const status =
+      error?.code === "NOT_FOUND"
+        ? 404
+        : error?.code === "CONFLICT"
+          ? 409
+          : 500;
     return c.json(
       {
         error: {
@@ -744,7 +754,7 @@ extensionsV2.openapi(reverifyOwnDeveloperRoute, async (c) => {
           code: error?.code ?? "DATABASE_ERROR"
         }
       },
-      error?.code === "NOT_FOUND" ? 404 : 500
+      status
     );
   }
 

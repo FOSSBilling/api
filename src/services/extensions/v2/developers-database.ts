@@ -1076,7 +1076,12 @@ export class DevelopersDatabase {
         identity.data
       );
 
-      await this.db
+      // Re-asserts ownership in the write itself (not just the lookup
+      // above) — otherwise a transfer/claim landing in between would let
+      // this write a result computed from the *former* owner's GitHub
+      // identity onto the profile after it's changed hands. Same guard as
+      // upsertOwn's update branch.
+      const result = await this.db
         .update(developers)
         .set({
           githubOrgVerified: matches ? 1 : 0,
@@ -1085,7 +1090,19 @@ export class DevelopersDatabase {
             : "No longer verified: caller's linked GitHub identity no longer matches.",
           githubVerifiedAt: sql`CURRENT_TIMESTAMP`
         })
-        .where(eq(developers.id, row.id));
+        .where(
+          and(eq(developers.id, row.id), eq(developers.ownerUserId, userId))
+        );
+
+      if (!result.meta?.changes) {
+        return {
+          data: null,
+          error: {
+            message: "Developer ownership changed while re-verifying",
+            code: "CONFLICT"
+          }
+        };
+      }
 
       return this.getById(row.id);
     } catch (error) {
