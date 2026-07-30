@@ -7,10 +7,10 @@ import {
   check
 } from "drizzle-orm/sqlite-core";
 
-// Bootstrapped historically via db/init.sql + scripts/init-db.ts
-// (`wrangler d1 execute --file`), not wrangler's migrations mechanism.
-// This schema is the baseline for adopting drizzle-kit-managed migrations
-// for DB_CENTRAL_ALERTS - see db/migrations/0001_create_central_alerts.sql.
+// Historically bootstrapped via `wrangler d1 execute --file` against a
+// hand-written init.sql, not wrangler's migrations mechanism. This schema
+// is the baseline for adopting drizzle-kit-managed migrations for
+// DB_CENTRAL_ALERTS - see db/migrations/0000_create_central_alerts.sql.
 //
 // dismissible/include_preview_branch were declared BOOLEAN in the original
 // DDL (SQLite has no native boolean type - BOOLEAN gets NUMERIC affinity,
