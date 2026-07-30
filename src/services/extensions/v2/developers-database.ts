@@ -221,7 +221,8 @@ export class DevelopersDatabase {
           githubOrgVerified,
           githubUrlVerified,
           githubVerificationNote,
-          githubVerifiedAt: githubOrgVerified !== null ? sql`CURRENT_TIMESTAMP` : null,
+          githubVerifiedAt:
+            githubOrgVerified !== null ? sql`CURRENT_TIMESTAMP` : null,
           createdAt: sql`CURRENT_TIMESTAMP`,
           updatedAt: sql`CURRENT_TIMESTAMP`
         });
@@ -260,7 +261,8 @@ export class DevelopersDatabase {
         // on-file website, so a stale URL can't still be "verified" once
         // it's no longer the URL being served.
         const urlChanged = (developer.URL ?? null) !== existingOwn.url;
-        const keepsApproval = !typeChanged && existingOwn.githubOrgVerified === 1;
+        const keepsApproval =
+          !typeChanged && existingOwn.githubOrgVerified === 1;
 
         mainStmt = this.db
           .update(developers)
@@ -660,7 +662,10 @@ export class DevelopersDatabase {
           changedAt: developerHistory.changedAt
         })
         .from(developerHistory)
-        .leftJoin(externalUsers, eq(externalUsers.id, developerHistory.changedBy))
+        .leftJoin(
+          externalUsers,
+          eq(externalUsers.id, developerHistory.changedBy)
+        )
         .where(eq(developerHistory.developerId, developerId))
         // CURRENT_TIMESTAMP has only second resolution, so two writes in
         // the same second tie on changed_at; rowid (insertion order,
@@ -717,7 +722,9 @@ export class DevelopersDatabase {
         crypto.randomUUID().replace(/-/g, "") +
         crypto.randomUUID().replace(/-/g, "");
       const tokenHash = await sha256Hex(token);
-      const expiresAt = toSqliteDatetime(new Date(Date.now() + 60 * 60 * 1000));
+      const expiresAt = toSqliteDatetime(
+        new Date(Date.now() + 24 * 60 * 60 * 1000)
+      );
 
       // Both writes are conditioned on current ownership in the same
       // statement, rather than a separate SELECT beforehand — a caller who
@@ -1045,7 +1052,10 @@ export class DevelopersDatabase {
       }
     | { error: DatabaseError }
   > {
-    const githubEntity = await checkGithubEntity(developerId, githubToken ?? "");
+    const githubEntity = await checkGithubEntity(
+      developerId,
+      githubToken ?? ""
+    );
 
     if (githubEntity === null) {
       // Also covers a failed lookup (rate limit, network, auth error) —
@@ -1128,7 +1138,11 @@ export class DevelopersDatabase {
   ): Promise<DatabaseResult<DeveloperProfile>> {
     try {
       const [row] = await this.db
-        .select({ id: developers.id, type: developers.type, url: developers.url })
+        .select({
+          id: developers.id,
+          type: developers.type,
+          url: developers.url
+        })
         .from(developers)
         .where(eq(developers.ownerUserId, userId));
       if (!row) {
@@ -1479,7 +1493,10 @@ export class DevelopersDatabase {
         })
         .from(developerClaims)
         .innerJoin(developers, eq(developers.id, developerClaims.developerId))
-        .leftJoin(externalUsers, eq(externalUsers.id, developerClaims.claimantId))
+        .leftJoin(
+          externalUsers,
+          eq(externalUsers.id, developerClaims.claimantId)
+        )
         .where(eq(developerClaims.status, "pending"))
         .orderBy(asc(developerClaims.createdAt));
     } catch (error) {
