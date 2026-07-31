@@ -9,11 +9,14 @@ export type GithubIdentity = {
   githubOrgs: string[];
 };
 
+const RFC3339_TIMESTAMP =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+
 function isFutureGithubOrgsExpiry(
   value: string | null | undefined,
   now = Date.now()
 ): boolean {
-  if (!value) return false;
+  if (!value || !RFC3339_TIMESTAMP.test(value)) return false;
   const expiresAt = Date.parse(value);
   return Number.isFinite(expiresAt) && expiresAt > now;
 }

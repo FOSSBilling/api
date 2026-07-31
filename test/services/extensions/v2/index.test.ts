@@ -1005,7 +1005,8 @@ describe("Extensions API v2", () => {
 
     it.each([
       ["expired", "2000-01-01T00:00:00.000Z"],
-      ["missing", null]
+      ["missing", null],
+      ["malformed", "2099"]
     ])(
       "does not verify an organization from %s GitHub membership evidence",
       async (_state, github_orgs_expires_at) => {
