@@ -13,5 +13,6 @@ export const users = sqliteTable("users", {
   name: text("name"),
   isModerator: integer("is_moderator"),
   githubLogin: text("github_login"),
-  githubOrgs: text("github_orgs")
+  githubOrgs: text("github_orgs"),
+  githubOrgsExpiresAt: text("github_orgs_expires_at")
 });

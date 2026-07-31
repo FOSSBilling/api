@@ -32,7 +32,7 @@ const v1SchemaSql = readFileSync(
   "utf8"
 );
 const usersStubSql =
-  "CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY NOT NULL, name TEXT, is_moderator INTEGER, github_login TEXT, github_orgs TEXT);";
+  "CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY NOT NULL, name TEXT, is_moderator INTEGER, github_login TEXT, github_orgs TEXT, github_orgs_expires_at TEXT);";
 
 export default defineConfig({
   plugins: [
