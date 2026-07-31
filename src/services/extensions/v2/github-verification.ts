@@ -70,7 +70,9 @@ export function urlMatchesGithubBlog(
   if (!publisherUrl || !blog) return false;
   const normalize = (value: string) => {
     try {
-      const url = new URL(/^https?:\/\//i.test(value) ? value : `https://${value}`);
+      const url = new URL(
+        /^https?:\/\//i.test(value) ? value : `https://${value}`
+      );
       const host = url.host.replace(/^www\./i, "").toLowerCase();
       return `${host}${url.pathname}`.replace(/\/$/, "");
     } catch {
