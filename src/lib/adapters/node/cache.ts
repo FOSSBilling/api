@@ -38,8 +38,7 @@ export class SQLiteCacheAdapter implements ICache {
 
   async get(key: string): Promise<string | null> {
     const result = this.stmtGet.get(key, Date.now()) as
-      | { value: string }
-      | undefined;
+      { value: string } | undefined;
     return result?.value ?? null;
   }
 

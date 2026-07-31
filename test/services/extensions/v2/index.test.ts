@@ -66,10 +66,7 @@ function mockGithubEntityNotFound(): void {
   });
 }
 
-function mockGithubEntity(
-  type: "User" | "Organization",
-  blog?: string
-): void {
+function mockGithubEntity(type: "User" | "Organization", blog?: string): void {
   (vi.mocked(ghRequest) as MockGitHubRequest).mockImplementation(async () => ({
     data: { type, blog }
   }));
@@ -1071,7 +1068,10 @@ describe("Extensions API v2", () => {
 
       expect(res.status).toBe(200);
       const created = (await res.json()) as {
-        result: { github_org_verified?: boolean; github_url_verified?: boolean };
+        result: {
+          github_org_verified?: boolean;
+          github_url_verified?: boolean;
+        };
       };
       expect(created.result.github_org_verified).toBe(true);
       expect(created.result.github_url_verified).toBe(true);
@@ -1395,7 +1395,10 @@ describe("Extensions API v2", () => {
         { ...sampleDeveloper(), URL: "https://acme.example" }
       );
       const createdBody = (await created.json()) as {
-        result: { github_org_verified?: boolean; github_url_verified?: boolean };
+        result: {
+          github_org_verified?: boolean;
+          github_url_verified?: boolean;
+        };
       };
       expect(createdBody.result.github_org_verified).toBe(true);
       expect(createdBody.result.github_url_verified).toBe(true);
@@ -1408,7 +1411,10 @@ describe("Extensions API v2", () => {
 
       expect(res.status).toBe(200);
       const data = (await res.json()) as {
-        result: { github_org_verified?: boolean; github_url_verified?: boolean };
+        result: {
+          github_org_verified?: boolean;
+          github_url_verified?: boolean;
+        };
       };
       expect(data.result.github_org_verified).toBe(true);
       expect(data.result.github_url_verified).toBeUndefined();
@@ -1689,7 +1695,8 @@ describe("Extensions API v2", () => {
         url: null,
         owner_user_id: "user-1",
         github_org_verified: 1,
-        github_verification_note: "Verified: caller's linked GitHub identity matches.",
+        github_verification_note:
+          "Verified: caller's linked GitHub identity matches.",
         github_verified_at: "2020-01-01T00:00:00.000Z"
       });
       await insertUser(db, {
@@ -1707,7 +1714,9 @@ describe("Extensions API v2", () => {
         result: { github_org_verified?: boolean; github_verified_at?: string };
       };
       expect(body.result.github_org_verified).toBe(true);
-      expect(body.result.github_verified_at).not.toBe("2020-01-01T00:00:00.000Z");
+      expect(body.result.github_verified_at).not.toBe(
+        "2020-01-01T00:00:00.000Z"
+      );
     });
 
     it("flips to unverified when the owner's GitHub org membership no longer matches", async () => {
@@ -1718,7 +1727,8 @@ describe("Extensions API v2", () => {
         url: null,
         owner_user_id: "user-1",
         github_org_verified: 1,
-        github_verification_note: "Verified: caller's linked GitHub identity matches.",
+        github_verification_note:
+          "Verified: caller's linked GitHub identity matches.",
         github_verified_at: "2020-01-01T00:00:00.000Z"
       });
       // No longer a member of dev-developer's org.
@@ -1734,7 +1744,10 @@ describe("Extensions API v2", () => {
       );
       expect(res.status).toBe(200);
       const body = (await res.json()) as {
-        result: { github_org_verified?: boolean; github_verification_note?: string };
+        result: {
+          github_org_verified?: boolean;
+          github_verification_note?: string;
+        };
       };
       expect(body.result.github_org_verified).toBe(false);
       expect(body.result.github_verification_note).toBe(
@@ -1980,9 +1993,9 @@ describe("Extensions API v2", () => {
       env.DB_EXTENSIONS = db;
 
       expect(res.status).toBe(409);
-      expect((await getDeveloper(db, "dev-developer"))?.github_url_verified).toBe(
-        null
-      );
+      expect(
+        (await getDeveloper(db, "dev-developer"))?.github_url_verified
+      ).toBe(null);
       expect((await getDeveloper(db, "dev-developer"))?.url).toBe(
         "https://different.example"
       );
@@ -2012,7 +2025,10 @@ describe("Extensions API v2", () => {
       );
       expect(res.status).toBe(200);
       const body = (await res.json()) as {
-        result: { github_org_verified?: boolean; github_url_verified?: boolean };
+        result: {
+          github_org_verified?: boolean;
+          github_url_verified?: boolean;
+        };
       };
       expect(body.result.github_org_verified).toBe(false);
       expect(body.result.github_url_verified).toBeUndefined();
@@ -2041,7 +2057,10 @@ describe("Extensions API v2", () => {
       );
       expect(res.status).toBe(200);
       const body = (await res.json()) as {
-        result: { github_org_verified?: boolean; github_url_verified?: boolean };
+        result: {
+          github_org_verified?: boolean;
+          github_url_verified?: boolean;
+        };
       };
       expect(body.result.github_org_verified).toBe(false);
       expect(body.result.github_url_verified).toBeUndefined();
@@ -2573,7 +2592,10 @@ describe("Extensions API v2", () => {
         { ...sampleDeveloper(), URL: "https://acme.example" }
       );
       const createdBody = (await created.json()) as {
-        result: { github_org_verified?: boolean; github_url_verified?: boolean };
+        result: {
+          github_org_verified?: boolean;
+          github_url_verified?: boolean;
+        };
       };
       expect(createdBody.result.github_org_verified).toBe(true);
       expect(createdBody.result.github_url_verified).toBe(true);
@@ -2591,7 +2613,10 @@ describe("Extensions API v2", () => {
       );
       expect(accept.status).toBe(200);
       const accepted = (await accept.json()) as {
-        result: { github_org_verified?: boolean; github_url_verified?: boolean };
+        result: {
+          github_org_verified?: boolean;
+          github_url_verified?: boolean;
+        };
       };
       expect(accepted.result.github_org_verified).toBeUndefined();
       expect(accepted.result.github_url_verified).toBeUndefined();
