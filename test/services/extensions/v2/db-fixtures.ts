@@ -146,8 +146,15 @@ export async function insertUser(
     is_moderator?: number;
     github_login?: string;
     github_orgs?: string;
+    github_orgs_expires_at?: string | null;
   }
 ): Promise<void> {
+  const githubOrgsExpiresAt =
+    row.github_orgs_expires_at !== undefined
+      ? row.github_orgs_expires_at
+      : row.github_orgs != null
+        ? "2099-01-01T00:00:00.000Z"
+        : null;
   // Upsert rather than a plain INSERT: ensureUser() (called automatically
   // by the other insert* helpers below, and by authHeaders() in
   // index.test.ts, to satisfy users(id) FKs - e.g. developers.owner_user_id
@@ -156,17 +163,19 @@ export async function insertUser(
   // created a bare stub row for this id before this richer call runs.
   await db
     .prepare(
-      `INSERT INTO users (id, is_moderator, github_login, github_orgs) VALUES (?, ?, ?, ?)
+      `INSERT INTO users (id, is_moderator, github_login, github_orgs, github_orgs_expires_at) VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          is_moderator = excluded.is_moderator,
          github_login = excluded.github_login,
-         github_orgs = excluded.github_orgs`
+         github_orgs = excluded.github_orgs,
+         github_orgs_expires_at = excluded.github_orgs_expires_at`
     )
     .bind(
       row.id,
       row.is_moderator ?? null,
       row.github_login ?? null,
-      row.github_orgs ?? null
+      row.github_orgs ?? null,
+      githubOrgsExpiresAt
     )
     .run();
 }

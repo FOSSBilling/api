@@ -9,11 +9,21 @@ export type GithubIdentity = {
   githubOrgs: string[];
 };
 
+function isFutureGithubOrgsExpiry(
+  value: string | null | undefined,
+  now = Date.now()
+): boolean {
+  if (!value) return false;
+  const expiresAt = Date.parse(value);
+  return Number.isFinite(expiresAt) && expiresAt > now;
+}
+
 // `users` is owned by the FOSSBilling/extensions repo (src/lib/db/users.sql there),
 // NOT this repo, but lives in the same DB_EXTENSIONS database. If that schema
 // changes (columns renamed/dropped), update fossbilling/api AND that file. Assumed
 // columns used here: users.id (TEXT, = auth `sub` claim), users.is_moderator
-// (INTEGER 0/1), users.github_login (TEXT), users.github_orgs (TEXT, JSON array).
+// (INTEGER 0/1), users.github_login (TEXT), users.github_orgs (TEXT, JSON
+// array), and users.github_orgs_expires_at (TEXT, absolute RFC3339 expiry).
 export class UsersDatabase {
   constructor(private db: ExtensionsDb) {}
 
@@ -31,9 +41,9 @@ export class UsersDatabase {
 
   // Used to verify developer-profile claims against the claimant's own
   // linked GitHub identity — see DevelopersDatabase.claim(). github_orgs is
-  // only populated once the claimant has signed in via GitHub since the
-  // auth service started requesting the read:org scope; absent columns/rows
-  // resolve to "no linked identity" rather than throwing.
+  // only usable while its central-auth expiry is in the future; absent,
+  // malformed, or expired organization evidence resolves to no memberships
+  // rather than throwing.
   async getGithubIdentity(
     userId: string
   ): Promise<DatabaseResult<GithubIdentity>> {
@@ -41,16 +51,25 @@ export class UsersDatabase {
       const [row] = await this.db
         .select({
           githubLogin: users.githubLogin,
-          githubOrgs: users.githubOrgs
+          githubOrgs: users.githubOrgs,
+          githubOrgsExpiresAt: users.githubOrgsExpiresAt
         })
         .from(users)
         .where(eq(users.id, userId));
 
       let githubOrgs: string[] = [];
-      if (row?.githubOrgs) {
+      if (
+        row?.githubOrgs &&
+        isFutureGithubOrgsExpiry(row.githubOrgsExpiresAt)
+      ) {
         try {
           const parsed = JSON.parse(row.githubOrgs);
-          if (Array.isArray(parsed)) githubOrgs = parsed;
+          if (
+            Array.isArray(parsed) &&
+            parsed.every((org) => typeof org === "string")
+          ) {
+            githubOrgs = parsed;
+          }
         } catch {
           // Malformed JSON is treated the same as "no orgs recorded" —
           // never let a parse failure block or wrongly verify a claim.

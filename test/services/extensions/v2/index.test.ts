@@ -981,6 +981,74 @@ describe("Extensions API v2", () => {
       expect(created.result.github_org_verified).toBe(true);
     });
 
+    it("keeps username verification independent of organization expiry", async () => {
+      mockGithubEntity("User");
+      await insertUser(db, {
+        id: "user-1",
+        github_login: "dev-developer",
+        github_orgs: JSON.stringify(["former-org"]),
+        github_orgs_expires_at: "2000-01-01T00:00:00.000Z"
+      });
+
+      const res = await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        sampleDeveloper()
+      );
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        result: { github_org_verified?: boolean };
+      };
+      expect(body.result.github_org_verified).toBe(true);
+    });
+
+    it.each([
+      ["expired", "2000-01-01T00:00:00.000Z"],
+      ["missing", null]
+    ])(
+      "does not verify an organization from %s GitHub membership evidence",
+      async (_state, github_orgs_expires_at) => {
+        mockGithubEntity("Organization");
+        await insertUser(db, {
+          id: "user-1",
+          github_login: "someone",
+          github_orgs: JSON.stringify(["acme-org"]),
+          github_orgs_expires_at
+        });
+
+        const res = await put(
+          "/extensions/v2/developers/me",
+          await authHeaders("user-1"),
+          { id: "acme-org", type: "organization", name: "Acme Org" }
+        );
+
+        expect(res.status).toBe(403);
+        const body = (await res.json()) as { error: { code: string } };
+        expect(body.error.code).toBe("GITHUB_MISMATCH");
+      }
+    );
+
+    it("does not verify an organization from a fresh confirmed empty list", async () => {
+      mockGithubEntity("Organization");
+      await insertUser(db, {
+        id: "user-1",
+        github_login: "someone",
+        github_orgs: JSON.stringify([]),
+        github_orgs_expires_at: "2099-01-01T00:00:00.000Z"
+      });
+
+      const res = await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        { id: "acme-org", type: "organization", name: "Acme Org" }
+      );
+
+      expect(res.status).toBe(403);
+      const body = (await res.json()) as { error: { code: string } };
+      expect(body.error.code).toBe("GITHUB_MISMATCH");
+    });
+
     it("verifies the Publisher URL when it matches GitHub's on-file website", async () => {
       mockGithubEntity("Organization", "https://www.acme.example/");
       await insertUser(db, {
