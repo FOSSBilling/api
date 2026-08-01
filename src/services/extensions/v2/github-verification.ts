@@ -23,7 +23,8 @@ export type GithubUnavailableReason =
   | "authentication"
   | "network"
   | "upstream"
-  | "invalid_response";
+  | "invalid_response"
+  | "unsupported_entity_type";
 
 export type GithubEntityResult =
   | { status: "found"; entity: GithubEntity }
@@ -80,7 +81,7 @@ export async function checkGithubEntity(
     if (result.data.type === "User") {
       return { status: "found", entity: { type: "user", blog } };
     }
-    return unavailable(id, "invalid_response");
+    return unavailable(id, "unsupported_entity_type");
   } catch (error) {
     const githubError = classifyGitHubError(
       error,

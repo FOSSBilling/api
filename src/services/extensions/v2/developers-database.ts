@@ -57,6 +57,12 @@ function isPendingClaimConflict(error: unknown): boolean {
 function githubUnavailableError(
   reason: GithubUnavailableReason
 ): DatabaseError {
+  if (reason === "unsupported_entity_type") {
+    return {
+      code: "GITHUB_ENTITY_UNSUPPORTED",
+      message: "This GitHub account type is not supported"
+    };
+  }
   return reason === "rate_limited"
     ? {
         code: "RATE_LIMITED",

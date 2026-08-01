@@ -70,7 +70,8 @@ function statusFromErrorCode(code?: string): 404 | 409 | 500 {
 function statusFromGithubErrorCode<T extends number>(
   code: string | undefined,
   fallback: T
-): T | 429 | 503 {
+): T | 422 | 429 | 503 {
+  if (code === "GITHUB_ENTITY_UNSUPPORTED") return 422;
   if (code === "RATE_LIMITED") return 429;
   if (code === "SERVICE_UNAVAILABLE") return 503;
   return fallback;
@@ -618,7 +619,8 @@ const upsertOwnDeveloperRoute = createRoute({
     },
     422: {
       content: { "application/json": { schema: ErrorResponseSchema } },
-      description: "Payload failed validation"
+      description:
+        "Payload failed validation, or the GitHub account type is unsupported"
     },
     500: {
       content: { "application/json": { schema: ErrorResponseSchema } },
@@ -756,6 +758,10 @@ const reverifyOwnDeveloperRoute = createRoute({
       content: { "application/json": { schema: ErrorResponseSchema } },
       description: "GitHub verification is temporarily unavailable"
     },
+    422: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "The GitHub account type is unsupported"
+    },
     500: {
       content: { "application/json": { schema: ErrorResponseSchema } },
       description: "Database error"
@@ -849,7 +855,8 @@ const claimDeveloperRoute = createRoute({
     },
     422: {
       content: { "application/json": { schema: ErrorResponseSchema } },
-      description: "id param or note body failed validation"
+      description:
+        "The request failed validation, or the GitHub account type is unsupported"
     },
     500: {
       content: { "application/json": { schema: ErrorResponseSchema } },

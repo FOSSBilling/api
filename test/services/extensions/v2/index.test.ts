@@ -1276,7 +1276,6 @@ describe("Extensions API v2", () => {
 
     it.each([
       ["missing entity type", { blog: null }],
-      ["unexpected entity type", { type: "Bot", blog: null }],
       ["malformed website", { type: "User", blog: { url: "example.com" } }]
     ])(
       "does not create a developer for %s response data",
@@ -1297,6 +1296,23 @@ describe("Extensions API v2", () => {
         expect(await hasDeveloper(db, "invalid-response")).toBe(false);
       }
     );
+
+    it("returns a permanent error for an unsupported GitHub entity type", async () => {
+      (vi.mocked(ghRequest) as MockGitHubRequest).mockImplementation(
+        async () => ({ data: { type: "Bot", blog: null } })
+      );
+
+      const res = await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        { id: "unsupported-entity", type: "user", name: "Unsupported" }
+      );
+
+      expect(res.status).toBe(422);
+      const body = (await res.json()) as { error: { code: string } };
+      expect(body.error.code).toBe("GITHUB_ENTITY_UNSUPPORTED");
+      expect(await hasDeveloper(db, "unsupported-entity")).toBe(false);
+    });
 
     it("falls back to unverified creation when the creator has no linked GitHub identity", async () => {
       mockGithubEntity("Organization");
