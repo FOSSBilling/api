@@ -37,14 +37,27 @@ export type GithubEntityResult =
 function unavailable(
   id: string,
   reason: GithubUnavailableReason,
-  httpStatus?: number
+  httpStatus?: number,
+  message?: string
 ): GithubEntityResult {
   logWarn("extensions-v2", "GitHub entity lookup unavailable", {
     id,
     reason,
-    ...(httpStatus === undefined ? {} : { status: httpStatus })
+    ...(httpStatus === undefined ? {} : { status: httpStatus }),
+    ...(message === undefined ? {} : { message })
   });
   return { status: "unavailable", reason };
+}
+
+function redactedFailureMessage(message: string): string {
+  return message
+    .replace(/\bBearer\s+\S+/gi, "Bearer [REDACTED]")
+    .replace(/(authorization\s*[:=]\s*)\S+/gi, "$1[REDACTED]")
+    .replace(/([?&](?:access_token|token)=)[^&\s]+/gi, "$1[REDACTED]")
+    .replace(/\bgh[pousr]_[A-Za-z0-9_]+\b/g, "[REDACTED]")
+    .replace(/\bgithub_pat_[A-Za-z0-9_]+\b/g, "[REDACTED]")
+    .replace(/\b(?:response\s+)?body\s*:[\s\S]*/i, "body: [REDACTED]")
+    .slice(0, 500);
 }
 
 // Returns the GitHub account "type" for `id` (translated to this app's
@@ -64,6 +77,7 @@ export async function checkGithubEntity(
       typeof result.data !== "object" ||
       result.data === null ||
       !("type" in result.data) ||
+      typeof result.data.type !== "string" ||
       ("blog" in result.data &&
         result.data.blog !== null &&
         result.data.blog !== undefined &&
@@ -88,6 +102,7 @@ export async function checkGithubEntity(
       `https://api.github.com/users/${id}`
     );
     if (githubError instanceof NotFoundError) return { status: "not_found" };
+    const message = redactedFailureMessage(githubError.message);
 
     const rawError =
       typeof error === "object" && error !== null
@@ -106,17 +121,17 @@ export async function checkGithubEntity(
           rawError.message.toLowerCase().includes("rate limit")) ||
           response?.headers?.["x-ratelimit-remaining"] === "0"));
 
-    if (isRateLimited) return unavailable(id, "rate_limited", status);
+    if (isRateLimited) return unavailable(id, "rate_limited", status, message);
     if (status === 401 || status === 403) {
-      return unavailable(id, "authentication", status);
+      return unavailable(id, "authentication", status, message);
     }
     if (githubError.errorCode === "validation_error") {
-      return unavailable(id, "invalid_response", status);
+      return unavailable(id, "invalid_response", status, message);
     }
     if (githubError.errorCode === "network_error" || status === undefined) {
-      return unavailable(id, "network");
+      return unavailable(id, "network", undefined, message);
     }
-    return unavailable(id, "upstream", status);
+    return unavailable(id, "upstream", status, message);
   }
 }
 

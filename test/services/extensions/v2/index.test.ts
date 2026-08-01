@@ -1276,6 +1276,7 @@ describe("Extensions API v2", () => {
 
     it.each([
       ["missing entity type", { blog: null }],
+      ["non-string entity type", { type: 123, blog: null }],
       ["malformed website", { type: "User", blog: { url: "example.com" } }]
     ])(
       "does not create a developer for %s response data",
