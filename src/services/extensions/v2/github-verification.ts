@@ -18,27 +18,24 @@ export type GithubEntity = {
   blog: string | null;
 };
 
+export type GithubUnavailableReason =
+  | "rate_limited"
+  | "authentication"
+  | "network"
+  | "upstream"
+  | "invalid_response";
+
 export type GithubEntityResult =
   | { status: "found"; entity: GithubEntity }
   | { status: "not_found" }
   | {
       status: "unavailable";
-      reason:
-        | "rate_limited"
-        | "authentication"
-        | "network"
-        | "upstream"
-        | "invalid_response";
+      reason: GithubUnavailableReason;
     };
-
-type UnavailableReason = Extract<
-  GithubEntityResult,
-  { status: "unavailable" }
->["reason"];
 
 function unavailable(
   id: string,
-  reason: UnavailableReason,
+  reason: GithubUnavailableReason,
   httpStatus?: number
 ): GithubEntityResult {
   logWarn("extensions-v2", "GitHub entity lookup unavailable", {

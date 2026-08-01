@@ -14,6 +14,7 @@ import { databaseError, errorMessageChain } from "./errors";
 import { toD1Statement } from "./d1-batch";
 import {
   checkGithubEntity,
+  GithubUnavailableReason,
   matchesClaimant,
   urlMatchesGithubBlog
 } from "./github-verification";
@@ -51,6 +52,20 @@ function isPendingClaimConflict(error: unknown): boolean {
   return /UNIQUE constraint failed.*developer_claims/i.test(
     errorMessageChain(error)
   );
+}
+
+function githubUnavailableError(
+  reason: GithubUnavailableReason
+): DatabaseError {
+  return reason === "rate_limited"
+    ? {
+        code: "RATE_LIMITED",
+        message: "GitHub verification is temporarily rate limited"
+      }
+    : {
+        code: "SERVICE_UNAVAILABLE",
+        message: "GitHub verification is temporarily unavailable"
+      };
 }
 
 async function sha256Hex(input: string): Promise<string> {
@@ -1058,18 +1073,7 @@ export class DevelopersDatabase {
     );
 
     if (githubEntity.status === "unavailable") {
-      return {
-        error: {
-          code:
-            githubEntity.reason === "rate_limited"
-              ? "RATE_LIMITED"
-              : "SERVICE_UNAVAILABLE",
-          message:
-            githubEntity.reason === "rate_limited"
-              ? "GitHub verification is temporarily rate limited"
-              : "GitHub verification is temporarily unavailable"
-        }
-      };
+      return { error: githubUnavailableError(githubEntity.reason) };
     }
 
     if (githubEntity.status === "not_found") {
@@ -1253,6 +1257,18 @@ export class DevelopersDatabase {
         // than clearing a real prior verification over a transient failure.
         // A confirmed absence likewise provides no website to compare. Only
         // a successful lookup gets to overwrite the stored URL signal.
+        if (entity.status === "unavailable") {
+          // The cooldown update above reserves this attempt before the API
+          // call. Release it when GitHub could not perform the check so the
+          // caller can retry instead of waiting for a check that never ran.
+          await this.db
+            .update(developers)
+            .set({ urlCheckCooldownUntil: null })
+            .where(
+              and(eq(developers.id, row.id), eq(developers.ownerUserId, userId))
+            );
+          return { data: null, error: githubUnavailableError(entity.reason) };
+        }
         if (entity.status === "found") {
           writeUrlVerified = true;
           if (entity.entity.type !== row.type) {

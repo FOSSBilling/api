@@ -67,6 +67,15 @@ function statusFromErrorCode(code?: string): 404 | 409 | 500 {
   return 500;
 }
 
+function statusFromGithubErrorCode<T extends number>(
+  code: string | undefined,
+  fallback: T
+): T | 429 | 503 {
+  if (code === "RATE_LIMITED") return 429;
+  if (code === "SERVICE_UNAVAILABLE") return 503;
+  return fallback;
+}
+
 function requireModerator(): MiddlewareHandler {
   return async (c, next) => {
     const auth = getAuth(c);
@@ -635,11 +644,7 @@ extensionsV2.openapi(upsertOwnDeveloperRoute, async (c) => {
         ? 403
         : error?.code === "CONFLICT" || error?.code === "DEVELOPER_ID_TAKEN"
           ? 409
-          : error?.code === "RATE_LIMITED"
-            ? 429
-            : error?.code === "SERVICE_UNAVAILABLE"
-              ? 503
-              : 500;
+          : statusFromGithubErrorCode(error?.code, 500);
     return c.json(
       {
         error: {
@@ -744,7 +749,12 @@ const reverifyOwnDeveloperRoute = createRoute({
     },
     429: {
       content: { "application/json": { schema: ErrorResponseSchema } },
-      description: "check_url was used again too soon after a previous check"
+      description:
+        "check_url was used again too soon, or GitHub verification is rate limited"
+    },
+    503: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "GitHub verification is temporarily unavailable"
     },
     500: {
       content: { "application/json": { schema: ErrorResponseSchema } },
@@ -765,14 +775,10 @@ extensionsV2.openapi(reverifyOwnDeveloperRoute, async (c) => {
     platform.getEnv("GITHUB_TOKEN")
   );
   if (error || !data) {
-    const status =
-      error?.code === "NOT_FOUND"
-        ? 404
-        : error?.code === "CONFLICT"
-          ? 409
-          : error?.code === "RATE_LIMITED"
-            ? 429
-            : 500;
+    const status = statusFromGithubErrorCode(
+      error?.code,
+      statusFromErrorCode(error?.code)
+    );
     return c.json(
       {
         error: {
@@ -875,11 +881,10 @@ extensionsV2.openapi(claimDeveloperRoute, async (c) => {
       },
       error?.code === "GITHUB_MISMATCH"
         ? 403
-        : error?.code === "RATE_LIMITED"
-          ? 429
-          : error?.code === "SERVICE_UNAVAILABLE"
-            ? 503
-            : statusFromErrorCode(error?.code)
+        : statusFromGithubErrorCode(
+            error?.code,
+            statusFromErrorCode(error?.code)
+          )
     );
   }
 

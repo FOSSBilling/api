@@ -1911,6 +1911,54 @@ describe("Extensions API v2", () => {
       expect(body.result.github_url_verified).toBe(true);
     });
 
+    it.each([
+      [403, "API rate limit exceeded", 429, "RATE_LIMITED"],
+      [503, "Service Unavailable", 503, "SERVICE_UNAVAILABLE"]
+    ])(
+      "returns an error and releases the cooldown when GitHub responds with %s",
+      async (upstreamStatus, message, expectedStatus, expectedCode) => {
+        await insertDeveloper(db, {
+          id: "dev-developer",
+          type: "organization",
+          name: "Dev",
+          url: "https://acme.example",
+          owner_user_id: "user-1",
+          github_org_verified: 1,
+          github_url_verified: 1
+        });
+        await insertUser(db, {
+          id: "user-1",
+          github_login: "someone",
+          github_orgs: JSON.stringify(["dev-developer"])
+        });
+        (vi.mocked(ghRequest) as MockGitHubRequest).mockImplementation(
+          async () => {
+            throw Object.assign(new Error(message as string), {
+              status: upstreamStatus
+            });
+          }
+        );
+
+        const failed = await post(
+          "/extensions/v2/developers/me/reverify?check_url=true",
+          await authHeaders("user-1")
+        );
+        expect(failed.status).toBe(expectedStatus);
+        const body = (await failed.json()) as { error: { code: string } };
+        expect(body.error.code).toBe(expectedCode);
+        expect(
+          (await getDeveloper(db, "dev-developer"))?.github_url_verified
+        ).toBe(1);
+
+        mockGithubEntity("Organization", "https://acme.example");
+        const retry = await post(
+          "/extensions/v2/developers/me/reverify?check_url=true",
+          await authHeaders("user-1")
+        );
+        expect(retry.status).toBe(200);
+      }
+    );
+
     it("rate-limits repeated ?check_url=true calls from the same caller", async () => {
       mockGithubEntity("Organization", "https://acme.example");
       await insertDeveloper(db, {
