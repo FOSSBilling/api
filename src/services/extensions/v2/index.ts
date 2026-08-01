@@ -67,6 +67,16 @@ function statusFromErrorCode(code?: string): 404 | 409 | 500 {
   return 500;
 }
 
+function statusFromGithubErrorCode<T extends number>(
+  code: string | undefined,
+  fallback: T
+): T | 422 | 429 | 503 {
+  if (code === "GITHUB_ENTITY_UNSUPPORTED") return 422;
+  if (code === "RATE_LIMITED") return 429;
+  if (code === "SERVICE_UNAVAILABLE") return 503;
+  return fallback;
+}
+
 function requireModerator(): MiddlewareHandler {
   return async (c, next) => {
     const auth = getAuth(c);
@@ -599,9 +609,18 @@ const upsertOwnDeveloperRoute = createRoute({
       description:
         "Developer id already taken by someone else, or id was changed on an existing profile"
     },
+    429: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "GitHub verification is temporarily rate limited"
+    },
+    503: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "GitHub verification is temporarily unavailable"
+    },
     422: {
       content: { "application/json": { schema: ErrorResponseSchema } },
-      description: "Payload failed validation"
+      description:
+        "Payload failed validation, or the GitHub account type is unsupported"
     },
     500: {
       content: { "application/json": { schema: ErrorResponseSchema } },
@@ -627,7 +646,7 @@ extensionsV2.openapi(upsertOwnDeveloperRoute, async (c) => {
         ? 403
         : error?.code === "CONFLICT" || error?.code === "DEVELOPER_ID_TAKEN"
           ? 409
-          : 500;
+          : statusFromGithubErrorCode(error?.code, 500);
     return c.json(
       {
         error: {
@@ -732,7 +751,16 @@ const reverifyOwnDeveloperRoute = createRoute({
     },
     429: {
       content: { "application/json": { schema: ErrorResponseSchema } },
-      description: "check_url was used again too soon after a previous check"
+      description:
+        "check_url was used again too soon, or GitHub verification is rate limited"
+    },
+    503: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "GitHub verification is temporarily unavailable"
+    },
+    422: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "The GitHub account type is unsupported"
     },
     500: {
       content: { "application/json": { schema: ErrorResponseSchema } },
@@ -753,14 +781,10 @@ extensionsV2.openapi(reverifyOwnDeveloperRoute, async (c) => {
     platform.getEnv("GITHUB_TOKEN")
   );
   if (error || !data) {
-    const status =
-      error?.code === "NOT_FOUND"
-        ? 404
-        : error?.code === "CONFLICT"
-          ? 409
-          : error?.code === "RATE_LIMITED"
-            ? 429
-            : 500;
+    const status = statusFromGithubErrorCode(
+      error?.code,
+      statusFromErrorCode(error?.code)
+    );
     return c.json(
       {
         error: {
@@ -821,9 +845,18 @@ const claimDeveloperRoute = createRoute({
       description:
         "Profile is already owned, caller already owns a different profile, or already has a pending claim on this one"
     },
+    429: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "GitHub verification is temporarily rate limited"
+    },
+    503: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "GitHub verification is temporarily unavailable"
+    },
     422: {
       content: { "application/json": { schema: ErrorResponseSchema } },
-      description: "id param or note body failed validation"
+      description:
+        "The request failed validation, or the GitHub account type is unsupported"
     },
     500: {
       content: { "application/json": { schema: ErrorResponseSchema } },
@@ -853,7 +886,12 @@ extensionsV2.openapi(claimDeveloperRoute, async (c) => {
           code: error?.code ?? "DATABASE_ERROR"
         }
       },
-      error?.code === "GITHUB_MISMATCH" ? 403 : statusFromErrorCode(error?.code)
+      error?.code === "GITHUB_MISMATCH"
+        ? 403
+        : statusFromGithubErrorCode(
+            error?.code,
+            statusFromErrorCode(error?.code)
+          )
     );
   }
 

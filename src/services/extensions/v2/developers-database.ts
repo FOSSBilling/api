@@ -14,6 +14,7 @@ import { databaseError, errorMessageChain } from "./errors";
 import { toD1Statement } from "./d1-batch";
 import {
   checkGithubEntity,
+  GithubUnavailableReason,
   matchesClaimant,
   urlMatchesGithubBlog
 } from "./github-verification";
@@ -51,6 +52,26 @@ function isPendingClaimConflict(error: unknown): boolean {
   return /UNIQUE constraint failed.*developer_claims/i.test(
     errorMessageChain(error)
   );
+}
+
+function githubUnavailableError(
+  reason: GithubUnavailableReason
+): DatabaseError {
+  if (reason === "unsupported_entity_type") {
+    return {
+      code: "GITHUB_ENTITY_UNSUPPORTED",
+      message: "This GitHub account type is not supported"
+    };
+  }
+  return reason === "rate_limited"
+    ? {
+        code: "RATE_LIMITED",
+        message: "GitHub verification is temporarily rate limited"
+      }
+    : {
+        code: "SERVICE_UNAVAILABLE",
+        message: "GitHub verification is temporarily unavailable"
+      };
 }
 
 async function sha256Hex(input: string): Promise<string> {
@@ -1057,10 +1078,11 @@ export class DevelopersDatabase {
       githubToken ?? ""
     );
 
-    if (githubEntity === null) {
-      // Also covers a failed lookup (rate limit, network, auth error) —
-      // checkGithubEntity can't tell "confirmed absent" from "couldn't
-      // check", so the note can't claim to know no matching entity exists.
+    if (githubEntity.status === "unavailable") {
+      return { error: githubUnavailableError(githubEntity.reason) };
+    }
+
+    if (githubEntity.status === "not_found") {
       return {
         mismatch: false,
         githubOrgVerified: null,
@@ -1074,7 +1096,7 @@ export class DevelopersDatabase {
     // disagreement with GitHub, not an unknown, so it must block rather than
     // fall back to unverified. Otherwise a caller could take a real org/user's
     // id unverified simply by submitting the wrong type for it.
-    if (githubEntity.type !== developerType) {
+    if (githubEntity.entity.type !== developerType) {
       return { mismatch: true };
     }
 
@@ -1107,7 +1129,10 @@ export class DevelopersDatabase {
       return {
         mismatch: false,
         githubOrgVerified: 1,
-        githubUrlVerified: urlMatchesGithubBlog(publisherUrl, githubEntity.blog)
+        githubUrlVerified: urlMatchesGithubBlog(
+          publisherUrl,
+          githubEntity.entity.blog
+        )
           ? 1
           : null,
         note: "Verified: caller's linked GitHub identity matches."
@@ -1233,19 +1258,25 @@ export class DevelopersDatabase {
         writeUrlVerified = true;
       } else if (checkUrl) {
         const entity = await checkGithubEntity(row.id, githubToken ?? "");
-        // A failed lookup (rate limit, network, auth error) is inconclusive,
-        // not a disproof — checkGithubEntity can't tell the two apart (see
-        // its own docstring) — so it leaves the stored signal untouched
-        // rather than clearing a real prior verification over a transient
-        // failure. Only a successful lookup gets to overwrite it.
-        if (entity) {
+        // An unavailable lookup is explicitly inconclusive, not a disproof,
+        // so it leaves the stored URL verification signal untouched rather
+        // than clearing a real prior verification over a transient failure.
+        // A confirmed absence likewise provides no website to compare. Only
+        // a successful lookup gets to overwrite the stored URL signal.
+        if (entity.status === "unavailable") {
+          // Keep the cooldown reservation even though no signal was changed.
+          // Otherwise a caller could repeatedly hit GitHub while the shared
+          // service token is throttled or the upstream service is failing.
+          return { data: null, error: githubUnavailableError(entity.reason) };
+        }
+        if (entity.status === "found") {
           writeUrlVerified = true;
-          if (entity.type !== row.type) {
+          if (entity.entity.type !== row.type) {
             identityTypeContradicted = true;
           } else {
             githubUrlVerified = urlMatchesGithubBlog(
               row.url ?? undefined,
-              entity.blog
+              entity.entity.blog
             )
               ? 1
               : null;

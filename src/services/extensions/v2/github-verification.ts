@@ -18,43 +18,120 @@ export type GithubEntity = {
   blog: string | null;
 };
 
+export type GithubUnavailableReason =
+  | "rate_limited"
+  | "authentication"
+  | "network"
+  | "upstream"
+  | "invalid_response"
+  | "unsupported_entity_type";
+
+export type GithubEntityResult =
+  | { status: "found"; entity: GithubEntity }
+  | { status: "not_found" }
+  | {
+      status: "unavailable";
+      reason: GithubUnavailableReason;
+    };
+
+function unavailable(
+  id: string,
+  reason: GithubUnavailableReason,
+  httpStatus?: number,
+  message?: string
+): GithubEntityResult {
+  logWarn("extensions-v2", "GitHub entity lookup unavailable", {
+    id,
+    reason,
+    ...(httpStatus === undefined ? {} : { status: httpStatus }),
+    ...(message === undefined ? {} : { message })
+  });
+  return { status: "unavailable", reason };
+}
+
+function redactedFailureMessage(message: string): string {
+  return message
+    .replace(/\bBearer\s+\S+/gi, "Bearer [REDACTED]")
+    .replace(/(authorization\s*[:=]\s*)\S+/gi, "$1[REDACTED]")
+    .replace(/([?&](?:access_token|token)=)[^&\s]+/gi, "$1[REDACTED]")
+    .replace(/\bgh[pousr]_[A-Za-z0-9_]+\b/g, "[REDACTED]")
+    .replace(/\bgithub_pat_[A-Za-z0-9_]+\b/g, "[REDACTED]")
+    .replace(/\b(?:response\s+)?body\s*:[\s\S]*/i, "body: [REDACTED]")
+    .slice(0, 500);
+}
+
 // Returns the GitHub account "type" for `id` (translated to this app's
-// user/organization vocabulary) plus its on-file website, or null if no such
-// account exists — or if the lookup itself failed (auth error, rate limit,
-// network issue, unexpected response shape). A failed lookup is
-// indistinguishable from "no such account" here on purpose: both mean
-// claim() can't verify anything and must fall back to manual moderator
-// review, never block.
+// user/organization vocabulary) plus its on-file website. A confirmed 404 is
+// kept distinct from authentication, throttling, network/upstream failures,
+// and invalid data so callers never mistake an outage for a missing account.
 export async function checkGithubEntity(
   id: string,
   githubToken: string
-): Promise<GithubEntity | null> {
+): Promise<GithubEntityResult> {
   try {
     const result = await ghRequest("GET /users/{username}", {
       username: id,
       headers: githubToken ? { authorization: `Bearer ${githubToken}` } : {}
     });
-    const blog = result.data.blog?.trim() || null;
+    if (
+      typeof result.data !== "object" ||
+      result.data === null ||
+      !("type" in result.data) ||
+      typeof result.data.type !== "string" ||
+      ("blog" in result.data &&
+        result.data.blog !== null &&
+        result.data.blog !== undefined &&
+        typeof result.data.blog !== "string")
+    ) {
+      return unavailable(id, "invalid_response");
+    }
+    const blog =
+      "blog" in result.data && typeof result.data.blog === "string"
+        ? result.data.blog.trim() || null
+        : null;
     if (result.data.type === "Organization") {
-      return { type: "organization", blog };
+      return { status: "found", entity: { type: "organization", blog } };
     }
     if (result.data.type === "User") {
-      return { type: "user", blog };
+      return { status: "found", entity: { type: "user", blog } };
     }
-    return null;
+    return unavailable(id, "unsupported_entity_type");
   } catch (error) {
     const githubError = classifyGitHubError(
       error,
       `https://api.github.com/users/${id}`
     );
-    if (!(githubError instanceof NotFoundError)) {
-      logWarn(
-        "extensions-v2",
-        "GitHub entity lookup failed, falling back to manual claim review",
-        { id, message: githubError.message }
-      );
+    if (githubError instanceof NotFoundError) return { status: "not_found" };
+    const message = redactedFailureMessage(githubError.message);
+
+    const rawError =
+      typeof error === "object" && error !== null
+        ? (error as Record<string, unknown>)
+        : undefined;
+    const status =
+      typeof rawError?.status === "number"
+        ? rawError.status
+        : githubError.httpStatus;
+    const response = rawError?.response as
+      { headers?: Record<string, string> } | undefined;
+    const isRateLimited =
+      status === 429 ||
+      (status === 403 &&
+        ((typeof rawError?.message === "string" &&
+          rawError.message.toLowerCase().includes("rate limit")) ||
+          response?.headers?.["x-ratelimit-remaining"] === "0"));
+
+    if (isRateLimited) return unavailable(id, "rate_limited", status, message);
+    if (status === 401 || status === 403) {
+      return unavailable(id, "authentication", status, message);
     }
-    return null;
+    if (githubError.errorCode === "validation_error") {
+      return unavailable(id, "invalid_response", status, message);
+    }
+    if (githubError.errorCode === "network_error" || status === undefined) {
+      return unavailable(id, "network", undefined, message);
+    }
+    return unavailable(id, "upstream", status, message);
   }
 }
 
