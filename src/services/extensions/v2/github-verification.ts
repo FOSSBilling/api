@@ -18,43 +18,107 @@ export type GithubEntity = {
   blog: string | null;
 };
 
+export type GithubEntityResult =
+  | { status: "found"; entity: GithubEntity }
+  | { status: "not_found" }
+  | {
+      status: "unavailable";
+      reason:
+        | "rate_limited"
+        | "authentication"
+        | "network"
+        | "upstream"
+        | "invalid_response";
+    };
+
+type UnavailableReason = Extract<
+  GithubEntityResult,
+  { status: "unavailable" }
+>["reason"];
+
+function unavailable(
+  id: string,
+  reason: UnavailableReason,
+  httpStatus?: number
+): GithubEntityResult {
+  logWarn("extensions-v2", "GitHub entity lookup unavailable", {
+    id,
+    reason,
+    ...(httpStatus === undefined ? {} : { status: httpStatus })
+  });
+  return { status: "unavailable", reason };
+}
+
 // Returns the GitHub account "type" for `id` (translated to this app's
-// user/organization vocabulary) plus its on-file website, or null if no such
-// account exists — or if the lookup itself failed (auth error, rate limit,
-// network issue, unexpected response shape). A failed lookup is
-// indistinguishable from "no such account" here on purpose: both mean
-// claim() can't verify anything and must fall back to manual moderator
-// review, never block.
+// user/organization vocabulary) plus its on-file website. A confirmed 404 is
+// kept distinct from authentication, throttling, network/upstream failures,
+// and invalid data so callers never mistake an outage for a missing account.
 export async function checkGithubEntity(
   id: string,
   githubToken: string
-): Promise<GithubEntity | null> {
+): Promise<GithubEntityResult> {
   try {
     const result = await ghRequest("GET /users/{username}", {
       username: id,
       headers: githubToken ? { authorization: `Bearer ${githubToken}` } : {}
     });
-    const blog = result.data.blog?.trim() || null;
+    if (
+      typeof result.data !== "object" ||
+      result.data === null ||
+      !("type" in result.data) ||
+      ("blog" in result.data &&
+        result.data.blog !== null &&
+        result.data.blog !== undefined &&
+        typeof result.data.blog !== "string")
+    ) {
+      return unavailable(id, "invalid_response");
+    }
+    const blog =
+      "blog" in result.data && typeof result.data.blog === "string"
+        ? result.data.blog.trim() || null
+        : null;
     if (result.data.type === "Organization") {
-      return { type: "organization", blog };
+      return { status: "found", entity: { type: "organization", blog } };
     }
     if (result.data.type === "User") {
-      return { type: "user", blog };
+      return { status: "found", entity: { type: "user", blog } };
     }
-    return null;
+    return unavailable(id, "invalid_response");
   } catch (error) {
     const githubError = classifyGitHubError(
       error,
       `https://api.github.com/users/${id}`
     );
-    if (!(githubError instanceof NotFoundError)) {
-      logWarn(
-        "extensions-v2",
-        "GitHub entity lookup failed, falling back to manual claim review",
-        { id, message: githubError.message }
-      );
+    if (githubError instanceof NotFoundError) return { status: "not_found" };
+
+    const rawError =
+      typeof error === "object" && error !== null
+        ? (error as Record<string, unknown>)
+        : undefined;
+    const status =
+      typeof rawError?.status === "number"
+        ? rawError.status
+        : githubError.httpStatus;
+    const response = rawError?.response as
+      { headers?: Record<string, string> } | undefined;
+    const isRateLimited =
+      status === 429 ||
+      (status === 403 &&
+        ((typeof rawError?.message === "string" &&
+          rawError.message.toLowerCase().includes("rate limit")) ||
+          response?.headers?.["x-ratelimit-remaining"] === "0"));
+
+    if (isRateLimited) return unavailable(id, "rate_limited", status);
+    if (status === 401 || status === 403) {
+      return unavailable(id, "authentication", status);
     }
-    return null;
+    if (githubError.errorCode === "validation_error") {
+      return unavailable(id, "invalid_response", status);
+    }
+    if (githubError.errorCode === "network_error" || status === undefined) {
+      return unavailable(id, "network");
+    }
+    return unavailable(id, "upstream", status);
   }
 }
 

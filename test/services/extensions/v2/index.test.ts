@@ -1222,6 +1222,82 @@ describe("Extensions API v2", () => {
       expect(await hasDeveloper(db, "acme-org")).toBe(false);
     });
 
+    it.each([
+      ["401 authentication failure", 401, "Bad credentials", 503],
+      ["rate-limit 403", 403, "API rate limit exceeded", 429],
+      ["429 throttling", 429, "Too Many Requests", 429],
+      ["GitHub 500", 500, "Internal Server Error", 503],
+      ["GitHub 503", 503, "Service Unavailable", 503]
+    ])(
+      "does not create a developer when GitHub returns %s",
+      async (_case, upstreamStatus, message, expectedStatus) => {
+        (vi.mocked(ghRequest) as MockGitHubRequest).mockImplementation(
+          async () => {
+            throw Object.assign(new Error(message as string), {
+              status: upstreamStatus
+            });
+          }
+        );
+
+        const res = await put(
+          "/extensions/v2/developers/me",
+          await authHeaders("user-1"),
+          { id: "unavailable-dev", type: "user", name: "Unavailable" }
+        );
+
+        expect(res.status).toBe(expectedStatus);
+        const body = (await res.json()) as { error: { code: string } };
+        expect(body.error.code).toBe(
+          expectedStatus === 429 ? "RATE_LIMITED" : "SERVICE_UNAVAILABLE"
+        );
+        expect(await hasDeveloper(db, "unavailable-dev")).toBe(false);
+      }
+    );
+
+    it.each(["request timed out", "network connection reset"])(
+      "does not create a developer after a thrown %s error",
+      async (message) => {
+        (vi.mocked(ghRequest) as MockGitHubRequest).mockImplementation(
+          async () => {
+            throw new Error(message);
+          }
+        );
+
+        const res = await put(
+          "/extensions/v2/developers/me",
+          await authHeaders("user-1"),
+          { id: "unavailable-dev", type: "user", name: "Unavailable" }
+        );
+
+        expect(res.status).toBe(503);
+        expect(await hasDeveloper(db, "unavailable-dev")).toBe(false);
+      }
+    );
+
+    it.each([
+      ["missing entity type", { blog: null }],
+      ["unexpected entity type", { type: "Bot", blog: null }],
+      ["malformed website", { type: "User", blog: { url: "example.com" } }]
+    ])(
+      "does not create a developer for %s response data",
+      async (_case, data) => {
+        (vi.mocked(ghRequest) as MockGitHubRequest).mockImplementation(
+          async () => ({ data })
+        );
+
+        const res = await put(
+          "/extensions/v2/developers/me",
+          await authHeaders("user-1"),
+          { id: "invalid-response", type: "user", name: "Invalid" }
+        );
+
+        expect(res.status).toBe(503);
+        const body = (await res.json()) as { error: { code: string } };
+        expect(body.error.code).toBe("SERVICE_UNAVAILABLE");
+        expect(await hasDeveloper(db, "invalid-response")).toBe(false);
+      }
+    );
+
     it("falls back to unverified creation when the creator has no linked GitHub identity", async () => {
       mockGithubEntity("Organization");
       // No row in users for user-1 — never linked GitHub.

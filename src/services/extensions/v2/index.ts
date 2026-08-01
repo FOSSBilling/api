@@ -599,6 +599,14 @@ const upsertOwnDeveloperRoute = createRoute({
       description:
         "Developer id already taken by someone else, or id was changed on an existing profile"
     },
+    429: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "GitHub verification is temporarily rate limited"
+    },
+    503: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "GitHub verification is temporarily unavailable"
+    },
     422: {
       content: { "application/json": { schema: ErrorResponseSchema } },
       description: "Payload failed validation"
@@ -627,7 +635,11 @@ extensionsV2.openapi(upsertOwnDeveloperRoute, async (c) => {
         ? 403
         : error?.code === "CONFLICT" || error?.code === "DEVELOPER_ID_TAKEN"
           ? 409
-          : 500;
+          : error?.code === "RATE_LIMITED"
+            ? 429
+            : error?.code === "SERVICE_UNAVAILABLE"
+              ? 503
+              : 500;
     return c.json(
       {
         error: {
@@ -821,6 +833,14 @@ const claimDeveloperRoute = createRoute({
       description:
         "Profile is already owned, caller already owns a different profile, or already has a pending claim on this one"
     },
+    429: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "GitHub verification is temporarily rate limited"
+    },
+    503: {
+      content: { "application/json": { schema: ErrorResponseSchema } },
+      description: "GitHub verification is temporarily unavailable"
+    },
     422: {
       content: { "application/json": { schema: ErrorResponseSchema } },
       description: "id param or note body failed validation"
@@ -853,7 +873,13 @@ extensionsV2.openapi(claimDeveloperRoute, async (c) => {
           code: error?.code ?? "DATABASE_ERROR"
         }
       },
-      error?.code === "GITHUB_MISMATCH" ? 403 : statusFromErrorCode(error?.code)
+      error?.code === "GITHUB_MISMATCH"
+        ? 403
+        : error?.code === "RATE_LIMITED"
+          ? 429
+          : error?.code === "SERVICE_UNAVAILABLE"
+            ? 503
+            : statusFromErrorCode(error?.code)
     );
   }
 
