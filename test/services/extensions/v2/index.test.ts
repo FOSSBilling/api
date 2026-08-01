@@ -1931,7 +1931,7 @@ describe("Extensions API v2", () => {
       [403, "API rate limit exceeded", 429, "RATE_LIMITED"],
       [503, "Service Unavailable", 503, "SERVICE_UNAVAILABLE"]
     ])(
-      "returns an error and releases the cooldown when GitHub responds with %s",
+      "returns an error and retains the cooldown when GitHub responds with %s",
       async (upstreamStatus, message, expectedStatus, expectedCode) => {
         await insertDeveloper(db, {
           id: "dev-developer",
@@ -1966,12 +1966,13 @@ describe("Extensions API v2", () => {
           (await getDeveloper(db, "dev-developer"))?.github_url_verified
         ).toBe(1);
 
-        mockGithubEntity("Organization", "https://acme.example");
+        vi.clearAllMocks();
         const retry = await post(
           "/extensions/v2/developers/me/reverify?check_url=true",
           await authHeaders("user-1")
         );
-        expect(retry.status).toBe(200);
+        expect(retry.status).toBe(429);
+        expect(ghRequest).not.toHaveBeenCalled();
       }
     );
 

@@ -1264,15 +1264,9 @@ export class DevelopersDatabase {
         // A confirmed absence likewise provides no website to compare. Only
         // a successful lookup gets to overwrite the stored URL signal.
         if (entity.status === "unavailable") {
-          // The cooldown update above reserves this attempt before the API
-          // call. Release it when GitHub could not perform the check so the
-          // caller can retry instead of waiting for a check that never ran.
-          await this.db
-            .update(developers)
-            .set({ urlCheckCooldownUntil: null })
-            .where(
-              and(eq(developers.id, row.id), eq(developers.ownerUserId, userId))
-            );
+          // Keep the cooldown reservation even though no signal was changed.
+          // Otherwise a caller could repeatedly hit GitHub while the shared
+          // service token is throttled or the upstream service is failing.
           return { data: null, error: githubUnavailableError(entity.reason) };
         }
         if (entity.status === "found") {
