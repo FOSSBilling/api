@@ -3105,6 +3105,52 @@ describe("Extensions API v2", () => {
       expect(res.status).toBe(409);
     });
 
+    it("rolls back claim approval when a later ownership statement fails", async () => {
+      await seedUnownedDeveloper("legacy-developer");
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+
+      const claim1 = await post(
+        "/extensions/v2/developers/legacy-developer/claim",
+        await authHeaders("user-1"),
+        {}
+      );
+      const claim1Id = ((await claim1.json()) as { result: { id: string } })
+        .result.id;
+      const claim2 = await post(
+        "/extensions/v2/developers/legacy-developer/claim",
+        await authHeaders("user-2"),
+        {}
+      );
+      const claim2Id = ((await claim2.json()) as { result: { id: string } })
+        .result.id;
+      const before = await getDeveloper(db, "legacy-developer");
+
+      env.DB_EXTENSIONS = wrapD1WithHook(db, (sql) => {
+        if (sql.includes("SET owner_user_id = ?")) {
+          // Replace this item inside the real D1 batch, rather than throwing
+          // from the interceptor before the batch is submitted. The claim
+          // transition therefore executes first and this CHECK violation
+          // proves D1 rolls it back.
+          return db.prepare(
+            "UPDATE developers SET ownership_epoch = 0 WHERE id = 'legacy-developer'"
+          );
+        }
+      });
+
+      const approve = await post(
+        `/extensions/v2/developers/claims/${claim1Id}/approve`,
+        await authHeaders("mod-1")
+      );
+      expect(approve.status).toBe(500);
+
+      const after = await getDeveloper(db, "legacy-developer");
+      expect(after?.owner_user_id).toBeNull();
+      expect(after?.ownership_epoch).toBe(before?.ownership_epoch);
+      expect(after?.content_revision).toBe(before?.content_revision);
+      expect((await getDeveloperClaim(db, claim1Id))?.status).toBe("pending");
+      expect((await getDeveloperClaim(db, claim2Id))?.status).toBe("pending");
+    });
+
     it("approving a claim transfers ownership and auto-rejects competing claims", async () => {
       await seedUnownedDeveloper("legacy-developer");
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
@@ -3143,6 +3189,41 @@ describe("Extensions API v2", () => {
       expect(rejectedClaim?.status).toBe("rejected");
       expect(rejectedClaim?.review_note).toBe(
         "Another claim on this profile was approved"
+      );
+    });
+
+    it("allows only one competing claim approval to win a race", async () => {
+      await seedUnownedDeveloper("legacy-developer");
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+
+      const first = await post(
+        "/extensions/v2/developers/legacy-developer/claim",
+        await authHeaders("user-1"),
+        {}
+      );
+      const firstId = ((await first.json()) as { result: { id: string } })
+        .result.id;
+      const second = await post(
+        "/extensions/v2/developers/legacy-developer/claim",
+        await authHeaders("user-2"),
+        {}
+      );
+      const secondId = ((await second.json()) as { result: { id: string } })
+        .result.id;
+      const headers = await authHeaders("mod-1");
+
+      const approvals = await Promise.all([
+        post(`/extensions/v2/developers/claims/${firstId}/approve`, headers),
+        post(`/extensions/v2/developers/claims/${secondId}/approve`, headers)
+      ]);
+
+      expect(approvals.map(({ status }) => status).sort()).toEqual([200, 409]);
+      const claims = await listDeveloperClaims(db);
+      expect(claims.filter(({ status }) => status === "approved")).toHaveLength(
+        1
+      );
+      expect(claims.filter(({ status }) => status === "rejected")).toHaveLength(
+        1
       );
     });
 
