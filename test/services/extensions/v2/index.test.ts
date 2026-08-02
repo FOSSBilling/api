@@ -3129,10 +3129,10 @@ describe("Extensions API v2", () => {
         if (sql.includes("SET owner_user_id = ?")) {
           // Replace this item inside the real D1 batch, rather than throwing
           // from the interceptor before the batch is submitted. The claim
-          // transition therefore executes first and this CHECK violation
+          // transition therefore executes first and this NOT NULL violation
           // proves D1 rolls it back.
           return db.prepare(
-            "UPDATE developers SET ownership_epoch = 0 WHERE id = 'legacy-developer'"
+            "UPDATE developers SET name = NULL WHERE id = 'legacy-developer'"
           );
         }
       });
