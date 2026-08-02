@@ -1547,17 +1547,46 @@ export class DevelopersDatabase {
     };
   }
 
-  // Best-effort compensation: if the write-through after claiming the status
-  // transition fails, put the claim back to 'pending' rather than leaving it
-  // permanently 'approved' with no matching ownership change.
-  private async revertClaimToPending(id: string): Promise<void> {
+  private async explainClaimApprovalNoOp(
+    claim: DeveloperClaim
+  ): Promise<DatabaseResult<DeveloperProfile>> {
+    const latestClaim = await this.getClaimById(claim.id);
+    if (latestClaim.error || latestClaim.data?.status !== "pending") {
+      return {
+        data: null,
+        error: latestClaim.error ?? {
+          message: "Claim is not pending",
+          code: "CONFLICT"
+        }
+      };
+    }
+
     try {
-      await this.db
-        .update(developerClaims)
-        .set({ status: "pending", reviewerId: null, reviewedAt: null })
-        .where(eq(developerClaims.id, id));
-    } catch {
-      // best-effort only
+      const [developer] = await this.db
+        .select({ ownerUserId: developers.ownerUserId })
+        .from(developers)
+        .where(eq(developers.id, claim.developer_id));
+      if (!developer) {
+        return {
+          data: null,
+          error: { message: "Developer not found", code: "NOT_FOUND" }
+        };
+      }
+      if (developer.ownerUserId !== null) {
+        return {
+          data: null,
+          error: { message: "This profile is already owned", code: "CONFLICT" }
+        };
+      }
+      return {
+        data: null,
+        error: {
+          message: "The claimant already owns a different developer profile",
+          code: "CONFLICT"
+        }
+      };
+    } catch (error) {
+      return databaseError("approveClaim", error);
     }
   }
 
@@ -1584,29 +1613,86 @@ export class DevelopersDatabase {
       };
     }
 
+    // Keep the status transition, ownership handoff, and competing-claim
+    // rejection in one raw D1 batch. Each write is gated by changes() from
+    // the immediately preceding statement, so a stale claim cannot transfer
+    // ownership and a failed transfer cannot reject competing claims.
+    //
+    // The assertion statement is intentionally capable of violating the
+    // ownership_epoch CHECK. D1 rolls the entire batch back when that happens,
+    // which prevents a zero-row ownership update from leaving the claim
+    // approved. Its successful no-op update also preserves changes() = 1 for
+    // the final rejection statement.
+    let results;
     try {
-      const [developer] = await this.db
-        .select({ ownerUserId: developers.ownerUserId })
-        .from(developers)
-        .where(eq(developers.id, claim.developer_id));
-      if (!developer) {
-        return {
-          data: null,
-          error: { message: "Developer not found", code: "NOT_FOUND" }
-        };
-      }
-      if (developer.ownerUserId !== null) {
-        return {
-          data: null,
-          error: { message: "This profile is already owned", code: "CONFLICT" }
-        };
-      }
+      const claimStmt = toD1Statement(this.db.$client, {
+        sql: `UPDATE developer_claims
+              SET status = 'approved', reviewer_id = ?, reviewed_at = CURRENT_TIMESTAMP
+              WHERE id = ? AND status = 'pending'
+                AND EXISTS (
+                  SELECT 1 FROM developers d
+                  WHERE d.id = developer_claims.developer_id
+                    AND d.owner_user_id IS NULL
+                )
+                AND NOT EXISTS (
+                  SELECT 1 FROM developers owned
+                  WHERE owned.owner_user_id = developer_claims.claimant_id
+                )`,
+        params: [reviewerId, claimId]
+      });
+      const developerStmt = toD1Statement(this.db.$client, {
+        sql: `UPDATE developers
+              SET owner_user_id = ?,
+                  ownership_epoch = ownership_epoch + 1,
+                  content_revision = content_revision + 1,
+                  approved_at = NULL, approved_revision = NULL, approved_by = NULL,
+                  url_check_cooldown_until = NULL,
+                  github_org_verified = ?, github_verification_note = ?,
+                  github_verified_at = ?, updated_at = CURRENT_TIMESTAMP
+              WHERE changes() = 1 AND id = ? AND owner_user_id IS NULL
+                AND NOT EXISTS (SELECT 1 FROM developers WHERE owner_user_id = ?)`,
+        params: [
+          claim.claimant_id,
+          claim.github_org_verified === undefined
+            ? null
+            : claim.github_org_verified
+              ? 1
+              : 0,
+          claim.github_verification_note ?? null,
+          claim.github_org_verified === undefined ? null : claim.created_at,
+          claim.developer_id,
+          claim.claimant_id
+        ]
+      });
+      const assertTransferStmt = toD1Statement(this.db.$client, {
+        sql: `UPDATE developers
+              SET ownership_epoch = CASE WHEN changes() = 1 THEN ownership_epoch ELSE 0 END
+              WHERE id = ?`,
+        params: [claim.developer_id]
+      });
+      const rejectOthersStmt = toD1Statement(this.db.$client, {
+        sql: `UPDATE developer_claims
+              SET status = 'rejected', reviewer_id = ?, reviewed_at = CURRENT_TIMESTAMP,
+                  review_note = 'Another claim on this profile was approved'
+              WHERE changes() = 1 AND developer_id = ? AND status = 'pending' AND id != ?`,
+        params: [reviewerId, claim.developer_id, claimId]
+      });
 
-      const [conflict] = await this.db
-        .select({ one: sql`1` })
-        .from(developers)
-        .where(eq(developers.ownerUserId, claim.claimant_id));
-      if (conflict) {
+      results = await this.db.$client.batch([
+        claimStmt,
+        developerStmt,
+        assertTransferStmt,
+        rejectOthersStmt
+      ]);
+    } catch (error) {
+      if (
+        /CHECK constraint failed.*ownership_epoch/i.test(
+          errorMessageChain(error)
+        )
+      ) {
+        return this.explainClaimApprovalNoOp(claim);
+      }
+      if (isOwnerConflict(error)) {
         return {
           data: null,
           error: {
@@ -1615,115 +1701,14 @@ export class DevelopersDatabase {
           }
         };
       }
-    } catch (error) {
       return databaseError("approveClaim", error);
     }
 
-    // Claim the transition atomically before writing anything through. If
-    // this affects no rows, a concurrent approve/reject already won the race.
-    let claimResult;
-    try {
-      claimResult = await this.db
-        .update(developerClaims)
-        .set({
-          status: "approved",
-          reviewerId,
-          reviewedAt: sql`CURRENT_TIMESTAMP`
-        })
-        .where(
-          and(
-            eq(developerClaims.id, claimId),
-            eq(developerClaims.status, "pending")
-          )
-        );
-    } catch (error) {
-      return databaseError("approveClaim", error);
-    }
-
+    const [claimResult] = results;
     if (!claimResult.meta?.changes) {
-      return {
-        data: null,
-        error: { message: "Claim is not pending", code: "CONFLICT" }
-      };
-    }
-
-    // The ownership write is itself guarded by `owner_user_id IS NULL`, so a
-    // second concurrent approval of a *different* pending claim on the same
-    // developer (each claim id claims its own status row above, so both
-    // could reach this point) can't also move ownership — only the first to
-    // commit here wins, and the loser's developerStmt affects zero rows,
-    // caught below. rejectOthersStmt is gated on that same win via
-    // `changes() = 1`, so competing claims are only auto-rejected once
-    // ownership has actually moved, not whenever this batch merely runs.
-    // Both batched via the raw D1 client (see toD1Statement / upsertOwn's
-    // historyStmt comment) - rejectOthersStmt's changes()=1 gate needs it
-    // regardless, and mixing a query builder item with a raw one in the
-    // same batch hits the same drizzle-orm bug either way.
-    let results;
-    try {
-      const developerStmt = this.db
-        .update(developers)
-        .set({
-          ownerUserId: claim.claimant_id,
-          ownershipEpoch: sql`ownership_epoch + 1`,
-          contentRevision: sql`content_revision + 1`,
-          approvedAt: null,
-          approvedRevision: null,
-          approvedBy: null,
-          // Not known to be reachable today (claims only ever target
-          // never-owned profiles, so there's no prior owner's cooldown to
-          // inherit), but reset for the same reason as acceptTransfer's
-          // equivalent write — belongs to whichever user currently owns
-          // this row.
-          urlCheckCooldownUntil: null,
-          // Carries the claim's own verification result onto the profile it
-          // just transferred ownership to — verifyGithubOwnership() already
-          // ran once, inside claim() itself, so this isn't a fresh check.
-          // github_verified_at uses the claim's created_at (when that check
-          // actually ran), not this approval time.
-          githubOrgVerified:
-            claim.github_org_verified === undefined
-              ? null
-              : claim.github_org_verified
-                ? 1
-                : 0,
-          githubVerificationNote: claim.github_verification_note ?? null,
-          githubVerifiedAt:
-            claim.github_org_verified === undefined ? null : claim.created_at,
-          updatedAt: sql`CURRENT_TIMESTAMP`
-        })
-        .where(
-          and(
-            eq(developers.id, claim.developer_id),
-            isNull(developers.ownerUserId)
-          )
-        );
-      const rejectOthersStmt = toD1Statement(this.db.$client, {
-        sql: `UPDATE developer_claims SET status = 'rejected', reviewer_id = ?, reviewed_at = CURRENT_TIMESTAMP,
-                review_note = 'Another claim on this profile was approved'
-              WHERE changes() = 1 AND developer_id = ? AND status = 'pending' AND id != ?`,
-        params: [reviewerId, claim.developer_id, claimId]
-      });
-
-      results = await this.db.$client.batch([
-        toD1Statement(this.db.$client, developerStmt.toSQL()),
-        rejectOthersStmt
-      ]);
-    } catch (error) {
-      await this.revertClaimToPending(claimId);
-      return databaseError("approveClaim", error);
-    }
-
-    const [developerResult] = results;
-    if (!developerResult.meta?.changes) {
-      await this.revertClaimToPending(claimId);
-      return {
-        data: null,
-        error: {
-          message: "This profile is no longer unowned",
-          code: "CONFLICT"
-        }
-      };
+      // Diagnose only after the guarded transaction. These reads improve the
+      // response without participating in (or weakening) its race safety.
+      return this.explainClaimApprovalNoOp(claim);
     }
 
     return this.getById(claim.developer_id);

@@ -7,7 +7,9 @@
 // inside a .batch() call, in the order they'd run) - tests match on the
 // SQL text to run a side effect or throw, then everything still executes
 // for real against the same D1 database.
-type Hook = (sql: string) => Promise<void> | void;
+type Hook = (
+  sql: string
+) => Promise<D1PreparedStatement | void> | D1PreparedStatement | void;
 
 class HookedStatement implements D1PreparedStatement {
   constructor(
@@ -65,16 +67,20 @@ export function wrapD1WithHook(real: D1Database, hook: Hook): D1Database {
       // individual statements inside it, since they're never executed
       // one-at-a-time from the caller's perspective. So every statement's
       // hook necessarily fires before the batch is sent, not interleaved
-      // with its (real, all-or-nothing) execution. That's sufficient for
-      // faults meant to land before the batch starts (e.g. a concurrent
-      // mutation racing a guarded write), but it can't simulate "the first
-      // N statements committed, then the batch failed" - real D1 batches
-      // don't have partial commits for a hook to reproduce in the first place.
+      // with its (real, all-or-nothing) execution. A hook may return a real
+      // prepared statement to replace the matching batch item, allowing a
+      // constraint failure to occur at that exact position inside D1. Hooks
+      // that only perform a side effect still run before the batch starts.
       const hooked = statements as unknown as HookedStatement[];
+      const replacements: (D1PreparedStatement | void)[] = [];
       for (const statement of hooked) {
-        await hook(statement.sqlText);
+        replacements.push(await hook(statement.sqlText));
       }
-      return real.batch<T>(hooked.map((statement) => statement.target()));
+      return real.batch<T>(
+        hooked.map(
+          (statement, index) => replacements[index] ?? statement.target()
+        )
+      );
     },
     dump: () => real.dump(),
     exec: (query: string) => real.exec(query),
