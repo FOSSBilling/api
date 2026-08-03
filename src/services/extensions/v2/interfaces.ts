@@ -14,6 +14,9 @@ export const EXTENSION_TYPES = [
   "translation"
 ] as const;
 
+const nullableString = () =>
+  z.union([z.string(), z.null()]).openapi({ type: ["string", "null"] });
+
 // Lowercase alphanumeric slug (hyphens allowed, no leading/trailing hyphen) —
 // matches the shape of existing ids (e.g. "fossbilling") and rules out
 // anything that isn't safe to use as a URL path segment or DOM identifier.
@@ -154,7 +157,7 @@ export const DeveloperProfileSchema = DeveloperSchema.extend({
   github_verification_note: z.string().optional(),
   // Set whenever github_org_verified is last (re-)computed to a definitive
   // true/false — see reverifyOwn(). Absent/stale on an inconclusive check.
-  github_verified_at: z.string().nullable().optional(),
+  github_verified_at: nullableString().optional(),
   // Whether Publisher URL matches GitHub's own on-file website for this
   // org/user — see verifyGithubOwnership()'s urlMatchesGithubBlog() call.
   // Only ever true or absent (never false): GitHub's website field is
@@ -174,8 +177,8 @@ export const DeveloperProfileSchema = DeveloperSchema.extend({
   // Owner identity is never exposed publicly — see PublicDeveloperSchema
   // below and the README's note on not leaking owner identity.
   unclaimed: z.boolean().optional(),
-  owner_name: z.string().nullable().optional(),
-  owner_github_login: z.string().nullable().optional()
+  owner_name: nullableString().optional(),
+  owner_github_login: nullableString().optional()
 }).openapi("DeveloperProfile");
 
 export type DeveloperProfile = z.infer<typeof DeveloperProfileSchema>;
@@ -262,7 +265,7 @@ export const ExtensionListResponseSchema = z
   .object({
     result: z.array(ExtensionListItemSchema),
     pagination: z.object({
-      next_cursor: z.string().nullable(),
+      next_cursor: nullableString(),
       has_more: z.boolean()
     })
   })
@@ -277,7 +280,7 @@ export const DeveloperHistoryEntrySchema = z
     changed_by: z.string(),
     // The editor's account name at read time — null if the auth provider
     // never gave one, or the users row was since deleted.
-    changed_by_name: z.string().nullable(),
+    changed_by_name: nullableString(),
     changed_at: z.string()
   })
   .openapi("DeveloperHistoryEntry");
@@ -307,15 +310,15 @@ export type SubmissionStatus = z.infer<typeof SubmissionStatusSchema>;
 export const SubmissionSchema = z
   .object({
     id: z.string(),
-    extension_id: z.string().nullable(),
+    extension_id: nullableString(),
     developer_id: z.string(),
     submitted_by: z.string(),
     status: SubmissionStatusSchema,
     payload: SubmissionPayloadSchema,
-    reviewer_id: z.string().nullable(),
-    review_note: z.string().nullable(),
+    reviewer_id: nullableString(),
+    review_note: nullableString(),
     created_at: z.string(),
-    reviewed_at: z.string().nullable()
+    reviewed_at: nullableString()
   })
   .openapi("Submission");
 
@@ -326,7 +329,13 @@ export const ErrorResponseSchema = z
     error: z.object({
       message: z.string(),
       code: z.string(),
-      details: z.array(z.unknown()).optional()
+      details: z
+        .array(
+          z.unknown().openapi({
+            type: ["string", "number", "boolean", "object", "array", "null"]
+          })
+        )
+        .optional()
     })
   })
   .openapi("Error");
@@ -386,8 +395,8 @@ export const PendingDeveloperClaimSchema = DeveloperClaimSchema.extend({
   // The claimant's own account name/GitHub handle, so the moderator sees
   // who's asking instead of just their opaque id. Null if the auth
   // provider never gave a name, or the claimant hasn't linked GitHub yet.
-  claimant_name: z.string().nullable(),
-  claimant_github_login: z.string().nullable()
+  claimant_name: nullableString(),
+  claimant_github_login: nullableString()
 }).openapi("PendingDeveloperClaim");
 
 export type PendingDeveloperClaim = z.infer<typeof PendingDeveloperClaimSchema>;
@@ -441,7 +450,7 @@ export const SubmissionPageQuerySchema = QueueQuerySchema.pick({
 
 export const PaginationSchema = z
   .object({
-    next_cursor: z.string().nullable(),
+    next_cursor: nullableString(),
     has_more: z.boolean()
   })
   .openapi("Pagination");
