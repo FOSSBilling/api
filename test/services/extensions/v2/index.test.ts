@@ -3663,8 +3663,6 @@ describe("Extensions API v2", () => {
       expect(await res.json()).toMatchObject({
         error: { code: "INVALID_CURSOR" }
       });
-<<<<<<< ours
-=======
 
       const blank = await get("/extensions/v2/extensions?cursor=", {});
       expect(blank.status).toBe(422);
@@ -3689,7 +3687,6 @@ describe("Extensions API v2", () => {
         result: [{ id: "😀" }],
         pagination: { next_cursor: null, has_more: false }
       });
->>>>>>> theirs
     });
 
     it("accepts the maximum limit and rejects values above it", async () => {
