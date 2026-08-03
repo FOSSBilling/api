@@ -161,7 +161,7 @@ export function registerOwnershipRoutes(
     );
     const { data, error } = await db.cancelClaim(id, auth.userId);
     if (error || !data) {
-      const status = error?.code === "NOT_FOUND" ? 404 : 500;
+      const status = statusFromErrorCode(error?.code, false);
       return c.json(
         {
           error: {
@@ -402,7 +402,7 @@ export function registerOwnershipRoutes(
     );
     const { data, error } = await db.rejectClaim(id, auth.userId, review_note);
     if (error || !data) {
-      const status = error?.code === "NOT_FOUND" ? 404 : 500;
+      const status = statusFromErrorCode(error?.code, false);
       return c.json(
         {
           error: {

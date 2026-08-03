@@ -1,6 +1,19 @@
-export function statusFromErrorCode(code?: string): 404 | 409 | 500 {
+// Routes that do not declare a 409 response pass false so unexpected conflict
+// codes remain an internal error rather than escaping their OpenAPI contract.
+export function statusFromErrorCode(
+  code: string | undefined,
+  includeConflict: false
+): 404 | 500;
+export function statusFromErrorCode(
+  code?: string,
+  includeConflict?: true
+): 404 | 409 | 500;
+export function statusFromErrorCode(
+  code?: string,
+  includeConflict = true
+): 404 | 409 | 500 {
   if (code === "NOT_FOUND") return 404;
-  if (code === "CONFLICT") return 409;
+  if (includeConflict && code === "CONFLICT") return 409;
   return 500;
 }
 

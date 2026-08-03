@@ -153,7 +153,7 @@ export function registerSubmissionRoutes(
         {
           error: {
             message: error?.message ?? "Unable to load submissions",
-            code: "DATABASE_ERROR"
+            code: error?.code ?? "DATABASE_ERROR"
           }
         },
         error?.code === "INVALID_CURSOR" ? 422 : 500

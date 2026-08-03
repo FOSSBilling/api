@@ -65,6 +65,8 @@ registerPublicExtensionsRoutes(extensionsV2, dependencies);
 registerSubmissionRoutes(extensionsV2, dependencies);
 registerOwnershipRoutes(extensionsV2, dependencies);
 registerModerationRoutes(extensionsV2, dependencies);
+// Keep this last: its GET /developers/{id} parameter route would otherwise
+// shadow static GET /developers/* routes registered by the modules above.
 registerDeveloperProfileRoutes(extensionsV2, dependencies);
 
 extensionsV2.doc31("/openapi.json", {

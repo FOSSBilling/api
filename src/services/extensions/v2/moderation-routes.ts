@@ -78,7 +78,7 @@ export function registerModerationRoutes(
         {
           error: {
             message: error?.message ?? "Unable to load queue",
-            code: "DATABASE_ERROR"
+            code: error?.code ?? "DATABASE_ERROR"
           }
         },
         error?.code === "INVALID_CURSOR" ? 422 : 500
@@ -363,13 +363,6 @@ export function registerModerationRoutes(
     }
     return c.json({ result: data }, 200);
   });
-  // Registered after every other static-segment GET /developers/* route
-  // (claims, claims/mine, unapproved above) — Hono matches path params against
-  // whichever handler was registered first among overlapping patterns, so this
-  // wildcard would otherwise shadow those static routes (e.g. swallow
-  // GET /developers/claims as a lookup for a developer literally named
-  // "claims").
-
   const approveDeveloperRoute = createRoute({
     method: "post",
     path: "/developers/{id}/approve",

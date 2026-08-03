@@ -1,4 +1,5 @@
 import { createRoute, z } from "@hono/zod-openapi";
+import { statusFromErrorCode } from "./route-errors";
 import {
   ErrorResponseSchema,
   ExtensionListQuerySchema,
@@ -108,7 +109,7 @@ export function registerPublicExtensionsRoutes(
     );
     const { data, error } = await db.getById(id);
     if (error || !data) {
-      const status = error?.code === "NOT_FOUND" ? 404 : 500;
+      const status = statusFromErrorCode(error?.code, false);
       return c.json(
         {
           error: {

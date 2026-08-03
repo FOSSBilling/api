@@ -242,6 +242,8 @@ export function registerDeveloperProfileRoutes(
     return c.json({ result: data }, 200);
   });
 
+  // This parameter route must be registered after static GET /developers/* routes.
+  // The composition root enforces that ordering by registering this module last.
   const getDeveloperRoute = createRoute({
     method: "get",
     path: "/developers/{id}",
@@ -279,7 +281,7 @@ export function registerDeveloperProfileRoutes(
     );
     const { data, error } = await db.getById(id);
     if (error || !data) {
-      const status = error?.code === "NOT_FOUND" ? 404 : 500;
+      const status = statusFromErrorCode(error?.code, false);
       return c.json(
         {
           error: {
