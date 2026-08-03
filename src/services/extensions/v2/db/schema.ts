@@ -49,7 +49,21 @@ export const extensions = sqliteTable(
   },
   (table) => [
     index("idx_extensions_type").on(table.type),
-    index("idx_extensions_author").on(table.authorId)
+    index("idx_extensions_author").on(table.authorId),
+    index("idx_extensions_catalogue_order").on(
+      sql`lower(${table.id})`,
+      table.id
+    ),
+    index("idx_extensions_type_catalogue_order").on(
+      table.type,
+      sql`lower(${table.id})`,
+      table.id
+    ),
+    index("idx_extensions_author_catalogue_order").on(
+      table.authorId,
+      sql`lower(${table.id})`,
+      table.id
+    )
   ]
 );
 

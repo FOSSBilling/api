@@ -16,6 +16,7 @@ import {
   DeveloperTransferSchema,
   ErrorResponseSchema,
   ExtensionListQuerySchema,
+  ExtensionListResponseSchema,
   ExtensionSchema,
   IdParamSchema,
   PendingDeveloperClaimSchema,
@@ -110,14 +111,14 @@ const listExtensionsRoute = createRoute({
     200: {
       content: {
         "application/json": {
-          schema: z.object({ result: z.array(ExtensionSchema) })
+          schema: ExtensionListResponseSchema
         }
       },
       description: "Extensions matching the given filters"
     },
     422: {
       content: { "application/json": { schema: ErrorResponseSchema } },
-      description: "type or developer_id query param failed validation"
+      description: "Filter or pagination query failed validation"
     },
     500: {
       content: { "application/json": { schema: ErrorResponseSchema } },
@@ -127,23 +128,37 @@ const listExtensionsRoute = createRoute({
 });
 
 extensionsV2.openapi(listExtensionsRoute, async (c) => {
-  const { type, developer_id } = c.req.valid("query");
+  const { type, developer_id, limit, cursor } = c.req.valid("query");
   const db = new ExtensionsDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
 
-  const { data, error } = await db.list({ type, developerId: developer_id });
+  const { data, error } = await db.list({
+    type,
+    developerId: developer_id,
+    limit,
+    cursor
+  });
   if (error || !data) {
     return c.json(
       {
         error: {
           message: error?.message ?? "Unable to load extensions",
-          code: "DATABASE_ERROR"
+          code: error?.code ?? "DATABASE_ERROR"
         }
       },
-      500
+      error?.code === "INVALID_CURSOR" ? 422 : 500
     );
   }
 
-  return c.json({ result: data }, 200);
+  return c.json(
+    {
+      result: data.items,
+      pagination: {
+        next_cursor: data.nextCursor,
+        has_more: data.hasMore
+      }
+    },
+    200
+  );
 });
 
 const getExtensionRoute = createRoute({

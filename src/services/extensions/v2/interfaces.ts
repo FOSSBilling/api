@@ -217,6 +217,16 @@ export const ExtensionSchema = ExtensionPayloadSchema.extend({
 
 export type Extension = z.infer<typeof ExtensionSchema>;
 
+// Catalogue cards do not need the potentially large README or every historic
+// release. Consumers can fetch those fields from GET /extensions/{id} when a
+// visitor opens an extension's detail page.
+export const ExtensionListItemSchema = ExtensionSchema.omit({
+  readme: true,
+  releases: true
+}).openapi("ExtensionListItem");
+
+export type ExtensionListItem = z.infer<typeof ExtensionListItemSchema>;
+
 export const ExtensionListQuerySchema = z.object({
   type: z
     .enum(EXTENSION_TYPES)
@@ -229,8 +239,34 @@ export const ExtensionListQuerySchema = z.object({
     .optional()
     .openapi({
       param: { name: "developer_id", in: "query" }
+    }),
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(100)
+    .default(50)
+    .openapi({ param: { name: "limit", in: "query" } }),
+  cursor: z
+    .string()
+    .min(1)
+    .max(1000)
+    .optional()
+    .openapi({
+      param: { name: "cursor", in: "query" },
+      description: "Opaque cursor returned by the previous page"
     })
 });
+
+export const ExtensionListResponseSchema = z
+  .object({
+    result: z.array(ExtensionListItemSchema),
+    pagination: z.object({
+      next_cursor: z.string().nullable(),
+      has_more: z.boolean()
+    })
+  })
+  .openapi("ExtensionListResponse");
 
 export const DeveloperHistoryEntrySchema = z
   .object({
