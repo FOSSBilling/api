@@ -3539,6 +3539,33 @@ describe("Extensions API v2", () => {
   });
 
   describe("GET /extensions", () => {
+    async function seedCatalogue(ids: string[]): Promise<void> {
+      await insertDeveloper(db, {
+        id: "catalogue-developer",
+        type: "user",
+        name: "Catalogue Developer",
+        url: null,
+        owner_user_id: null
+      });
+      for (const id of ids) {
+        await insertExtension(db, {
+          id,
+          type: "mod",
+          author_id: "catalogue-developer",
+          name: id,
+          description: `Description for ${id}`,
+          releases: '[{"tag":"1.0.0"}]',
+          website: "https://example.com",
+          license: '{"name":"MIT"}',
+          icon_url: null,
+          readme: `README for ${id}`,
+          source: '{"type":"github","repo":"example/catalogue"}',
+          version: "1.0.0",
+          download_url: "https://example.com/download.zip"
+        });
+      }
+    }
+
     it("lists published extensions with the developer embedded", async () => {
       await seedOwnedExtension();
 
@@ -3550,6 +3577,8 @@ describe("Extensions API v2", () => {
       expect(body.result).toHaveLength(1);
       expect(body.result[0].id).toBe("existing-ext");
       expect(body.result[0].developer.id).toBe("owner-developer");
+      expect(body.result[0]).not.toHaveProperty("readme");
+      expect(body.result[0]).not.toHaveProperty("releases");
     });
 
     it("filters by type", async () => {
@@ -3590,6 +3619,61 @@ describe("Extensions API v2", () => {
       };
       expect(nonMatchingBody.result).toHaveLength(0);
     });
+
+    it("returns deterministic first, middle, and final pages", async () => {
+      await seedCatalogue(["charlie", "Alpha", "bravo", "delta", "echo"]);
+
+      const first = await get("/extensions/v2/extensions?limit=2", {});
+      const firstBody = (await first.json()) as {
+        result: Array<{ id: string }>;
+        pagination: { next_cursor: string | null; has_more: boolean };
+      };
+      expect(firstBody.result.map(({ id }) => id)).toEqual(["Alpha", "bravo"]);
+      expect(firstBody.pagination.has_more).toBe(true);
+
+      const middle = await get(
+        `/extensions/v2/extensions?limit=2&cursor=${encodeURIComponent(firstBody.pagination.next_cursor!)}`,
+        {}
+      );
+      const middleBody = (await middle.json()) as typeof firstBody;
+      expect(middleBody.result.map(({ id }) => id)).toEqual([
+        "charlie",
+        "delta"
+      ]);
+      expect(middleBody.pagination.has_more).toBe(true);
+
+      const final = await get(
+        `/extensions/v2/extensions?limit=2&cursor=${encodeURIComponent(middleBody.pagination.next_cursor!)}`,
+        {}
+      );
+      const finalBody = (await final.json()) as typeof firstBody;
+      expect(finalBody.result.map(({ id }) => id)).toEqual(["echo"]);
+      expect(finalBody.pagination).toEqual({
+        next_cursor: null,
+        has_more: false
+      });
+    });
+
+    it("rejects invalid cursors", async () => {
+      const res = await get(
+        "/extensions/v2/extensions?cursor=not-a-cursor",
+        {}
+      );
+      expect(res.status).toBe(422);
+      expect(await res.json()).toMatchObject({
+        error: { code: "INVALID_CURSOR" }
+      });
+    });
+
+    it("accepts the maximum limit and rejects values above it", async () => {
+      await seedCatalogue(["one"]);
+      expect(
+        (await get("/extensions/v2/extensions?limit=100", {})).status
+      ).toBe(200);
+      expect(
+        (await get("/extensions/v2/extensions?limit=101", {})).status
+      ).toBe(422);
+    });
   });
 
   describe("GET /extensions/{id}", () => {
@@ -3604,6 +3688,13 @@ describe("Extensions API v2", () => {
       expect(body.result.id).toBe("existing-ext");
       expect(body.result.developer.name).toBe("Owner");
       expect(body.result.developer.approved).toBe(false);
+      expect(body.result).toMatchObject({
+        readme: "r",
+        releases: [],
+        source: { type: "github", repo: "example/existing" },
+        version: "1.0.0",
+        download_url: "https://e.com/d.zip"
+      });
     });
 
     it("404s for an unknown extension", async () => {
