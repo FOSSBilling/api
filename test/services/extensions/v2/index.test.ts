@@ -3663,6 +3663,33 @@ describe("Extensions API v2", () => {
       expect(await res.json()).toMatchObject({
         error: { code: "INVALID_CURSOR" }
       });
+<<<<<<< ours
+=======
+
+      const blank = await get("/extensions/v2/extensions?cursor=", {});
+      expect(blank.status).toBe(422);
+    });
+
+    it("supports UTF-8 extension ids in cursors", async () => {
+      await seedCatalogue(["alpha", "zulu", "éclair", "😀"]);
+
+      const first = await get("/extensions/v2/extensions?limit=3", {});
+      const firstBody = (await first.json()) as {
+        pagination: { next_cursor: string | null };
+      };
+      expect(first.status).toBe(200);
+      expect(firstBody.pagination.next_cursor).not.toBeNull();
+
+      const second = await get(
+        `/extensions/v2/extensions?limit=3&cursor=${encodeURIComponent(firstBody.pagination.next_cursor!)}`,
+        {}
+      );
+      expect(second.status).toBe(200);
+      expect(await second.json()).toMatchObject({
+        result: [{ id: "😀" }],
+        pagination: { next_cursor: null, has_more: false }
+      });
+>>>>>>> theirs
     });
 
     it("accepts the maximum limit and rejects values above it", async () => {

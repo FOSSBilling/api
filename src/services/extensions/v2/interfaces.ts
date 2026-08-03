@@ -249,6 +249,10 @@ export const ExtensionListQuerySchema = z.object({
     .openapi({ param: { name: "limit", in: "query" } }),
   cursor: z
     .string()
+<<<<<<< ours
+=======
+    .min(1)
+>>>>>>> theirs
     .max(1000)
     .optional()
     .openapi({

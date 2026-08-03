@@ -192,12 +192,29 @@ export class ExtensionsDatabase {
 
 function encodeCursor(id: string): string {
   const cursor: ExtensionCursor = { v: 1, normalizedId: id.toLowerCase(), id };
+<<<<<<< ours
   return btoa(JSON.stringify(cursor));
+=======
+  const bytes = new TextEncoder().encode(JSON.stringify(cursor));
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+>>>>>>> theirs
 }
 
 function decodeCursor(value: string): ExtensionCursor | null {
   try {
+<<<<<<< ours
     const parsed: unknown = JSON.parse(atob(value));
+=======
+    const binary = atob(value);
+    const bytes = Uint8Array.from(binary, (character) =>
+      character.charCodeAt(0)
+    );
+    const parsed: unknown = JSON.parse(
+      new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes)
+    );
+>>>>>>> theirs
     if (
       typeof parsed !== "object" ||
       parsed === null ||
