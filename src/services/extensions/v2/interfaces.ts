@@ -145,7 +145,7 @@ export type SubmissionPayload = z.infer<typeof SubmissionPayloadSchema>;
 
 export const DeveloperProfileSchema = DeveloperSchema.extend({
   approved: z.boolean(),
-  content_revision: z.number().int().positive(),
+  content_revision: z.int().positive(),
   // Server-computed — see DevelopersDatabase.verifyGithubOwnership() (at
   // claim/creation time) and reverifyOwn() (opportunistic re-check on
   // login, or the owner's own "Re-verify" action). Never part of the
