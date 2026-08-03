@@ -1683,7 +1683,7 @@ extensionsV2.openapi(developerHistoryRoute, async (c) => {
   return c.json({ result: data }, 200);
 });
 
-extensionsV2.doc("/openapi.json", {
+extensionsV2.doc31("/openapi.json", {
   openapi: "3.1.0",
   info: {
     title: "FOSSBilling Extensions API (v2)",
