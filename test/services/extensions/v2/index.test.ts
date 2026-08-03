@@ -550,6 +550,17 @@ describe("Extensions API v2", () => {
       expect(res.status).toBe(401);
     });
 
+    it("identifies invalid cursors", async () => {
+      const res = await get(
+        "/extensions/v2/submissions/mine?cursor=not-a-cursor",
+        await authHeaders("user-1")
+      );
+      expect(res.status).toBe(422);
+      await expect(res.json()).resolves.toMatchObject({
+        error: { code: "INVALID_CURSOR" }
+      });
+    });
+
     it("paginates deterministically with an opaque cursor", async () => {
       await seedDeveloper("new-developer", "user-1");
       const headers = await authHeaders("user-1");
@@ -599,6 +610,18 @@ describe("Extensions API v2", () => {
         await authHeaders("user-1")
       );
       expect(res.status).toBe(403);
+    });
+
+    it("identifies invalid cursors", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      const res = await get(
+        "/extensions/v2/submissions/queue?cursor=not-a-cursor",
+        await authHeaders("mod-1")
+      );
+      expect(res.status).toBe(422);
+      await expect(res.json()).resolves.toMatchObject({
+        error: { code: "INVALID_CURSOR" }
+      });
     });
 
     it("returns pending submissions for a moderator", async () => {
