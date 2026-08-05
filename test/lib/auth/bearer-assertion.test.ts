@@ -93,17 +93,26 @@ describe("bearerAssertionVerifier", () => {
     expect(principal).toBeNull();
   });
 
-  it("accepts finite fractional NumericDate values", async () => {
-    const now = Math.floor(Date.now() / 1000);
-    const iat = now + 0.5;
-    const token = await signAssertion(SECRET, { iat, exp: iat + 60 });
-    const principal = await bearerAssertionVerifier.verify(
-      token,
-      platformWithSecret(SECRET)
-    );
+  it.each(["iat", "exp"])(
+    "rejects fractional %s NumericDate values",
+    async (claim) => {
+      const now = Math.floor(Date.now() / 1000);
+      const overrides =
+        claim === "iat"
+          ? { iat: now + 0.5, exp: now + 60 }
+          : { iat: now, exp: now + 59.5 };
+      const token = await signAssertion(SECRET, {
+        iat: overrides.iat,
+        exp: overrides.exp
+      });
+      const principal = await bearerAssertionVerifier.verify(
+        token,
+        platformWithSecret(SECRET)
+      );
 
-    expect(principal).toEqual({ userId: "user-1", scope: "assertion" });
-  });
+      expect(principal).toBeNull();
+    }
+  );
 
   it.each([
     ["zero", 0],

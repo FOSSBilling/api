@@ -26,8 +26,8 @@ interface AssertionPayload {
   ver: typeof ASSERTION_VERSION;
 }
 
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
+function isInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value);
 }
 
 function isAssertionPayload(value: unknown): value is AssertionPayload {
@@ -36,8 +36,8 @@ function isAssertionPayload(value: unknown): value is AssertionPayload {
   return (
     typeof record.sub === "string" &&
     record.sub.length > 0 &&
-    isFiniteNumber(record.iat) &&
-    isFiniteNumber(record.exp) &&
+    isInteger(record.iat) &&
+    isInteger(record.exp) &&
     record.iss === ASSERTION_ISSUER &&
     record.aud === ASSERTION_AUDIENCE &&
     record.purpose === ASSERTION_PURPOSE &&
