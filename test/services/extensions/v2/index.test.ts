@@ -81,11 +81,23 @@ const SECRET = "test-assertion-signing-secret";
 // fault/race injection never leak that wrapper into the next test.
 let db: D1Database;
 
+function freshProfileCreationRateLimiter(): RateLimit {
+  const attempts = new Map<string, number>();
+  return {
+    async limit({ key }) {
+      const next = (attempts.get(key) ?? 0) + 1;
+      attempts.set(key, next);
+      return { success: next <= 3 };
+    }
+  };
+}
+
 beforeAll(applyTestMigrations);
 
 beforeEach(async () => {
   db = env.DB_EXTENSIONS;
   await resetExtensionsDb(db);
+  env.PROFILE_CREATION_RATE_LIMITER = freshProfileCreationRateLimiter();
   vi.clearAllMocks();
   mockGithubEntityNotFound();
 });
@@ -882,6 +894,86 @@ describe("Extensions API v2", () => {
   });
 
   describe("PUT /developers/me", () => {
+    it("limits creation attempts per account before GitHub and database writes", async () => {
+      mockGithubEntity("Organization");
+      const firstHeaders = await authHeaders("rate-limited-account");
+
+      for (const id of ["attempt-one", "attempt-two", "attempt-three"]) {
+        const allowed = await put(
+          "/extensions/v2/developers/me",
+          firstHeaders,
+          { id, type: "user", name: id }
+        );
+        expect(allowed.status).toBe(403);
+      }
+
+      const denied = await put("/extensions/v2/developers/me", firstHeaders, {
+        id: "attempt-four",
+        type: "user",
+        name: "Attempt four"
+      });
+      expect(denied.status).toBe(429);
+      expect(denied.headers.get("Retry-After")).toBe("60");
+      expect(denied.headers.get("Access-Control-Expose-Headers")).toContain(
+        "Retry-After"
+      );
+      expect(await denied.json()).toMatchObject({
+        error: { code: "PROFILE_CREATION_RATE_LIMITED" }
+      });
+      expect(ghRequest).toHaveBeenCalledTimes(3);
+      expect(await listDevelopers(db)).toHaveLength(0);
+
+      const otherAccount = await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("independent-rate-limit-account"),
+        { id: "other-attempt", type: "user", name: "Other attempt" }
+      );
+      expect(otherAccount.status).toBe(403);
+      expect(ghRequest).toHaveBeenCalledTimes(4);
+      expect(await listDevelopers(db)).toHaveLength(0);
+    });
+
+    it("does not charge profile updates against creation allowance", async () => {
+      const headers = await authHeaders("update-rate-limit-account");
+      const created = await put(
+        "/extensions/v2/developers/me",
+        headers,
+        sampleDeveloper({ id: "update-limit-profile" })
+      );
+      expect(created.status).toBe(200);
+
+      for (const name of ["First update", "Second update", "Third update"]) {
+        const updated = await put(
+          "/extensions/v2/developers/me",
+          headers,
+          sampleDeveloper({ id: "update-limit-profile", name })
+        );
+        expect(updated.status).toBe(200);
+      }
+      expect(ghRequest).toHaveBeenCalledTimes(1);
+
+      const removed = await del("/extensions/v2/developers/me", headers);
+      expect(removed.status).toBe(200);
+      mockGithubEntity("Organization");
+
+      for (const id of ["remaining-one", "remaining-two"]) {
+        const allowed = await put("/extensions/v2/developers/me", headers, {
+          id,
+          type: "user",
+          name: id
+        });
+        expect(allowed.status).toBe(403);
+      }
+      const denied = await put("/extensions/v2/developers/me", headers, {
+        id: "no-allowance",
+        type: "user",
+        name: "No allowance"
+      });
+      expect(denied.status).toBe(429);
+      expect(ghRequest).toHaveBeenCalledTimes(3);
+      expect(await listDevelopers(db)).toHaveLength(0);
+    });
+
     it("creates a new developer profile, unapproved", async () => {
       const res = await put(
         "/extensions/v2/developers/me",

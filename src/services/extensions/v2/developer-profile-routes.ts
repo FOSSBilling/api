@@ -54,7 +54,8 @@ export function registerDeveloperProfileRoutes(
       },
       429: {
         content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "GitHub verification is temporarily rate limited"
+        description:
+          "The account exhausted its profile-creation allowance, or GitHub verification is temporarily rate limited"
       },
       503: {
         content: { "application/json": { schema: ErrorResponseSchema } },
@@ -82,16 +83,28 @@ export function registerDeveloperProfileRoutes(
     const { data, error } = await db.upsertOwn(
       auth.userId,
       body,
-      platform.getEnv("GITHUB_TOKEN")
+      platform.getEnv("GITHUB_TOKEN"),
+      // Cloudflare enforces the configured 3-per-60s account allowance across
+      // isolates. Keep this as a callback so upsertOwn can run its cheap
+      // existing-profile/id checks first; updates and known-taken ids must not
+      // spend creation allowance.
+      async () =>
+        (
+          await c.env.PROFILE_CREATION_RATE_LIMITER.limit({
+            key: auth.userId
+          })
+        ).success
     );
     if (error || !data) {
       const status =
         error?.code === "GITHUB_MISMATCH"
           ? 403
-          : error?.code === "CONFLICT" || error?.code === "DEVELOPER_ID_TAKEN"
-            ? 409
-            : statusFromGithubErrorCode(error?.code, 500);
-      return c.json(
+          : error?.code === "PROFILE_CREATION_RATE_LIMITED"
+            ? 429
+            : error?.code === "CONFLICT" || error?.code === "DEVELOPER_ID_TAKEN"
+              ? 409
+              : statusFromGithubErrorCode(error?.code, 500);
+      const response = c.json(
         {
           error: {
             message: error?.message ?? "Unable to save developer profile",
@@ -100,6 +113,10 @@ export function registerDeveloperProfileRoutes(
         },
         status
       );
+      if (error?.code === "PROFILE_CREATION_RATE_LIMITED") {
+        response.headers.set("Retry-After", "60");
+      }
+      return response;
     }
     return c.json({ result: data }, 200);
   });

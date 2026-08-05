@@ -46,5 +46,15 @@
       "binding": "CACHE_KV",
       "id": "0771957093ae481b9cd974ffa83f8263"
     }
+  ],
+  "ratelimits": [
+    {
+      "name": "PROFILE_CREATION_RATE_LIMITER",
+      "namespace_id": "1001",
+      "simple": {
+        "limit": 3,
+        "period": 60
+      }
+    }
   ]
 }

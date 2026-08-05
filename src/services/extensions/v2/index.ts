@@ -31,7 +31,11 @@ const extensionsV2 = new OpenAPIHono<{ Bindings: CloudflareBindings }>({
   }
 });
 
-extensionsV2.use("/*", cors({ origin: "*" }));
+// exposeHeaders: browsers hide non-safelisted response headers from
+// cross-origin JS by default; Retry-After (set on 429s, see
+// developer-profile-routes.ts) needs an explicit expose so callers can read
+// it to schedule their retry.
+extensionsV2.use("/*", cors({ origin: "*", exposeHeaders: ["Retry-After"] }));
 extensionsV2.use("/*", trimTrailingSlash());
 extensionsV2.openAPIRegistry.registerComponent("securitySchemes", "Bearer", {
   type: "http",
