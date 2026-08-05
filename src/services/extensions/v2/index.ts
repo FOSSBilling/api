@@ -126,8 +126,8 @@ const dependencies: RouteDependencies = {
 
 // Register the static owner route before the public parameter route
 // (/extensions/{id}) so the reserved "mine" segment is handled as the
-// owner collection. The deployment preflight in README.md must reject any
-// pre-existing extension with that id before this route is enabled.
+// owner collection. Existing rows require a one-time release data check
+// before this route is enabled; new submissions reject the reserved id.
 registerOwnerExtensionsRoutes(extensionsV2, dependencies);
 registerPublicExtensionsRoutes(extensionsV2, dependencies);
 registerAccountRoutes(extensionsV2, dependencies);
@@ -136,8 +136,8 @@ registerOwnershipRoutes(extensionsV2, dependencies);
 registerModerationRoutes(extensionsV2, dependencies);
 // Keep this last: its GET /developers/{id} parameter route would otherwise
 // shadow static GET /developers/* routes registered by the modules above.
-// The "me" namespace is reserved for the owner profile route; the rollout
-// preflight must reject a pre-existing developer with that id.
+// The "me" namespace is reserved for the owner profile route; existing rows
+// require the same one-time release data check before enabling the route.
 registerDeveloperProfileRoutes(extensionsV2, dependencies);
 
 extensionsV2.doc31("/openapi.json", {

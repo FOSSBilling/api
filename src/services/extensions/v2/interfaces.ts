@@ -38,8 +38,8 @@ const httpUrl = () =>
 // GET /developers/* routes (claims, me, unapproved), so a developer whose id
 // literally matched one of those words would always hit the static route
 // instead. Rejecting these ids at creation time keeps new profiles
-// resolvable; the deployment checklist also preflights existing data because
-// route reservations cannot rename a row that is already in production.
+// resolvable; existing databases need a one-time release check because route
+// reservations cannot rename a row that is already in production.
 export const RESERVED_DEVELOPER_IDS = new Set(["claims", "me", "unapproved"]);
 
 const developerId = () =>
@@ -50,9 +50,13 @@ const developerId = () =>
 // GET /extensions/mine is a static owner-only route registered before
 // GET /extensions/{id}. Reserve its segment for new submissions so a newly
 // published extension cannot become unreachable. Existing databases must be
-// checked for this id before enabling the route (see the README rollout
-// preflight); this schema cannot safely rename production catalogue rows.
+// checked for this id before enabling the route; this schema cannot safely
+// rename production catalogue rows.
 export const RESERVED_EXTENSION_IDS = new Set(["mine"]);
+
+export function isReservedExtensionId(id: string): boolean {
+  return RESERVED_EXTENSION_IDS.has(id.toLowerCase());
+}
 
 export const DeveloperSchema = z
   .object({
@@ -138,7 +142,7 @@ export const SubmissionPayloadSchema = z
   })
   .strict()
   .superRefine((payload, ctx) => {
-    if (RESERVED_EXTENSION_IDS.has(payload.extension.id)) {
+    if (isReservedExtensionId(payload.extension.id)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: "This extension id is reserved",

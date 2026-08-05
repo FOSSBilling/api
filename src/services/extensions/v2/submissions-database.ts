@@ -9,7 +9,12 @@ import {
 } from "./db/schema";
 import { databaseError, errorMessageChain } from "./errors";
 import { toD1Statement } from "./d1-batch";
-import { Submission, SubmissionPayload, SubmissionStatus } from "./interfaces";
+import {
+  isReservedExtensionId,
+  Submission,
+  SubmissionPayload,
+  SubmissionStatus
+} from "./interfaces";
 
 interface OwnershipResolution {
   extensionId: string | null;
@@ -457,6 +462,22 @@ export class SubmissionsDatabase {
 
     const { developer, extension } = submission.payload;
     const extensionId = submission.extension_id ?? extension.id;
+
+    // Stored submissions predate the reserved-id validation on new requests,
+    // so re-check the payload at the approval boundary before it can be
+    // written through to the public catalogue.
+    if (
+      isReservedExtensionId(extension.id) ||
+      isReservedExtensionId(extensionId)
+    ) {
+      return {
+        data: null,
+        error: {
+          message: "This extension id is reserved",
+          code: "CONFLICT"
+        }
+      };
+    }
 
     // Kept as raw sql via the raw D1 client (see toD1Statement) rather than
     // the query builder: D1's batch() executes these three statements as

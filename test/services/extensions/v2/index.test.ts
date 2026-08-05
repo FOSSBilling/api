@@ -716,6 +716,31 @@ describe("Extensions API v2", () => {
       expect(await countExtensions(db)).toBe(0);
     });
 
+    it("does not approve a legacy pending submission with a reserved extension id", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await seedDeveloper("new-developer", "user-1");
+      const legacyPayload = samplePayload({ extensionId: "mine" });
+      await insertSubmission(db, {
+        id: "legacy-mine-submission",
+        developer_id: "new-developer",
+        submitted_by: "user-1",
+        payload: JSON.stringify(legacyPayload),
+        target_key: "mine"
+      });
+
+      const approved = await post(
+        "/extensions/v2/submissions/legacy-mine-submission/approve",
+        await authHeaders("mod-1"),
+        {}
+      );
+
+      expect(approved.status).toBe(409);
+      expect(await getSubmission(db, "legacy-mine-submission")).toMatchObject({
+        status: "pending"
+      });
+      expect(await countExtensions(db)).toBe(0);
+    });
+
     it("leaves the submission pending if the extension write-through fails mid-batch", async () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await seedDeveloper("new-developer", "user-1");
