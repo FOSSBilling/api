@@ -15,6 +15,12 @@ export interface AssertionOverrides {
   sub?: string;
   iat?: number;
   exp?: number;
+  iss?: string;
+  aud?: string;
+  purpose?: string;
+  ver?: number;
+  header?: Record<string, string>;
+  includeContext?: boolean;
 }
 
 /** Mints a compact HS256 assertion matching what bearer-assertion.ts verifies. */
@@ -23,14 +29,22 @@ export async function signAssertion(
   overrides: AssertionOverrides = {}
 ): Promise<string> {
   const iat = overrides.iat ?? Math.floor(Date.now() / 1000);
-  const payload = {
+  const payload: Record<string, string | number> = {
     sub: overrides.sub ?? "user-1",
     iat,
     exp: overrides.exp ?? iat + 60
   };
+  if (overrides.includeContext !== false) {
+    Object.assign(payload, {
+      iss: overrides.iss ?? "fossbilling-extensions",
+      aud: overrides.aud ?? "fossbilling-api/extensions-v2",
+      purpose: overrides.purpose ?? "user-authentication",
+      ver: overrides.ver ?? 1
+    });
+  }
 
   const headerB64 = base64UrlEncodeString(
-    JSON.stringify({ alg: "HS256", typ: "JWT" })
+    JSON.stringify(overrides.header ?? { alg: "HS256", typ: "JWT" })
   );
   const payloadB64 = base64UrlEncodeString(JSON.stringify(payload));
 
