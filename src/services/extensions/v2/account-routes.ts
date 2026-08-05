@@ -2,6 +2,7 @@ import { createRoute, z } from "@hono/zod-openapi";
 import { getAuth } from "../../../lib/auth";
 import { statusFromErrorCode } from "./route-errors";
 import {
+  ActiveAccountRequiredResponse,
   ErrorResponseSchema,
   UserIdentityInputSchema,
   UserProfileUpdateSchema,
@@ -34,7 +35,7 @@ export function registerAccountRoutes(
     tags: ["Users"],
     summary: "Synchronize the caller's OIDC identity projection",
     security: [{ Bearer: [] }],
-    middleware: [dependencies.requireAuthAllowInactive()] as const,
+    middleware: [dependencies.requireIdentitySync()] as const,
     request: {
       body: {
         content: { "application/json": { schema: UserIdentityInputSchema } }
@@ -51,6 +52,10 @@ export function registerAccountRoutes(
         content: { "application/json": { schema: ErrorResponseSchema } },
         description: "Missing or invalid bearer token"
       },
+      403: {
+        ...ActiveAccountRequiredResponse,
+        description: "Identity synchronization requires a trusted assertion"
+      },
       422: {
         content: { "application/json": { schema: ErrorResponseSchema } },
         description: "Identity payload failed validation"
@@ -63,6 +68,10 @@ export function registerAccountRoutes(
   });
 
   app.openapi(syncIdentityRoute, async (c) => {
+    // requireIdentitySync has already verified the HMAC assertion minted by
+    // the trusted Extensions site. The projection fields below therefore
+    // represent the site's OIDC callback, while authorization state remains
+    // API-owned and is never accepted from the request body.
     const auth = getAuth(c);
     const body = c.req.valid("json");
     const users = new UsersDatabase(dependencies.database(c.env.DB_EXTENSIONS));
@@ -169,6 +178,7 @@ export function registerAccountRoutes(
         content: { "application/json": { schema: ErrorResponseSchema } },
         description: "Missing or invalid bearer token"
       },
+      403: ActiveAccountRequiredResponse,
       404: {
         content: { "application/json": { schema: ErrorResponseSchema } },
         description: "Account does not exist or has been deleted"

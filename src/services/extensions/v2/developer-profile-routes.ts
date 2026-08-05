@@ -1,6 +1,7 @@
 import { createRoute, z } from "@hono/zod-openapi";
 import { statusFromErrorCode, statusFromGithubErrorCode } from "./route-errors";
 import {
+  ActiveAccountRequiredResponse,
   DeveloperProfileSchema,
   DeveloperSchema,
   ErrorResponseSchema,
@@ -37,6 +38,7 @@ export function registerDeveloperProfileRoutes(
         content: { "application/json": { schema: ErrorResponseSchema } },
         description: "Missing or invalid bearer token"
       },
+      403: ActiveAccountRequiredResponse,
       500: {
         content: { "application/json": { schema: ErrorResponseSchema } },
         description: "Database error"
@@ -94,9 +96,9 @@ export function registerDeveloperProfileRoutes(
         description: "Missing or invalid bearer token"
       },
       403: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
+        ...ActiveAccountRequiredResponse,
         description:
-          "This id matches a real GitHub organization or username that isn't linked to the caller's account"
+          "The account is inactive, or this id matches a real GitHub organization or username that isn't linked to the caller's account"
       },
       409: {
         content: { "application/json": { schema: ErrorResponseSchema } },
@@ -194,6 +196,7 @@ export function registerDeveloperProfileRoutes(
         content: { "application/json": { schema: ErrorResponseSchema } },
         description: "Missing or invalid bearer token"
       },
+      403: ActiveAccountRequiredResponse,
       404: {
         content: { "application/json": { schema: ErrorResponseSchema } },
         description: "Caller has no developer profile"
@@ -252,6 +255,7 @@ export function registerDeveloperProfileRoutes(
         content: { "application/json": { schema: ErrorResponseSchema } },
         description: "Missing or invalid bearer token"
       },
+      403: ActiveAccountRequiredResponse,
       404: {
         content: { "application/json": { schema: ErrorResponseSchema } },
         description: "Caller has no developer profile"

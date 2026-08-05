@@ -40,7 +40,7 @@ const httpUrl = () =>
 // instead — its public profile would be permanently unreachable there.
 // Rejecting these ids at creation time (rather than trying to route around
 // the collision) keeps every existing/future developer id resolvable.
-const RESERVED_DEVELOPER_IDS = new Set(["claims", "unapproved"]);
+export const RESERVED_DEVELOPER_IDS = new Set(["claims", "me", "unapproved"]);
 
 const developerId = () =>
   lowercaseId("developer").refine((id) => !RESERVED_DEVELOPER_IDS.has(id), {
@@ -262,6 +262,14 @@ export const ExtensionListQuerySchema = z.object({
     })
 });
 
+// The owner-scoped list has the same pagination and type filters as the
+// public catalogue, but its developer is always taken from the authenticated
+// user. Keeping a separate schema prevents OpenAPI from advertising a
+// developer_id filter that this endpoint deliberately ignores.
+export const ExtensionMineListQuerySchema = ExtensionListQuerySchema.omit({
+  developer_id: true
+});
+
 export const ExtensionListResponseSchema = z
   .object({
     result: z.array(ExtensionListItemSchema),
@@ -340,6 +348,14 @@ export const ErrorResponseSchema = z
     })
   })
   .openapi("Error");
+
+// All routes behind requireAuth() perform an active-account check after
+// bearer authentication. Keep that response reusable so the generated
+// contract documents the middleware failure consistently on every route.
+export const ActiveAccountRequiredResponse = {
+  content: { "application/json": { schema: ErrorResponseSchema } },
+  description: "The bearer is valid but the account is inactive"
+} as const;
 
 // The site remains responsible for OIDC and sessions. It sends only the
 // provider projection needed by the API-owned domain row; authorization

@@ -142,6 +142,7 @@ export class UsersDatabase {
           isModerator: active && row.isModerator === 1,
           githubLinked:
             active &&
+            Boolean(row.githubLogin) &&
             hasUsableGithubOrgs(row.githubOrgs, row.githubOrgsExpiresAt),
           deletedAt: row.deletedAt
         },

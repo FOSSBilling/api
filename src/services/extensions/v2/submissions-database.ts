@@ -1,7 +1,12 @@
 import { and, asc, desc, eq, gt, lt, or, sql } from "drizzle-orm";
 import { DatabaseResult } from "../../../lib/interfaces";
 import { ExtensionsDb } from "../../../lib/db";
-import { extensionSubmissions, developers, extensions } from "./db/schema";
+import {
+  extensionSubmissions,
+  developers,
+  extensions,
+  users
+} from "./db/schema";
 import { databaseError, errorMessageChain } from "./errors";
 import { toD1Statement } from "./d1-batch";
 import { Submission, SubmissionPayload, SubmissionStatus } from "./interfaces";
@@ -187,6 +192,10 @@ export class SubmissionsDatabase {
            SELECT ${id}, ${input.extensionId}, ${input.developerId}, ${input.submittedBy}, 'pending', ${JSON.stringify(input.payload)}, d.ownership_epoch, LOWER(${input.payload.extension.id})
            FROM ${developers} d
            WHERE d.id = ${input.developerId} AND d.owner_user_id = ${input.submittedBy} AND d.ownership_epoch = ${input.ownershipEpoch}
+             AND EXISTS (
+               SELECT 1 FROM ${users} u
+               WHERE u.id = ${input.submittedBy} AND u.deleted_at IS NULL
+             )
              AND (
                SELECT COUNT(*) FROM ${extensionSubmissions}
                WHERE submitted_by = ${input.submittedBy} AND status = 'pending'
@@ -404,7 +413,11 @@ export class SubmissionsDatabase {
         .where(
           and(
             eq(extensionSubmissions.id, id),
-            eq(extensionSubmissions.status, "pending")
+            eq(extensionSubmissions.status, "pending"),
+            sql`EXISTS (
+              SELECT 1 FROM ${users}
+              WHERE ${users.id} = ${reviewerId} AND ${users.deletedAt} IS NULL
+            )`
           )
         );
     } catch (error) {
@@ -468,6 +481,10 @@ export class SubmissionsDatabase {
                     AND d.owner_user_id = extension_submissions.submitted_by
                     AND d.ownership_epoch = extension_submissions.ownership_epoch
                 )
+                AND EXISTS (
+                  SELECT 1 FROM users u
+                  WHERE u.id = ? AND u.deleted_at IS NULL
+                )
                 AND (
                   (extension_id IS NULL AND NOT EXISTS (
                     SELECT 1 FROM extensions e
@@ -480,7 +497,7 @@ export class SubmissionsDatabase {
                       AND e.author_id = extension_submissions.developer_id
                   ))
                 )`,
-        params: [reviewerId, reviewNote ?? null, id, extension.id]
+        params: [reviewerId, reviewNote ?? null, id, reviewerId, extension.id]
       });
 
       const developerStmt = toD1Statement(this.db.$client, {

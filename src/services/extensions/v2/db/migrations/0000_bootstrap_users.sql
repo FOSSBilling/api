@@ -30,6 +30,13 @@ CREATE TABLE IF NOT EXISTS extensions (
 CREATE INDEX IF NOT EXISTS idx_extensions_type ON extensions(type);
 CREATE INDEX IF NOT EXISTS idx_extensions_author ON extensions(author_id);
 
+-- The former Extensions site migration already created this complete
+-- projection (it was never a one-column placeholder). Keeping IF NOT EXISTS
+-- here is what makes adoption data-preserving: the API chain reuses that
+-- table and 0019 adds only the new tombstone column. Deployments should
+-- inspect PRAGMA table_info(users) during the rollout backup; a database that
+-- does not match this historical contract is not an Extensions production
+-- database that this additive chain can safely infer or rebuild in SQL.
 CREATE TABLE IF NOT EXISTS users (
   id             TEXT PRIMARY KEY NOT NULL,
   name           TEXT,

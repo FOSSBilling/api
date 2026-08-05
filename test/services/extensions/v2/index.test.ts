@@ -1693,6 +1693,33 @@ describe("Extensions API v2", () => {
       ).toHaveLength(1);
     });
 
+    it("does not create a profile after the account is tombstoned mid-request", async () => {
+      const headers = await authHeaders("deleted-during-write");
+      let tombstoned = false;
+      env.DB_EXTENSIONS = wrapD1WithHook(db, async (sql) => {
+        if (!tombstoned && sql.includes("INSERT INTO developers")) {
+          tombstoned = true;
+          await db
+            .prepare("UPDATE users SET deleted_at = ? WHERE id = ?")
+            .bind(new Date().toISOString(), "deleted-during-write")
+            .run();
+        }
+      });
+
+      const res = await put(
+        "/extensions/v2/developers/me",
+        headers,
+        sampleDeveloper({ id: "deleted-during-write-profile" })
+      );
+      env.DB_EXTENSIONS = db;
+
+      expect(tombstoned).toBe(true);
+      expect(res.status).toBe(409);
+      expect(await hasDeveloper(db, "deleted-during-write-profile")).toBe(
+        false
+      );
+    });
+
     it("round-trips avatar_url and contact_email", async () => {
       const headers = await authHeaders("user-1");
       const res = await put("/extensions/v2/developers/me", headers, {
@@ -3930,6 +3957,22 @@ describe("Extensions API v2", () => {
           "/developers/claims/{id}/reject"
         ])
       );
+
+      const paths = spec.paths as Record<
+        string,
+        {
+          get?: {
+            parameters?: Array<{ name?: string }>;
+            responses?: Record<string, unknown>;
+          };
+          patch?: { responses?: Record<string, unknown> };
+        }
+      >;
+      expect(paths["/extensions/mine"].get?.responses).toHaveProperty("403");
+      expect(
+        paths["/extensions/mine"].get?.parameters?.map(({ name }) => name)
+      ).not.toContain("developer_id");
+      expect(paths["/users/me"].patch?.responses).toHaveProperty("403");
     });
 
     it("serves the Scalar API reference UI", async () => {
@@ -3999,6 +4042,46 @@ describe("Extensions API v2", () => {
       expect(await owned.json()).toMatchObject({
         result: [{ id: "account-extension" }],
         pagination: { has_more: false, next_cursor: null }
+      });
+
+      const filtered = await get(
+        "/extensions/v2/extensions/mine?developer_id=someone-else",
+        headers
+      );
+      expect(filtered.status).toBe(200);
+      expect(await filtered.json()).toMatchObject({
+        result: [{ id: "account-extension" }]
+      });
+    });
+
+    it("validates a mine cursor before returning an empty owner page", async () => {
+      const res = await get(
+        "/extensions/v2/extensions/mine?cursor=not-a-cursor",
+        await authHeaders("no-developer")
+      );
+      expect(res.status).toBe(422);
+      expect(await res.json()).toMatchObject({
+        error: { code: "INVALID_CURSOR" }
+      });
+    });
+
+    it("only reports GitHub as linked when both login and fresh evidence exist", async () => {
+      const res = await put(
+        "/extensions/v2/users/me/identity",
+        await authHeaders("github-evidence-without-login"),
+        {
+          name: "No Login",
+          email: "no-login@example.com",
+          email_verified: true,
+          picture: null,
+          github_login: null,
+          github_orgs: ["fossbilling"],
+          github_orgs_expires_at: "2099-01-01T00:00:00.000Z"
+        }
+      );
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({
+        result: { github_linked: false }
       });
     });
 

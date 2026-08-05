@@ -58,6 +58,11 @@ We use [Cloudflare D1](https://developers.cloudflare.com/d1/) and [KV](https://d
   its migrations only from this repository, from
   `src/services/extensions/v2/db/migrations`, with
   `db:migrate:extensions-v2:*`. The Extensions site has no D1 migration source.
+  The `0000` users bootstrap mirrors the complete table created by the former
+  site migration, so it is safe to re-run against the existing split-owned
+  database without replacing rows; `0019` then adds the API-owned tombstone
+  column. Back up the database and inspect `PRAGMA table_info(users)` before
+  adoption, as with any schema ownership change.
 - **KV Namespace** (`CACHE_KV`): Caches GitHub API responses so we don't hit rate limits.
 - **KV Namespace** (`AUTH_KV`): Stores the `UPDATE_TOKEN` value for `/versions/v1/update`.
 

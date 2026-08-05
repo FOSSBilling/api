@@ -8,6 +8,7 @@ import { getExtensionsDb } from "../../../lib/db";
 import { getPlatform } from "../../../lib/middleware";
 import { UsersDatabase } from "./users-database";
 import { registerPublicExtensionsRoutes } from "./public-extensions-routes";
+import { registerOwnerExtensionsRoutes } from "./owner-extensions-routes";
 import { registerSubmissionRoutes } from "./submission-routes";
 import { registerDeveloperProfileRoutes } from "./developer-profile-routes";
 import { registerOwnershipRoutes } from "./ownership-routes";
@@ -34,6 +35,29 @@ function requireActiveAuth(): MiddlewareHandler {
             error: {
               message: "Active account required",
               code: "ACCOUNT_INACTIVE"
+            }
+          },
+          403
+        );
+        return;
+      }
+      await next();
+    });
+    return response ?? authenticationResult;
+  };
+}
+
+function requireIdentitySync(): MiddlewareHandler {
+  const authenticate = requireAuth();
+  return async (c, next) => {
+    let response: Response | undefined;
+    const authenticationResult = await authenticate(c, async () => {
+      if (getAuth(c).scope !== "assertion") {
+        response = c.json(
+          {
+            error: {
+              message: "Identity synchronization requires a trusted assertion",
+              code: "FORBIDDEN"
             }
           },
           403
@@ -95,9 +119,13 @@ const dependencies: RouteDependencies = {
   platform: getPlatform,
   requireAuth: requireActiveAuth,
   requireAuthAllowInactive,
+  requireIdentitySync,
   requireModerator
 };
 
+// Register the static owner route before the public parameter route
+// (/extensions/{id}) so "mine" is never interpreted as an extension id.
+registerOwnerExtensionsRoutes(extensionsV2, dependencies);
 registerPublicExtensionsRoutes(extensionsV2, dependencies);
 registerAccountRoutes(extensionsV2, dependencies);
 registerSubmissionRoutes(extensionsV2, dependencies);

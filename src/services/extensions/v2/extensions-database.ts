@@ -225,6 +225,10 @@ function decodeCursor(value: string): ExtensionCursor | null {
   }
 }
 
+export function isValidExtensionCursor(value: string): boolean {
+  return decodeCursor(value) !== null;
+}
+
 function parseExtensionRow(row: ExtensionRow): Extension {
   const releases = parseJSON<Release[]>(row.releases, []);
   return {

@@ -1,5 +1,6 @@
 import { createRoute, z } from "@hono/zod-openapi";
 import {
+  ActiveAccountRequiredResponse,
   ErrorResponseSchema,
   PaginationSchema,
   SubmissionPayloadSchema,
@@ -41,8 +42,9 @@ export function registerSubmissionRoutes(
         description: "Missing or invalid bearer token"
       },
       403: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Caller does not own the target developer or extension"
+        ...ActiveAccountRequiredResponse,
+        description:
+          "The account is inactive, or the caller does not own the target developer or extension"
       },
       409: {
         content: { "application/json": { schema: ErrorResponseSchema } },
@@ -126,6 +128,7 @@ export function registerSubmissionRoutes(
         content: { "application/json": { schema: ErrorResponseSchema } },
         description: "Missing or invalid bearer token"
       },
+      403: ActiveAccountRequiredResponse,
       422: {
         content: { "application/json": { schema: ErrorResponseSchema } },
         description: "Pagination query failed validation"
