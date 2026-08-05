@@ -7,9 +7,9 @@ import {
   developerTransfers,
   developerClaims,
   extensions,
-  extensionSubmissions
+  extensionSubmissions,
+  users
 } from "./db/schema";
-import { users as externalUsers } from "./db/external-tables";
 import { databaseError, errorMessageChain } from "./errors";
 import { toD1Statement } from "./d1-batch";
 import {
@@ -122,7 +122,7 @@ function parseDeveloperRow(row: DeveloperRow): DeveloperProfile {
   };
 }
 
-// Used by listAll/listUnapproved, whose queries left-join externalUsers on
+// Used by listAll/listUnapproved, whose queries left-join users on
 // developers.owner_user_id to save the moderator a lookup per row (see
 // PendingDeveloperClaim's claimant_name/claimant_github_login for the same
 // pattern on the claims queue).
@@ -160,6 +160,45 @@ function parseClaimRow(row: ClaimRow): DeveloperClaim {
 
 export class DevelopersDatabase {
   constructor(private db: ExtensionsDb) {}
+
+  async getOwn(
+    userId: string
+  ): Promise<
+    | DatabaseResult<DeveloperProfile & { has_pending_transfer: boolean }>
+    | { data: null; error: null }
+  > {
+    try {
+      const [row] = await this.db
+        .select()
+        .from(developers)
+        .where(eq(developers.ownerUserId, userId));
+      if (!row) return { data: null, error: null };
+
+      const [pending] = await this.db
+        .select({ id: developerTransfers.id })
+        .from(developerTransfers)
+        .where(
+          and(
+            eq(developerTransfers.developerId, row.id),
+            isNull(developerTransfers.acceptedAt),
+            isNull(developerTransfers.revokedAt),
+            sql`${developerTransfers.expiresAt} > CURRENT_TIMESTAMP`
+          )
+        )
+        .limit(1);
+
+      return {
+        data: {
+          ...parseDeveloperRow(row),
+          unclaimed: false,
+          has_pending_transfer: pending !== undefined
+        },
+        error: null
+      };
+    } catch (error) {
+      return databaseError("getOwn", error);
+    }
+  }
 
   // githubToken — see the comment on verifyGithubOwnership(). Only consulted
   // when creating a brand-new profile (developer.id is immutable once
@@ -577,7 +616,9 @@ export class DevelopersDatabase {
     }
   }
 
-  async getById(id: string): Promise<DatabaseResult<DeveloperProfile>> {
+  async getById(
+    id: string
+  ): Promise<DatabaseResult<DeveloperProfile & { unclaimed: boolean }>> {
     try {
       const [row] = await this.db
         .select()
@@ -592,7 +633,13 @@ export class DevelopersDatabase {
           }
         };
       }
-      return { data: parseDeveloperRow(row), error: null };
+      return {
+        data: {
+          ...parseDeveloperRow(row),
+          unclaimed: row.ownerUserId === null
+        },
+        error: null
+      };
     } catch (error) {
       return databaseError("getById", error);
     }
@@ -604,11 +651,11 @@ export class DevelopersDatabase {
       rows = await this.db
         .select({
           developer: developers,
-          ownerName: externalUsers.name,
-          ownerGithubLogin: externalUsers.githubLogin
+          ownerName: users.name,
+          ownerGithubLogin: users.githubLogin
         })
         .from(developers)
-        .leftJoin(externalUsers, eq(externalUsers.id, developers.ownerUserId))
+        .leftJoin(users, eq(users.id, developers.ownerUserId))
         .orderBy(asc(developers.name));
     } catch (error) {
       return databaseError("listAll", error);
@@ -623,11 +670,11 @@ export class DevelopersDatabase {
       rows = await this.db
         .select({
           developer: developers,
-          ownerName: externalUsers.name,
-          ownerGithubLogin: externalUsers.githubLogin
+          ownerName: users.name,
+          ownerGithubLogin: users.githubLogin
         })
         .from(developers)
-        .leftJoin(externalUsers, eq(externalUsers.id, developers.ownerUserId))
+        .leftJoin(users, eq(users.id, developers.ownerUserId))
         .where(isNull(developers.approvedAt))
         .orderBy(asc(developers.createdAt));
     } catch (error) {
@@ -696,14 +743,11 @@ export class DevelopersDatabase {
           name: developerHistory.name,
           url: developerHistory.url,
           changedBy: developerHistory.changedBy,
-          changedByName: externalUsers.name,
+          changedByName: users.name,
           changedAt: developerHistory.changedAt
         })
         .from(developerHistory)
-        .leftJoin(
-          externalUsers,
-          eq(externalUsers.id, developerHistory.changedBy)
-        )
+        .leftJoin(users, eq(users.id, developerHistory.changedBy))
         .where(eq(developerHistory.developerId, developerId))
         // CURRENT_TIMESTAMP has only second resolution, so two writes in
         // the same second tie on changed_at; rowid (insertion order,
@@ -1536,15 +1580,12 @@ export class DevelopersDatabase {
           claim: developerClaims,
           developerName: developers.name,
           developerType: developers.type,
-          claimantName: externalUsers.name,
-          claimantGithubLogin: externalUsers.githubLogin
+          claimantName: users.name,
+          claimantGithubLogin: users.githubLogin
         })
         .from(developerClaims)
         .innerJoin(developers, eq(developers.id, developerClaims.developerId))
-        .leftJoin(
-          externalUsers,
-          eq(externalUsers.id, developerClaims.claimantId)
-        )
+        .leftJoin(users, eq(users.id, developerClaims.claimantId))
         .where(eq(developerClaims.status, "pending"))
         .orderBy(asc(developerClaims.createdAt));
     } catch (error) {

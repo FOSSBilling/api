@@ -5,6 +5,7 @@ import {
   DeveloperSchema,
   ErrorResponseSchema,
   IdParamSchema,
+  OwnedDeveloperProfileSchema,
   PublicDeveloperSchema,
   ReverifyQuerySchema,
   toPublicDeveloper
@@ -16,6 +17,56 @@ export function registerDeveloperProfileRoutes(
   app: ExtensionsV2App,
   dependencies: RouteDependencies
 ): void {
+  const getOwnDeveloperRoute = createRoute({
+    method: "get",
+    path: "/developers/me",
+    tags: ["Developers"],
+    summary: "Get the caller's own developer profile",
+    security: [{ Bearer: [] }],
+    middleware: [dependencies.requireAuth()] as const,
+    responses: {
+      200: {
+        content: {
+          "application/json": {
+            schema: z.object({ result: OwnedDeveloperProfileSchema.nullable() })
+          }
+        },
+        description: "The caller's profile, or null when none exists"
+      },
+      401: {
+        content: { "application/json": { schema: ErrorResponseSchema } },
+        description: "Missing or invalid bearer token"
+      },
+      500: {
+        content: { "application/json": { schema: ErrorResponseSchema } },
+        description: "Database error"
+      }
+    }
+  });
+
+  app.openapi(getOwnDeveloperRoute, async (c) => {
+    const auth = dependencies.auth(c);
+    const db = new DevelopersDatabase(
+      dependencies.database(c.env.DB_EXTENSIONS)
+    );
+    const { data, error } = await db.getOwn(auth.userId);
+    if (error || data === null) {
+      if (error) {
+        return c.json(
+          {
+            error: {
+              message: error.message,
+              code: error.code ?? "DATABASE_ERROR"
+            }
+          },
+          500
+        );
+      }
+      return c.json({ result: null }, 200);
+    }
+    return c.json({ result: data }, 200);
+  });
+
   const upsertOwnDeveloperRoute = createRoute({
     method: "put",
     path: "/developers/me",

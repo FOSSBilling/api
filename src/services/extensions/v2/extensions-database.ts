@@ -13,12 +13,10 @@ import {
   parseJSON
 } from "./interfaces";
 
-// LEFT JOIN so an extension whose developer row is missing (author_id
-// pointing nowhere) still lists - author_id isn't a hard FK (see
-// 0001_add_v2_tables.sql). COALESCE keeps developerId non-null in that
-// case: extensions.authorId is itself NOT NULL, so the id half of the
-// embedded developer is never lost even when every other field falls back
-// to a default in parseExtensionRow below.
+// LEFT JOIN defensively preserves catalogue reads if a legacy/corrupt row
+// points at a missing developer. The current baseline enforces the
+// extensions.author_id foreign key; COALESCE still keeps the embedded id
+// available for any historical data that predates that constraint.
 const EXTENSION_COLUMNS = {
   id: extensions.id,
   type: extensions.type,
@@ -37,7 +35,8 @@ const EXTENSION_COLUMNS = {
   developerName: developers.name,
   developerUrl: developers.url,
   developerAvatarUrl: developers.avatarUrl,
-  developerApprovedAt: developers.approvedAt
+  developerApprovedAt: developers.approvedAt,
+  developerOwnerUserId: developers.ownerUserId
 };
 
 const EXTENSION_LIST_COLUMNS = {
@@ -56,7 +55,8 @@ const EXTENSION_LIST_COLUMNS = {
   developerName: EXTENSION_COLUMNS.developerName,
   developerUrl: EXTENSION_COLUMNS.developerUrl,
   developerAvatarUrl: EXTENSION_COLUMNS.developerAvatarUrl,
-  developerApprovedAt: EXTENSION_COLUMNS.developerApprovedAt
+  developerApprovedAt: EXTENSION_COLUMNS.developerApprovedAt,
+  developerOwnerUserId: EXTENSION_COLUMNS.developerOwnerUserId
 };
 
 interface ExtensionRow {
@@ -78,6 +78,7 @@ interface ExtensionRow {
   developerUrl: string | null;
   developerAvatarUrl: string | null;
   developerApprovedAt: string | null;
+  developerOwnerUserId: string | null;
 }
 
 type ExtensionListRow = Omit<ExtensionRow, "readme" | "releases">;
@@ -245,7 +246,8 @@ function parseExtensionRow(row: ExtensionRow): Extension {
       name: row.developerName ?? "",
       URL: row.developerUrl ?? undefined,
       avatar_url: row.developerAvatarUrl ?? undefined,
-      approved: row.developerApprovedAt !== null
+      approved: row.developerApprovedAt !== null,
+      unclaimed: row.developerOwnerUserId === null
     }
   };
 }
@@ -268,7 +270,8 @@ function parseExtensionListRow(row: ExtensionListRow): ExtensionListItem {
       name: row.developerName ?? "",
       URL: row.developerUrl ?? undefined,
       avatar_url: row.developerAvatarUrl ?? undefined,
-      approved: row.developerApprovedAt !== null
+      approved: row.developerApprovedAt !== null,
+      unclaimed: row.developerOwnerUserId === null
     }
   };
 }

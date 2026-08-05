@@ -12,7 +12,39 @@ import { registerSubmissionRoutes } from "./submission-routes";
 import { registerDeveloperProfileRoutes } from "./developer-profile-routes";
 import { registerOwnershipRoutes } from "./ownership-routes";
 import { registerModerationRoutes } from "./moderation-routes";
+import { registerAccountRoutes } from "./account-routes";
 import { RouteDependencies } from "./route-dependencies";
+
+const requireAuthAllowInactive = requireAuth;
+
+function requireActiveAuth(): MiddlewareHandler {
+  const authenticate = requireAuth();
+  return async (c, next) => {
+    let response: Response | undefined;
+    const authenticationResult = await authenticate(c, async () => {
+      const users = new UsersDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
+      const result = await users.isActive(getAuth(c).userId);
+      if (result.error) {
+        response = c.json({ error: result.error }, 500);
+        return;
+      }
+      if (!result.data) {
+        response = c.json(
+          {
+            error: {
+              message: "Active account required",
+              code: "ACCOUNT_INACTIVE"
+            }
+          },
+          403
+        );
+        return;
+      }
+      await next();
+    });
+    return response ?? authenticationResult;
+  };
+}
 
 const extensionsV2 = new OpenAPIHono<{ Bindings: CloudflareBindings }>({
   defaultHook: (result, c) => {
@@ -61,11 +93,13 @@ const dependencies: RouteDependencies = {
   database: getExtensionsDb,
   auth: getAuth,
   platform: getPlatform,
-  requireAuth,
+  requireAuth: requireActiveAuth,
+  requireAuthAllowInactive,
   requireModerator
 };
 
 registerPublicExtensionsRoutes(extensionsV2, dependencies);
+registerAccountRoutes(extensionsV2, dependencies);
 registerSubmissionRoutes(extensionsV2, dependencies);
 registerOwnershipRoutes(extensionsV2, dependencies);
 registerModerationRoutes(extensionsV2, dependencies);

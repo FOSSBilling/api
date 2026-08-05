@@ -8,26 +8,32 @@ import {
   check
 } from "drizzle-orm/sqlite-core";
 
-// Owned by the sibling FOSSBilling/extensions repo (src/lib/db/users.sql
-// there), not this repo - only its id is modeled here, purely so other
-// tables in this file can express their FK .references(() => users.id).
-// This file is drizzle-kit's schema entry point (see
-// drizzle.extensions.config.ts), so a fuller definition here would make
-// drizzle-kit think it owns and should generate ALTER TABLE users
-// migrations, which would be wrong. users-database.ts (the only place that
-// reads more than id) imports a separate, non-scanned definition from
-// ./external-tables instead.
+// The API owns the complete Extensions domain, including this user projection.
+// The row is keyed by the central auth service's `sub`; authentication itself
+// remains in the Extensions site, while this projection is the domain-side
+// authorization and foreign-key anchor for developers, submissions, claims,
+// transfers, and audit history.
 export const users = sqliteTable("users", {
-  id: text("id").primaryKey()
+  id: text("id").primaryKey(),
+  name: text("name"),
+  email: text("email"),
+  emailVerified: integer("email_verified").notNull().default(0),
+  picture: text("picture"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+  isModerator: integer("is_moderator").notNull().default(0),
+  displayName: text("display_name"),
+  githubLogin: text("github_login"),
+  githubOrgs: text("github_orgs"),
+  githubOrgsExpiresAt: text("github_orgs_expires_at"),
+  deletedAt: text("deleted_at")
 });
 
-// Owned by v1 (../../v1/db/schema.sql) - v1 only ever reads this table, v2
-// only references its id via FK, so this file is the single schema source
-// for the whole DB_EXTENSIONS database and v1's Drizzle queries import
-// these table objects rather than redeclaring them. author_id's column
-// name is left as-is (v1's own column, not touched by the v2 rename), but
-// its target followed developers per migration 0008 - SQLite's
-// ALTER TABLE RENAME TO updates other tables' FK references automatically.
+// Legacy catalogue table, now owned by the API along with the rest of the
+// Extensions domain. The v1 read-only routes import this model rather than
+// maintaining a second table definition. author_id's column name is kept for
+// compatibility with the public v1 response, while its target followed
+// developers in migration 0008.
 export const extensions = sqliteTable(
   "extensions",
   {
@@ -67,10 +73,10 @@ export const extensions = sqliteTable(
   ]
 );
 
-// v1-owned table (../../v1/db/schema.sql), renamed authors -> developers by
-// v2 migration 0008. type/name/url are v1's original columns; everything
-// else was added by v2 migrations 0001-0013. bio (added in 0003) was
-// dropped in 0010 and is intentionally absent here.
+// Legacy catalogue table renamed from authors to developers by migration
+// 0008. The API owns the full table now; type/name/url are the original
+// catalogue fields and the remaining columns were added by the v2 migrations.
+// bio (added in 0003) was dropped in 0010 and is intentionally absent here.
 export const developers = sqliteTable(
   "developers",
   {
