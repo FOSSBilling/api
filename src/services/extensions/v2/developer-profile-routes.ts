@@ -1,10 +1,12 @@
 import { createRoute, z } from "@hono/zod-openapi";
 import { statusFromErrorCode, statusFromGithubErrorCode } from "./route-errors";
 import {
+  ActiveAccountRequiredResponse,
   DeveloperProfileSchema,
   DeveloperSchema,
   ErrorResponseSchema,
   IdParamSchema,
+  OwnedDeveloperProfileSchema,
   PublicDeveloperSchema,
   ReverifyQuerySchema,
   toPublicDeveloper
@@ -16,6 +18,57 @@ export function registerDeveloperProfileRoutes(
   app: ExtensionsV2App,
   dependencies: RouteDependencies
 ): void {
+  const getOwnDeveloperRoute = createRoute({
+    method: "get",
+    path: "/developers/me",
+    tags: ["Developers"],
+    summary: "Get the caller's own developer profile",
+    security: [{ Bearer: [] }],
+    middleware: [dependencies.requireAuth()] as const,
+    responses: {
+      200: {
+        content: {
+          "application/json": {
+            schema: z.object({ result: OwnedDeveloperProfileSchema.nullable() })
+          }
+        },
+        description: "The caller's profile, or null when none exists"
+      },
+      401: {
+        content: { "application/json": { schema: ErrorResponseSchema } },
+        description: "Missing or invalid bearer token"
+      },
+      403: ActiveAccountRequiredResponse,
+      500: {
+        content: { "application/json": { schema: ErrorResponseSchema } },
+        description: "Database error"
+      }
+    }
+  });
+
+  app.openapi(getOwnDeveloperRoute, async (c) => {
+    const auth = dependencies.auth(c);
+    const db = new DevelopersDatabase(
+      dependencies.database(c.env.DB_EXTENSIONS)
+    );
+    const { data, error } = await db.getOwn(auth.userId);
+    if (error || data === null) {
+      if (error) {
+        return c.json(
+          {
+            error: {
+              message: error.message,
+              code: error.code ?? "DATABASE_ERROR"
+            }
+          },
+          500
+        );
+      }
+      return c.json({ result: null }, 200);
+    }
+    return c.json({ result: data }, 200);
+  });
+
   const upsertOwnDeveloperRoute = createRoute({
     method: "put",
     path: "/developers/me",
@@ -43,9 +96,9 @@ export function registerDeveloperProfileRoutes(
         description: "Missing or invalid bearer token"
       },
       403: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
+        ...ActiveAccountRequiredResponse,
         description:
-          "This id matches a real GitHub organization or username that isn't linked to the caller's account"
+          "The account is inactive, or this id matches a real GitHub organization or username that isn't linked to the caller's account"
       },
       409: {
         content: { "application/json": { schema: ErrorResponseSchema } },
@@ -143,6 +196,7 @@ export function registerDeveloperProfileRoutes(
         content: { "application/json": { schema: ErrorResponseSchema } },
         description: "Missing or invalid bearer token"
       },
+      403: ActiveAccountRequiredResponse,
       404: {
         content: { "application/json": { schema: ErrorResponseSchema } },
         description: "Caller has no developer profile"
@@ -201,6 +255,7 @@ export function registerDeveloperProfileRoutes(
         content: { "application/json": { schema: ErrorResponseSchema } },
         description: "Missing or invalid bearer token"
       },
+      403: ActiveAccountRequiredResponse,
       404: {
         content: { "application/json": { schema: ErrorResponseSchema } },
         description: "Caller has no developer profile"

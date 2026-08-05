@@ -13,7 +13,5 @@ declare namespace Cloudflare {
   interface Env {
     TEST_MIGRATIONS_EXTENSIONS: import("cloudflare:test").D1Migration[];
     TEST_MIGRATIONS_CENTRAL_ALERTS: import("cloudflare:test").D1Migration[];
-    TEST_V1_SCHEMA_SQL: string;
-    TEST_USERS_STUB_SQL: string;
   }
 }

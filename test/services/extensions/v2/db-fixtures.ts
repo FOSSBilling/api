@@ -163,8 +163,9 @@ export async function insertUser(
   // created a bare stub row for this id before this richer call runs.
   await db
     .prepare(
-      `INSERT INTO users (id, is_moderator, github_login, github_orgs, github_orgs_expires_at) VALUES (?, ?, ?, ?, ?)
+      `INSERT INTO users (id, created_at, updated_at, is_moderator, github_login, github_orgs, github_orgs_expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
+         updated_at = excluded.updated_at,
          is_moderator = excluded.is_moderator,
          github_login = excluded.github_login,
          github_orgs = excluded.github_orgs,
@@ -172,7 +173,9 @@ export async function insertUser(
     )
     .bind(
       row.id,
-      row.is_moderator ?? null,
+      new Date().toISOString(),
+      new Date().toISOString(),
+      row.is_moderator ?? 0,
       row.github_login ?? null,
       row.github_orgs ?? null,
       githubOrgsExpiresAt
@@ -184,8 +187,10 @@ export async function insertUser(
 // insertUser() may set up separately (before or after this runs).
 export async function ensureUser(db: D1Database, id: string): Promise<void> {
   await db
-    .prepare("INSERT OR IGNORE INTO users (id) VALUES (?)")
-    .bind(id)
+    .prepare(
+      "INSERT OR IGNORE INTO users (id, created_at, updated_at) VALUES (?, ?, ?)"
+    )
+    .bind(id, new Date().toISOString(), new Date().toISOString())
     .run();
 }
 
@@ -326,6 +331,70 @@ export async function insertDeveloperClaim(
       row.reviewed_at ?? null,
       row.github_org_verified ?? null,
       row.github_verification_note ?? null
+    )
+    .run();
+}
+
+export async function insertDeveloperTransfer(
+  db: D1Database,
+  row: Partial<DeveloperTransferRow> & {
+    id: string;
+    developer_id: string;
+    created_by: string;
+    token_hash: string;
+    expires_at: string;
+  }
+): Promise<void> {
+  await ensureUser(db, row.created_by);
+  if (row.accepted_by) {
+    await ensureUser(db, row.accepted_by);
+  }
+  await db
+    .prepare(
+      `INSERT INTO developer_transfers
+         (id, developer_id, token_hash, created_by, created_at, expires_at,
+          accepted_by, accepted_at, revoked_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .bind(
+      row.id,
+      row.developer_id,
+      row.token_hash,
+      row.created_by,
+      row.created_at ?? new Date().toISOString(),
+      row.expires_at,
+      row.accepted_by ?? null,
+      row.accepted_at ?? null,
+      row.revoked_at ?? null
+    )
+    .run();
+}
+
+export async function insertDeveloperHistory(
+  db: D1Database,
+  row: Partial<DeveloperHistoryRow> & {
+    id: string;
+    developer_id: string;
+    type: string;
+    name: string;
+    changed_by: string;
+  }
+): Promise<void> {
+  await ensureUser(db, row.changed_by);
+  await db
+    .prepare(
+      `INSERT INTO developer_history
+         (id, developer_id, type, name, url, changed_by, changed_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    )
+    .bind(
+      row.id,
+      row.developer_id,
+      row.type,
+      row.name,
+      row.url ?? null,
+      row.changed_by,
+      row.changed_at ?? new Date().toISOString()
     )
     .run();
 }

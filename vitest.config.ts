@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
   cloudflareTest,
@@ -13,26 +12,11 @@ import { defineConfig } from "vitest/config";
 // config files are ESM) avoids fighting defineConfig's overload typing for
 // an async factory function.
 const extensionsMigrations = await readD1Migrations(
-  path.join(__dirname, "src/services/extensions/v2/db/migrations")
+  path.join(import.meta.dirname, "src/services/extensions/v2/db/migrations")
 );
 const centralAlertsMigrations = await readD1Migrations(
-  path.join(__dirname, "src/services/central-alerts/v1/db/migrations")
+  path.join(import.meta.dirname, "src/services/central-alerts/v1/db/migrations")
 );
-
-// v1's schema.sql (authors/extensions) and the sibling FOSSBilling/extensions
-// repo's `users` table are bootstrapped by hand in every real environment
-// (never through `wrangler d1 migrations`), so readD1Migrations never sees
-// them - migration 0001 ALTERs `authors` and several v2 tables REFERENCE
-// `users(id)`, so both must exist before the v2 migrations run against a
-// fresh test-local D1. Read as a string here (Node) rather than having
-// test/apply-migrations.ts read the file itself - that script runs inside
-// workerd, which doesn't have host filesystem access via node:fs.
-const v1SchemaSql = readFileSync(
-  path.join(__dirname, "src/services/extensions/v1/db/schema.sql"),
-  "utf8"
-);
-const usersStubSql =
-  "CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY NOT NULL, name TEXT, is_moderator INTEGER, github_login TEXT, github_orgs TEXT, github_orgs_expires_at TEXT);";
 
 export default defineConfig({
   plugins: [
@@ -45,9 +29,7 @@ export default defineConfig({
           UPDATE_TOKEN: "test-update-token",
           ASSERTION_SIGNING_SECRET: "test-assertion-signing-secret",
           TEST_MIGRATIONS_EXTENSIONS: extensionsMigrations,
-          TEST_MIGRATIONS_CENTRAL_ALERTS: centralAlertsMigrations,
-          TEST_V1_SCHEMA_SQL: v1SchemaSql,
-          TEST_USERS_STUB_SQL: usersStubSql
+          TEST_MIGRATIONS_CENTRAL_ALERTS: centralAlertsMigrations
         }
       }
     })
@@ -65,7 +47,11 @@ export default defineConfig({
     // the test file's own module graph rather than a separate setupFiles one.
 
     // Exclude Node.js tests from Cloudflare Workers environment
-    exclude: ["**/node_modules/**", "**/test/lib/adapters/node/**"],
+    exclude: [
+      "**/node_modules/**",
+      "**/test/lib/adapters/node/**",
+      "**/test/services/extensions/v2/migrations.test.ts"
+    ],
 
     // Test timeout configuration
     testTimeout: 30000, // 30 seconds max per test

@@ -7,9 +7,9 @@ import {
   developerTransfers,
   developerClaims,
   extensions,
-  extensionSubmissions
+  extensionSubmissions,
+  users
 } from "./db/schema";
-import { users as externalUsers } from "./db/external-tables";
 import { databaseError, errorMessageChain } from "./errors";
 import { toD1Statement } from "./d1-batch";
 import {
@@ -122,7 +122,7 @@ function parseDeveloperRow(row: DeveloperRow): DeveloperProfile {
   };
 }
 
-// Used by listAll/listUnapproved, whose queries left-join externalUsers on
+// Used by listAll/listUnapproved, whose queries left-join users on
 // developers.owner_user_id to save the moderator a lookup per row (see
 // PendingDeveloperClaim's claimant_name/claimant_github_login for the same
 // pattern on the claims queue).
@@ -161,6 +161,45 @@ function parseClaimRow(row: ClaimRow): DeveloperClaim {
 export class DevelopersDatabase {
   constructor(private db: ExtensionsDb) {}
 
+  async getOwn(
+    userId: string
+  ): Promise<
+    | DatabaseResult<DeveloperProfile & { has_pending_transfer: boolean }>
+    | { data: null; error: null }
+  > {
+    try {
+      const [row] = await this.db
+        .select()
+        .from(developers)
+        .where(eq(developers.ownerUserId, userId));
+      if (!row) return { data: null, error: null };
+
+      const [pending] = await this.db
+        .select({ id: developerTransfers.id })
+        .from(developerTransfers)
+        .where(
+          and(
+            eq(developerTransfers.developerId, row.id),
+            isNull(developerTransfers.acceptedAt),
+            isNull(developerTransfers.revokedAt),
+            sql`${developerTransfers.expiresAt} > CURRENT_TIMESTAMP`
+          )
+        )
+        .limit(1);
+
+      return {
+        data: {
+          ...parseDeveloperRow(row),
+          unclaimed: false,
+          has_pending_transfer: pending !== undefined
+        },
+        error: null
+      };
+    } catch (error) {
+      return databaseError("getOwn", error);
+    }
+  }
+
   // githubToken — see the comment on verifyGithubOwnership(). Only consulted
   // when creating a brand-new profile (developer.id is immutable once
   // owned, so an update can't need re-verifying); guards against squatting
@@ -188,7 +227,7 @@ export class DevelopersDatabase {
       let githubUrlVerified: number | null = null;
       let githubVerificationNote: string | null = null;
 
-      let mainStmt;
+      let mainStmt: D1PreparedStatement;
       if (!existingOwn) {
         if (existingById) {
           // Distinct from the generic CONFLICT used elsewhere in this file —
@@ -247,22 +286,39 @@ export class DevelopersDatabase {
         githubUrlVerified = check.githubUrlVerified;
         githubVerificationNote = check.note;
 
-        mainStmt = this.db.insert(developers).values({
-          id: developer.id,
-          type: developer.type,
-          name: developer.name,
-          url: developer.URL ?? null,
-          avatarUrl: developer.avatar_url ?? null,
-          contactEmail: developer.contact_email ?? null,
-          ownerUserId: userId,
-          approvedAt: null,
-          githubOrgVerified,
-          githubUrlVerified,
-          githubVerificationNote,
-          githubVerifiedAt:
-            githubOrgVerified !== null ? sql`CURRENT_TIMESTAMP` : null,
-          createdAt: sql`CURRENT_TIMESTAMP`,
-          updatedAt: sql`CURRENT_TIMESTAMP`
+        // INSERT ... SELECT makes the active-account check part of the
+        // mutation itself. The middleware check is only an early rejection;
+        // a deletion can win between that check and this statement.
+        mainStmt = toD1Statement(this.db.$client, {
+          sql: `INSERT INTO developers (
+                  id, type, name, url, avatar_url, contact_email,
+                  owner_user_id, approved_at, created_at, updated_at,
+                  github_org_verified,
+                  github_verification_note, github_verified_at,
+                  github_url_verified
+                )
+                SELECT ?, ?, ?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP,
+                       CURRENT_TIMESTAMP, ?, ?,
+                       CASE WHEN ? IS NULL THEN NULL ELSE CURRENT_TIMESTAMP END,
+                       ?
+                WHERE EXISTS (
+                  SELECT 1 FROM users
+                  WHERE id = ? AND deleted_at IS NULL
+                )`,
+          params: [
+            developer.id,
+            developer.type,
+            developer.name,
+            developer.URL ?? null,
+            developer.avatar_url ?? null,
+            developer.contact_email ?? null,
+            userId,
+            githubOrgVerified,
+            githubVerificationNote,
+            githubOrgVerified,
+            githubUrlVerified,
+            userId
+          ]
         });
       } else {
         if (developer.id !== existingOwn.id) {
@@ -302,7 +358,7 @@ export class DevelopersDatabase {
         const keepsApproval =
           !typeChanged && existingOwn.githubOrgVerified === 1;
 
-        mainStmt = this.db
+        const updateStmt = this.db
           .update(developers)
           .set({
             type: developer.type,
@@ -329,9 +385,14 @@ export class DevelopersDatabase {
           .where(
             and(
               eq(developers.id, developer.id),
-              eq(developers.ownerUserId, userId)
+              eq(developers.ownerUserId, userId),
+              sql`EXISTS (
+                SELECT 1 FROM ${users}
+                WHERE ${users.id} = ${userId} AND ${users.deletedAt} IS NULL
+              )`
             )
           );
+        mainStmt = toD1Statement(this.db.$client, updateStmt.toSQL());
       }
 
       // Batched via the raw D1 client ($client - see toD1Statement's
@@ -359,10 +420,7 @@ export class DevelopersDatabase {
 
       let results;
       try {
-        results = await this.db.$client.batch([
-          toD1Statement(this.db.$client, mainStmt.toSQL()),
-          historyStmt
-        ]);
+        results = await this.db.$client.batch([mainStmt, historyStmt]);
       } catch (error) {
         if (isOwnerConflict(error)) {
           return {
@@ -518,8 +576,12 @@ export class DevelopersDatabase {
                       WHERE extension_submissions.developer_id = developers.id
                         AND extension_submissions.status = 'pending'
                     )
+                    AND EXISTS (
+                      SELECT 1 FROM users active_user
+                      WHERE active_user.id = ? AND active_user.deleted_at IS NULL
+                    )
                 )`,
-        params: [developer.id, userId]
+        params: [developer.id, userId, userId]
       });
 
       const deleteClaimsStmt = toD1Statement(this.db.$client, {
@@ -535,8 +597,12 @@ export class DevelopersDatabase {
                       WHERE extension_submissions.developer_id = developers.id
                         AND extension_submissions.status = 'pending'
                     )
+                    AND EXISTS (
+                      SELECT 1 FROM users active_user
+                      WHERE active_user.id = ? AND active_user.deleted_at IS NULL
+                    )
                 )`,
-        params: [developer.id, userId]
+        params: [developer.id, userId, userId]
       });
 
       const deleteDeveloperStmt = toD1Statement(this.db.$client, {
@@ -548,8 +614,12 @@ export class DevelopersDatabase {
                   SELECT 1 FROM extension_submissions
                   WHERE extension_submissions.developer_id = developers.id
                     AND extension_submissions.status = 'pending'
+                )
+                AND EXISTS (
+                  SELECT 1 FROM users active_user
+                  WHERE active_user.id = ? AND active_user.deleted_at IS NULL
                 )`,
-        params: [developer.id, userId]
+        params: [developer.id, userId, userId]
       });
 
       let results;
@@ -577,7 +647,9 @@ export class DevelopersDatabase {
     }
   }
 
-  async getById(id: string): Promise<DatabaseResult<DeveloperProfile>> {
+  async getById(
+    id: string
+  ): Promise<DatabaseResult<DeveloperProfile & { unclaimed: boolean }>> {
     try {
       const [row] = await this.db
         .select()
@@ -592,7 +664,13 @@ export class DevelopersDatabase {
           }
         };
       }
-      return { data: parseDeveloperRow(row), error: null };
+      return {
+        data: {
+          ...parseDeveloperRow(row),
+          unclaimed: row.ownerUserId === null
+        },
+        error: null
+      };
     } catch (error) {
       return databaseError("getById", error);
     }
@@ -604,11 +682,11 @@ export class DevelopersDatabase {
       rows = await this.db
         .select({
           developer: developers,
-          ownerName: externalUsers.name,
-          ownerGithubLogin: externalUsers.githubLogin
+          ownerName: users.name,
+          ownerGithubLogin: users.githubLogin
         })
         .from(developers)
-        .leftJoin(externalUsers, eq(externalUsers.id, developers.ownerUserId))
+        .leftJoin(users, eq(users.id, developers.ownerUserId))
         .orderBy(asc(developers.name));
     } catch (error) {
       return databaseError("listAll", error);
@@ -623,11 +701,11 @@ export class DevelopersDatabase {
       rows = await this.db
         .select({
           developer: developers,
-          ownerName: externalUsers.name,
-          ownerGithubLogin: externalUsers.githubLogin
+          ownerName: users.name,
+          ownerGithubLogin: users.githubLogin
         })
         .from(developers)
-        .leftJoin(externalUsers, eq(externalUsers.id, developers.ownerUserId))
+        .leftJoin(users, eq(users.id, developers.ownerUserId))
         .where(isNull(developers.approvedAt))
         .orderBy(asc(developers.createdAt));
     } catch (error) {
@@ -654,7 +732,11 @@ export class DevelopersDatabase {
         .where(
           and(
             eq(developers.id, id),
-            eq(developers.contentRevision, expectedRevision)
+            eq(developers.contentRevision, expectedRevision),
+            sql`EXISTS (
+              SELECT 1 FROM ${users}
+              WHERE ${users.id} = ${reviewerId} AND ${users.deletedAt} IS NULL
+            )`
           )
         );
     } catch (error) {
@@ -696,14 +778,11 @@ export class DevelopersDatabase {
           name: developerHistory.name,
           url: developerHistory.url,
           changedBy: developerHistory.changedBy,
-          changedByName: externalUsers.name,
+          changedByName: users.name,
           changedAt: developerHistory.changedAt
         })
         .from(developerHistory)
-        .leftJoin(
-          externalUsers,
-          eq(externalUsers.id, developerHistory.changedBy)
-        )
+        .leftJoin(users, eq(users.id, developerHistory.changedBy))
         .where(eq(developerHistory.developerId, developerId))
         // CURRENT_TIMESTAMP has only second resolution, so two writes in
         // the same second tie on changed_at; rowid (insertion order,
@@ -777,13 +856,27 @@ export class DevelopersDatabase {
       const revokeStmt = toD1Statement(this.db.$client, {
         sql: `UPDATE developer_transfers SET revoked_at = CURRENT_TIMESTAMP
               WHERE developer_id = ? AND accepted_at IS NULL AND revoked_at IS NULL
-                AND EXISTS (SELECT 1 FROM developers WHERE developers.id = developer_transfers.developer_id AND developers.owner_user_id = ?)`,
-        params: [developerId, userId]
+                AND EXISTS (
+                  SELECT 1 FROM developers
+                  WHERE developers.id = developer_transfers.developer_id
+                    AND developers.owner_user_id = ?
+                )
+                AND EXISTS (
+                  SELECT 1 FROM users
+                  WHERE users.id = ? AND users.deleted_at IS NULL
+                )`,
+        params: [developerId, userId, userId]
       });
       const insertStmt = toD1Statement(this.db.$client, {
         sql: `INSERT INTO developer_transfers (id, developer_id, token_hash, created_by, expires_at)
               SELECT ?, ?, ?, ?, ?
-              WHERE EXISTS (SELECT 1 FROM developers WHERE id = ? AND owner_user_id = ?)`,
+              WHERE EXISTS (
+                SELECT 1 FROM developers WHERE id = ? AND owner_user_id = ?
+              )
+                AND EXISTS (
+                  SELECT 1 FROM users
+                  WHERE users.id = ? AND users.deleted_at IS NULL
+                )`,
         params: [
           crypto.randomUUID(),
           developerId,
@@ -791,6 +884,7 @@ export class DevelopersDatabase {
           userId,
           expiresAt,
           developerId,
+          userId,
           userId
         ]
       });
@@ -827,6 +921,7 @@ export class DevelopersDatabase {
         UPDATE ${developerTransfers} SET revoked_at = CURRENT_TIMESTAMP
            WHERE developer_id = ${developerId} AND accepted_at IS NULL AND revoked_at IS NULL
              AND EXISTS (SELECT 1 FROM ${developers} WHERE developers.id = developer_transfers.developer_id AND developers.owner_user_id = ${userId})
+             AND EXISTS (SELECT 1 FROM ${users} WHERE ${users.id} = ${userId} AND ${users.deletedAt} IS NULL)
       `);
 
       // Zero rows changed is ambiguous by itself (no pending transfer vs.
@@ -889,8 +984,9 @@ export class DevelopersDatabase {
       const claimStmt = toD1Statement(this.db.$client, {
         sql: `UPDATE developer_transfers SET accepted_at = CURRENT_TIMESTAMP, accepted_by = ?
               WHERE token_hash = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > CURRENT_TIMESTAMP
-                AND NOT EXISTS (SELECT 1 FROM developers WHERE owner_user_id = ?)`,
-        params: [userId, tokenHash, userId]
+                AND NOT EXISTS (SELECT 1 FROM developers WHERE owner_user_id = ?)
+                AND EXISTS (SELECT 1 FROM users WHERE id = ? AND deleted_at IS NULL)`,
+        params: [userId, tokenHash, userId, userId]
       });
       const updateDeveloperStmt = toD1Statement(this.db.$client, {
         // url_check_cooldown_until is reset here too — it's keyed by
@@ -1212,6 +1308,10 @@ export class DevelopersDatabase {
             and(
               eq(developers.id, row.id),
               eq(developers.ownerUserId, userId),
+              sql`EXISTS (
+                SELECT 1 FROM ${users}
+                WHERE ${users.id} = ${userId} AND ${users.deletedAt} IS NULL
+              )`,
               or(
                 isNull(developers.urlCheckCooldownUntil),
                 sql`${developers.urlCheckCooldownUntil} < CURRENT_TIMESTAMP`
@@ -1326,6 +1426,10 @@ export class DevelopersDatabase {
           and(
             eq(developers.id, row.id),
             eq(developers.ownerUserId, userId),
+            sql`EXISTS (
+              SELECT 1 FROM ${users}
+              WHERE ${users.id} = ${userId} AND ${users.deletedAt} IS NULL
+            )`,
             ...(writeUrlVerified
               ? [
                   row.url === null
@@ -1449,6 +1553,7 @@ export class DevelopersDatabase {
              SELECT ${id}, ${developerId}, ${claimantId}, ${note ?? null}, ${githubOrgVerified}, ${githubVerificationNote}
              WHERE EXISTS (SELECT 1 FROM ${developers} WHERE id = ${developerId} AND owner_user_id IS NULL)
                AND NOT EXISTS (SELECT 1 FROM ${developers} WHERE owner_user_id = ${claimantId})
+               AND EXISTS (SELECT 1 FROM ${users} WHERE ${users.id} = ${claimantId} AND ${users.deletedAt} IS NULL)
         `);
       } catch (error) {
         if (isPendingClaimConflict(error)) {
@@ -1485,15 +1590,17 @@ export class DevelopersDatabase {
   ): Promise<DatabaseResult<{ id: string }>> {
     let result;
     try {
-      result = await this.db
-        .delete(developerClaims)
-        .where(
-          and(
-            eq(developerClaims.id, claimId),
-            eq(developerClaims.claimantId, claimantId),
-            eq(developerClaims.status, "pending")
-          )
-        );
+      result = await this.db.delete(developerClaims).where(
+        and(
+          eq(developerClaims.id, claimId),
+          eq(developerClaims.claimantId, claimantId),
+          eq(developerClaims.status, "pending"),
+          sql`EXISTS (
+              SELECT 1 FROM ${users}
+              WHERE ${users.id} = ${claimantId} AND ${users.deletedAt} IS NULL
+            )`
+        )
+      );
     } catch (error) {
       return databaseError("cancelClaim", error);
     }
@@ -1536,15 +1643,12 @@ export class DevelopersDatabase {
           claim: developerClaims,
           developerName: developers.name,
           developerType: developers.type,
-          claimantName: externalUsers.name,
-          claimantGithubLogin: externalUsers.githubLogin
+          claimantName: users.name,
+          claimantGithubLogin: users.githubLogin
         })
         .from(developerClaims)
         .innerJoin(developers, eq(developers.id, developerClaims.developerId))
-        .leftJoin(
-          externalUsers,
-          eq(externalUsers.id, developerClaims.claimantId)
-        )
+        .leftJoin(users, eq(users.id, developerClaims.claimantId))
         .where(eq(developerClaims.status, "pending"))
         .orderBy(asc(developerClaims.createdAt));
     } catch (error) {
@@ -1654,8 +1758,12 @@ export class DevelopersDatabase {
                 AND NOT EXISTS (
                   SELECT 1 FROM developers owned
                   WHERE owned.owner_user_id = developer_claims.claimant_id
+                )
+                AND EXISTS (
+                  SELECT 1 FROM users
+                  WHERE users.id = ? AND users.deleted_at IS NULL
                 )`,
-        params: [reviewerId, claimId]
+        params: [reviewerId, claimId, reviewerId]
       });
       const developerStmt = toD1Statement(this.db.$client, {
         sql: `UPDATE developers
@@ -1749,7 +1857,11 @@ export class DevelopersDatabase {
         .where(
           and(
             eq(developerClaims.id, claimId),
-            eq(developerClaims.status, "pending")
+            eq(developerClaims.status, "pending"),
+            sql`EXISTS (
+              SELECT 1 FROM ${users}
+              WHERE ${users.id} = ${reviewerId} AND ${users.deletedAt} IS NULL
+            )`
           )
         );
     } catch (error) {

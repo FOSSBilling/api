@@ -1,3 +1,7 @@
+-- Historical catalogue baseline. The API-owned Extensions migration chain
+-- (src/services/extensions/v2/db/migrations) is the only active D1 migration
+-- source; this file is retained as a readable record of the original v1 shape.
+
 CREATE TABLE IF NOT EXISTS authors (
   id   TEXT PRIMARY KEY NOT NULL,
   type TEXT NOT NULL,

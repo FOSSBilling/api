@@ -6,13 +6,19 @@ Everything is built on [Hono](https://hono.dev), making it lightweight and fast.
 
 ## What it does
 
-The worker exposes two main services:
+The worker exposes three main services:
 
 - **Versions Service** (`/versions/v1`)
   The source of truth for FOSSBilling updates. It fetches release data from GitHub, caches it for performance, and helps instances decide if they need to update.
 
 - **Central Alerts** (`/central-alerts/v1`)
   Allows the project to push critical notifications to all FOSSBilling installations—useful for security hotfixes or major announcements.
+
+- **Extensions** (`/extensions/v1`, `/extensions/v2`)
+  Owns the complete Extensions domain and its `DB_EXTENSIONS` schema, including
+  users, developers, submissions, claims, transfers, history, and catalogue data.
+  The separate Extensions site keeps OIDC/session state but accesses this domain
+  through the generated HTTPS API client; it must not bind or migrate `DB_EXTENSIONS`.
 
 ## Architecture
 
@@ -48,12 +54,25 @@ If you're running this yourself, you'll need a few things set up.
 We use [Cloudflare D1](https://developers.cloudflare.com/d1/) and [KV](https://developers.cloudflare.com/kv/).
 
 - **D1 Database** (`DB_CENTRAL_ALERTS`): Stores the alert messages.
+- **D1 Database** (`DB_EXTENSIONS`): Stores the complete Extensions domain. Apply
+  its migrations only from this repository, from
+  `src/services/extensions/v2/db/migrations`, with
+  `db:migrate:extensions-v2:*`. The Extensions site has no D1 migration source.
+  The `0000` users bootstrap mirrors the complete table created by the former
+  site migration, so it is safe to re-run against the existing split-owned
+  database without replacing rows; `0019` then adds the API-owned tombstone
+  column. Back up the database and inspect `PRAGMA table_info(users)` before
+  adoption, as with any schema ownership change.
+
 - **KV Namespace** (`CACHE_KV`): Caches GitHub API responses so we don't hit rate limits.
 - **KV Namespace** (`AUTH_KV`): Stores the `UPDATE_TOKEN` value for `/versions/v1/update`.
 
 ### Environment Variables
 
 - `GITHUB_TOKEN`: A GitHub Personal Access Token (classic) with public repo read access.
+- `ASSERTION_SIGNING_SECRET`: Shared HMAC secret used to verify the short-lived
+  bearer assertions minted by the Extensions site. Configure the same value
+  in both Workers; it is never sent to clients.
 
 ## Development
 
@@ -69,13 +88,14 @@ npm install
 
    ```env
    GITHUB_TOKEN="your-token"
+   ASSERTION_SIGNING_SECRET="local-shared-secret"
    ```
 
 2. Apply migrations to the local D1 databases:
 
    ```bash
-   npm run migrate:extensions-v2:local
-   npm run migrate:central-alerts:local
+   npm run db:migrate:extensions-v2:local
+   npm run db:migrate:central-alerts:local
    ```
 
 3. (Optional) Store an update token in KV for `/versions/v1/update`:

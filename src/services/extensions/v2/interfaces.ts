@@ -35,17 +35,28 @@ const httpUrl = () =>
     });
 
 // GET /developers/{id} is registered after the static single-segment
-// GET /developers/* routes (claims, unapproved), so a developer whose id
+// GET /developers/* routes (claims, me, unapproved), so a developer whose id
 // literally matched one of those words would always hit the static route
-// instead — its public profile would be permanently unreachable there.
-// Rejecting these ids at creation time (rather than trying to route around
-// the collision) keeps every existing/future developer id resolvable.
-const RESERVED_DEVELOPER_IDS = new Set(["claims", "unapproved"]);
+// instead. Rejecting these ids at creation time keeps new profiles
+// resolvable; existing databases need a one-time release check because route
+// reservations cannot rename a row that is already in production.
+export const RESERVED_DEVELOPER_IDS = new Set(["claims", "me", "unapproved"]);
 
 const developerId = () =>
   lowercaseId("developer").refine((id) => !RESERVED_DEVELOPER_IDS.has(id), {
     message: "This developer id is reserved"
   });
+
+// GET /extensions/mine is a static owner-only route registered before
+// GET /extensions/{id}. Reserve its segment for new submissions so a newly
+// published extension cannot become unreachable. Existing databases must be
+// checked for this id before enabling the route; this schema cannot safely
+// rename production catalogue rows.
+export const RESERVED_EXTENSION_IDS = new Set(["mine"]);
+
+export function isReservedExtensionId(id: string): boolean {
+  return RESERVED_EXTENSION_IDS.has(id.toLowerCase());
+}
 
 export const DeveloperSchema = z
   .object({
@@ -131,6 +142,13 @@ export const SubmissionPayloadSchema = z
   })
   .strict()
   .superRefine((payload, ctx) => {
+    if (isReservedExtensionId(payload.extension.id)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "This extension id is reserved",
+        path: ["extension", "id"]
+      });
+    }
     const size = new TextEncoder().encode(JSON.stringify(payload)).byteLength;
     if (size > 256 * 1024) {
       ctx.addIssue({
@@ -184,8 +202,8 @@ export type DeveloperProfile = z.infer<typeof DeveloperProfileSchema>;
 // DeveloperProfile except contact_email/content_revision (moderator/owner
 // only), the GitHub verification signal (a moderator-review aid, not meant
 // for public consumption), and the owner's identity (only ever an
-// `unclaimed` boolean is public — see src/lib/database.ts in the extensions
-// repo).
+// `unclaimed` boolean is public). The Extensions site consumes this
+// projection through the generated API client.
 export const PublicDeveloperSchema = DeveloperProfileSchema.omit({
   contact_email: true,
   content_revision: true,
@@ -193,21 +211,25 @@ export const PublicDeveloperSchema = DeveloperProfileSchema.omit({
   github_verification_note: true,
   github_verified_at: true,
   github_url_verified: true,
-  unclaimed: true,
   owner_name: true,
   owner_github_login: true
-}).openapi("PublicDeveloper");
+})
+  .extend({ unclaimed: z.boolean() })
+  .openapi("PublicDeveloper");
 
 export type PublicDeveloper = z.infer<typeof PublicDeveloperSchema>;
 
-export function toPublicDeveloper(profile: DeveloperProfile): PublicDeveloper {
+export function toPublicDeveloper(
+  profile: DeveloperProfile & { unclaimed: boolean }
+): PublicDeveloper {
   return {
     id: profile.id,
     type: profile.type,
     name: profile.name,
     URL: profile.URL,
     avatar_url: profile.avatar_url,
-    approved: profile.approved
+    approved: profile.approved,
+    unclaimed: profile.unclaimed
   };
 }
 
@@ -256,6 +278,14 @@ export const ExtensionListQuerySchema = z.object({
       param: { name: "cursor", in: "query" },
       description: "Opaque cursor returned by the previous page"
     })
+});
+
+// The owner-scoped list has the same pagination and type filters as the
+// public catalogue, but its developer is always taken from the authenticated
+// user. Keeping a separate schema prevents OpenAPI from advertising a
+// developer_id filter that this endpoint deliberately ignores.
+export const ExtensionMineListQuerySchema = ExtensionListQuerySchema.omit({
+  developer_id: true
 });
 
 export const ExtensionListResponseSchema = z
@@ -336,6 +366,57 @@ export const ErrorResponseSchema = z
     })
   })
   .openapi("Error");
+
+// All routes behind requireAuth() perform an active-account check after
+// bearer authentication. Keep that response reusable so the generated
+// contract documents the middleware failure consistently on every route.
+export const ActiveAccountRequiredResponse = {
+  content: { "application/json": { schema: ErrorResponseSchema } },
+  description: "The bearer is valid but the account is inactive"
+} as const;
+
+// The site remains responsible for OIDC and sessions. It sends only the
+// provider projection needed by the API-owned domain row; authorization
+// fields such as is_moderator are never accepted from this payload.
+export const UserIdentityInputSchema = z
+  .object({
+    name: z.string().max(200).nullable(),
+    email: z.string().email().max(254).nullable(),
+    email_verified: z.boolean(),
+    picture: z.string().max(2048).nullable(),
+    github_login: z.string().max(200).nullable(),
+    github_orgs: z.array(z.string().max(200)).max(500).nullable(),
+    github_orgs_expires_at: z.string().max(64).nullable()
+  })
+  .strict()
+  .openapi("UserIdentityInput");
+
+export type UserIdentityInput = z.infer<typeof UserIdentityInputSchema>;
+
+export const UserProfileUpdateSchema = z
+  .object({
+    display_name: z.string().max(120).nullable()
+  })
+  .strict()
+  .openapi("UserProfileUpdate");
+
+export const UserSchema = z
+  .object({
+    display_name: z.string().nullable(),
+    is_moderator: z.boolean(),
+    github_linked: z.boolean(),
+    active: z.boolean()
+  })
+  .openapi("User");
+
+export type User = z.infer<typeof UserSchema>;
+
+export const OwnedDeveloperProfileSchema = z
+  .intersection(
+    DeveloperProfileSchema,
+    z.object({ has_pending_transfer: z.boolean() })
+  )
+  .openapi("OwnedDeveloperProfile");
 
 export const IdParamSchema = z.object({
   id: z.string().openapi({

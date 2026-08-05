@@ -1,6 +1,7 @@
 import { createRoute, z } from "@hono/zod-openapi";
 import { statusFromErrorCode } from "./route-errors";
 import {
+  ActiveAccountRequiredResponse,
   DeveloperApprovalSchema,
   DeveloperHistoryEntrySchema,
   DeveloperProfileSchema,
@@ -49,8 +50,8 @@ export function registerModerationRoutes(
         description: "Missing or invalid bearer token"
       },
       403: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Caller is not a moderator"
+        ...ActiveAccountRequiredResponse,
+        description: "The account is inactive or the caller is not a moderator"
       },
       422: {
         content: { "application/json": { schema: ErrorResponseSchema } },
@@ -132,8 +133,8 @@ export function registerModerationRoutes(
         description: "Missing or invalid bearer token"
       },
       403: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Caller is not a moderator"
+        ...ActiveAccountRequiredResponse,
+        description: "The account is inactive or the caller is not a moderator"
       },
       404: {
         content: { "application/json": { schema: ErrorResponseSchema } },
@@ -213,8 +214,8 @@ export function registerModerationRoutes(
         description: "Missing or invalid bearer token"
       },
       403: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Caller is not a moderator"
+        ...ActiveAccountRequiredResponse,
+        description: "The account is inactive or the caller is not a moderator"
       },
       404: {
         content: { "application/json": { schema: ErrorResponseSchema } },
@@ -282,8 +283,8 @@ export function registerModerationRoutes(
         description: "Missing or invalid bearer token"
       },
       403: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Caller is not a moderator"
+        ...ActiveAccountRequiredResponse,
+        description: "The account is inactive or the caller is not a moderator"
       },
       500: {
         content: { "application/json": { schema: ErrorResponseSchema } },
@@ -335,8 +336,8 @@ export function registerModerationRoutes(
         description: "Missing or invalid bearer token"
       },
       403: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Caller is not a moderator"
+        ...ActiveAccountRequiredResponse,
+        description: "The account is inactive or the caller is not a moderator"
       },
       500: {
         content: { "application/json": { schema: ErrorResponseSchema } },
@@ -395,8 +396,8 @@ export function registerModerationRoutes(
         description: "Missing or invalid bearer token"
       },
       403: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Caller is not a moderator"
+        ...ActiveAccountRequiredResponse,
+        description: "The account is inactive or the caller is not a moderator"
       },
       404: {
         content: { "application/json": { schema: ErrorResponseSchema } },
@@ -469,8 +470,8 @@ export function registerModerationRoutes(
         description: "Missing or invalid bearer token"
       },
       403: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Caller is not a moderator"
+        ...ActiveAccountRequiredResponse,
+        description: "The account is inactive or the caller is not a moderator"
       },
       422: {
         content: { "application/json": { schema: ErrorResponseSchema } },

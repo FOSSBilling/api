@@ -32,8 +32,7 @@ export function requireAuth(): MiddlewareHandler {
       const principal = await verifier.verify(token, platform);
       if (principal) {
         c.set("auth", principal);
-        await next();
-        return;
+        return next();
       }
     }
 

@@ -1,10 +1,10 @@
 -- v2: direct (unmoderated) developer-profile writes, with a moderator-set
--- "approved" trust flag. Adds to the v1-owned `authors` table.
+-- "approved" trust flag. Extends the legacy authors table now owned by the API.
 --
 -- SQLite's ALTER TABLE ADD COLUMN rejects non-constant defaults (including
 -- CURRENT_TIMESTAMP), so created_at/updated_at are added with a placeholder
 -- default and backfilled immediately after. New rows always set these
--- explicitly (see authors-database.ts), so the placeholder is never seen
+-- explicitly (see developers-database.ts), so the placeholder is never seen
 -- outside of this migration.
 
 ALTER TABLE authors ADD COLUMN approved_at TEXT;

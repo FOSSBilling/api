@@ -5,6 +5,7 @@ import {
   statusFromOwnershipErrorCode
 } from "./route-errors";
 import {
+  ActiveAccountRequiredResponse,
   ClaimNoteSchema,
   DeveloperClaimSchema,
   DeveloperProfileSchema,
@@ -53,9 +54,9 @@ export function registerOwnershipRoutes(
         description: "No developer with that id"
       },
       403: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
+        ...ActiveAccountRequiredResponse,
         description:
-          "Caller's linked GitHub account doesn't match this developer's GitHub organization or username"
+          "The account is inactive, or the caller's linked GitHub account doesn't match this developer's GitHub organization or username"
       },
       409: {
         content: { "application/json": { schema: ErrorResponseSchema } },
@@ -138,6 +139,7 @@ export function registerOwnershipRoutes(
         content: { "application/json": { schema: ErrorResponseSchema } },
         description: "Missing or invalid bearer token"
       },
+      403: ActiveAccountRequiredResponse,
       404: {
         content: { "application/json": { schema: ErrorResponseSchema } },
         description: "No pending claim with that id owned by the caller"
@@ -195,6 +197,7 @@ export function registerOwnershipRoutes(
         content: { "application/json": { schema: ErrorResponseSchema } },
         description: "Missing or invalid bearer token"
       },
+      403: ActiveAccountRequiredResponse,
       500: {
         content: { "application/json": { schema: ErrorResponseSchema } },
         description: "Database error"
@@ -246,8 +249,8 @@ export function registerOwnershipRoutes(
         description: "Missing or invalid bearer token"
       },
       403: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Caller is not a moderator"
+        ...ActiveAccountRequiredResponse,
+        description: "The account is inactive or the caller is not a moderator"
       },
       500: {
         content: { "application/json": { schema: ErrorResponseSchema } },
@@ -301,8 +304,8 @@ export function registerOwnershipRoutes(
         description: "Missing or invalid bearer token"
       },
       403: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Caller is not a moderator"
+        ...ActiveAccountRequiredResponse,
+        description: "The account is inactive or the caller is not a moderator"
       },
       404: {
         content: { "application/json": { schema: ErrorResponseSchema } },
@@ -375,8 +378,8 @@ export function registerOwnershipRoutes(
         description: "Missing or invalid bearer token"
       },
       403: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Caller is not a moderator"
+        ...ActiveAccountRequiredResponse,
+        description: "The account is inactive or the caller is not a moderator"
       },
       404: {
         content: { "application/json": { schema: ErrorResponseSchema } },
@@ -439,8 +442,9 @@ export function registerOwnershipRoutes(
         description: "Missing or invalid bearer token"
       },
       403: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Caller does not own this profile"
+        ...ActiveAccountRequiredResponse,
+        description:
+          "The account is inactive or the caller does not own this profile"
       },
       404: {
         content: { "application/json": { schema: ErrorResponseSchema } },
@@ -502,8 +506,9 @@ export function registerOwnershipRoutes(
         description: "Missing or invalid bearer token"
       },
       403: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Caller does not own this profile"
+        ...ActiveAccountRequiredResponse,
+        description:
+          "The account is inactive or the caller does not own this profile"
       },
       404: {
         content: { "application/json": { schema: ErrorResponseSchema } },
@@ -566,6 +571,7 @@ export function registerOwnershipRoutes(
         content: { "application/json": { schema: ErrorResponseSchema } },
         description: "Missing or invalid bearer token"
       },
+      403: ActiveAccountRequiredResponse,
       404: {
         content: { "application/json": { schema: ErrorResponseSchema } },
         description: "Transfer link is invalid, already used, or expired"

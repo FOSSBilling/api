@@ -13,5 +13,13 @@ export interface RouteDependencies {
   auth: typeof getAuth;
   platform: typeof getPlatform;
   requireAuth: typeof requireAuth;
+  // Account projection endpoints need to inspect or restore a tombstoned
+  // user. Every other authenticated route uses requireAuth, which also
+  // verifies that the caller still has an active user row.
+  requireAuthAllowInactive: typeof requireAuth;
+  // Identity synchronization is a server-to-server projection update. Keep
+  // it restricted to the signed assertion verifier even if another bearer
+  // verifier (such as API keys) is added later.
+  requireIdentitySync: () => MiddlewareHandler;
   requireModerator: () => MiddlewareHandler;
 }
