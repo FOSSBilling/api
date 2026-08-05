@@ -12,10 +12,10 @@ import { defineConfig } from "vitest/config";
 // config files are ESM) avoids fighting defineConfig's overload typing for
 // an async factory function.
 const extensionsMigrations = await readD1Migrations(
-  path.join(__dirname, "src/services/extensions/v2/db/migrations")
+  path.join(import.meta.dirname, "src/services/extensions/v2/db/migrations")
 );
 const centralAlertsMigrations = await readD1Migrations(
-  path.join(__dirname, "src/services/central-alerts/v1/db/migrations")
+  path.join(import.meta.dirname, "src/services/central-alerts/v1/db/migrations")
 );
 
 export default defineConfig({
