@@ -73,6 +73,21 @@ We use [Cloudflare D1](https://developers.cloudflare.com/d1/) and [KV](https://d
 - `ASSERTION_SIGNING_SECRET`: Shared HMAC secret used to verify the short-lived
   bearer assertions minted by the Extensions site. Configure the same value
   in both Workers; it is never sent to clients.
+- `ASSERTION_SIGNING_SECRET_PREVIOUS`: Optional previous HMAC secret accepted
+  during a signing-key rotation. Remove it after the new secret has been active
+  for at least 65 seconds and all in-flight assertions have expired.
+
+Extensions assertions use HS256 and include the exact issuer
+`fossbilling-extensions`, audience `fossbilling-api/extensions-v2`, purpose
+`user-authentication`, and protocol version `1`. Assertions are valid for at
+most 60 seconds; the previous secret is accepted only as a temporary rotation
+window.
+
+To rotate the shared secret without interrupting requests, first set the API's
+`ASSERTION_SIGNING_SECRET_PREVIOUS` to the current value, then replace the API's
+active `ASSERTION_SIGNING_SECRET`, and finally replace the Extensions site's
+active secret. After at least 65 seconds, verify requests and remove the API
+previous secret.
 
 ## Development
 
@@ -89,6 +104,8 @@ npm install
    ```env
    GITHUB_TOKEN="your-token"
    ASSERTION_SIGNING_SECRET="local-shared-secret"
+   # Optional while rotating the shared assertion secret.
+   # ASSERTION_SIGNING_SECRET_PREVIOUS="previous-local-shared-secret"
    ```
 
 2. Apply migrations to the local D1 databases:
