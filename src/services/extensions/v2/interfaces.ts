@@ -35,17 +35,24 @@ const httpUrl = () =>
     });
 
 // GET /developers/{id} is registered after the static single-segment
-// GET /developers/* routes (claims, unapproved), so a developer whose id
+// GET /developers/* routes (claims, me, unapproved), so a developer whose id
 // literally matched one of those words would always hit the static route
-// instead — its public profile would be permanently unreachable there.
-// Rejecting these ids at creation time (rather than trying to route around
-// the collision) keeps every existing/future developer id resolvable.
+// instead. Rejecting these ids at creation time keeps new profiles
+// resolvable; the deployment checklist also preflights existing data because
+// route reservations cannot rename a row that is already in production.
 export const RESERVED_DEVELOPER_IDS = new Set(["claims", "me", "unapproved"]);
 
 const developerId = () =>
   lowercaseId("developer").refine((id) => !RESERVED_DEVELOPER_IDS.has(id), {
     message: "This developer id is reserved"
   });
+
+// GET /extensions/mine is a static owner-only route registered before
+// GET /extensions/{id}. Reserve its segment for new submissions so a newly
+// published extension cannot become unreachable. Existing databases must be
+// checked for this id before enabling the route (see the README rollout
+// preflight); this schema cannot safely rename production catalogue rows.
+export const RESERVED_EXTENSION_IDS = new Set(["mine"]);
 
 export const DeveloperSchema = z
   .object({
@@ -131,6 +138,13 @@ export const SubmissionPayloadSchema = z
   })
   .strict()
   .superRefine((payload, ctx) => {
+    if (RESERVED_EXTENSION_IDS.has(payload.extension.id)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "This extension id is reserved",
+        path: ["extension", "id"]
+      });
+    }
     const size = new TextEncoder().encode(JSON.stringify(payload)).byteLength;
     if (size > 256 * 1024) {
       ctx.addIssue({
@@ -184,8 +198,8 @@ export type DeveloperProfile = z.infer<typeof DeveloperProfileSchema>;
 // DeveloperProfile except contact_email/content_revision (moderator/owner
 // only), the GitHub verification signal (a moderator-review aid, not meant
 // for public consumption), and the owner's identity (only ever an
-// `unclaimed` boolean is public — see src/lib/database.ts in the extensions
-// repo).
+// `unclaimed` boolean is public). The Extensions site consumes this
+// projection through the generated API client.
 export const PublicDeveloperSchema = DeveloperProfileSchema.omit({
   contact_email: true,
   content_revision: true,

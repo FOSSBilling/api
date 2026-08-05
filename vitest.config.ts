@@ -47,7 +47,11 @@ export default defineConfig({
     // the test file's own module graph rather than a separate setupFiles one.
 
     // Exclude Node.js tests from Cloudflare Workers environment
-    exclude: ["**/node_modules/**", "**/test/lib/adapters/node/**"],
+    exclude: [
+      "**/node_modules/**",
+      "**/test/lib/adapters/node/**",
+      "**/test/services/extensions/v2/migrations.test.ts"
+    ],
 
     // Test timeout configuration
     testTimeout: 30000, // 30 seconds max per test

@@ -3,7 +3,10 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     environment: "node",
-    include: ["test/lib/adapters/node/**/*.test.ts"],
+    include: [
+      "test/lib/adapters/node/**/*.test.ts",
+      "test/services/extensions/v2/migrations.test.ts"
+    ],
     testTimeout: 10000,
 
     // Code coverage configuration

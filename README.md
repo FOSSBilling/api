@@ -63,12 +63,30 @@ We use [Cloudflare D1](https://developers.cloudflare.com/d1/) and [KV](https://d
   database without replacing rows; `0019` then adds the API-owned tombstone
   column. Back up the database and inspect `PRAGMA table_info(users)` before
   adoption, as with any schema ownership change.
+
+  The v2 API reserves the static route segments `mine` for extensions and
+  `me` (along with `claims` and `unapproved`) for developer routes. Before
+  deploying the route changes, run this read-only preflight against the backed
+  up/production database and stop the rollout if either query returns a row:
+
+  ```sql
+  SELECT id FROM extensions WHERE lower(id) = 'mine';
+  SELECT id FROM developers WHERE lower(id) IN ('claims', 'me', 'unapproved');
+  ```
+
+  A returned row needs an explicitly reviewed data migration or an alternate
+  route before deployment; the API deliberately does not rename existing
+  catalogue or developer records as part of an additive migration.
+
 - **KV Namespace** (`CACHE_KV`): Caches GitHub API responses so we don't hit rate limits.
 - **KV Namespace** (`AUTH_KV`): Stores the `UPDATE_TOKEN` value for `/versions/v1/update`.
 
 ### Environment Variables
 
 - `GITHUB_TOKEN`: A GitHub Personal Access Token (classic) with public repo read access.
+- `ASSERTION_SIGNING_SECRET`: Shared HMAC secret used to verify the short-lived
+  bearer assertions minted by the Extensions site. Configure the same value
+  in both Workers; it is never sent to clients.
 
 ## Development
 
@@ -84,6 +102,7 @@ npm install
 
    ```env
    GITHUB_TOKEN="your-token"
+   ASSERTION_SIGNING_SECRET="local-shared-secret"
    ```
 
 2. Apply migrations to the local D1 databases:

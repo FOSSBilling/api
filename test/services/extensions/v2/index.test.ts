@@ -313,6 +313,18 @@ describe("Extensions API v2", () => {
       expect(data.error.code).toBe("VALIDATION_ERROR");
     });
 
+    it("rejects the reserved extension id mine", async () => {
+      const payload = samplePayload({ extensionId: "mine" });
+      const res = await post(
+        "/extensions/v2/submissions",
+        await authHeaders("user-1"),
+        payload
+      );
+
+      expect(res.status).toBe(422);
+      expect(await countSubmissions(db)).toBe(0);
+    });
+
     it("rejects profile fields (avatar_url/contact_email) on a submission's developer", async () => {
       await seedDeveloper("new-developer", "user-1");
       const headers = await authHeaders("user-1");
@@ -1488,7 +1500,7 @@ describe("Extensions API v2", () => {
       expect(await hasDeveloper(db, "acme-org")).toBe(false);
     });
 
-    it.each(["claims", "unapproved"])(
+    it.each(["claims", "me", "unapproved"])(
       "rejects the reserved id %s",
       async (id) => {
         const res = await put(
