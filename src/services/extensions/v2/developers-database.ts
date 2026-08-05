@@ -170,7 +170,8 @@ export class DevelopersDatabase {
   async upsertOwn(
     userId: string,
     developer: Developer,
-    githubToken?: string
+    githubToken?: string,
+    allowCreationAttempt: () => Promise<boolean> = async () => true
   ): Promise<DatabaseResult<DeveloperProfile>> {
     try {
       const [existingOwn] = await this.db
@@ -199,6 +200,22 @@ export class DevelopersDatabase {
             error: {
               message: "Developer id already exists",
               code: "DEVELOPER_ID_TAKEN"
+            }
+          };
+        }
+
+        // This hook sits after both cheap D1 existence checks and directly
+        // before the creation-only GitHub lookup. The Worker supplies the
+        // configured account limiter; keeping it as a callback leaves this
+        // database/service module runtime-agnostic and ensures updates and
+        // already-taken ids never spend creation allowance.
+        if (!(await allowCreationAttempt())) {
+          return {
+            data: null,
+            error: {
+              message:
+                "Too many new profile creation attempts; try again in 60 seconds",
+              code: "PROFILE_CREATION_RATE_LIMITED"
             }
           };
         }
