@@ -914,6 +914,9 @@ describe("Extensions API v2", () => {
       });
       expect(denied.status).toBe(429);
       expect(denied.headers.get("Retry-After")).toBe("60");
+      expect(denied.headers.get("Access-Control-Expose-Headers")).toContain(
+        "Retry-After"
+      );
       expect(await denied.json()).toMatchObject({
         error: { code: "PROFILE_CREATION_RATE_LIMITED" }
       });
