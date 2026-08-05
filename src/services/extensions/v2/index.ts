@@ -2,7 +2,7 @@ import { OpenAPIHono } from "@hono/zod-openapi";
 import { Scalar } from "@scalar/hono-api-reference";
 import { cors } from "hono/cors";
 import { trimTrailingSlash } from "hono/trailing-slash";
-import { MiddlewareHandler } from "hono";
+import { type Context, type MiddlewareHandler } from "hono";
 import { getAuth, requireAuth } from "../../../lib/auth";
 import { getExtensionsDb } from "../../../lib/db";
 import { getPlatform } from "../../../lib/middleware";
@@ -18,56 +18,57 @@ import { RouteDependencies } from "./route-dependencies";
 
 const requireAuthAllowInactive = requireAuth;
 
-function requireActiveAuth(): MiddlewareHandler {
+type AuthenticatedCheck = (c: Context) => Promise<Response | undefined>;
+
+function withAuthenticatedCheck(check: AuthenticatedCheck): MiddlewareHandler {
   const authenticate = requireAuth();
   return async (c, next) => {
     let response: Response | undefined;
     const authenticationResult = await authenticate(c, async () => {
-      const users = new UsersDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
-      const result = await users.isActive(getAuth(c).userId);
-      if (result.error) {
-        response = c.json({ error: result.error }, 500);
-        return;
+      const checkResponse = await check(c);
+      if (checkResponse) {
+        response = checkResponse;
+      } else {
+        await next();
       }
-      if (!result.data) {
-        response = c.json(
-          {
-            error: {
-              message: "Active account required",
-              code: "ACCOUNT_INACTIVE"
-            }
-          },
-          403
-        );
-        return;
-      }
-      await next();
     });
     return response ?? authenticationResult;
   };
 }
 
+function requireActiveAuth(): MiddlewareHandler {
+  return withAuthenticatedCheck(async (c) => {
+    const users = new UsersDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
+    const result = await users.isActive(getAuth(c).userId);
+    if (result.error) return c.json({ error: result.error }, 500);
+    if (!result.data) {
+      return c.json(
+        {
+          error: {
+            message: "Active account required",
+            code: "ACCOUNT_INACTIVE"
+          }
+        },
+        403
+      );
+    }
+  });
+}
+
 function requireIdentitySync(): MiddlewareHandler {
-  const authenticate = requireAuth();
-  return async (c, next) => {
-    let response: Response | undefined;
-    const authenticationResult = await authenticate(c, async () => {
-      if (getAuth(c).scope !== "assertion") {
-        response = c.json(
-          {
-            error: {
-              message: "Identity synchronization requires a trusted assertion",
-              code: "FORBIDDEN"
-            }
-          },
-          403
-        );
-        return;
-      }
-      await next();
-    });
-    return response ?? authenticationResult;
-  };
+  return withAuthenticatedCheck(async (c) => {
+    if (getAuth(c).scope !== "assertion") {
+      return c.json(
+        {
+          error: {
+            message: "Identity synchronization requires a trusted assertion",
+            code: "FORBIDDEN"
+          }
+        },
+        403
+      );
+    }
+  });
 }
 
 const extensionsV2 = new OpenAPIHono<{ Bindings: CloudflareBindings }>({
