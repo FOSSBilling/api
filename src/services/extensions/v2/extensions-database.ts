@@ -1,10 +1,11 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, asc, eq, or, sql } from "drizzle-orm";
 import { DatabaseResult } from "../../../lib/interfaces";
 import { ExtensionsDb } from "../../../lib/db";
 import { extensions, developers } from "./db/schema";
 import { databaseError } from "./errors";
 import {
   Extension,
+  ExtensionListItem,
   License,
   Release,
   Repository,
@@ -39,6 +40,25 @@ const EXTENSION_COLUMNS = {
   developerApprovedAt: developers.approvedAt
 };
 
+const EXTENSION_LIST_COLUMNS = {
+  id: EXTENSION_COLUMNS.id,
+  type: EXTENSION_COLUMNS.type,
+  name: EXTENSION_COLUMNS.name,
+  description: EXTENSION_COLUMNS.description,
+  website: EXTENSION_COLUMNS.website,
+  license: EXTENSION_COLUMNS.license,
+  iconUrl: EXTENSION_COLUMNS.iconUrl,
+  source: EXTENSION_COLUMNS.source,
+  version: EXTENSION_COLUMNS.version,
+  downloadUrl: EXTENSION_COLUMNS.downloadUrl,
+  developerId: EXTENSION_COLUMNS.developerId,
+  developerType: EXTENSION_COLUMNS.developerType,
+  developerName: EXTENSION_COLUMNS.developerName,
+  developerUrl: EXTENSION_COLUMNS.developerUrl,
+  developerAvatarUrl: EXTENSION_COLUMNS.developerAvatarUrl,
+  developerApprovedAt: EXTENSION_COLUMNS.developerApprovedAt
+};
+
 interface ExtensionRow {
   id: string;
   type: string;
@@ -60,9 +80,25 @@ interface ExtensionRow {
   developerApprovedAt: string | null;
 }
 
+type ExtensionListRow = Omit<ExtensionRow, "readme" | "releases">;
+
 export interface ExtensionListFilters {
   type?: string;
   developerId?: string;
+  limit?: number;
+  cursor?: string;
+}
+
+export interface ExtensionListPage {
+  items: ExtensionListItem[];
+  nextCursor: string | null;
+  hasMore: boolean;
+}
+
+interface ExtensionCursor {
+  v: 1;
+  normalizedId: string;
+  id: string;
 }
 
 export class ExtensionsDatabase {
@@ -70,26 +106,61 @@ export class ExtensionsDatabase {
 
   async list(
     filters: ExtensionListFilters = {}
-  ): Promise<DatabaseResult<Extension[]>> {
+  ): Promise<DatabaseResult<ExtensionListPage>> {
+    const limit = filters.limit ?? 50;
     const conditions = [];
     if (filters.type) conditions.push(eq(extensions.type, filters.type));
     if (filters.developerId)
       conditions.push(eq(extensions.authorId, filters.developerId));
 
-    let rows: ExtensionRow[];
+    if (filters.cursor) {
+      const cursor = decodeCursor(filters.cursor);
+      if (!cursor) {
+        return {
+          data: null,
+          error: {
+            message: "Invalid pagination cursor",
+            code: "INVALID_CURSOR"
+          }
+        };
+      }
+      conditions.push(
+        or(
+          sql`LOWER(${extensions.id}) > ${cursor.normalizedId}`,
+          and(
+            sql`LOWER(${extensions.id}) = ${cursor.normalizedId}`,
+            sql`${extensions.id} > ${cursor.id}`
+          )
+        )!
+      );
+    }
+
+    let rows: ExtensionListRow[];
     try {
       const query = this.db
-        .select(EXTENSION_COLUMNS)
+        .select(EXTENSION_LIST_COLUMNS)
         .from(extensions)
         .leftJoin(developers, eq(extensions.authorId, developers.id));
-      rows = conditions.length
-        ? await query.where(and(...conditions))
-        : await query;
+      rows = await query
+        .where(conditions.length ? and(...conditions) : undefined)
+        .orderBy(asc(sql`LOWER(${extensions.id})`), asc(extensions.id))
+        .limit(limit + 1);
     } catch (error) {
       return databaseError("list", error);
     }
 
-    return { data: rows.map(parseExtensionRow), error: null };
+    const hasMore = rows.length > limit;
+    const pageRows = rows.slice(0, limit);
+    const items = pageRows.map(parseExtensionListRow);
+    const last = pageRows.at(-1);
+    return {
+      data: {
+        items,
+        hasMore,
+        nextCursor: hasMore && last ? encodeCursor(last.id) : null
+      },
+      error: null
+    };
   }
 
   async getById(id: string): Promise<DatabaseResult<Extension>> {
@@ -119,6 +190,40 @@ export class ExtensionsDatabase {
   }
 }
 
+function encodeCursor(id: string): string {
+  const cursor: ExtensionCursor = { v: 1, normalizedId: id.toLowerCase(), id };
+  const bytes = new TextEncoder().encode(JSON.stringify(cursor));
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+function decodeCursor(value: string): ExtensionCursor | null {
+  try {
+    const binary = atob(value);
+    const bytes = Uint8Array.from(binary, (character) =>
+      character.charCodeAt(0)
+    );
+    const parsed: unknown = JSON.parse(
+      new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes)
+    );
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      (parsed as Partial<ExtensionCursor>).v !== 1 ||
+      typeof (parsed as Partial<ExtensionCursor>).id !== "string" ||
+      typeof (parsed as Partial<ExtensionCursor>).normalizedId !== "string" ||
+      (parsed as ExtensionCursor).normalizedId !==
+        (parsed as ExtensionCursor).id.toLowerCase()
+    ) {
+      return null;
+    }
+    return parsed as ExtensionCursor;
+  } catch {
+    return null;
+  }
+}
+
 function parseExtensionRow(row: ExtensionRow): Extension {
   const releases = parseJSON<Release[]>(row.releases, []);
   return {
@@ -131,6 +236,29 @@ function parseExtensionRow(row: ExtensionRow): Extension {
     license: parseJSON<License>(row.license, { name: "" }),
     icon_url: row.iconUrl ?? undefined,
     readme: row.readme,
+    source: parseJSON<Repository>(row.source, { type: "custom", repo: "" }),
+    version: row.version,
+    download_url: row.downloadUrl,
+    developer: {
+      id: row.developerId,
+      type: (row.developerType as "user" | "organization") ?? "user",
+      name: row.developerName ?? "",
+      URL: row.developerUrl ?? undefined,
+      avatar_url: row.developerAvatarUrl ?? undefined,
+      approved: row.developerApprovedAt !== null
+    }
+  };
+}
+
+function parseExtensionListRow(row: ExtensionListRow): ExtensionListItem {
+  return {
+    id: row.id,
+    type: row.type as ExtensionListItem["type"],
+    name: row.name,
+    description: row.description,
+    website: row.website,
+    license: parseJSON<License>(row.license, { name: "" }),
+    icon_url: row.iconUrl ?? undefined,
     source: parseJSON<Repository>(row.source, { type: "custom", repo: "" }),
     version: row.version,
     download_url: row.downloadUrl,

@@ -99,3 +99,11 @@ We use Vitest for testing. The suite includes unit tests for the endpoints and i
 ```bash
 npm run test
 ```
+
+### Extensions v2 list pagination
+
+`GET /extensions/v2/extensions` returns bounded pages of lightweight catalogue
+items. List items intentionally omit `readme` and `releases`; retrieve the full
+object from `GET /extensions/v2/extensions/{id}` for detail views. Follow
+`pagination.next_cursor` by passing it unchanged as `cursor`, and treat cursors
+as opaque. The default page size is 50 and `limit` may be set from 1 through 100.

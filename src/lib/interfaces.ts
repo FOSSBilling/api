@@ -3,10 +3,8 @@ export interface DatabaseError {
   code?: string;
 }
 
-export interface DatabaseResult<T> {
-  data: T | null;
-  error: DatabaseError | null;
-}
+export type DatabaseResult<T> =
+  { data: T; error: null } | { data: null; error: DatabaseError };
 
 export interface CacheOptions {
   expirationTtl?: number;

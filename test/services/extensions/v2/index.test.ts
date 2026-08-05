@@ -562,6 +562,17 @@ describe("Extensions API v2", () => {
       expect(res.status).toBe(401);
     });
 
+    it("identifies invalid cursors", async () => {
+      const res = await get(
+        "/extensions/v2/submissions/mine?cursor=not-a-cursor",
+        await authHeaders("user-1")
+      );
+      expect(res.status).toBe(422);
+      await expect(res.json()).resolves.toMatchObject({
+        error: { code: "INVALID_CURSOR" }
+      });
+    });
+
     it("paginates deterministically with an opaque cursor", async () => {
       await seedDeveloper("new-developer", "user-1");
       const headers = await authHeaders("user-1");
@@ -611,6 +622,18 @@ describe("Extensions API v2", () => {
         await authHeaders("user-1")
       );
       expect(res.status).toBe(403);
+    });
+
+    it("identifies invalid cursors", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      const res = await get(
+        "/extensions/v2/submissions/queue?cursor=not-a-cursor",
+        await authHeaders("mod-1")
+      );
+      expect(res.status).toBe(422);
+      await expect(res.json()).resolves.toMatchObject({
+        error: { code: "INVALID_CURSOR" }
+      });
     });
 
     it("returns pending submissions for a moderator", async () => {
@@ -3194,6 +3217,52 @@ describe("Extensions API v2", () => {
       expect(res.status).toBe(409);
     });
 
+    it("rolls back claim approval when a later ownership statement fails", async () => {
+      await seedUnownedDeveloper("legacy-developer");
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+
+      const claim1 = await post(
+        "/extensions/v2/developers/legacy-developer/claim",
+        await authHeaders("user-1"),
+        {}
+      );
+      const claim1Id = ((await claim1.json()) as { result: { id: string } })
+        .result.id;
+      const claim2 = await post(
+        "/extensions/v2/developers/legacy-developer/claim",
+        await authHeaders("user-2"),
+        {}
+      );
+      const claim2Id = ((await claim2.json()) as { result: { id: string } })
+        .result.id;
+      const before = await getDeveloper(db, "legacy-developer");
+
+      env.DB_EXTENSIONS = wrapD1WithHook(db, (sql) => {
+        if (sql.includes("SET owner_user_id = ?")) {
+          // Replace this item inside the real D1 batch, rather than throwing
+          // from the interceptor before the batch is submitted. The claim
+          // transition therefore executes first and this NOT NULL violation
+          // proves D1 rolls it back.
+          return db.prepare(
+            "UPDATE developers SET name = NULL WHERE id = 'legacy-developer'"
+          );
+        }
+      });
+
+      const approve = await post(
+        `/extensions/v2/developers/claims/${claim1Id}/approve`,
+        await authHeaders("mod-1")
+      );
+      expect(approve.status).toBe(500);
+
+      const after = await getDeveloper(db, "legacy-developer");
+      expect(after?.owner_user_id).toBeNull();
+      expect(after?.ownership_epoch).toBe(before?.ownership_epoch);
+      expect(after?.content_revision).toBe(before?.content_revision);
+      expect((await getDeveloperClaim(db, claim1Id))?.status).toBe("pending");
+      expect((await getDeveloperClaim(db, claim2Id))?.status).toBe("pending");
+    });
+
     it("approving a claim transfers ownership and auto-rejects competing claims", async () => {
       await seedUnownedDeveloper("legacy-developer");
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
@@ -3232,6 +3301,41 @@ describe("Extensions API v2", () => {
       expect(rejectedClaim?.status).toBe("rejected");
       expect(rejectedClaim?.review_note).toBe(
         "Another claim on this profile was approved"
+      );
+    });
+
+    it("allows only one competing claim approval to win a race", async () => {
+      await seedUnownedDeveloper("legacy-developer");
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+
+      const first = await post(
+        "/extensions/v2/developers/legacy-developer/claim",
+        await authHeaders("user-1"),
+        {}
+      );
+      const firstId = ((await first.json()) as { result: { id: string } })
+        .result.id;
+      const second = await post(
+        "/extensions/v2/developers/legacy-developer/claim",
+        await authHeaders("user-2"),
+        {}
+      );
+      const secondId = ((await second.json()) as { result: { id: string } })
+        .result.id;
+      const headers = await authHeaders("mod-1");
+
+      const approvals = await Promise.all([
+        post(`/extensions/v2/developers/claims/${firstId}/approve`, headers),
+        post(`/extensions/v2/developers/claims/${secondId}/approve`, headers)
+      ]);
+
+      expect(approvals.map(({ status }) => status).sort()).toEqual([200, 409]);
+      const claims = await listDeveloperClaims(db);
+      expect(claims.filter(({ status }) => status === "approved")).toHaveLength(
+        1
+      );
+      expect(claims.filter(({ status }) => status === "rejected")).toHaveLength(
+        1
       );
     });
 
@@ -3547,6 +3651,33 @@ describe("Extensions API v2", () => {
   });
 
   describe("GET /extensions", () => {
+    async function seedCatalogue(ids: string[]): Promise<void> {
+      await insertDeveloper(db, {
+        id: "catalogue-developer",
+        type: "user",
+        name: "Catalogue Developer",
+        url: null,
+        owner_user_id: null
+      });
+      for (const id of ids) {
+        await insertExtension(db, {
+          id,
+          type: "mod",
+          author_id: "catalogue-developer",
+          name: id,
+          description: `Description for ${id}`,
+          releases: '[{"tag":"1.0.0"}]',
+          website: "https://example.com",
+          license: '{"name":"MIT"}',
+          icon_url: null,
+          readme: `README for ${id}`,
+          source: '{"type":"github","repo":"example/catalogue"}',
+          version: "1.0.0",
+          download_url: "https://example.com/download.zip"
+        });
+      }
+    }
+
     it("lists published extensions with the developer embedded", async () => {
       await seedOwnedExtension();
 
@@ -3558,6 +3689,8 @@ describe("Extensions API v2", () => {
       expect(body.result).toHaveLength(1);
       expect(body.result[0].id).toBe("existing-ext");
       expect(body.result[0].developer.id).toBe("owner-developer");
+      expect(body.result[0]).not.toHaveProperty("readme");
+      expect(body.result[0]).not.toHaveProperty("releases");
     });
 
     it("filters by type", async () => {
@@ -3598,6 +3731,85 @@ describe("Extensions API v2", () => {
       };
       expect(nonMatchingBody.result).toHaveLength(0);
     });
+
+    it("returns deterministic first, middle, and final pages", async () => {
+      await seedCatalogue(["charlie", "Alpha", "bravo", "delta", "echo"]);
+
+      const first = await get("/extensions/v2/extensions?limit=2", {});
+      const firstBody = (await first.json()) as {
+        result: Array<{ id: string }>;
+        pagination: { next_cursor: string | null; has_more: boolean };
+      };
+      expect(firstBody.result.map(({ id }) => id)).toEqual(["Alpha", "bravo"]);
+      expect(firstBody.pagination.has_more).toBe(true);
+
+      const middle = await get(
+        `/extensions/v2/extensions?limit=2&cursor=${encodeURIComponent(firstBody.pagination.next_cursor!)}`,
+        {}
+      );
+      const middleBody = (await middle.json()) as typeof firstBody;
+      expect(middleBody.result.map(({ id }) => id)).toEqual([
+        "charlie",
+        "delta"
+      ]);
+      expect(middleBody.pagination.has_more).toBe(true);
+
+      const final = await get(
+        `/extensions/v2/extensions?limit=2&cursor=${encodeURIComponent(middleBody.pagination.next_cursor!)}`,
+        {}
+      );
+      const finalBody = (await final.json()) as typeof firstBody;
+      expect(finalBody.result.map(({ id }) => id)).toEqual(["echo"]);
+      expect(finalBody.pagination).toEqual({
+        next_cursor: null,
+        has_more: false
+      });
+    });
+
+    it("rejects invalid cursors", async () => {
+      const res = await get(
+        "/extensions/v2/extensions?cursor=not-a-cursor",
+        {}
+      );
+      expect(res.status).toBe(422);
+      expect(await res.json()).toMatchObject({
+        error: { code: "INVALID_CURSOR" }
+      });
+
+      const blank = await get("/extensions/v2/extensions?cursor=", {});
+      expect(blank.status).toBe(422);
+    });
+
+    it("supports UTF-8 extension ids in cursors", async () => {
+      await seedCatalogue(["alpha", "zulu", "éclair", "😀"]);
+
+      const first = await get("/extensions/v2/extensions?limit=3", {});
+      const firstBody = (await first.json()) as {
+        pagination: { next_cursor: string | null };
+      };
+      expect(first.status).toBe(200);
+      expect(firstBody.pagination.next_cursor).not.toBeNull();
+
+      const second = await get(
+        `/extensions/v2/extensions?limit=3&cursor=${encodeURIComponent(firstBody.pagination.next_cursor!)}`,
+        {}
+      );
+      expect(second.status).toBe(200);
+      expect(await second.json()).toMatchObject({
+        result: [{ id: "😀" }],
+        pagination: { next_cursor: null, has_more: false }
+      });
+    });
+
+    it("accepts the maximum limit and rejects values above it", async () => {
+      await seedCatalogue(["one"]);
+      expect(
+        (await get("/extensions/v2/extensions?limit=100", {})).status
+      ).toBe(200);
+      expect(
+        (await get("/extensions/v2/extensions?limit=101", {})).status
+      ).toBe(422);
+    });
   });
 
   describe("GET /extensions/{id}", () => {
@@ -3612,6 +3824,13 @@ describe("Extensions API v2", () => {
       expect(body.result.id).toBe("existing-ext");
       expect(body.result.developer.name).toBe("Owner");
       expect(body.result.developer.approved).toBe(false);
+      expect(body.result).toMatchObject({
+        readme: "r",
+        releases: [],
+        source: { type: "github", repo: "example/existing" },
+        version: "1.0.0",
+        download_url: "https://e.com/d.zip"
+      });
     });
 
     it("404s for an unknown extension", async () => {

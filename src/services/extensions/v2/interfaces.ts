@@ -145,7 +145,7 @@ export type SubmissionPayload = z.infer<typeof SubmissionPayloadSchema>;
 
 export const DeveloperProfileSchema = DeveloperSchema.extend({
   approved: z.boolean(),
-  content_revision: z.number().int().positive(),
+  content_revision: z.int().positive(),
   // Server-computed — see DevelopersDatabase.verifyGithubOwnership() (at
   // claim/creation time) and reverifyOwn() (opportunistic re-check on
   // login, or the owner's own "Re-verify" action). Never part of the
@@ -154,7 +154,7 @@ export const DeveloperProfileSchema = DeveloperSchema.extend({
   github_verification_note: z.string().optional(),
   // Set whenever github_org_verified is last (re-)computed to a definitive
   // true/false — see reverifyOwn(). Absent/stale on an inconclusive check.
-  github_verified_at: z.string().nullable().optional(),
+  github_verified_at: z.string().nullish(),
   // Whether Publisher URL matches GitHub's own on-file website for this
   // org/user — see verifyGithubOwnership()'s urlMatchesGithubBlog() call.
   // Only ever true or absent (never false): GitHub's website field is
@@ -174,8 +174,8 @@ export const DeveloperProfileSchema = DeveloperSchema.extend({
   // Owner identity is never exposed publicly — see PublicDeveloperSchema
   // below and the README's note on not leaking owner identity.
   unclaimed: z.boolean().optional(),
-  owner_name: z.string().nullable().optional(),
-  owner_github_login: z.string().nullable().optional()
+  owner_name: z.string().nullish(),
+  owner_github_login: z.string().nullish()
 }).openapi("DeveloperProfile");
 
 export type DeveloperProfile = z.infer<typeof DeveloperProfileSchema>;
@@ -217,6 +217,16 @@ export const ExtensionSchema = ExtensionPayloadSchema.extend({
 
 export type Extension = z.infer<typeof ExtensionSchema>;
 
+// Catalogue cards do not need the potentially large README or every historic
+// release. Consumers can fetch those fields from GET /extensions/{id} when a
+// visitor opens an extension's detail page.
+export const ExtensionListItemSchema = ExtensionSchema.omit({
+  readme: true,
+  releases: true
+}).openapi("ExtensionListItem");
+
+export type ExtensionListItem = z.infer<typeof ExtensionListItemSchema>;
+
 export const ExtensionListQuerySchema = z.object({
   type: z
     .enum(EXTENSION_TYPES)
@@ -229,8 +239,34 @@ export const ExtensionListQuerySchema = z.object({
     .optional()
     .openapi({
       param: { name: "developer_id", in: "query" }
+    }),
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(100)
+    .default(50)
+    .openapi({ param: { name: "limit", in: "query" } }),
+  cursor: z
+    .string()
+    .min(1)
+    .max(1000)
+    .optional()
+    .openapi({
+      param: { name: "cursor", in: "query" },
+      description: "Opaque cursor returned by the previous page"
     })
 });
+
+export const ExtensionListResponseSchema = z
+  .object({
+    result: z.array(ExtensionListItemSchema),
+    pagination: z.object({
+      next_cursor: z.string().nullable(),
+      has_more: z.boolean()
+    })
+  })
+  .openapi("ExtensionListResponse");
 
 export const DeveloperHistoryEntrySchema = z
   .object({
@@ -290,7 +326,13 @@ export const ErrorResponseSchema = z
     error: z.object({
       message: z.string(),
       code: z.string(),
-      details: z.array(z.unknown()).optional()
+      details: z
+        .array(
+          z.unknown().openapi({
+            type: ["string", "number", "boolean", "object", "array", "null"]
+          })
+        )
+        .optional()
     })
   })
   .openapi("Error");
