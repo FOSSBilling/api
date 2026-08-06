@@ -205,10 +205,7 @@ export class DeveloperClaimsDatabase {
         // .insert().values().
         // ON CONFLICT DO NOTHING turns a lost race against the pending-claim
         // partial unique index into changes = 0, which the ineligibility
-        // diagnosis below already has to explain. Without it the driver threw
-        // and the only way to recognise the failure was to regex its message
-        // text for the index name - a coupling nothing but a comment held to
-        // db/schema.ts.
+        // diagnosis below already has to explain.
         result = await this.db.run(sql`
           INSERT INTO ${developerClaims} (id, developer_id, claimant_id, note, github_org_verified, github_verification_note)
              SELECT ${id}, ${developerId}, ${claimantId}, ${note ?? null}, ${githubOrgVerified}, ${githubVerificationNote}

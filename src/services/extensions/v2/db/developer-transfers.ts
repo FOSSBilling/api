@@ -26,11 +26,10 @@ function toSqliteDatetime(date: Date): string {
   return date.toISOString().slice(0, 19).replace("T", " ");
 }
 
-// The developer this token has just been accepted for. Written once because
-// every statement in the acceptTransfer batch has to agree on it - a copy that
-// drifted would silently target a different profile than the one the batch
-// just transferred. Takes the token hash and accepting user as its two
-// parameters, in that order.
+// The developer this token has just been accepted for. Every statement in the
+// acceptTransfer batch has to agree on it - a copy that drifted would target a
+// different profile than the one the batch just transferred. Takes the token
+// hash and accepting user as its two parameters, in that order.
 const CLAIMED_DEVELOPER = `SELECT developer_id FROM developer_transfers
                 WHERE token_hash = ? AND accepted_by = ? AND accepted_at IS NOT NULL`;
 

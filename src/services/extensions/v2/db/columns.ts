@@ -1,8 +1,7 @@
 // SQLite has no boolean type, so the nullable flag columns in db/schema.ts are
-// integers where NULL means "not determined yet" rather than false. Both
-// developer and claim rows expose that as an optional boolean, and the two
-// must agree - github_org_verified in particular is a moderation signal where
-// "unknown" and "no" mean different things.
+// integers where NULL means "not determined yet" rather than false. Preserving
+// that distinction matters for github_org_verified, where "unknown" and "no"
+// lead to different moderation outcomes.
 export function optionalBool(
   value: number | null | undefined
 ): boolean | undefined {

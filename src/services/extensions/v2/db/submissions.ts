@@ -214,7 +214,11 @@ export class SubmissionsDatabase {
     }
 
     if (!result.meta?.changes) {
-      return { data: null, error: await this.createBlockedError(input) };
+      try {
+        return { data: null, error: await this.createBlockedError(input) };
+      } catch (error) {
+        return databaseError("create", error);
+      }
     }
 
     return { data: { id }, error: null };
@@ -224,32 +228,25 @@ export class SubmissionsDatabase {
   // the caller or ON CONFLICT DO NOTHING swallowed a collision with the
   // pending-target unique index. Only the second case has a specific message,
   // so look for the row that would have caused it; anything else falls back to
-  // the combined guard explanation. Replaces regex-matching the driver's
-  // "UNIQUE constraint failed" text, which silently coupled this branch to the
-  // index name in db/schema.ts.
+  // the combined guard explanation.
   private async createBlockedError(
     input: CreateInput
   ): Promise<{ message: string; code: string }> {
     const targetKey = input.payload.extension.id.toLowerCase();
-    try {
-      const [pending] = await this.db
-        .select({ one: sql`1` })
-        .from(extensionSubmissions)
-        .where(
-          and(
-            eq(extensionSubmissions.targetKey, targetKey),
-            eq(extensionSubmissions.status, "pending")
-          )
-        );
-      if (pending) {
-        return {
-          message: "A submission for this extension is already pending",
-          code: "CONFLICT"
-        };
-      }
-    } catch {
-      // Fall through to the generic explanation - this path is only ever
-      // refining an error message that is already being returned.
+    const [pending] = await this.db
+      .select({ one: sql`1` })
+      .from(extensionSubmissions)
+      .where(
+        and(
+          eq(extensionSubmissions.targetKey, targetKey),
+          eq(extensionSubmissions.status, "pending")
+        )
+      );
+    if (pending) {
+      return {
+        message: "A submission for this extension is already pending",
+        code: "CONFLICT"
+      };
     }
 
     return {

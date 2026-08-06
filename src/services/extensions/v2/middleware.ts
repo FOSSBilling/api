@@ -55,12 +55,10 @@ export function requireIdentitySync(): MiddlewareHandler {
   });
 }
 
-// Moderator routes list this alone, not stacked behind requireActiveAuth():
-// it authenticates through the same combinator and answers both the active
-// and the moderator question from one row, so the route pays one user read
-// instead of two. The ACCOUNT_INACTIVE / FORBIDDEN split the stacked form
-// produced is preserved here deliberately - a deactivated moderator still
-// gets ACCOUNT_INACTIVE, not FORBIDDEN.
+// Moderator routes list this alone, not behind requireActiveAuth(): it
+// authenticates through the same combinator and answers both the active and
+// the moderator question from one row. The two 403s are distinct on purpose -
+// a deactivated moderator gets ACCOUNT_INACTIVE, not FORBIDDEN.
 export function requireModerator(): MiddlewareHandler {
   return withAuthenticatedCheck(async (c) => {
     const users = new UsersDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));

@@ -526,15 +526,12 @@ export class DeveloperProfilesDatabase {
       // outer statement's own table name, which the query builder can't
       // express, and this batch needs the raw-D1 escape hatch regardless
       // (see upsertOwn's historyStmt comment).
-      // The eligibility predicate, written once so the "same guard on all
-      // three statements" property the comment above promises is structural
-      // rather than something a reviewer has to diff by eye. Parameterised by
-      // the developers-table reference because the two child-table deletes
-      // reach it through a correlated EXISTS, while the developers delete
-      // applies it directly to the row being removed - wrapping that one in
-      // EXISTS (SELECT 1 FROM developers ...) would let the inner table
-      // shadow the outer and pass whenever *any* profile were deletable.
-      // Parameters, in order: owner user id, then active user id.
+      // Parameterised by the developers-table reference: the two child-table
+      // deletes reach the predicate through a correlated EXISTS, while the
+      // developers delete applies it directly to the row being removed -
+      // wrapping that one in EXISTS (SELECT 1 FROM developers ...) would let
+      // the inner table shadow the outer and pass whenever *any* profile were
+      // deletable. Parameters, in order: owner user id, then active user id.
       const deletable = (dev: string) => `${dev}.owner_user_id = ?
                     AND NOT EXISTS (SELECT 1 FROM extensions WHERE extensions.author_id = ${dev}.id)
                     AND NOT EXISTS (

@@ -14,8 +14,7 @@ export type CentralAlertsDb = ReturnType<
 // db.query.*, which this codebase never uses, but dropping the schema would
 // change the exported types; caching per binding keeps them identical and
 // builds the config once per isolate. The wrapper is stateless, so sharing one
-// instance across requests is safe, and tests that swap in a wrapped D1 (see
-// test/services/extensions/v2/db-interceptor.ts) get their own entry.
+// instance across requests is safe.
 const extensionsDbs = new WeakMap<D1Database, ExtensionsDb>();
 const centralAlertsDbs = new WeakMap<D1Database, CentralAlertsDb>();
 
