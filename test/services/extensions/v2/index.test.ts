@@ -13,7 +13,7 @@ import {
 } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 
-// Mocked so DevelopersDatabase.claim()'s GitHub entity-existence check never
+// Mocked so DeveloperClaimsDatabase.claim()'s GitHub entity-existence check never
 // makes a real network call. Defaults to "not found" (matching classifyGitHubError's
 // NotFoundError check in github-verification.ts), which makes claim() fall
 // back to today's unverified/manual-review path — the same behavior these

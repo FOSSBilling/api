@@ -13,7 +13,7 @@ import {
   ReviewNoteRequiredSchema,
   SubmissionSchema
 } from "./interfaces";
-import { DevelopersDatabase } from "./developers-database";
+import { DeveloperProfilesDatabase } from "./developer-profiles-database";
 import { SubmissionsDatabase } from "./submissions-database";
 import { ExtensionsV2App, RouteDependencies } from "./route-dependencies";
 
@@ -294,7 +294,7 @@ export function registerModerationRoutes(
   });
 
   app.openapi(allDevelopersRoute, async (c) => {
-    const db = new DevelopersDatabase(
+    const db = new DeveloperProfilesDatabase(
       dependencies.database(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.listAll();
@@ -347,7 +347,7 @@ export function registerModerationRoutes(
   });
 
   app.openapi(unapprovedDevelopersRoute, async (c) => {
-    const db = new DevelopersDatabase(
+    const db = new DeveloperProfilesDatabase(
       dependencies.database(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.listUnapproved();
@@ -422,7 +422,7 @@ export function registerModerationRoutes(
     const auth = dependencies.auth(c);
     const { id } = c.req.valid("param");
     const { expected_revision } = c.req.valid("json");
-    const db = new DevelopersDatabase(
+    const db = new DeveloperProfilesDatabase(
       dependencies.database(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.approve(
@@ -486,7 +486,7 @@ export function registerModerationRoutes(
 
   app.openapi(developerHistoryRoute, async (c) => {
     const { id } = c.req.valid("param");
-    const db = new DevelopersDatabase(
+    const db = new DeveloperProfilesDatabase(
       dependencies.database(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.listHistory(id);

@@ -102,7 +102,7 @@ export const developers = sqliteTable(
     githubOrgVerified: integer("github_org_verified"),
     githubVerificationNote: text("github_verification_note"),
     // Set whenever githubOrgVerified is (re-)computed to a definitive 0/1 —
-    // see DevelopersDatabase.reverifyOwn(). Left null/stale on an
+    // see DeveloperProfilesDatabase.reverifyOwn(). Left null/stale on an
     // inconclusive check (no linked GitHub identity), same as
     // githubOrgVerified itself.
     githubVerifiedAt: text("github_verified_at"),

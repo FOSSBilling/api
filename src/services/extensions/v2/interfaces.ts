@@ -164,7 +164,7 @@ export type SubmissionPayload = z.infer<typeof SubmissionPayloadSchema>;
 export const DeveloperProfileSchema = DeveloperSchema.extend({
   approved: z.boolean(),
   content_revision: z.int().positive(),
-  // Server-computed — see DevelopersDatabase.verifyGithubOwnership() (at
+  // Server-computed — see verifyGithubOwnership() (at
   // claim/creation time) and reverifyOwn() (opportunistic re-check on
   // login, or the owner's own "Re-verify" action). Never part of the
   // client-supplied DeveloperSchema.
@@ -183,7 +183,7 @@ export const DeveloperProfileSchema = DeveloperSchema.extend({
   // GitHub-API-free by design).
   github_url_verified: z.boolean().optional(),
   // Only populated by the moderator listAll/listUnapproved queries (see
-  // DevelopersDatabase.listAll/listUnapproved) — other DeveloperProfile
+  // DeveloperProfilesDatabase.listAll/listUnapproved) — other DeveloperProfile
   // producers (getById, create/update/claim/transfer results) don't join
   // for it, so it's absent rather than null there. `unclaimed` is the
   // authoritative "has an owner" signal (owner_user_id IS NULL) — don't
@@ -486,7 +486,7 @@ export const ClaimNoteSchema = z
   .openapi("ClaimNote");
 
 // check_url — opt-in because it costs an extra GitHub API call (see
-// DevelopersDatabase.reverifyOwn()); only the owner's own manual "Re-verify"
+// DeveloperProfilesDatabase.reverifyOwn()); only the owner's own manual "Re-verify"
 // button sets this, never the opportunistic per-login re-check. Not
 // z.coerce.boolean(): that coerces the non-empty string "false" to true.
 export const ReverifyQuerySchema = z.object({

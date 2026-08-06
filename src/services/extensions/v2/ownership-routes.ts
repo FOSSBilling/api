@@ -16,7 +16,8 @@ import {
   ReviewNoteRequiredSchema,
   TransferAcceptanceSchema
 } from "./interfaces";
-import { DevelopersDatabase } from "./developers-database";
+import { DeveloperClaimsDatabase } from "./developer-claims-database";
+import { DeveloperTransfersDatabase } from "./developer-transfers-database";
 import { ExtensionsV2App, RouteDependencies } from "./route-dependencies";
 
 export function registerOwnershipRoutes(
@@ -88,7 +89,7 @@ export function registerOwnershipRoutes(
     const { id } = c.req.valid("param");
     const { note } = c.req.valid("json");
     const platform = dependencies.platform(c);
-    const db = new DevelopersDatabase(
+    const db = new DeveloperClaimsDatabase(
       dependencies.database(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.claim(
@@ -158,7 +159,7 @@ export function registerOwnershipRoutes(
   app.openapi(cancelClaimRoute, async (c) => {
     const auth = dependencies.auth(c);
     const { id } = c.req.valid("param");
-    const db = new DevelopersDatabase(
+    const db = new DeveloperClaimsDatabase(
       dependencies.database(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.cancelClaim(id, auth.userId);
@@ -207,7 +208,7 @@ export function registerOwnershipRoutes(
 
   app.openapi(myClaimsRoute, async (c) => {
     const auth = dependencies.auth(c);
-    const db = new DevelopersDatabase(
+    const db = new DeveloperClaimsDatabase(
       dependencies.database(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.listMyClaims(auth.userId);
@@ -260,7 +261,7 @@ export function registerOwnershipRoutes(
   });
 
   app.openapi(pendingClaimsRoute, async (c) => {
-    const db = new DevelopersDatabase(
+    const db = new DeveloperClaimsDatabase(
       dependencies.database(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.listPendingClaims();
@@ -330,7 +331,7 @@ export function registerOwnershipRoutes(
   app.openapi(approveClaimRoute, async (c) => {
     const auth = dependencies.auth(c);
     const { id } = c.req.valid("param");
-    const db = new DevelopersDatabase(
+    const db = new DeveloperClaimsDatabase(
       dependencies.database(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.approveClaim(id, auth.userId);
@@ -400,7 +401,7 @@ export function registerOwnershipRoutes(
     const auth = dependencies.auth(c);
     const { id } = c.req.valid("param");
     const { review_note } = c.req.valid("json");
-    const db = new DevelopersDatabase(
+    const db = new DeveloperClaimsDatabase(
       dependencies.database(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.rejectClaim(id, auth.userId, review_note);
@@ -464,7 +465,7 @@ export function registerOwnershipRoutes(
   app.openapi(initiateTransferRoute, async (c) => {
     const auth = dependencies.auth(c);
     const { id } = c.req.valid("param");
-    const db = new DevelopersDatabase(
+    const db = new DeveloperTransfersDatabase(
       dependencies.database(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.initiateTransfer(id, auth.userId);
@@ -528,7 +529,7 @@ export function registerOwnershipRoutes(
   app.openapi(revokeTransferRoute, async (c) => {
     const auth = dependencies.auth(c);
     const { id } = c.req.valid("param");
-    const db = new DevelopersDatabase(
+    const db = new DeveloperTransfersDatabase(
       dependencies.database(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.revokeTransfer(id, auth.userId);
@@ -594,7 +595,7 @@ export function registerOwnershipRoutes(
   app.openapi(acceptTransferRoute, async (c) => {
     const auth = dependencies.auth(c);
     const { token } = c.req.valid("json");
-    const db = new DevelopersDatabase(
+    const db = new DeveloperTransfersDatabase(
       dependencies.database(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.acceptTransfer(token, auth.userId);

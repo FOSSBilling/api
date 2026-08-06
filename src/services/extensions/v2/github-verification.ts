@@ -4,10 +4,10 @@ import { logWarn } from "../../../lib/logger";
 import { Developer } from "./interfaces";
 import { GithubIdentity } from "./users-database";
 
-// Used by DevelopersDatabase.claim() to gate self-service claims on an
+// Used by DeveloperClaimsDatabase.claim() to gate self-service claims on an
 // unowned developer id: does a real GitHub org/user exist for this id, and
 // does the claimant's own linked GitHub identity match it? See the comment
-// on DevelopersDatabase.claim() for the full decision matrix — this module
+// on DeveloperClaimsDatabase.claim() for the full decision matrix — this module
 // only answers the two underlying questions, it never decides to block.
 
 export type GithubEntity = {

@@ -336,7 +336,7 @@ export class UsersDatabase {
   }
 
   // Used to verify developer-profile claims against the claimant's own
-  // linked GitHub identity — see DevelopersDatabase.claim(). github_orgs is
+  // linked GitHub identity — see DeveloperClaimsDatabase.claim(). github_orgs is
   // only usable while its central-auth expiry is in the future; absent,
   // malformed, or expired organization evidence resolves to no memberships
   // rather than throwing.
