@@ -63,6 +63,17 @@ export function classifyGitHubError(error: unknown, url?: string): GitHubError {
 
   const errorMessage = error instanceof Error ? error.message : String(error);
 
+  // Carried through to the generic fallback below. Statuses this function has
+  // no specific class for - 500, 502, 503 - are still worth reporting: callers
+  // use them to tell an upstream outage apart from a transport failure that
+  // never reached GitHub at all.
+  const httpStatus =
+    typeof error === "object" &&
+    error !== null &&
+    typeof (error as Record<string, unknown>).status === "number"
+      ? ((error as Record<string, unknown>).status as number)
+      : undefined;
+
   if (typeof error === "object" && error !== null) {
     const err = error as Record<string, unknown>;
 
@@ -126,7 +137,7 @@ export function classifyGitHubError(error: unknown, url?: string): GitHubError {
 
   return new GitHubError(
     errorMessage,
-    undefined,
+    httpStatus,
     "unknown_error",
     ErrorPriority.HIGH,
     url

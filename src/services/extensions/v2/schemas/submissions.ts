@@ -66,8 +66,12 @@ export const QueueQuerySchema = z.object({
     .openapi({
       param: { name: "limit", in: "query" }
     }),
+  // min(1) matches ExtensionListQuerySchema: without it `?cursor=` arrives as
+  // an empty string, which the page helper treats as "no cursor" and silently
+  // restarts pagination instead of reporting the malformed value.
   cursor: z
     .string()
+    .min(1)
     .max(1000)
     .optional()
     .openapi({

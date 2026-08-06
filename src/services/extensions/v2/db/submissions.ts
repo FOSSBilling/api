@@ -6,6 +6,7 @@ import { databaseError } from "./errors";
 import { toD1Statement } from "./batch";
 import { encodeCursor as encode, decodeCursor as decode } from "./cursor";
 import { isReservedExtensionId } from "../schemas/extensions";
+import { isReservedDeveloperId } from "../schemas/developers";
 import {
   Submission,
   SubmissionPayload,
@@ -461,7 +462,10 @@ export class SubmissionsDatabase {
 
     // Stored submissions predate the reserved-id validation on new requests,
     // so re-check the payload at the approval boundary before it can be
-    // written through to the public catalogue.
+    // written through to the public catalogue. The developer id is checked
+    // here too: approval only ever UPDATEs an existing developer row, so it
+    // cannot create a reserved profile, but it can still point a new
+    // extension at one that predates the reservation.
     if (
       isReservedExtensionId(extension.id) ||
       isReservedExtensionId(extensionId)
@@ -470,6 +474,15 @@ export class SubmissionsDatabase {
         data: null,
         error: {
           message: "This extension id is reserved",
+          code: "CONFLICT"
+        }
+      };
+    }
+    if (isReservedDeveloperId(developer.id)) {
+      return {
+        data: null,
+        error: {
+          message: "This developer id is reserved",
           code: "CONFLICT"
         }
       };

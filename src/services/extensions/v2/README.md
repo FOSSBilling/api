@@ -88,6 +88,28 @@ it is safe to re-run against an existing database without replacing rows; `0019`
 then adds the API-owned tombstone column. Back up the database and inspect
 `PRAGMA table_info(users)` before adoption, as with any schema ownership change.
 
+### Reserved id check before adoption
+
+Some route paths are static segments on tables this service adopted rather than
+created. `extensions.id = 'mine'` shadows `GET /extensions/{id}`, and a
+`developers.id` of `me`, `claims`, or `unapproved` shadows `GET /developers/{id}`
+— the static route wins and the row's detail page becomes unreachable at that
+id. New writes are rejected by schema validation and again at the approval
+boundary, but adopted rows predate both, so check once as part of the adoption
+backup above:
+
+```sql
+SELECT id FROM extensions WHERE lower(id) = 'mine';
+SELECT id FROM developers WHERE lower(id) IN ('me', 'claims', 'unapproved');
+```
+
+Both should return zero rows. If either returns a row, decide deliberately
+before deploying — renaming a published id breaks consumers, so this is not
+something a migration should do silently.
+
+Route matching is case-sensitive while the id lookup is not, so only an
+exact-lowercase id collides; a row id'd `Mine` resolves normally.
+
 ## Code layout
 
 See `AGENTS.md` for what belongs in `routes/`, `db/`, `schemas/`, `github/`, and

@@ -13,7 +13,7 @@ const CURSOR_VERSION = 1;
 
 export function encodeCursor(payload: Record<string, string>): string {
   const bytes = new TextEncoder().encode(
-    JSON.stringify({ v: CURSOR_VERSION, ...payload })
+    JSON.stringify({ ...payload, v: CURSOR_VERSION })
   );
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);

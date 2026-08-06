@@ -170,6 +170,19 @@ describe("classifyGitHubError", () => {
     expect(result.httpStatus).toBe(429);
   });
 
+  // A 5xx has no dedicated class, but dropping its status would make an
+  // upstream outage indistinguishable from a transport failure that never
+  // reached GitHub. extensions/v2 branches on exactly that difference.
+  it("should retain the status for unrecognised HTTP statuses", () => {
+    for (const status of [500, 502, 503]) {
+      const error = Object.assign(new Error("upstream failure"), { status });
+      const result = classifyGitHubError(error);
+
+      expect(result.errorCode).toBe("unknown_error");
+      expect(result.httpStatus).toBe(status);
+    }
+  });
+
   it("should classify 404 errors as NotFoundError", () => {
     const error = { status: 404, message: "Not found" };
     const result = classifyGitHubError(error, "https://api.github.com/test");

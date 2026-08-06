@@ -25,7 +25,8 @@ import {
   countDeveloperClaims,
   getDeveloperClaim,
   listDeveloperClaims,
-  expireAllDeveloperTransfers
+  expireAllDeveloperTransfers,
+  listDeveloperTransfers
 } from "./db-fixtures";
 
 // Hoisted so no v2 suite can make a real GitHub call. harness.ts applies the
@@ -242,6 +243,9 @@ describe("Extensions API v2", () => {
       expect(await res.json()).toMatchObject({
         error: { code: "ACCOUNT_INACTIVE", message: "Active account required" }
       });
+      // The 403 alone would also be satisfied by a committed row the guard
+      // merely failed to report, which a later accept could still act on.
+      expect(await listDeveloperTransfers(db)).toHaveLength(0);
     });
 
     it("reports an inactive recipient when the account is deactivated during acceptance", async () => {
@@ -284,6 +288,11 @@ describe("Extensions API v2", () => {
       expect((await getDeveloper(db, "dev-developer"))?.owner_user_id).toBe(
         "user-1"
       );
+      // Ownership not moving is only half of it: a transfer left marked
+      // accepted would burn the token while the handover never happened.
+      const [transfer] = await listDeveloperTransfers(db);
+      expect(transfer.accepted_at).toBeNull();
+      expect(transfer.accepted_by).toBeNull();
     });
 
     it("doesn't inherit the previous owner's check_url cooldown after a transfer", async () => {

@@ -14,9 +14,9 @@ export const EXTENSION_TYPES = [
 
 // GET /extensions/mine is a static owner-only route registered before
 // GET /extensions/{id}. Reserve its segment for new submissions so a newly
-// published extension cannot become unreachable. Existing databases must be
-// checked for this id before enabling the route; this schema cannot safely
-// rename production catalogue rows.
+// published extension cannot become unreachable. This schema cannot rename
+// an already-adopted row, so those are covered by the pre-deploy check in
+// the service README.
 // Private: isReservedExtensionId() lowercases before the lookup, and these
 // literals are lowercase — reading the Set directly would miss "Mine".
 const RESERVED_EXTENSION_IDS = new Set(["mine"]);

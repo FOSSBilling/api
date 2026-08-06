@@ -125,6 +125,42 @@ describe("Extensions API v2", () => {
       expect(await countExtensions(db)).toBe(0);
     });
 
+    // The developer half of the same guard. Approval only ever UPDATEs an
+    // existing developer row, so this cannot create a reserved profile - but a
+    // profile predating the reservation would otherwise gain a new extension
+    // pointing at an id that GET /developers/{id} can never serve.
+    it("does not approve a legacy pending submission with a reserved developer id", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await insertDeveloper(db, {
+        id: "me",
+        type: "user",
+        name: "Legacy Reserved",
+        url: null,
+        owner_user_id: "user-1"
+      });
+      const legacyPayload = samplePayload({ developerId: "me" });
+      await insertSubmission(db, {
+        id: "legacy-me-submission",
+        developer_id: "me",
+        submitted_by: "user-1",
+        payload: JSON.stringify(legacyPayload)
+      });
+
+      const approved = await post(
+        "/extensions/v2/submissions/legacy-me-submission/approve",
+        await authHeaders("mod-1"),
+        {}
+      );
+
+      expect(approved.status).toBe(409);
+      expect(await approved.json()).toMatchObject({
+        error: { message: "This developer id is reserved" }
+      });
+      expect(await getSubmission(db, "legacy-me-submission")).toMatchObject({
+        status: "pending"
+      });
+      expect(await countExtensions(db)).toBe(0);
+    });
     it("leaves the submission pending if the extension write-through fails mid-batch", async () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await seedDeveloper("new-developer", "user-1");
