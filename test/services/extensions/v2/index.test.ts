@@ -3783,6 +3783,59 @@ describe("Extensions API v2", () => {
       expect(res.status).toBe(409);
     });
 
+    it.each([
+      [
+        "expired",
+        JSON.stringify(["some-other-org"]),
+        "2000-01-01T00:00:00.000Z"
+      ],
+      ["malformed", "not-json", "2099-01-01T00:00:00.000Z"]
+    ])(
+      "keeps a claim pending for manual review when %s GitHub membership evidence is unavailable",
+      async (_state, github_orgs, github_orgs_expires_at) => {
+        mockGithubEntity("Organization");
+        await insertUser(db, {
+          id: "user-1",
+          github_login: "someone",
+          github_orgs,
+          github_orgs_expires_at
+        });
+        await insertDeveloper(db, {
+          id: "acme-org",
+          type: "organization",
+          name: "Acme Org",
+          url: null,
+          owner_user_id: null
+        });
+
+        const res = await post(
+          "/extensions/v2/developers/acme-org/claim",
+          await authHeaders("user-1"),
+          {}
+        );
+
+        expect(res.status).toBe(201);
+        const body = (await res.json()) as {
+          result: {
+            id: string;
+            status: string;
+            github_org_verified?: boolean;
+            github_verification_note?: string;
+          };
+        };
+        expect(body.result.status).toBe("pending");
+        expect(body.result.github_org_verified).toBeUndefined();
+        expect(body.result.github_verification_note).toContain(
+          "could not be confirmed"
+        );
+        expect((await getDeveloper(db, "acme-org"))?.owner_user_id).toBeNull();
+
+        const stored = await getDeveloperClaim(db, body.result.id);
+        expect(stored?.status).toBe("pending");
+        expect(stored?.github_org_verified).toBeNull();
+      }
+    );
+
     it("does not create a duplicate row for a second claim while one is already pending", async () => {
       await seedUnownedDeveloper("legacy-developer");
 

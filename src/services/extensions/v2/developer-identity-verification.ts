@@ -44,10 +44,10 @@ export function githubUnavailableError(
 // the claimant's own token, which never leaves the auth service. Shared by
 // claim() and upsertOwn(): both need the same question answered — does a
 // real GitHub org/user exist for this id, and if so, does the caller's own
-// linked GitHub identity match it? A positive mismatch is the only outcome
-// that ever blocks; no real GitHub entity for this id, or the caller
-// having no linked GitHub identity yet, both fall back to unverified
-// (manual moderator review), never to a block.
+// linked GitHub identity match it? A positive mismatch is the only automated
+// block; no real GitHub entity for this id, or the caller having no linked
+// GitHub identity yet, both fall back to an explicitly unverified result for
+// manual moderator review. That fallback never grants verified ownership.
 // publisherUrl — only ever passed by upsertOwn's create path, which is the
 // one place a new Publisher URL is actually being submitted alongside
 // identity verification; claim() has no URL of its own to cross-check
@@ -104,7 +104,8 @@ export async function verifyGithubOwnership(
   // Organization membership is only a definitive non-match when central auth
   // supplied a valid, unexpired membership snapshot. Missing, malformed, or
   // expired evidence is inconclusive and must go to manual review instead of
-  // blocking an otherwise valid claimant/profile owner.
+  // blocking an otherwise valid claimant/profile owner. This path never
+  // grants verified ownership; the profile/claim still needs moderation.
   if (
     !callerIdentity.githubLogin?.trim() ||
     (developerType === "organization" && !callerIdentity.githubOrgsAvailable)
