@@ -600,7 +600,10 @@ export function registerOwnershipRoutes(
     );
     const { data, error } = await db.acceptTransfer(token, auth.userId);
     if (error || !data) {
-      const status = statusFromErrorCode(error?.code);
+      const status =
+        error?.code === "ACCOUNT_INACTIVE"
+          ? 403
+          : statusFromErrorCode(error?.code);
       return c.json(
         {
           error: {

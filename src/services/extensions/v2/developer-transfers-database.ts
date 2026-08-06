@@ -28,11 +28,15 @@ function toSqliteDatetime(date: Date): string {
 export class DeveloperTransfersDatabase {
   constructor(private db: ExtensionsDb) {}
   // Shared by initiateTransfer/revokeTransfer: both are owner-only actions on
-  // an existing developer, so both need the same NOT_FOUND/FORBIDDEN check.
+  // an existing developer, so both need the same NOT_FOUND/FORBIDDEN/
+  // ACCOUNT_INACTIVE check.
   private async checkOwnership(
     developerId: string,
     userId: string
-  ): Promise<{ code: "NOT_FOUND" | "FORBIDDEN"; message: string } | null> {
+  ): Promise<{
+    code: "NOT_FOUND" | "FORBIDDEN" | "ACCOUNT_INACTIVE";
+    message: string;
+  } | null> {
     const [owner] = await this.db
       .select({
         ownerUserId: developers.ownerUserId,
@@ -49,7 +53,7 @@ export class DeveloperTransfersDatabase {
       return { code: "FORBIDDEN", message: "You don't own this profile" };
     }
     if (owner.ownerDeletedAt !== null) {
-      return { code: "FORBIDDEN", message: "Active account required" };
+      return { code: "ACCOUNT_INACTIVE", message: "Active account required" };
     }
     return null;
   }
@@ -117,8 +121,8 @@ export class DeveloperTransfersDatabase {
 
       // The INSERT only writes a row when the ownership guard above passes,
       // so zero rows written means the caller doesn't currently own this
-      // developer — a follow-up read distinguishes NOT_FOUND from FORBIDDEN
-      // for the response without reopening the race the guard closes.
+      // developer — a follow-up read distinguishes NOT_FOUND, ownership, and
+      // inactive-account errors without reopening the race the guard closes.
       if (!results[1]?.meta?.changes) {
         const ownershipError = await this.checkOwnership(developerId, userId);
         return {
@@ -327,6 +331,26 @@ export class DeveloperTransfersDatabase {
         // The claim can fail either because the token itself is bad (used,
         // revoked, expired, unknown) or because it's still valid but the
         // ownership guard rejected it — check which, for an accurate error.
+        const [recipient] = await this.db
+          .select({ deletedAt: users.deletedAt })
+          .from(users)
+          .where(eq(users.id, userId));
+
+        // The active-account middleware runs before this transaction, so a
+        // recipient can be deactivated in the small window before the
+        // guarded claim. Preserve the documented inactive-account response
+        // rather than misclassifying a still-pending token as an ownership
+        // conflict.
+        if (!recipient || recipient.deletedAt !== null) {
+          return {
+            data: null,
+            error: {
+              code: "ACCOUNT_INACTIVE",
+              message: "Active account required"
+            }
+          };
+        }
+
         const [stillPending] = await this.db
           .select({ one: sql`1` })
           .from(developerTransfers)

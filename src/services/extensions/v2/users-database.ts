@@ -12,6 +12,12 @@ export type GithubIdentity = {
   // non-member) from absent, malformed, or expired evidence. The latter must
   // fall back to moderator review rather than being treated as a mismatch.
   githubOrgsAvailable: boolean;
+  // Raw values used to make a re-verification write conditional on the same
+  // identity snapshot that was read. The parsed fields above are sufficient
+  // for matching, but cannot distinguish a concurrent sync from an unchanged
+  // empty/missing membership list on their own.
+  githubOrgsSnapshot: string | null;
+  githubOrgsExpiresAt: string | null;
 };
 
 export type UserIdentityInput = {
@@ -364,7 +370,9 @@ export class UsersDatabase {
           data: {
             githubLogin: null,
             githubOrgs: [],
-            githubOrgsAvailable: false
+            githubOrgsAvailable: false,
+            githubOrgsSnapshot: null,
+            githubOrgsExpiresAt: null
           },
           error: null
         };
@@ -395,7 +403,9 @@ export class UsersDatabase {
         data: {
           githubLogin: row?.githubLogin ?? null,
           githubOrgs,
-          githubOrgsAvailable
+          githubOrgsAvailable,
+          githubOrgsSnapshot: row?.githubOrgs ?? null,
+          githubOrgsExpiresAt: row?.githubOrgsExpiresAt ?? null
         },
         error: null
       };

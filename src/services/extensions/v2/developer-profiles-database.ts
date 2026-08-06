@@ -668,22 +668,21 @@ export class DeveloperProfilesDatabase {
 
     if (!result.meta?.changes) {
       const existing = await this.getById(id);
-      return existing.error
-        ? {
-            data: null,
-            error: {
-              message: `Cannot find developer by id: ${id}`,
-              code: "NOT_FOUND"
-            }
-          }
-        : {
-            data: null,
-            error: {
-              message:
-                "Developer profile changed after it was reviewed; reload it and approve the current revision",
-              code: "CONFLICT"
-            }
-          };
+      if (existing.error) {
+        // A failed diagnostic lookup is not evidence that the developer is
+        // missing. Preserve database errors (and any other lookup error) so
+        // transient failures are not misreported as HTTP 404.
+        return { data: null, error: existing.error };
+      }
+
+      return {
+        data: null,
+        error: {
+          message:
+            "Developer profile changed after it was reviewed; reload it and approve the current revision",
+          code: "CONFLICT"
+        }
+      };
     }
 
     return { data: { id, approved: true }, error: null };
@@ -824,7 +823,16 @@ export class DeveloperProfilesDatabase {
       // No linked GitHub identity at all shouldn't be reachable in practice
       // (GitHub is this system's sole login provider), but stays a no-op
       // rather than writing a misleading "unverified" result over it.
-      if (!identity.data.githubLogin) {
+      if (!identity.data.githubLogin?.trim()) {
+        return this.getById(row.id);
+      }
+
+      // An expired or malformed organization-membership snapshot is
+      // inconclusive, not proof that the owner left the organization. Keep
+      // the stored verification signal and timestamp until central auth
+      // supplies a fresh snapshot. The cooldown (when check_url was used)
+      // was already reserved above, so this remains bounded even on retries.
+      if (row.type === "organization" && !identity.data.githubOrgsAvailable) {
         return this.getById(row.id);
       }
 
@@ -887,7 +895,20 @@ export class DeveloperProfilesDatabase {
       // upsertOwn's update branch. Also re-asserts the URL is still the one
       // just checked — otherwise a concurrent Publisher URL edit landing in
       // between would let a stale URL comparison get written as if it
-      // described the new URL.
+      // described the new URL. Finally, the users predicates below re-check
+      // the exact GitHub identity snapshot used for this result, so a newer
+      // central-auth sync cannot be overwritten by this in-flight request.
+      const sameGithubIdentity = [
+        identity.data.githubLogin === null
+          ? isNull(users.githubLogin)
+          : eq(users.githubLogin, identity.data.githubLogin),
+        identity.data.githubOrgsSnapshot === null
+          ? isNull(users.githubOrgs)
+          : eq(users.githubOrgs, identity.data.githubOrgsSnapshot),
+        identity.data.githubOrgsExpiresAt === null
+          ? isNull(users.githubOrgsExpiresAt)
+          : eq(users.githubOrgsExpiresAt, identity.data.githubOrgsExpiresAt)
+      ];
       const result = await this.db
         .update(developers)
         .set({
@@ -907,6 +928,9 @@ export class DeveloperProfilesDatabase {
             sql`EXISTS (
               SELECT 1 FROM ${users}
               WHERE ${users.id} = ${userId} AND ${users.deletedAt} IS NULL
+                AND ${sameGithubIdentity[0]}
+                AND ${sameGithubIdentity[1]}
+                AND ${sameGithubIdentity[2]}
             )`,
             ...(writeUrlVerified
               ? [

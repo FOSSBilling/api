@@ -29,6 +29,6 @@ export function statusFromGithubErrorCode<T extends number>(
 
 export function statusFromOwnershipErrorCode(code?: string): 403 | 404 | 500 {
   if (code === "NOT_FOUND") return 404;
-  if (code === "FORBIDDEN") return 403;
+  if (code === "FORBIDDEN" || code === "ACCOUNT_INACTIVE") return 403;
   return 500;
 }
