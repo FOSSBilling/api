@@ -2,18 +2,16 @@
 
 **Base Path:** `/extensions/v2`
 
-Self-service extension submission, developer-profile ownership, moderation, and public catalogue browsing. v1 (`/extensions/v1`) remains available for existing integrations.
+Self-service extension submission, developer-profile ownership, moderation, and public catalogue browsing.
 
 This service owns the complete Extensions domain and its `DB_EXTENSIONS` schema: users, developers, submissions, claims, transfers, history, and catalogue data. The separate Extensions site keeps OIDC/session state but reaches this domain through the generated HTTPS API client; it must not bind or migrate `DB_EXTENSIONS`.
 
 ## Endpoints
 
-Endpoints are not listed here. The service publishes its own contract, and a hand-maintained copy would drift from it:
+Endpoints are not listed here. The service publishes its own contract:
 
 - **OpenAPI document:** `GET /extensions/v2/openapi.json`
 - **Reference UI:** `GET /extensions/v2/docs`
-
-What follows is the behaviour that document cannot express.
 
 ## Authentication
 
@@ -21,7 +19,7 @@ Requests carry a short-lived bearer assertion minted by the Extensions site and 
 
 Assertions use HS256 and include the exact issuer `fossbilling-extensions`, audience `fossbilling-api/extensions-v2`, purpose `user-authentication`, and protocol version `1`. They are valid for at most 60 seconds.
 
-### Rotating the shared secret
+### Rotating the Shared Secret
 
 `ASSERTION_SIGNING_SECRET_PREVIOUS` is an optional second secret accepted only as a temporary rotation window. To rotate without interrupting requests:
 
@@ -32,13 +30,13 @@ Assertions use HS256 and include the exact issuer `fossbilling-extensions`, audi
 
 Remove the previous secret once the new one has been active for at least 65 seconds and all in-flight assertions have expired.
 
-## Ownership verification
+## Ownership Verification
 
 For organization developer IDs, GitHub membership is used for automatic verification only when the API has a valid, unexpired membership snapshot. A fresh snapshot that does not contain the organization remains a confirmed mismatch and is rejected. Missing, malformed, or expired evidence is inconclusive instead: a new profile remains unapproved and a claim remains pending for manual moderator review. Moderators must verify ownership through their normal out-of-band process before approving either workflow.
 
 `github_org_verified` being absent or `null` is a review signal, not proof of ownership or an authorization grant. Consumers and moderation tooling must not treat an inconclusive result as verified.
 
-## List pagination
+## List Pagination
 
 `GET /extensions/v2/extensions` returns bounded pages of lightweight catalogue items. List items intentionally omit `readme` and `releases`; retrieve the full object from `GET /extensions/v2/extensions/{id}` for detail views. Follow `pagination.next_cursor` by passing it unchanged as `cursor`, and treat cursors as opaque. The default page size is 50 and `limit` may be set from 1 through 100.
 
@@ -50,22 +48,6 @@ Uses the D1 binding `DB_EXTENSIONS`, shared with v1 (read-only there). This serv
 
 Apply migrations **only from this repository**, from `db/migrations`, with `npm run db:migrate:extensions-v2:local` / `:remote`. The Extensions site has no D1 migration source.
 
-Adopting the database from the former split-ownership arrangement: the `0000` users bootstrap mirrors the complete table created by the old site migration, so it is safe to re-run against an existing database without replacing rows; `0019` then adds the API-owned tombstone column. Back up the database and inspect `PRAGMA table_info(users)` before adoption, as with any schema ownership change.
-
-### Reserved id check before adoption
-
-Some route paths are static segments on tables this service adopted rather than created. `extensions.id = 'mine'` shadows `GET /extensions/{id}`, and a `developers.id` of `me`, `claims`, or `unapproved` shadows `GET /developers/{id}`
-  — the static route wins and the row's detail page becomes unreachable at that id. New writes are rejected by schema validation and again at the approval boundary, but adopted rows predate both, so check once as part of the adoption backup above:
-
-   ```sql
-   SELECT id FROM extensions WHERE lower(id) = 'mine';
-   SELECT id FROM developers WHERE lower(id) IN ('me', 'claims', 'unapproved');
-   ```
-
-  Both should return zero rows. If either returns a row, decide deliberately before deploying — renaming a published id breaks consumers, so this is not something a migration should do silently.
-
-  Route matching is case-sensitive while the id lookup is not, so only an exact-lowercase id collides; a row id'd `Mine` resolves normally.
-
-## Code layout
+## Code Layout
 
 See `AGENTS.md` for what belongs in `routes/`, `db/`, `schemas/`, `github/`, and `middleware.ts`. This service is the reference layout for larger services.
