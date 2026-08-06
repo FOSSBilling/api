@@ -4705,36 +4705,46 @@ describe("Extensions API v2", () => {
       });
     });
 
-    it("does not treat an impossible future organization expiry as usable evidence", async () => {
-      const res = await put(
-        "/extensions/v2/users/me/identity",
-        await authHeaders("impossible-org-date"),
-        {
-          name: "Impossible Date",
-          email: "impossible-date@example.com",
-          email_verified: true,
-          picture: null,
-          github_login: "someone",
-          github_orgs: ["fossbilling"],
-          github_orgs_expires_at: "2099-02-30T00:00:00.000Z"
-        }
-      );
+    it.each([
+      ["an impossible calendar day", "2099-02-30T00:00:00.000Z"],
+      ["an out-of-range hour", "2099-01-01T24:00:00.000Z"],
+      ["an out-of-range offset", "2099-01-01T00:00:00.000+24:00"]
+    ])(
+      "does not treat %s as usable organization evidence",
+      async (_description, github_orgs_expires_at) => {
+        const res = await put(
+          "/extensions/v2/users/me/identity",
+          await authHeaders("impossible-org-date"),
+          {
+            name: "Impossible Date",
+            email: "impossible-date@example.com",
+            email_verified: true,
+            picture: null,
+            github_login: "someone",
+            github_orgs: ["fossbilling"],
+            github_orgs_expires_at
+          }
+        );
 
-      expect(res.status).toBe(200);
-      expect(await res.json()).toMatchObject({
-        result: { github_linked: false }
-      });
-      const row = await db
-        .prepare(
-          "SELECT github_orgs, github_orgs_expires_at FROM users WHERE id = ?"
-        )
-        .bind("impossible-org-date")
-        .first<{
-          github_orgs: string | null;
-          github_orgs_expires_at: string | null;
-        }>();
-      expect(row).toEqual({ github_orgs: null, github_orgs_expires_at: null });
-    });
+        expect(res.status).toBe(200);
+        expect(await res.json()).toMatchObject({
+          result: { github_linked: false }
+        });
+        const row = await db
+          .prepare(
+            "SELECT github_orgs, github_orgs_expires_at FROM users WHERE id = ?"
+          )
+          .bind("impossible-org-date")
+          .first<{
+            github_orgs: string | null;
+            github_orgs_expires_at: string | null;
+          }>();
+        expect(row).toEqual({
+          github_orgs: null,
+          github_orgs_expires_at: null
+        });
+      }
+    );
 
     it("tombstones and later reactivates an account", async () => {
       const headers = await authHeaders("delete-me");

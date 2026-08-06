@@ -43,7 +43,7 @@ export type UserRecord = {
 };
 
 const RFC3339_TIMESTAMP =
-  /^(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-](\d{2}):(\d{2}))$/;
 
 function isFutureGithubOrgsExpiry(
   value: string | null | undefined,
@@ -79,6 +79,15 @@ function isFutureGithubOrgsExpiry(
     31
   ][month - 1];
   if (day > daysInMonth) return false;
+
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  if (hour > 23 || minute > 59 || second > 59) return false;
+
+  const offsetHour = match[7] === undefined ? 0 : Number(match[7]);
+  const offsetMinute = match[8] === undefined ? 0 : Number(match[8]);
+  if (offsetHour > 23 || offsetMinute > 59) return false;
 
   const expiresAt = Date.parse(value);
   return Number.isFinite(expiresAt) && expiresAt > now;
