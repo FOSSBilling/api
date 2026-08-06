@@ -1,15 +1,16 @@
 import { and, eq, isNull, sql } from "drizzle-orm";
-import { DatabaseResult } from "../../../lib/interfaces";
-import { ExtensionsDb } from "../../../lib/db";
-import { developers, developerTransfers, users } from "./db/schema";
+import { DatabaseResult } from "../../../../lib/interfaces";
+import { ExtensionsDb } from "../../../../lib/db";
+import { developers, developerTransfers, users } from "./schema";
 import {
   databaseError,
   errorMessageChain,
   isDeveloperOwnerConflict
 } from "./errors";
-import { toD1Statement } from "./d1-batch";
-import { DeveloperProfile, DeveloperTransfer } from "./interfaces";
-import { DeveloperProfilesDatabase } from "./developer-profiles-database";
+import { toD1Statement } from "./batch";
+import { DeveloperProfile } from "../schemas/developers";
+import { DeveloperTransfer } from "../schemas/ownership";
+import { DeveloperProfilesDatabase } from "./developer-profiles";
 
 async function sha256Hex(input: string): Promise<string> {
   const digest = await crypto.subtle.digest(

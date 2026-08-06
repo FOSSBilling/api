@@ -1,21 +1,22 @@
 import { createRoute, z } from "@hono/zod-openapi";
-import { statusFromErrorCode } from "./route-errors";
+import { statusFromErrorCode } from "./errors";
 import {
   ActiveAccountRequiredResponse,
-  DeveloperApprovalSchema,
-  DeveloperHistoryEntrySchema,
-  DeveloperProfileSchema,
   ErrorResponseSchema,
   IdParamSchema,
   PaginationSchema,
-  QueueQuerySchema,
   ReviewNoteOptionalSchema,
-  ReviewNoteRequiredSchema,
-  SubmissionSchema
-} from "./interfaces";
-import { DeveloperProfilesDatabase } from "./developer-profiles-database";
-import { SubmissionsDatabase } from "./submissions-database";
-import { ExtensionsV2App, RouteDependencies } from "./route-dependencies";
+  ReviewNoteRequiredSchema
+} from "../schemas/common";
+import {
+  DeveloperApprovalSchema,
+  DeveloperHistoryEntrySchema,
+  DeveloperProfileSchema
+} from "../schemas/developers";
+import { QueueQuerySchema, SubmissionSchema } from "../schemas/submissions";
+import { DeveloperProfilesDatabase } from "../db/developer-profiles";
+import { SubmissionsDatabase } from "../db/submissions";
+import { ExtensionsV2App, RouteDependencies } from "./dependencies";
 
 export function registerModerationRoutes(
   app: ExtensionsV2App,

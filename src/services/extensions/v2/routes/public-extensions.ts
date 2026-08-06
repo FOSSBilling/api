@@ -1,14 +1,13 @@
 import { createRoute, z } from "@hono/zod-openapi";
-import { statusFromErrorCode } from "./route-errors";
+import { statusFromErrorCode } from "./errors";
+import { ErrorResponseSchema, IdParamSchema } from "../schemas/common";
 import {
-  ErrorResponseSchema,
   ExtensionListQuerySchema,
   ExtensionListResponseSchema,
-  ExtensionSchema,
-  IdParamSchema
-} from "./interfaces";
-import { ExtensionsDatabase } from "./extensions-database";
-import { ExtensionsV2App, RouteDependencies } from "./route-dependencies";
+  ExtensionSchema
+} from "../schemas/extensions";
+import { ExtensionsDatabase } from "../db/extensions";
+import { ExtensionsV2App, RouteDependencies } from "./dependencies";
 
 export function registerPublicExtensionsRoutes(
   app: ExtensionsV2App,

@@ -1,17 +1,17 @@
 import { and, asc, eq, or, sql } from "drizzle-orm";
-import { DatabaseResult } from "../../../lib/interfaces";
-import { ExtensionsDb } from "../../../lib/db";
-import { extensions, developers } from "./db/schema";
+import { DatabaseResult } from "../../../../lib/interfaces";
+import { ExtensionsDb } from "../../../../lib/db";
+import { sortReleasesDescending } from "../../../../lib/releases";
+import { parseJSON } from "../../../../lib/json";
+import { extensions, developers } from "./schema";
 import { databaseError } from "./errors";
 import {
   Extension,
   ExtensionListItem,
   License,
   Release,
-  Repository,
-  sortReleasesDescending,
-  parseJSON
-} from "./interfaces";
+  Repository
+} from "../schemas/extensions";
 
 // LEFT JOIN defensively preserves catalogue reads if a legacy/corrupt row
 // points at a missing developer. The current baseline enforces the

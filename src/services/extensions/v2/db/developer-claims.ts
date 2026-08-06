@@ -1,21 +1,17 @@
 import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
-import { DatabaseResult } from "../../../lib/interfaces";
-import { ExtensionsDb } from "../../../lib/db";
-import { developerClaims, developers, users } from "./db/schema";
+import { DatabaseResult } from "../../../../lib/interfaces";
+import { ExtensionsDb } from "../../../../lib/db";
+import { developerClaims, developers, users } from "./schema";
 import {
   databaseError,
   errorMessageChain,
   isDeveloperOwnerConflict
 } from "./errors";
-import { toD1Statement } from "./d1-batch";
-import {
-  Developer,
-  DeveloperClaim,
-  DeveloperProfile,
-  PendingDeveloperClaim
-} from "./interfaces";
-import { DeveloperProfilesDatabase } from "./developer-profiles-database";
-import { verifyGithubOwnership } from "./developer-identity-verification";
+import { toD1Statement } from "./batch";
+import { Developer, DeveloperProfile } from "../schemas/developers";
+import { DeveloperClaim, PendingDeveloperClaim } from "../schemas/ownership";
+import { DeveloperProfilesDatabase } from "./developer-profiles";
+import { verifyGithubOwnership } from "../github/identity";
 
 type ClaimRow = typeof developerClaims.$inferSelect;
 

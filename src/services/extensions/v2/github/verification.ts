@@ -1,8 +1,11 @@
 import { request as ghRequest } from "@octokit/request";
-import { classifyGitHubError, NotFoundError } from "../../../lib/github-errors";
-import { logWarn } from "../../../lib/logger";
-import { Developer } from "./interfaces";
-import { GithubIdentity } from "./users-database";
+import {
+  classifyGitHubError,
+  NotFoundError
+} from "../../../../lib/github-errors";
+import { logWarn } from "../../../../lib/logger";
+import { Developer } from "../schemas/developers";
+import { GithubIdentity } from "../db/users";
 
 // Used by DeveloperClaimsDatabase.claim() to gate self-service claims on an
 // unowned developer id: does a real GitHub org/user exist for this id, and

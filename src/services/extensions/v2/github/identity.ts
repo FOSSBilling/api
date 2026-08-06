@@ -1,13 +1,13 @@
-import { DatabaseError } from "../../../lib/interfaces";
-import { ExtensionsDb } from "../../../lib/db";
+import { DatabaseError } from "../../../../lib/interfaces";
+import { ExtensionsDb } from "../../../../lib/db";
 import {
   checkGithubEntity,
   GithubUnavailableReason,
   matchesClaimant,
   urlMatchesGithubBlog
-} from "./github-verification";
-import { Developer } from "./interfaces";
-import { UsersDatabase } from "./users-database";
+} from "./verification";
+import { Developer } from "../schemas/developers";
+import { UsersDatabase } from "../db/users";
 
 export type GithubOwnershipVerificationResult =
   | { mismatch: true }

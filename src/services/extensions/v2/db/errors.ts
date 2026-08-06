@@ -1,5 +1,5 @@
-import { DatabaseResult } from "../../../lib/interfaces";
-import { logError } from "../../../lib/logger";
+import { DatabaseResult } from "../../../../lib/interfaces";
+import { logError } from "../../../../lib/logger";
 
 // Drizzle wraps the real D1 driver error in a DrizzleError whose own
 // .message is a generic "Failed to run the query '<sql>'" - the actual

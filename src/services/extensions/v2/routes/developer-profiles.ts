@@ -1,18 +1,20 @@
 import { createRoute, z } from "@hono/zod-openapi";
-import { statusFromErrorCode, statusFromGithubErrorCode } from "./route-errors";
+import { statusFromErrorCode, statusFromGithubErrorCode } from "./errors";
 import {
   ActiveAccountRequiredResponse,
+  ErrorResponseSchema,
+  IdParamSchema
+} from "../schemas/common";
+import {
   DeveloperProfileSchema,
   DeveloperSchema,
-  ErrorResponseSchema,
-  IdParamSchema,
   OwnedDeveloperProfileSchema,
   PublicDeveloperSchema,
   ReverifyQuerySchema,
   toPublicDeveloper
-} from "./interfaces";
-import { DeveloperProfilesDatabase } from "./developer-profiles-database";
-import { ExtensionsV2App, RouteDependencies } from "./route-dependencies";
+} from "../schemas/developers";
+import { DeveloperProfilesDatabase } from "../db/developer-profiles";
+import { ExtensionsV2App, RouteDependencies } from "./dependencies";
 
 export function registerDeveloperProfileRoutes(
   app: ExtensionsV2App,

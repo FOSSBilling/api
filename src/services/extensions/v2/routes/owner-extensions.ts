@@ -1,16 +1,15 @@
 import { createRoute } from "@hono/zod-openapi";
 import {
   ActiveAccountRequiredResponse,
-  ErrorResponseSchema,
+  ErrorResponseSchema
+} from "../schemas/common";
+import {
   ExtensionListResponseSchema,
   ExtensionMineListQuerySchema
-} from "./interfaces";
-import { DeveloperProfilesDatabase } from "./developer-profiles-database";
-import {
-  ExtensionsDatabase,
-  isValidExtensionCursor
-} from "./extensions-database";
-import { ExtensionsV2App, RouteDependencies } from "./route-dependencies";
+} from "../schemas/extensions";
+import { DeveloperProfilesDatabase } from "../db/developer-profiles";
+import { ExtensionsDatabase, isValidExtensionCursor } from "../db/extensions";
+import { ExtensionsV2App, RouteDependencies } from "./dependencies";
 
 export function registerOwnerExtensionsRoutes(
   app: ExtensionsV2App,

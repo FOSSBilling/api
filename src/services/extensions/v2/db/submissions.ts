@@ -1,20 +1,15 @@
 import { and, asc, desc, eq, gt, lt, or, sql } from "drizzle-orm";
-import { DatabaseResult } from "../../../lib/interfaces";
-import { ExtensionsDb } from "../../../lib/db";
-import {
-  extensionSubmissions,
-  developers,
-  extensions,
-  users
-} from "./db/schema";
+import { DatabaseResult } from "../../../../lib/interfaces";
+import { ExtensionsDb } from "../../../../lib/db";
+import { extensionSubmissions, developers, extensions, users } from "./schema";
 import { databaseError, errorMessageChain } from "./errors";
-import { toD1Statement } from "./d1-batch";
+import { toD1Statement } from "./batch";
+import { isReservedExtensionId } from "../schemas/extensions";
 import {
-  isReservedExtensionId,
   Submission,
   SubmissionPayload,
   SubmissionStatus
-} from "./interfaces";
+} from "../schemas/submissions";
 
 interface OwnershipResolution {
   extensionId: string | null;

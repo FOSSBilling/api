@@ -3,22 +3,24 @@ import {
   statusFromErrorCode,
   statusFromGithubErrorCode,
   statusFromOwnershipErrorCode
-} from "./route-errors";
+} from "./errors";
 import {
   ActiveAccountRequiredResponse,
-  ClaimNoteSchema,
-  DeveloperClaimSchema,
-  DeveloperProfileSchema,
-  DeveloperTransferSchema,
   ErrorResponseSchema,
   IdParamSchema,
+  ReviewNoteRequiredSchema
+} from "../schemas/common";
+import { DeveloperProfileSchema } from "../schemas/developers";
+import {
+  ClaimNoteSchema,
+  DeveloperClaimSchema,
+  DeveloperTransferSchema,
   PendingDeveloperClaimSchema,
-  ReviewNoteRequiredSchema,
   TransferAcceptanceSchema
-} from "./interfaces";
-import { DeveloperClaimsDatabase } from "./developer-claims-database";
-import { DeveloperTransfersDatabase } from "./developer-transfers-database";
-import { ExtensionsV2App, RouteDependencies } from "./route-dependencies";
+} from "../schemas/ownership";
+import { DeveloperClaimsDatabase } from "../db/developer-claims";
+import { DeveloperTransfersDatabase } from "../db/developer-transfers";
+import { ExtensionsV2App, RouteDependencies } from "./dependencies";
 
 export function registerOwnershipRoutes(
   app: ExtensionsV2App,

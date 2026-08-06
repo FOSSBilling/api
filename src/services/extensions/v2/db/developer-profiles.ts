@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, isNull, or, sql } from "drizzle-orm";
-import { DatabaseResult } from "../../../lib/interfaces";
-import { ExtensionsDb } from "../../../lib/db";
+import { DatabaseResult } from "../../../../lib/interfaces";
+import { ExtensionsDb } from "../../../../lib/db";
 import {
   developers,
   developerHistory,
@@ -8,28 +8,28 @@ import {
   extensions,
   extensionSubmissions,
   users
-} from "./db/schema";
+} from "./schema";
 import {
   databaseError,
   isDeveloperIdConflict,
   isDeveloperOwnerConflict
 } from "./errors";
-import { toD1Statement } from "./d1-batch";
+import { toD1Statement } from "./batch";
 import {
   checkGithubEntity,
   matchesClaimant,
   urlMatchesGithubBlog
-} from "./github-verification";
+} from "../github/verification";
 import {
   Developer,
   DeveloperHistoryEntry,
   DeveloperProfile
-} from "./interfaces";
+} from "../schemas/developers";
 import {
   githubUnavailableError,
   verifyGithubOwnership
-} from "./developer-identity-verification";
-import { UsersDatabase } from "./users-database";
+} from "../github/identity";
+import { UsersDatabase } from "./users";
 
 const URL_CHECK_COOLDOWN_SECONDS = 60;
 

@@ -1,15 +1,17 @@
 import { createRoute, z } from "@hono/zod-openapi";
-import { getAuth } from "../../../lib/auth";
-import { statusFromErrorCode } from "./route-errors";
+import { getAuth } from "../../../../lib/auth";
+import { statusFromErrorCode } from "./errors";
 import {
   ActiveAccountRequiredResponse,
-  ErrorResponseSchema,
+  ErrorResponseSchema
+} from "../schemas/common";
+import {
   UserIdentityInputSchema,
   UserProfileUpdateSchema,
   UserSchema
-} from "./interfaces";
-import { UsersDatabase } from "./users-database";
-import { ExtensionsV2App, RouteDependencies } from "./route-dependencies";
+} from "../schemas/users";
+import { UsersDatabase } from "../db/users";
+import { ExtensionsV2App, RouteDependencies } from "./dependencies";
 
 function toUserResponse(user: {
   displayName: string | null;

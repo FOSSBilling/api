@@ -88,7 +88,7 @@ export const developers = sqliteTable(
     approvedAt: text("approved_at"),
     // Placeholder default from migration 0002 (SQLite rejects non-constant
     // ALTER TABLE ADD COLUMN defaults). Every write sets this explicitly
-    // (see developers-database.ts) - the literal default is never actually
+    // (see db/developer-profiles.ts) - the literal default is never actually
     // read, but it's part of the real column definition so it's kept here
     // for baseline-diff fidelity against the existing database.
     createdAt: text("created_at").notNull().default("1970-01-01T00:00:00.000Z"),
@@ -107,7 +107,7 @@ export const developers = sqliteTable(
     // githubOrgVerified itself.
     githubVerifiedAt: text("github_verified_at"),
     // Whether `url` matches GitHub's own on-file website — see
-    // github-verification.ts's urlMatchesGithubBlog(). Only ever 1 or null,
+    // github/verification.ts's urlMatchesGithubBlog(). Only ever 1 or null,
     // never 0 (see the schema comment on interfaces.ts's
     // DeveloperProfileSchema.github_url_verified for why).
     githubUrlVerified: integer("github_url_verified"),

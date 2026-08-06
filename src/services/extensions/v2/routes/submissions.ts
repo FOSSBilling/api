@@ -2,13 +2,15 @@ import { createRoute, z } from "@hono/zod-openapi";
 import {
   ActiveAccountRequiredResponse,
   ErrorResponseSchema,
-  PaginationSchema,
+  PaginationSchema
+} from "../schemas/common";
+import {
   SubmissionPayloadSchema,
   SubmissionPageQuerySchema,
   SubmissionSchema
-} from "./interfaces";
-import { SubmissionsDatabase } from "./submissions-database";
-import { ExtensionsV2App, RouteDependencies } from "./route-dependencies";
+} from "../schemas/submissions";
+import { SubmissionsDatabase } from "../db/submissions";
+import { ExtensionsV2App, RouteDependencies } from "./dependencies";
 
 export function registerSubmissionRoutes(
   app: ExtensionsV2App,

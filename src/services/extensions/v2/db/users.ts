@@ -1,9 +1,9 @@
 import { and, eq, isNull } from "drizzle-orm";
-import { DatabaseResult } from "../../../lib/interfaces";
-import { ExtensionsDb } from "../../../lib/db";
-import { users } from "./db/schema";
+import { DatabaseResult } from "../../../../lib/interfaces";
+import { ExtensionsDb } from "../../../../lib/db";
+import { users } from "./schema";
 import { databaseError } from "./errors";
-import { toD1Statement } from "./d1-batch";
+import { toD1Statement } from "./batch";
 
 export type GithubIdentity = {
   githubLogin: string | null;
