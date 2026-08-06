@@ -1786,6 +1786,46 @@ describe("Extensions API v2", () => {
       ).toHaveLength(1);
     });
 
+    it("reports an inactive account when deactivated during an existing profile update", async () => {
+      await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        sampleDeveloper()
+      );
+
+      let deactivated = false;
+      env.DB_EXTENSIONS = wrapD1WithHook(db, async (sql) => {
+        const normalizedSql = sql.toLowerCase();
+        if (
+          !deactivated &&
+          normalizedSql.includes('update "developers"') &&
+          normalizedSql.includes("content_revision")
+        ) {
+          deactivated = true;
+          await db
+            .prepare("UPDATE users SET deleted_at = ? WHERE id = ?")
+            .bind(new Date().toISOString(), "user-1")
+            .run();
+        }
+      });
+
+      const res = await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        sampleDeveloper({ name: "Inactive owner write" })
+      );
+      env.DB_EXTENSIONS = db;
+
+      expect(deactivated).toBe(true);
+      expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({
+        error: { code: "ACCOUNT_INACTIVE", message: "Active account required" }
+      });
+      expect((await getDeveloper(db, "dev-developer"))?.name).toBe(
+        "Dev Developer"
+      );
+    });
+
     it("does not create a profile after the account is tombstoned mid-request", async () => {
       const headers = await authHeaders("deleted-during-write");
       let tombstoned = false;
@@ -2072,6 +2112,45 @@ describe("Extensions API v2", () => {
   });
 
   describe("POST /developers/me/reverify", () => {
+    it("reports an inactive account when deactivated during a URL cooldown reservation", async () => {
+      await insertUser(db, { id: "user-1" });
+      await insertDeveloper(db, {
+        id: "dev-developer",
+        type: "organization",
+        name: "Dev",
+        url: "https://acme.example",
+        owner_user_id: "user-1"
+      });
+
+      let deactivated = false;
+      env.DB_EXTENSIONS = wrapD1WithHook(db, async (sql) => {
+        const normalizedSql = sql.toLowerCase();
+        if (
+          !deactivated &&
+          normalizedSql.includes('update "developers"') &&
+          normalizedSql.includes("url_check_cooldown_until")
+        ) {
+          deactivated = true;
+          await db
+            .prepare("UPDATE users SET deleted_at = ? WHERE id = ?")
+            .bind(new Date().toISOString(), "user-1")
+            .run();
+        }
+      });
+
+      const res = await post(
+        "/extensions/v2/developers/me/reverify?check_url=true",
+        await authHeaders("user-1")
+      );
+      env.DB_EXTENSIONS = db;
+
+      expect(deactivated).toBe(true);
+      expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({
+        error: { code: "ACCOUNT_INACTIVE", message: "Active account required" }
+      });
+    });
+
     it("re-verifies and refreshes the timestamp when the owner's GitHub org still matches", async () => {
       await insertDeveloper(db, {
         id: "dev-developer",

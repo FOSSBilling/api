@@ -359,20 +359,18 @@ export class DeveloperProfilesDatabase {
       }
 
       if (!results[0]?.meta?.changes) {
-        if (isCreating) {
-          const [activeUser] = await this.db
-            .select({ id: users.id })
-            .from(users)
-            .where(and(eq(users.id, userId), isNull(users.deletedAt)));
-          if (!activeUser) {
-            return {
-              data: null,
-              error: {
-                message: "Active account required",
-                code: "ACCOUNT_INACTIVE"
-              }
-            };
-          }
+        const [activeUser] = await this.db
+          .select({ id: users.id })
+          .from(users)
+          .where(and(eq(users.id, userId), isNull(users.deletedAt)));
+        if (!activeUser) {
+          return {
+            data: null,
+            error: {
+              message: "Active account required",
+              code: "ACCOUNT_INACTIVE"
+            }
+          };
         }
         return {
           data: null,
@@ -846,6 +844,19 @@ export class DeveloperProfilesDatabase {
             )
           );
         if (!cooldown.meta?.changes) {
+          const [activeUser] = await this.db
+            .select({ id: users.id })
+            .from(users)
+            .where(and(eq(users.id, userId), isNull(users.deletedAt)));
+          if (!activeUser) {
+            return {
+              data: null,
+              error: {
+                message: "Active account required",
+                code: "ACCOUNT_INACTIVE"
+              }
+            };
+          }
           return {
             data: null,
             error: {

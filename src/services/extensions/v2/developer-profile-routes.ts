@@ -299,10 +299,13 @@ export function registerDeveloperProfileRoutes(
       platform.getEnv("GITHUB_TOKEN")
     );
     if (error || !data) {
-      const status = statusFromGithubErrorCode(
-        error?.code,
-        statusFromErrorCode(error?.code)
-      );
+      const status =
+        error?.code === "ACCOUNT_INACTIVE"
+          ? 403
+          : statusFromGithubErrorCode(
+              error?.code,
+              statusFromErrorCode(error?.code)
+            );
       return c.json(
         {
           error: {
