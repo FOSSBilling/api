@@ -36,13 +36,21 @@ export const ErrorResponseSchema = z
   })
   .openapi("Error");
 
+// Every non-2xx response in this service carries ErrorResponseSchema and
+// differs only by description, so routes declare them through this rather
+// than restating the content block.
+export const errorResponse = (description: string) =>
+  ({
+    content: { "application/json": { schema: ErrorResponseSchema } },
+    description
+  }) as const;
+
 // All routes behind requireAuth() perform an active-account check after
 // bearer authentication. Keep that response reusable so the generated
 // contract documents the middleware failure consistently on every route.
-export const ActiveAccountRequiredResponse = {
-  content: { "application/json": { schema: ErrorResponseSchema } },
-  description: "The bearer is valid but the account is inactive"
-} as const;
+export const ActiveAccountRequiredResponse = errorResponse(
+  "The bearer is valid but the account is inactive"
+);
 
 export const IdParamSchema = z.object({
   id: z.string().openapi({

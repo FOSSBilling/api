@@ -1,8 +1,8 @@
 import { createRoute, z } from "@hono/zod-openapi";
 import {
   ActiveAccountRequiredResponse,
-  ErrorResponseSchema,
-  PaginationSchema
+  PaginationSchema,
+  errorResponse
 } from "../schemas/common";
 import {
   SubmissionPayloadSchema,
@@ -39,28 +39,17 @@ export function registerSubmissionRoutes(
         },
         description: "Submission created and pending moderator review"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
+      401: errorResponse("Missing or invalid bearer token"),
       403: {
         ...ActiveAccountRequiredResponse,
         description:
           "The account is inactive, or the caller does not own the target developer or extension"
       },
-      409: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description:
-          "Ownership or target changed, a duplicate is pending, or the pending limit was reached"
-      },
-      422: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Payload failed validation"
-      },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      409: errorResponse(
+        "Ownership or target changed, a duplicate is pending, or the pending limit was reached"
+      ),
+      422: errorResponse("Payload failed validation"),
+      500: errorResponse("Database error")
     }
   });
 
@@ -126,19 +115,10 @@ export function registerSubmissionRoutes(
         },
         description: "The caller's submissions"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
+      401: errorResponse("Missing or invalid bearer token"),
       403: ActiveAccountRequiredResponse,
-      422: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Pagination query failed validation"
-      },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      422: errorResponse("Pagination query failed validation"),
+      500: errorResponse("Database error")
     }
   });
 

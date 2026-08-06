@@ -39,25 +39,13 @@ const EXTENSION_COLUMNS = {
   developerOwnerUserId: developers.ownerUserId
 };
 
-const EXTENSION_LIST_COLUMNS = {
-  id: EXTENSION_COLUMNS.id,
-  type: EXTENSION_COLUMNS.type,
-  name: EXTENSION_COLUMNS.name,
-  description: EXTENSION_COLUMNS.description,
-  website: EXTENSION_COLUMNS.website,
-  license: EXTENSION_COLUMNS.license,
-  iconUrl: EXTENSION_COLUMNS.iconUrl,
-  source: EXTENSION_COLUMNS.source,
-  version: EXTENSION_COLUMNS.version,
-  downloadUrl: EXTENSION_COLUMNS.downloadUrl,
-  developerId: EXTENSION_COLUMNS.developerId,
-  developerType: EXTENSION_COLUMNS.developerType,
-  developerName: EXTENSION_COLUMNS.developerName,
-  developerUrl: EXTENSION_COLUMNS.developerUrl,
-  developerAvatarUrl: EXTENSION_COLUMNS.developerAvatarUrl,
-  developerApprovedAt: EXTENSION_COLUMNS.developerApprovedAt,
-  developerOwnerUserId: EXTENSION_COLUMNS.developerOwnerUserId
-};
+// Derived by subtraction so a column added to EXTENSION_COLUMNS cannot be
+// forgotten here: catalogue cards omit only the two large fields.
+const {
+  readme: _readme,
+  releases: _releases,
+  ...EXTENSION_LIST_COLUMNS
+} = EXTENSION_COLUMNS;
 
 interface ExtensionRow {
   id: string;

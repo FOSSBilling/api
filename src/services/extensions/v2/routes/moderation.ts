@@ -2,11 +2,11 @@ import { createRoute, z } from "@hono/zod-openapi";
 import { statusFromErrorCode } from "./errors";
 import {
   ActiveAccountRequiredResponse,
-  ErrorResponseSchema,
   IdParamSchema,
   PaginationSchema,
   ReviewNoteOptionalSchema,
-  ReviewNoteRequiredSchema
+  ReviewNoteRequiredSchema,
+  errorResponse
 } from "../schemas/common";
 import {
   DeveloperApprovalSchema,
@@ -46,22 +46,13 @@ export function registerModerationRoutes(
         description:
           "Submissions matching the requested status (default: pending)"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
+      401: errorResponse("Missing or invalid bearer token"),
       403: {
         ...ActiveAccountRequiredResponse,
         description: "The account is inactive or the caller is not a moderator"
       },
-      422: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "status query param failed validation"
-      },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      422: errorResponse("status query param failed validation"),
+      500: errorResponse("Database error")
     }
   });
 
@@ -129,31 +120,17 @@ export function registerModerationRoutes(
         description:
           "Submission approved and written through to the live extension/developer"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
+      401: errorResponse("Missing or invalid bearer token"),
       403: {
         ...ActiveAccountRequiredResponse,
         description: "The account is inactive or the caller is not a moderator"
       },
-      404: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "No submission with that id"
-      },
-      409: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description:
-          "Submission is not pending, or ownership has changed since it was submitted"
-      },
-      422: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "id param or review_note body failed validation"
-      },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      404: errorResponse("No submission with that id"),
+      409: errorResponse(
+        "Submission is not pending, or ownership has changed since it was submitted"
+      ),
+      422: errorResponse("id param or review_note body failed validation"),
+      500: errorResponse("Database error")
     }
   });
 
@@ -210,30 +187,15 @@ export function registerModerationRoutes(
         },
         description: "Submission rejected"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
+      401: errorResponse("Missing or invalid bearer token"),
       403: {
         ...ActiveAccountRequiredResponse,
         description: "The account is inactive or the caller is not a moderator"
       },
-      404: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "No submission with that id"
-      },
-      409: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Submission is not pending"
-      },
-      422: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "review_note is required"
-      },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      404: errorResponse("No submission with that id"),
+      409: errorResponse("Submission is not pending"),
+      422: errorResponse("review_note is required"),
+      500: errorResponse("Database error")
     }
   });
 
@@ -279,18 +241,12 @@ export function registerModerationRoutes(
         },
         description: "All developer profiles"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
+      401: errorResponse("Missing or invalid bearer token"),
       403: {
         ...ActiveAccountRequiredResponse,
         description: "The account is inactive or the caller is not a moderator"
       },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      500: errorResponse("Database error")
     }
   });
 
@@ -332,18 +288,12 @@ export function registerModerationRoutes(
         },
         description: "Developer profiles not yet approved"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
+      401: errorResponse("Missing or invalid bearer token"),
       403: {
         ...ActiveAccountRequiredResponse,
         description: "The account is inactive or the caller is not a moderator"
       },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      500: errorResponse("Database error")
     }
   });
 
@@ -392,30 +342,15 @@ export function registerModerationRoutes(
         },
         description: "Developer profile marked approved"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
+      401: errorResponse("Missing or invalid bearer token"),
       403: {
         ...ActiveAccountRequiredResponse,
         description: "The account is inactive or the caller is not a moderator"
       },
-      404: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "No developer with that id"
-      },
-      409: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Profile changed after the reviewed revision"
-      },
-      422: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "id param failed validation"
-      },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      404: errorResponse("No developer with that id"),
+      409: errorResponse("Profile changed after the reviewed revision"),
+      422: errorResponse("id param failed validation"),
+      500: errorResponse("Database error")
     }
   });
 
@@ -469,22 +404,13 @@ export function registerModerationRoutes(
         },
         description: "Snapshots of the profile, newest first"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
+      401: errorResponse("Missing or invalid bearer token"),
       403: {
         ...ActiveAccountRequiredResponse,
         description: "The account is inactive or the caller is not a moderator"
       },
-      422: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "id param failed validation"
-      },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      422: errorResponse("id param failed validation"),
+      500: errorResponse("Database error")
     }
   });
 

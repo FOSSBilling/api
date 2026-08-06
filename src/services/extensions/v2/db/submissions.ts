@@ -2,7 +2,7 @@ import { and, asc, desc, eq, gt, lt, or, sql } from "drizzle-orm";
 import { DatabaseResult } from "../../../../lib/interfaces";
 import { ExtensionsDb } from "../../../../lib/db";
 import { extensionSubmissions, developers, extensions, users } from "./schema";
-import { databaseError, errorMessageChain } from "./errors";
+import { databaseError, isPendingTargetConflict } from "./errors";
 import { toD1Statement } from "./batch";
 import { isReservedExtensionId } from "../schemas/extensions";
 import {
@@ -36,12 +36,6 @@ interface StoredSubmission extends Submission {
 }
 
 const MAX_PENDING_SUBMISSIONS_PER_USER = 10;
-
-function isPendingTargetConflict(error: unknown): boolean {
-  return /UNIQUE constraint failed.*extension_submissions/i.test(
-    errorMessageChain(error)
-  );
-}
 
 function encodeCursor(createdAt: string, id: string): string {
   return btoa(JSON.stringify([createdAt, id]));

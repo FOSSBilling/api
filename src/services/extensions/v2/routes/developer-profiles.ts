@@ -2,8 +2,8 @@ import { createRoute, z } from "@hono/zod-openapi";
 import { statusFromErrorCode, statusFromGithubErrorCode } from "./errors";
 import {
   ActiveAccountRequiredResponse,
-  ErrorResponseSchema,
-  IdParamSchema
+  IdParamSchema,
+  errorResponse
 } from "../schemas/common";
 import {
   DeveloperProfileSchema,
@@ -36,15 +36,9 @@ export function registerDeveloperProfileRoutes(
         },
         description: "The caller's profile, or null when none exists"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
+      401: errorResponse("Missing or invalid bearer token"),
       403: ActiveAccountRequiredResponse,
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      500: errorResponse("Database error")
     }
   });
 
@@ -93,38 +87,23 @@ export function registerDeveloperProfileRoutes(
         description:
           "Developer profile created or updated and usable immediately"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
+      401: errorResponse("Missing or invalid bearer token"),
       403: {
         ...ActiveAccountRequiredResponse,
         description:
           "The account is inactive, or this id matches a real GitHub organization or username that isn't linked to the caller's account"
       },
-      409: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description:
-          "Developer id already taken by someone else, or id was changed on an existing profile"
-      },
-      429: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description:
-          "The account exhausted its profile-creation allowance, or GitHub verification is temporarily rate limited"
-      },
-      503: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "GitHub verification is temporarily unavailable"
-      },
-      422: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description:
-          "Payload failed validation, or the GitHub account type is unsupported"
-      },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      409: errorResponse(
+        "Developer id already taken by someone else, or id was changed on an existing profile"
+      ),
+      429: errorResponse(
+        "The account exhausted its profile-creation allowance, or GitHub verification is temporarily rate limited"
+      ),
+      503: errorResponse("GitHub verification is temporarily unavailable"),
+      422: errorResponse(
+        "Payload failed validation, or the GitHub account type is unsupported"
+      ),
+      500: errorResponse("Database error")
     }
   });
 
@@ -194,24 +173,13 @@ export function registerDeveloperProfileRoutes(
         },
         description: "Profile deleted"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
+      401: errorResponse("Missing or invalid bearer token"),
       403: ActiveAccountRequiredResponse,
-      404: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Caller has no developer profile"
-      },
-      409: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description:
-          "Profile still has published extensions, or has a pending submission awaiting review"
-      },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      404: errorResponse("Caller has no developer profile"),
+      409: errorResponse(
+        "Profile still has published extensions, or has a pending submission awaiting review"
+      ),
+      500: errorResponse("Database error")
     }
   });
 
@@ -255,36 +223,16 @@ export function registerDeveloperProfileRoutes(
         },
         description: "Verification re-checked (result may be verified or not)"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
+      401: errorResponse("Missing or invalid bearer token"),
       403: ActiveAccountRequiredResponse,
-      404: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Caller has no developer profile"
-      },
-      409: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Developer ownership changed while re-verifying"
-      },
-      429: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description:
-          "check_url was used again too soon, or GitHub verification is rate limited"
-      },
-      503: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "GitHub verification is temporarily unavailable"
-      },
-      422: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "The GitHub account type is unsupported"
-      },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      404: errorResponse("Caller has no developer profile"),
+      409: errorResponse("Developer ownership changed while re-verifying"),
+      429: errorResponse(
+        "check_url was used again too soon, or GitHub verification is rate limited"
+      ),
+      503: errorResponse("GitHub verification is temporarily unavailable"),
+      422: errorResponse("The GitHub account type is unsupported"),
+      500: errorResponse("Database error")
     }
   });
 
@@ -338,18 +286,9 @@ export function registerDeveloperProfileRoutes(
         },
         description: "The developer's public profile"
       },
-      404: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "No developer with that id"
-      },
-      422: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "id param failed validation"
-      },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      404: errorResponse("No developer with that id"),
+      422: errorResponse("id param failed validation"),
+      500: errorResponse("Database error")
     }
   });
 

@@ -108,7 +108,7 @@ export const developers = sqliteTable(
     githubVerifiedAt: text("github_verified_at"),
     // Whether `url` matches GitHub's own on-file website — see
     // github/verification.ts's urlMatchesGithubBlog(). Only ever 1 or null,
-    // never 0 (see the schema comment on interfaces.ts's
+    // never 0 (see the schema comment on schemas/developers.ts's
     // DeveloperProfileSchema.github_url_verified for why).
     githubUrlVerified: integer("github_url_verified"),
     // Atomic per-owner cooldown gating reverifyOwn()'s check_url path (the
@@ -133,7 +133,7 @@ export const developers = sqliteTable(
       sql`${table.githubOrgVerified} IN (0, 1)`
     ),
     // = 1 rather than IN (0, 1): this column is documented to only ever be
-    // 1 or NULL, never 0 (see interfaces.ts's DeveloperProfileSchema
+    // 1 or NULL, never 0 (see schemas/developers.ts's DeveloperProfileSchema
     // comment) — SQLite's CHECK already treats NULL as satisfying `= 1`, so
     // this enforces that invariant instead of just validating it's a 0/1.
     check(

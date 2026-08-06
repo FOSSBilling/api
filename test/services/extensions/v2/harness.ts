@@ -22,8 +22,12 @@ const SECRET = "test-assertion-signing-secret";
 // The real D1_EXTENSIONS binding. beforeEach captures it fresh each time and
 // afterEach always restores env.DB_EXTENSIONS to this reference, so the
 // handful of tests that temporarily wrap it (see db-interceptor.ts) for a
-// fault/race injection never leak that wrapper into the next test.
-let db: D1Database;
+// fault/race injection never leak that wrapper into the next test. Suites
+// read it with `import { db }` — an ES module live binding, so they see each
+// beforeEach reassignment. They must never assign to it; the tests that
+// inject a fault replace env.DB_EXTENSIONS instead, which is what keeps the
+// fixtures below running against the unwrapped binding.
+export let db: D1Database;
 
 // The default applied in beforeEach: DeveloperClaimsDatabase.claim()'s GitHub
 // entity-existence check must never make a real network call. "Not found"
@@ -58,9 +62,8 @@ function freshProfileCreationRateLimiter(): RateLimit {
 }
 
 // Every v2 suite calls this once at the top of the file. It owns migrations,
-// per-test database reset, the rate-limiter stub, and the GitHub mock default.
-// Each suite still declares its own `let db` and captures env.DB_EXTENSIONS,
-// because fixture helpers take the binding as their first argument.
+// per-test database reset, the rate-limiter stub, the GitHub mock default,
+// and the exported `db` binding the suites import.
 export function setupExtensionsV2Tests(): void {
   beforeAll(applyTestMigrations);
 

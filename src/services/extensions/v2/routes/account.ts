@@ -3,7 +3,7 @@ import { getAuth } from "../../../../lib/auth";
 import { statusFromErrorCode } from "./errors";
 import {
   ActiveAccountRequiredResponse,
-  ErrorResponseSchema
+  errorResponse
 } from "../schemas/common";
 import {
   UserIdentityInputSchema,
@@ -50,22 +50,13 @@ export function registerAccountRoutes(
         },
         description: "Identity projection synchronized"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
+      401: errorResponse("Missing or invalid bearer token"),
       403: {
         ...ActiveAccountRequiredResponse,
         description: "Identity synchronization requires a trusted assertion"
       },
-      422: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Identity payload failed validation"
-      },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      422: errorResponse("Identity payload failed validation"),
+      500: errorResponse("Database error")
     }
   });
 
@@ -114,18 +105,9 @@ export function registerAccountRoutes(
         },
         description: "The caller's account projection, including active status"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
-      404: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Account does not exist"
-      },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      401: errorResponse("Missing or invalid bearer token"),
+      404: errorResponse("Account does not exist"),
+      500: errorResponse("Database error")
     }
   });
 
@@ -176,19 +158,10 @@ export function registerAccountRoutes(
         },
         description: "Profile updated"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
+      401: errorResponse("Missing or invalid bearer token"),
       403: ActiveAccountRequiredResponse,
-      404: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Account does not exist or has been deleted"
-      },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      404: errorResponse("Account does not exist or has been deleted"),
+      500: errorResponse("Database error")
     }
   });
 
@@ -248,22 +221,10 @@ export function registerAccountRoutes(
         },
         description: "Account deleted"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
-      404: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Account does not exist"
-      },
-      409: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Account still owns protected domain records"
-      },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      401: errorResponse("Missing or invalid bearer token"),
+      404: errorResponse("Account does not exist"),
+      409: errorResponse("Account still owns protected domain records"),
+      500: errorResponse("Database error")
     }
   });
 

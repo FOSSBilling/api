@@ -1,6 +1,6 @@
 import { createRoute, z } from "@hono/zod-openapi";
 import { statusFromErrorCode } from "./errors";
-import { ErrorResponseSchema, IdParamSchema } from "../schemas/common";
+import { IdParamSchema, errorResponse } from "../schemas/common";
 import {
   ExtensionListQuerySchema,
   ExtensionListResponseSchema,
@@ -28,14 +28,8 @@ export function registerPublicExtensionsRoutes(
         },
         description: "Extensions matching the given filters"
       },
-      422: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Filter or pagination query failed validation"
-      },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      422: errorResponse("Filter or pagination query failed validation"),
+      500: errorResponse("Database error")
     }
   });
 
@@ -86,18 +80,9 @@ export function registerPublicExtensionsRoutes(
         },
         description: "The extension"
       },
-      404: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "No extension with that id"
-      },
-      422: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "id param failed validation"
-      },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      404: errorResponse("No extension with that id"),
+      422: errorResponse("id param failed validation"),
+      500: errorResponse("Database error")
     }
   });
 

@@ -1,9 +1,10 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { env } from "cloudflare:workers";
 import { request as ghRequest } from "@octokit/request";
 import { wrapD1WithHook } from "./db-interceptor";
 import {
   setupExtensionsV2Tests,
+  db,
   authHeaders,
   post,
   get,
@@ -29,23 +30,11 @@ import {
 
 // Hoisted so no v2 suite can make a real GitHub call. harness.ts applies the
 // default "not found" behaviour in beforeEach and documents why.
-vi.mock("@octokit/request", () => {
-  const endpoint = { DEFAULTS: {} };
-  const derivedFn = Object.assign(vi.fn(), { defaults: vi.fn(), endpoint });
-  const request = Object.assign(vi.fn(), {
-    defaults: vi.fn().mockReturnValue(derivedFn),
-    endpoint
-  });
-  return { request };
-});
-
-let db: D1Database;
+vi.mock("@octokit/request", async () =>
+  (await import("../../../mocks/octokit")).octokitRequestMock()
+);
 
 setupExtensionsV2Tests();
-
-beforeEach(() => {
-  db = env.DB_EXTENSIONS;
-});
 
 describe("Extensions API v2", () => {
   describe("developer transfers", () => {

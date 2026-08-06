@@ -6,9 +6,9 @@ import {
 } from "./errors";
 import {
   ActiveAccountRequiredResponse,
-  ErrorResponseSchema,
   IdParamSchema,
-  ReviewNoteRequiredSchema
+  ReviewNoteRequiredSchema,
+  errorResponse
 } from "../schemas/common";
 import { DeveloperProfileSchema } from "../schemas/developers";
 import {
@@ -48,41 +48,22 @@ export function registerOwnershipRoutes(
         },
         description: "Claim created and pending moderator review"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
-      404: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "No developer with that id"
-      },
+      401: errorResponse("Missing or invalid bearer token"),
+      404: errorResponse("No developer with that id"),
       403: {
         ...ActiveAccountRequiredResponse,
         description:
           "The account is inactive, or the caller's linked GitHub account doesn't match this developer's GitHub organization or username"
       },
-      409: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description:
-          "Profile is already owned, caller already owns a different profile, or already has a pending claim on this one"
-      },
-      429: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "GitHub verification is temporarily rate limited"
-      },
-      503: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "GitHub verification is temporarily unavailable"
-      },
-      422: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description:
-          "The request failed validation, or the GitHub account type is unsupported"
-      },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      409: errorResponse(
+        "Profile is already owned, caller already owns a different profile, or already has a pending claim on this one"
+      ),
+      429: errorResponse("GitHub verification is temporarily rate limited"),
+      503: errorResponse("GitHub verification is temporarily unavailable"),
+      422: errorResponse(
+        "The request failed validation, or the GitHub account type is unsupported"
+      ),
+      500: errorResponse("Database error")
     }
   });
 
@@ -138,23 +119,11 @@ export function registerOwnershipRoutes(
         },
         description: "Claim withdrawn"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
+      401: errorResponse("Missing or invalid bearer token"),
       403: ActiveAccountRequiredResponse,
-      404: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "No pending claim with that id owned by the caller"
-      },
-      422: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "id param failed validation"
-      },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      404: errorResponse("No pending claim with that id owned by the caller"),
+      422: errorResponse("id param failed validation"),
+      500: errorResponse("Database error")
     }
   });
 
@@ -196,15 +165,9 @@ export function registerOwnershipRoutes(
         },
         description: "The caller's claims"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
+      401: errorResponse("Missing or invalid bearer token"),
       403: ActiveAccountRequiredResponse,
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      500: errorResponse("Database error")
     }
   });
 
@@ -247,18 +210,12 @@ export function registerOwnershipRoutes(
         },
         description: "Claims awaiting moderator review"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
+      401: errorResponse("Missing or invalid bearer token"),
       403: {
         ...ActiveAccountRequiredResponse,
         description: "The account is inactive or the caller is not a moderator"
       },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      500: errorResponse("Database error")
     }
   });
 
@@ -302,31 +259,17 @@ export function registerOwnershipRoutes(
         description:
           "Claim approved; profile ownership transferred to the claimant"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
+      401: errorResponse("Missing or invalid bearer token"),
       403: {
         ...ActiveAccountRequiredResponse,
         description: "The account is inactive or the caller is not a moderator"
       },
-      404: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "No claim or developer with that id"
-      },
-      409: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description:
-          "Claim is no longer pending, profile is no longer unowned, or the claimant now owns a different profile"
-      },
-      422: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "id param failed validation"
-      },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      404: errorResponse("No claim or developer with that id"),
+      409: errorResponse(
+        "Claim is no longer pending, profile is no longer unowned, or the claimant now owns a different profile"
+      ),
+      422: errorResponse("id param failed validation"),
+      500: errorResponse("Database error")
     }
   });
 
@@ -376,26 +319,14 @@ export function registerOwnershipRoutes(
         },
         description: "Claim rejected"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
+      401: errorResponse("Missing or invalid bearer token"),
       403: {
         ...ActiveAccountRequiredResponse,
         description: "The account is inactive or the caller is not a moderator"
       },
-      404: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "No pending claim with that id"
-      },
-      422: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "id param or review_note body failed validation"
-      },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      404: errorResponse("No pending claim with that id"),
+      422: errorResponse("id param or review_note body failed validation"),
+      500: errorResponse("Database error")
     }
   });
 
@@ -440,27 +371,15 @@ export function registerOwnershipRoutes(
         description:
           "Transfer token created; share it out-of-band with the recipient"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
+      401: errorResponse("Missing or invalid bearer token"),
       403: {
         ...ActiveAccountRequiredResponse,
         description:
           "The account is inactive or the caller does not own this profile"
       },
-      404: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "No developer with that id"
-      },
-      422: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "id param failed validation"
-      },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      404: errorResponse("No developer with that id"),
+      422: errorResponse("id param failed validation"),
+      500: errorResponse("Database error")
     }
   });
 
@@ -504,27 +423,15 @@ export function registerOwnershipRoutes(
         },
         description: "Any pending transfer for this profile is revoked"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
+      401: errorResponse("Missing or invalid bearer token"),
       403: {
         ...ActiveAccountRequiredResponse,
         description:
           "The account is inactive or the caller does not own this profile"
       },
-      404: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "No developer with that id"
-      },
-      422: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "id param failed validation"
-      },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      404: errorResponse("No developer with that id"),
+      422: errorResponse("id param failed validation"),
+      500: errorResponse("Database error")
     }
   });
 
@@ -570,27 +477,12 @@ export function registerOwnershipRoutes(
         },
         description: "Profile is now owned by the caller"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
+      401: errorResponse("Missing or invalid bearer token"),
       403: ActiveAccountRequiredResponse,
-      404: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Transfer link is invalid, already used, or expired"
-      },
-      409: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Caller already owns a different developer profile"
-      },
-      422: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "token body failed validation"
-      },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      404: errorResponse("Transfer link is invalid, already used, or expired"),
+      409: errorResponse("Caller already owns a different developer profile"),
+      422: errorResponse("token body failed validation"),
+      500: errorResponse("Database error")
     }
   });
 

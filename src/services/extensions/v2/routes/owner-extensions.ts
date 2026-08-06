@@ -1,7 +1,7 @@
 import { createRoute } from "@hono/zod-openapi";
 import {
   ActiveAccountRequiredResponse,
-  ErrorResponseSchema
+  errorResponse
 } from "../schemas/common";
 import {
   ExtensionListResponseSchema,
@@ -30,19 +30,10 @@ export function registerOwnerExtensionsRoutes(
         },
         description: "The caller's published extensions"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
+      401: errorResponse("Missing or invalid bearer token"),
       403: ActiveAccountRequiredResponse,
-      422: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Pagination query failed validation"
-      },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      422: errorResponse("Pagination query failed validation"),
+      500: errorResponse("Database error")
     }
   });
 

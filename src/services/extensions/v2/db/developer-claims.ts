@@ -5,7 +5,8 @@ import { developerClaims, developers, users } from "./schema";
 import {
   databaseError,
   errorMessageChain,
-  isDeveloperOwnerConflict
+  isDeveloperOwnerConflict,
+  isPendingClaimConflict
 } from "./errors";
 import { toD1Statement } from "./batch";
 import { Developer, DeveloperProfile } from "../schemas/developers";
@@ -32,12 +33,6 @@ function parseClaimRow(row: ClaimRow): DeveloperClaim {
         : row.githubOrgVerified === 1,
     github_verification_note: row.githubVerificationNote ?? undefined
   };
-}
-
-function isPendingClaimConflict(error: unknown): boolean {
-  return /UNIQUE constraint failed.*developer_claims/i.test(
-    errorMessageChain(error)
-  );
 }
 
 export class DeveloperClaimsDatabase {

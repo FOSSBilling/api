@@ -17,24 +17,37 @@ export function errorMessageChain(error: unknown): string {
   return parts.join(" ");
 }
 
-// Matches the SQLite/D1 message for the unique owner index. Several
-// ownership workflows need to translate this race into the same conflict
-// response, so keep the classifier beside the shared database error helpers.
-export function isDeveloperOwnerConflict(error: unknown): boolean {
-  return /UNIQUE constraint failed.*owner_user_id/i.test(
+// Every unique-constraint classifier below matches D1 driver message text,
+// which means each one is coupled to a physical index or table name in
+// db/schema.ts with nothing but this comment linking them. Keep them all
+// here so a migration that renames one has a single place to check.
+const uniqueConstraintMatcher = (target: RegExp) => (error: unknown) =>
+  new RegExp(`UNIQUE constraint failed.*${target.source}`, "i").test(
     errorMessageChain(error)
   );
-}
+
+// Matches the SQLite/D1 message for the unique owner index. Several
+// ownership workflows need to translate this race into the same conflict
+// response.
+export const isDeveloperOwnerConflict =
+  uniqueConstraintMatcher(/owner_user_id/);
 
 // A concurrent first-time profile creation can lose the developers primary-key
 // race after both requests pass the cheap existence check. Translate that
 // SQLite/D1 constraint failure into the same conflict returned by the
 // pre-flight check instead of exposing it as a generic database error.
-export function isDeveloperIdConflict(error: unknown): boolean {
-  return /UNIQUE constraint failed.*developers\.id/i.test(
-    errorMessageChain(error)
-  );
-}
+export const isDeveloperIdConflict = uniqueConstraintMatcher(/developers\.id/);
+
+// A second pending claim for the same developer loses the partial unique
+// index race; the route reports it as the same conflict the pre-flight
+// check would have.
+export const isPendingClaimConflict =
+  uniqueConstraintMatcher(/developer_claims/);
+
+// Same race for a second pending submission targeting one extension.
+export const isPendingTargetConflict = uniqueConstraintMatcher(
+  /extension_submissions/
+);
 
 // Logs the real error server-side and returns a generic message to the
 // caller — DB exception text can leak schema/backend details otherwise.
