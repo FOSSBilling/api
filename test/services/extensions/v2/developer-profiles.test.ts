@@ -1015,6 +1015,29 @@ describe("Extensions API v2", () => {
       expect(data.result.avatar_url).toBeUndefined();
       expect(data.result.contact_email).toBeUndefined();
     });
+
+    // The profile body is strict so server-owned fields (approved,
+    // content_revision, the github_* verification signals) can never be set by
+    // the caller. Unknown keys report at the root path - the body has no
+    // nesting.
+    it("rejects an unknown field in the profile body", async () => {
+      const res = await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        { ...sampleDeveloper(), approved: true }
+      );
+
+      expect(res.status).toBe(422);
+      const body = (await res.json()) as {
+        error: { details: Array<{ code: string; path: PropertyKey[] }> };
+      };
+      expect(body.error.details).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ code: "unrecognized_keys", path: [] })
+        ])
+      );
+      expect(await hasDeveloper(db, "dev-developer")).toBe(false);
+    });
   });
 
   describe("DELETE /developers/me", () => {

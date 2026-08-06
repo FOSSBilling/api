@@ -15,7 +15,7 @@ import {
 } from "../schemas/common";
 import {
   DeveloperProfileSchema,
-  DeveloperSchema,
+  DeveloperInputSchema,
   OwnedDeveloperProfileSchema,
   PublicDeveloperSchema,
   ReverifyQuerySchema,
@@ -79,7 +79,7 @@ export function registerDeveloperProfileRoutes(app: ExtensionsV2App): void {
     middleware: [requireActiveAuth()] as const,
     request: {
       body: {
-        content: { "application/json": { schema: DeveloperSchema } }
+        content: { "application/json": { schema: DeveloperInputSchema } }
       }
     },
     responses: {

@@ -63,12 +63,14 @@ export const ReviewNoteOptionalSchema = z
   .object({
     review_note: z.string().max(2000).optional()
   })
+  .strict()
   .openapi("ReviewNoteOptional");
 
 export const ReviewNoteRequiredSchema = z
   .object({
     review_note: z.string().min(1).max(2000)
   })
+  .strict()
   .openapi("ReviewNoteRequired");
 
 export const PaginationSchema = z

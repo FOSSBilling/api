@@ -36,6 +36,15 @@ export const DeveloperSchema = z
 
 export type Developer = z.infer<typeof DeveloperSchema>;
 
+// The PUT /developers/me request body. Separate from DeveloperSchema because
+// that one is also allOf/0 of the DeveloperProfile response, and strictness
+// propagates through extend/pick/omit - an additionalProperties:false branch
+// inside an allOf would reject the properties the sibling branch contributes,
+// and would tell generated clients to reject response fields added later.
+// Naming follows UserIdentityInputSchema.
+export const DeveloperInputSchema =
+  DeveloperSchema.strict().openapi("DeveloperInput");
+
 // Submissions go through moderation and only ever touch identity fields —
 // profile fields (avatar_url/contact_email) are direct-write-only via
 // PUT /developers/me, so this schema rejects them instead of silently

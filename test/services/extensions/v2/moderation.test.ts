@@ -370,6 +370,43 @@ describe("Extensions API v2", () => {
       expect(body.result.status).toBe("rejected");
       expect(await countExtensions(db)).toBe(0);
     });
+
+    // Both review-note bodies are strict: the reviewer decision is derived
+    // from the route, never from the payload, so an unknown key is a client
+    // mistake rather than something to drop silently.
+    it("rejects an unknown field in the approve and reject bodies", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await seedDeveloper("new-developer", "user-1");
+      await insertSubmission(db, {
+        id: "strict-body-submission",
+        developer_id: "new-developer",
+        submitted_by: "user-1",
+        payload: JSON.stringify(samplePayload({ developerId: "new-developer" }))
+      });
+      const headers = await authHeaders("mod-1");
+
+      for (const path of ["approve", "reject"]) {
+        const res = await post(
+          `/extensions/v2/submissions/strict-body-submission/${path}`,
+          headers,
+          { review_note: "looks fine", reviewer_id: "someone-else" }
+        );
+
+        expect(res.status).toBe(422);
+        const body = (await res.json()) as {
+          error: { details: Array<{ code: string; path: PropertyKey[] }> };
+        };
+        expect(body.error.details).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ code: "unrecognized_keys", path: [] })
+          ])
+        );
+      }
+
+      expect(await getSubmission(db, "strict-body-submission")).toMatchObject({
+        status: "pending"
+      });
+    });
   });
 
   describe("developer moderation", () => {
