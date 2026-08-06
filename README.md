@@ -15,8 +15,7 @@ The worker exposes three main services:
   Allows the project to push critical notifications to all FOSSBilling installations—useful for security hotfixes or major announcements.
 
 - **Extensions** (`/extensions/v1`, `/extensions/v2`)
-  Owns the complete Extensions domain and its `DB_EXTENSIONS` schema. The separate
-  Extensions site keeps OIDC/session state but accesses this domain through the
+  Owns the complete Extensions domain and its `DB_EXTENSIONS` schema. The separate Extensions site keeps OIDC/session state but accesses this domain through the
   generated HTTPS API client; it must not bind or migrate `DB_EXTENSIONS`.
   See [`src/services/extensions/v2/README.md`](src/services/extensions/v2/README.md).
 
@@ -25,13 +24,12 @@ The worker exposes three main services:
 We've structured the app to separate the core logic from the specific runtime environment (Cloudflare, Node, etc.).
 
 - **Application Logic**: Found in `src/services/versions/v1`, `src/services/central-alerts/v1`, etc. These feature modules don't know they are running on Cloudflare.
-  Smaller services are a flat `index.ts` + `interfaces.ts`; `src/services/extensions/v2` is the
-  reference layout for larger ones, splitting into `routes/`, `db/`, `schemas/`, and `github/`.
+  Smaller services are a flat `index.ts` + `interfaces.ts`; `src/services/extensions/v2` is the reference layout for larger ones, splitting into `routes/`, `db/`, `schemas/`, and `github/`.
   See `AGENTS.md` for what belongs in each.
 - **Platform Layer**: Located in `src/lib`. This defines interfaces for things like Cache, Database, and Environment variables.
 - **Adapters**:
-- `src/lib/adapters/cloudflare`: Real implementations using KV and D1.
-- `src/lib/adapters/node`: Reference implementations (useful for testing or alternative deployments).
+  - `src/lib/adapters/cloudflare`: Real implementations using KV and D1.
+  - `src/lib/adapters/node`: Reference implementations (useful for testing or alternative deployments).
 
 ## APIs
 
@@ -44,8 +42,7 @@ Each service documents its own endpoints and behaviour:
 | Stats          | `/stats/v1`                        | [`src/services/stats/v1/README.md`](src/services/stats/v1/README.md)                   |
 | Extensions     | `/extensions/v1`, `/extensions/v2` | [`src/services/extensions/v2/README.md`](src/services/extensions/v2/README.md)         |
 
-Extensions v2 also publishes a live OpenAPI document at
-`/extensions/v2/openapi.json` and a reference UI at `/extensions/v2/docs`.
+Extensions v2 also publishes a live OpenAPI document at `/extensions/v2/openapi.json` and a reference UI at `/extensions/v2/docs`.
 
 ## Configuration
 
@@ -57,24 +54,17 @@ We use [Cloudflare D1](https://developers.cloudflare.com/d1/) and [KV](https://d
 
 - **D1 Database** (`DB_CENTRAL_ALERTS`): Stores the alert messages.
 - **D1 Database** (`DB_EXTENSIONS`): Stores the complete Extensions domain.
-  Migrations are owned by extensions v2 and applied only from this repository —
-  see [its README](src/services/extensions/v2/README.md#database) for the
-  migration and adoption procedure.
+  Migrations are owned by extensions v2 and applied only from this repository — see [its README](src/services/extensions/v2/README.md#database) for the migration and adoption procedure.
 - **KV Namespace** (`CACHE_KV`): Caches GitHub API responses so we don't hit rate limits.
 - **KV Namespace** (`AUTH_KV`): Stores the `UPDATE_TOKEN` value for `/versions/v1/update`.
 
 ### Environment Variables
 
 - `GITHUB_TOKEN`: A GitHub Personal Access Token (classic) with public repo read access.
-- `ASSERTION_SIGNING_SECRET`: Shared HMAC secret used to verify the short-lived
-  bearer assertions minted by the Extensions site. Configure the same value
-  in both Workers; it is never sent to clients.
-- `ASSERTION_SIGNING_SECRET_PREVIOUS`: Optional previous HMAC secret accepted
-  during a signing-key rotation.
+- `ASSERTION_SIGNING_SECRET`: Shared HMAC secret used to verify the short-lived bearer assertions minted by the Extensions site. Configure the same value in both Workers; it is never sent to clients.
+- `ASSERTION_SIGNING_SECRET_PREVIOUS`: Optional previous HMAC secret accepted during a signing-key rotation.
 
-Only extensions v2 consumes these. For the assertion format and the
-rotation procedure, see
-[its README](src/services/extensions/v2/README.md#authentication).
+Only extensions v2 consumes these. For the assertion format and the rotation procedure, see [its README](src/services/extensions/v2/README.md#authentication).
 
 ## Development
 

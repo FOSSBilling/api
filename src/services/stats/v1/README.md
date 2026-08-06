@@ -2,8 +2,7 @@
 
 **Base Path:** `/stats/v1`
 
-Release statistics visualization for FOSSBilling versions. Reuses the release
-data already fetched by the versions service rather than calling GitHub itself.
+Release statistics visualization for FOSSBilling versions. Reuses the release data already fetched by the versions service rather than calling GitHub itself.
 
 ## Endpoints
 
@@ -24,6 +23,4 @@ Returns the aggregated statistics behind those charts as JSON.
 
 ## Caching
 
-Stats are cached with a 24-hour TTL and follow the same caching patterns as the
-versions service, including its graceful handling of GitHub API errors — a
-failed refresh serves the previous data rather than erroring.
+Stats are cached with a 24-hour TTL and follow the same caching patterns as the versions service, including its graceful handling of GitHub API errors — a failed refresh serves the previous data rather than erroring.
