@@ -54,37 +54,31 @@ function isFutureGithubOrgsExpiry(
   const match = RFC3339_TIMESTAMP.exec(value);
   if (!match) return false;
 
-  // Date.parse normalizes out-of-range calendar days (for example,
-  // 2025-02-30 becomes 2025-03-02) instead of rejecting them. Validate the
-  // date portion before parsing so malformed central-auth evidence cannot be
-  // treated as a usable, future membership snapshot.
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  if (month < 1 || month > 12 || day < 1) return false;
+  // Date.parse normalizes out-of-range fields instead of rejecting them
+  // (2025-02-30 becomes 2025-03-02, 24:00 rolls to the next day), so a
+  // malformed central-auth timestamp would otherwise be accepted as usable,
+  // future membership evidence. Round-tripping through Date.UTC and checking
+  // every field survived is equivalent to validating them by hand, and gets
+  // month lengths and leap years from the platform rather than a table here.
+  const [year, month, day, hour, minute, second] = match
+    .slice(1, 7)
+    .map(Number);
+  const roundTrip = new Date(
+    Date.UTC(year, month - 1, day, hour, minute, second)
+  );
+  if (
+    roundTrip.getUTCFullYear() !== year ||
+    roundTrip.getUTCMonth() !== month - 1 ||
+    roundTrip.getUTCDate() !== day ||
+    roundTrip.getUTCHours() !== hour ||
+    roundTrip.getUTCMinutes() !== minute ||
+    roundTrip.getUTCSeconds() !== second
+  ) {
+    return false;
+  }
 
-  const isLeapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
-  const daysInMonth = [
-    31,
-    isLeapYear ? 29 : 28,
-    31,
-    30,
-    31,
-    30,
-    31,
-    31,
-    30,
-    31,
-    30,
-    31
-  ][month - 1];
-  if (day > daysInMonth) return false;
-
-  const hour = Number(match[4]);
-  const minute = Number(match[5]);
-  const second = Number(match[6]);
-  if (hour > 23 || minute > 59 || second > 59) return false;
-
+  // The offset is applied by Date.parse below rather than by the round trip,
+  // so its range is still checked directly.
   const offsetHour = match[7] === undefined ? 0 : Number(match[7]);
   const offsetMinute = match[8] === undefined ? 0 : Number(match[8]);
   if (offsetHour > 23 || offsetMinute > 59) return false;
@@ -120,44 +114,29 @@ export class UsersDatabase {
       Array.isArray(input.githubOrgs) &&
       isFutureGithubOrgsExpiry(input.githubOrgsExpiresAt);
 
+    const projection = {
+      name: input.name,
+      email: input.email,
+      emailVerified: input.emailVerified ? 1 : 0,
+      picture: input.picture,
+      updatedAt: now,
+      githubLogin: input.githubLogin,
+      githubOrgs: hasFreshGithubOrgs ? JSON.stringify(input.githubOrgs) : null,
+      githubOrgsExpiresAt: hasFreshGithubOrgs
+        ? input.githubOrgsExpiresAt
+        : null,
+      deletedAt: null
+    };
+
     try {
       await this.db
         .insert(users)
-        .values({
-          id: userId,
-          name: input.name,
-          email: input.email,
-          emailVerified: input.emailVerified ? 1 : 0,
-          picture: input.picture,
-          createdAt: now,
-          updatedAt: now,
-          githubLogin: input.githubLogin,
-          githubOrgs: hasFreshGithubOrgs
-            ? JSON.stringify(input.githubOrgs)
-            : null,
-          githubOrgsExpiresAt: hasFreshGithubOrgs
-            ? input.githubOrgsExpiresAt
-            : null,
-          deletedAt: null
-        })
-        .onConflictDoUpdate({
-          target: users.id,
-          set: {
-            name: input.name,
-            email: input.email,
-            emailVerified: input.emailVerified ? 1 : 0,
-            picture: input.picture,
-            updatedAt: now,
-            githubLogin: input.githubLogin,
-            githubOrgs: hasFreshGithubOrgs
-              ? JSON.stringify(input.githubOrgs)
-              : null,
-            githubOrgsExpiresAt: hasFreshGithubOrgs
-              ? input.githubOrgsExpiresAt
-              : null,
-            deletedAt: null
-          }
-        })
+        .values({ ...projection, id: userId, createdAt: now })
+        // Insert and update must write the same projection - a field added to
+        // one and not the other would apply to new accounts but silently skip
+        // returning ones, or the reverse. created_at is the only difference,
+        // and it is deliberately not re-stamped on conflict.
+        .onConflictDoUpdate({ target: users.id, set: projection })
         .run();
 
       return this.get(userId);
@@ -366,7 +345,13 @@ export class UsersDatabase {
     }
   }
 
-  async isModerator(userId: string): Promise<DatabaseResult<boolean>> {
+  // Moderator routes need to tell "account deactivated" (ACCOUNT_INACTIVE)
+  // apart from "not a moderator" (FORBIDDEN), and both answers live in the
+  // same row - so they read it once here rather than stacking an isActive()
+  // check in front of a separate moderator lookup.
+  async moderatorAccess(
+    userId: string
+  ): Promise<DatabaseResult<{ active: boolean; moderator: boolean }>> {
     try {
       const [row] = await this.db
         .select({
@@ -375,12 +360,13 @@ export class UsersDatabase {
         })
         .from(users)
         .where(eq(users.id, userId));
+      const active = row !== undefined && row.deletedAt === null;
       return {
-        data: row?.deletedAt == null && row?.isModerator === 1,
+        data: { active, moderator: active && row.isModerator === 1 },
         error: null
       };
     } catch (error) {
-      return databaseError("isModerator", error);
+      return databaseError("moderatorAccess", error);
     }
   }
 

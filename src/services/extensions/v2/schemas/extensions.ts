@@ -1,5 +1,5 @@
 import { z } from "@hono/zod-openapi";
-import { httpUrl, lowercaseId } from "./common";
+import { httpUrl, lowercaseId, PaginationSchema } from "./common";
 import { PublicDeveloperSchema } from "./developers";
 
 export const EXTENSION_TYPES = [
@@ -134,9 +134,6 @@ export const ExtensionMineListQuerySchema = ExtensionListQuerySchema.omit({
 export const ExtensionListResponseSchema = z
   .object({
     result: z.array(ExtensionListItemSchema),
-    pagination: z.object({
-      next_cursor: z.string().nullable(),
-      has_more: z.boolean()
-    })
+    pagination: PaginationSchema
   })
   .openapi("ExtensionListResponse");

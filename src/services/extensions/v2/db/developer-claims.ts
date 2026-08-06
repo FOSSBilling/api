@@ -4,11 +4,11 @@ import { ExtensionsDb } from "../../../../lib/db";
 import { developerClaims, developers, users } from "./schema";
 import {
   databaseError,
-  errorMessageChain,
   isDeveloperOwnerConflict,
-  isPendingClaimConflict
+  isOwnershipEpochRollback
 } from "./errors";
 import { toD1Statement } from "./batch";
+import { optionalBool } from "./columns";
 import { Developer, DeveloperProfile } from "../schemas/developers";
 import { DeveloperClaim, PendingDeveloperClaim } from "../schemas/ownership";
 import { DeveloperProfilesDatabase } from "./developer-profiles";
@@ -27,10 +27,7 @@ function parseClaimRow(row: ClaimRow): DeveloperClaim {
     reviewer_id: row.reviewerId ?? undefined,
     created_at: row.createdAt,
     reviewed_at: row.reviewedAt ?? undefined,
-    github_org_verified:
-      row.githubOrgVerified === null || row.githubOrgVerified === undefined
-        ? undefined
-        : row.githubOrgVerified === 1,
+    github_org_verified: optionalBool(row.githubOrgVerified),
     github_verification_note: row.githubVerificationNote ?? undefined
   };
 }
@@ -93,9 +90,24 @@ export class DeveloperClaimsDatabase {
     if (developer.ownerUserId !== null) {
       return { code: "CONFLICT", message: "This profile is already owned" };
     }
+
+    const [ownProfile] = await this.db
+      .select({ id: developers.id })
+      .from(developers)
+      .where(eq(developers.ownerUserId, claimantId));
+    if (ownProfile) {
+      return {
+        code: "CONFLICT",
+        message: "You already have a developer profile"
+      };
+    }
+
+    // Every condition in the insert's WHERE guard holds, so the row was
+    // rejected by the pending-claim partial unique index instead - the
+    // claimant is replaying a claim they already have open here.
     return {
       code: "CONFLICT",
-      message: "You already have a developer profile"
+      message: "You already have a pending claim on this profile"
     };
   }
 
@@ -191,23 +203,21 @@ export class DeveloperClaimsDatabase {
         // re-checked here — it can't itself grant eligibility.) Kept as raw
         // sql: an INSERT...SELECT...WHERE EXISTS isn't expressible via
         // .insert().values().
+        // ON CONFLICT DO NOTHING turns a lost race against the pending-claim
+        // partial unique index into changes = 0, which the ineligibility
+        // diagnosis below already has to explain. Without it the driver threw
+        // and the only way to recognise the failure was to regex its message
+        // text for the index name - a coupling nothing but a comment held to
+        // db/schema.ts.
         result = await this.db.run(sql`
           INSERT INTO ${developerClaims} (id, developer_id, claimant_id, note, github_org_verified, github_verification_note)
              SELECT ${id}, ${developerId}, ${claimantId}, ${note ?? null}, ${githubOrgVerified}, ${githubVerificationNote}
              WHERE EXISTS (SELECT 1 FROM ${developers} WHERE id = ${developerId} AND owner_user_id IS NULL)
                AND NOT EXISTS (SELECT 1 FROM ${developers} WHERE owner_user_id = ${claimantId})
                AND EXISTS (SELECT 1 FROM ${users} WHERE ${users.id} = ${claimantId} AND ${users.deletedAt} IS NULL)
+          ON CONFLICT DO NOTHING
         `);
       } catch (error) {
-        if (isPendingClaimConflict(error)) {
-          return {
-            data: null,
-            error: {
-              code: "CONFLICT",
-              message: "You already have a pending claim on this profile"
-            }
-          };
-        }
         return databaseError("claim", error);
       }
 
@@ -453,11 +463,7 @@ export class DeveloperClaimsDatabase {
         rejectOthersStmt
       ]);
     } catch (error) {
-      if (
-        /CHECK constraint failed.*ownership_epoch/i.test(
-          errorMessageChain(error)
-        )
-      ) {
+      if (isOwnershipEpochRollback(error)) {
         return this.explainClaimApprovalNoOp(claim);
       }
       if (isDeveloperOwnerConflict(error)) {

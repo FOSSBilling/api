@@ -1,5 +1,10 @@
+import { requireActiveAuth, requireModerator } from "../middleware";
+import { getExtensionsDb } from "../../../../lib/db";
+import { getPlatform } from "../../../../lib/middleware";
+import { getAuth } from "../../../../lib/auth";
 import { createRoute, z } from "@hono/zod-openapi";
 import {
+  errorBody,
   statusFromErrorCode,
   statusFromGithubErrorCode,
   statusFromOwnershipErrorCode
@@ -20,19 +25,16 @@ import {
 } from "../schemas/ownership";
 import { DeveloperClaimsDatabase } from "../db/developer-claims";
 import { DeveloperTransfersDatabase } from "../db/developer-transfers";
-import { ExtensionsV2App, RouteDependencies } from "./dependencies";
+import { ExtensionsV2App } from "./app";
 
-export function registerOwnershipRoutes(
-  app: ExtensionsV2App,
-  dependencies: RouteDependencies
-): void {
+export function registerOwnershipRoutes(app: ExtensionsV2App): void {
   const claimDeveloperRoute = createRoute({
     method: "post",
     path: "/developers/{id}/claim",
     tags: ["Developers"],
     summary: "Request ownership of an unowned developer profile",
     security: [{ Bearer: [] }],
-    middleware: [dependencies.requireAuth()] as const,
+    middleware: [requireActiveAuth()] as const,
     request: {
       params: IdParamSchema,
       body: {
@@ -68,12 +70,12 @@ export function registerOwnershipRoutes(
   });
 
   app.openapi(claimDeveloperRoute, async (c) => {
-    const auth = dependencies.auth(c);
+    const auth = getAuth(c);
     const { id } = c.req.valid("param");
     const { note } = c.req.valid("json");
-    const platform = dependencies.platform(c);
+    const platform = getPlatform(c);
     const db = new DeveloperClaimsDatabase(
-      dependencies.database(c.env.DB_EXTENSIONS)
+      getExtensionsDb(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.claim(
       id,
@@ -83,12 +85,7 @@ export function registerOwnershipRoutes(
     );
     if (error || !data) {
       return c.json(
-        {
-          error: {
-            message: error?.message ?? "Unable to create claim",
-            code: error?.code ?? "DATABASE_ERROR"
-          }
-        },
+        errorBody(error, "Unable to create claim"),
         error?.code === "GITHUB_MISMATCH" || error?.code === "ACCOUNT_INACTIVE"
           ? 403
           : statusFromGithubErrorCode(
@@ -106,7 +103,7 @@ export function registerOwnershipRoutes(
     tags: ["Developers"],
     summary: "Withdraw the caller's own pending profile claim",
     security: [{ Bearer: [] }],
-    middleware: [dependencies.requireAuth()] as const,
+    middleware: [requireActiveAuth()] as const,
     request: { params: IdParamSchema },
     responses: {
       200: {
@@ -128,23 +125,15 @@ export function registerOwnershipRoutes(
   });
 
   app.openapi(cancelClaimRoute, async (c) => {
-    const auth = dependencies.auth(c);
+    const auth = getAuth(c);
     const { id } = c.req.valid("param");
     const db = new DeveloperClaimsDatabase(
-      dependencies.database(c.env.DB_EXTENSIONS)
+      getExtensionsDb(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.cancelClaim(id, auth.userId);
     if (error || !data) {
       const status = statusFromErrorCode(error?.code, false);
-      return c.json(
-        {
-          error: {
-            message: error?.message ?? "Unable to cancel claim",
-            code: error?.code ?? "DATABASE_ERROR"
-          }
-        },
-        status
-      );
+      return c.json(errorBody(error, "Unable to cancel claim"), status);
     }
     return c.json({ result: { id: data.id, cancelled: true as const } }, 200);
   });
@@ -155,7 +144,7 @@ export function registerOwnershipRoutes(
     tags: ["Developers"],
     summary: "List the caller's own profile claims, in any status",
     security: [{ Bearer: [] }],
-    middleware: [dependencies.requireAuth()] as const,
+    middleware: [requireActiveAuth()] as const,
     responses: {
       200: {
         content: {
@@ -172,9 +161,9 @@ export function registerOwnershipRoutes(
   });
 
   app.openapi(myClaimsRoute, async (c) => {
-    const auth = dependencies.auth(c);
+    const auth = getAuth(c);
     const db = new DeveloperClaimsDatabase(
-      dependencies.database(c.env.DB_EXTENSIONS)
+      getExtensionsDb(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.listMyClaims(auth.userId);
     if (error || !data) {
@@ -197,10 +186,7 @@ export function registerOwnershipRoutes(
     tags: ["Moderation"],
     summary: "List pending profile claims",
     security: [{ Bearer: [] }],
-    middleware: [
-      dependencies.requireAuth(),
-      dependencies.requireModerator()
-    ] as const,
+    middleware: [requireModerator()] as const,
     responses: {
       200: {
         content: {
@@ -221,7 +207,7 @@ export function registerOwnershipRoutes(
 
   app.openapi(pendingClaimsRoute, async (c) => {
     const db = new DeveloperClaimsDatabase(
-      dependencies.database(c.env.DB_EXTENSIONS)
+      getExtensionsDb(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.listPendingClaims();
     if (error || !data) {
@@ -244,10 +230,7 @@ export function registerOwnershipRoutes(
     tags: ["Moderation"],
     summary: "Approve a pending profile claim",
     security: [{ Bearer: [] }],
-    middleware: [
-      dependencies.requireAuth(),
-      dependencies.requireModerator()
-    ] as const,
+    middleware: [requireModerator()] as const,
     request: { params: IdParamSchema },
     responses: {
       200: {
@@ -274,20 +257,15 @@ export function registerOwnershipRoutes(
   });
 
   app.openapi(approveClaimRoute, async (c) => {
-    const auth = dependencies.auth(c);
+    const auth = getAuth(c);
     const { id } = c.req.valid("param");
     const db = new DeveloperClaimsDatabase(
-      dependencies.database(c.env.DB_EXTENSIONS)
+      getExtensionsDb(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.approveClaim(id, auth.userId);
     if (error || !data) {
       return c.json(
-        {
-          error: {
-            message: error?.message ?? "Unable to approve claim",
-            code: error?.code ?? "DATABASE_ERROR"
-          }
-        },
+        errorBody(error, "Unable to approve claim"),
         statusFromErrorCode(error?.code)
       );
     }
@@ -300,10 +278,7 @@ export function registerOwnershipRoutes(
     tags: ["Moderation"],
     summary: "Reject a pending profile claim",
     security: [{ Bearer: [] }],
-    middleware: [
-      dependencies.requireAuth(),
-      dependencies.requireModerator()
-    ] as const,
+    middleware: [requireModerator()] as const,
     request: {
       params: IdParamSchema,
       body: {
@@ -331,24 +306,16 @@ export function registerOwnershipRoutes(
   });
 
   app.openapi(rejectClaimRoute, async (c) => {
-    const auth = dependencies.auth(c);
+    const auth = getAuth(c);
     const { id } = c.req.valid("param");
     const { review_note } = c.req.valid("json");
     const db = new DeveloperClaimsDatabase(
-      dependencies.database(c.env.DB_EXTENSIONS)
+      getExtensionsDb(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.rejectClaim(id, auth.userId, review_note);
     if (error || !data) {
       const status = statusFromErrorCode(error?.code, false);
-      return c.json(
-        {
-          error: {
-            message: error?.message ?? "Unable to reject claim",
-            code: error?.code ?? "DATABASE_ERROR"
-          }
-        },
-        status
-      );
+      return c.json(errorBody(error, "Unable to reject claim"), status);
     }
     return c.json({ result: data }, 200);
   });
@@ -359,7 +326,7 @@ export function registerOwnershipRoutes(
     tags: ["Developers"],
     summary: "Create a single-use link to hand this profile to another account",
     security: [{ Bearer: [] }],
-    middleware: [dependencies.requireAuth()] as const,
+    middleware: [requireActiveAuth()] as const,
     request: { params: IdParamSchema },
     responses: {
       200: {
@@ -384,20 +351,15 @@ export function registerOwnershipRoutes(
   });
 
   app.openapi(initiateTransferRoute, async (c) => {
-    const auth = dependencies.auth(c);
+    const auth = getAuth(c);
     const { id } = c.req.valid("param");
     const db = new DeveloperTransfersDatabase(
-      dependencies.database(c.env.DB_EXTENSIONS)
+      getExtensionsDb(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.initiateTransfer(id, auth.userId);
     if (error || !data) {
       return c.json(
-        {
-          error: {
-            message: error?.message ?? "Unable to create transfer",
-            code: error?.code ?? "DATABASE_ERROR"
-          }
-        },
+        errorBody(error, "Unable to create transfer"),
         statusFromOwnershipErrorCode(error?.code)
       );
     }
@@ -410,7 +372,7 @@ export function registerOwnershipRoutes(
     tags: ["Developers"],
     summary: "Revoke this profile's pending transfer link, if any",
     security: [{ Bearer: [] }],
-    middleware: [dependencies.requireAuth()] as const,
+    middleware: [requireActiveAuth()] as const,
     request: { params: IdParamSchema },
     responses: {
       200: {
@@ -436,20 +398,15 @@ export function registerOwnershipRoutes(
   });
 
   app.openapi(revokeTransferRoute, async (c) => {
-    const auth = dependencies.auth(c);
+    const auth = getAuth(c);
     const { id } = c.req.valid("param");
     const db = new DeveloperTransfersDatabase(
-      dependencies.database(c.env.DB_EXTENSIONS)
+      getExtensionsDb(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.revokeTransfer(id, auth.userId);
     if (error || !data) {
       return c.json(
-        {
-          error: {
-            message: error?.message ?? "Unable to revoke transfer",
-            code: error?.code ?? "DATABASE_ERROR"
-          }
-        },
+        errorBody(error, "Unable to revoke transfer"),
         statusFromOwnershipErrorCode(error?.code)
       );
     }
@@ -462,7 +419,7 @@ export function registerOwnershipRoutes(
     tags: ["Developers"],
     summary: "Accept a developer profile transfer using its single-use token",
     security: [{ Bearer: [] }],
-    middleware: [dependencies.requireAuth()] as const,
+    middleware: [requireActiveAuth()] as const,
     request: {
       body: {
         content: { "application/json": { schema: TransferAcceptanceSchema } }
@@ -487,10 +444,10 @@ export function registerOwnershipRoutes(
   });
 
   app.openapi(acceptTransferRoute, async (c) => {
-    const auth = dependencies.auth(c);
+    const auth = getAuth(c);
     const { token } = c.req.valid("json");
     const db = new DeveloperTransfersDatabase(
-      dependencies.database(c.env.DB_EXTENSIONS)
+      getExtensionsDb(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.acceptTransfer(token, auth.userId);
     if (error || !data) {
@@ -498,15 +455,7 @@ export function registerOwnershipRoutes(
         error?.code === "ACCOUNT_INACTIVE"
           ? 403
           : statusFromErrorCode(error?.code);
-      return c.json(
-        {
-          error: {
-            message: error?.message ?? "Unable to accept transfer",
-            code: error?.code ?? "DATABASE_ERROR"
-          }
-        },
-        status
-      );
+      return c.json(errorBody(error, "Unable to accept transfer"), status);
     }
     return c.json({ result: data }, 200);
   });

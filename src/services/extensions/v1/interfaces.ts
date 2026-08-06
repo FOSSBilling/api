@@ -1,19 +1,17 @@
 import { gt } from "semver";
 import { sortReleasesDescending } from "../../../lib/releases";
 import { parseJSON } from "../../../lib/json";
+import { EXTENSION_TYPES } from "../v2/schemas/extensions";
 
 export { sortReleasesDescending, parseJSON };
 
 export type Extension = {
   id: string;
-  type:
-    | "mod"
-    | "theme"
-    | "payment-gateway"
-    | "server-manager"
-    | "domain-registrar"
-    | "hook"
-    | "translation";
+  // Derived from v2 rather than restated: both describe the same
+  // extensions.type column (v1/database.ts already reads v2's db/schema), so a
+  // new extension type would otherwise pass v2's runtime validator while v1's
+  // type silently disagreed.
+  type: (typeof EXTENSION_TYPES)[number];
   name: string;
   description: string;
   author: Author;

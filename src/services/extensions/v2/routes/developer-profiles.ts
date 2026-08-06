@@ -1,5 +1,13 @@
+import { requireActiveAuth } from "../middleware";
+import { getExtensionsDb } from "../../../../lib/db";
+import { getPlatform } from "../../../../lib/middleware";
+import { getAuth } from "../../../../lib/auth";
 import { createRoute, z } from "@hono/zod-openapi";
-import { statusFromErrorCode, statusFromGithubErrorCode } from "./errors";
+import {
+  errorBody,
+  statusFromErrorCode,
+  statusFromGithubErrorCode
+} from "./errors";
 import {
   ActiveAccountRequiredResponse,
   IdParamSchema,
@@ -14,19 +22,16 @@ import {
   toPublicDeveloper
 } from "../schemas/developers";
 import { DeveloperProfilesDatabase } from "../db/developer-profiles";
-import { ExtensionsV2App, RouteDependencies } from "./dependencies";
+import { ExtensionsV2App } from "./app";
 
-export function registerDeveloperProfileRoutes(
-  app: ExtensionsV2App,
-  dependencies: RouteDependencies
-): void {
+export function registerDeveloperProfileRoutes(app: ExtensionsV2App): void {
   const getOwnDeveloperRoute = createRoute({
     method: "get",
     path: "/developers/me",
     tags: ["Developers"],
     summary: "Get the caller's own developer profile",
     security: [{ Bearer: [] }],
-    middleware: [dependencies.requireAuth()] as const,
+    middleware: [requireActiveAuth()] as const,
     responses: {
       200: {
         content: {
@@ -43,9 +48,9 @@ export function registerDeveloperProfileRoutes(
   });
 
   app.openapi(getOwnDeveloperRoute, async (c) => {
-    const auth = dependencies.auth(c);
+    const auth = getAuth(c);
     const db = new DeveloperProfilesDatabase(
-      dependencies.database(c.env.DB_EXTENSIONS)
+      getExtensionsDb(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.getOwn(auth.userId);
     if (error || data === null) {
@@ -71,7 +76,7 @@ export function registerDeveloperProfileRoutes(
     tags: ["Developers"],
     summary: "Create or update the caller's own developer profile",
     security: [{ Bearer: [] }],
-    middleware: [dependencies.requireAuth()] as const,
+    middleware: [requireActiveAuth()] as const,
     request: {
       body: {
         content: { "application/json": { schema: DeveloperSchema } }
@@ -108,11 +113,11 @@ export function registerDeveloperProfileRoutes(
   });
 
   app.openapi(upsertOwnDeveloperRoute, async (c) => {
-    const auth = dependencies.auth(c);
+    const auth = getAuth(c);
     const body = c.req.valid("json");
-    const platform = dependencies.platform(c);
+    const platform = getPlatform(c);
     const db = new DeveloperProfilesDatabase(
-      dependencies.database(c.env.DB_EXTENSIONS)
+      getExtensionsDb(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.upsertOwn(
       auth.userId,
@@ -139,12 +144,7 @@ export function registerDeveloperProfileRoutes(
               ? 409
               : statusFromGithubErrorCode(error?.code, 500);
       const response = c.json(
-        {
-          error: {
-            message: error?.message ?? "Unable to save developer profile",
-            code: error?.code ?? "DATABASE_ERROR"
-          }
-        },
+        errorBody(error, "Unable to save developer profile"),
         status
       );
       if (error?.code === "PROFILE_CREATION_RATE_LIMITED") {
@@ -161,7 +161,7 @@ export function registerDeveloperProfileRoutes(
     tags: ["Developers"],
     summary: "Permanently delete the caller's own developer profile",
     security: [{ Bearer: [] }],
-    middleware: [dependencies.requireAuth()] as const,
+    middleware: [requireActiveAuth()] as const,
     responses: {
       200: {
         content: {
@@ -184,19 +184,14 @@ export function registerDeveloperProfileRoutes(
   });
 
   app.openapi(deleteOwnDeveloperRoute, async (c) => {
-    const auth = dependencies.auth(c);
+    const auth = getAuth(c);
     const db = new DeveloperProfilesDatabase(
-      dependencies.database(c.env.DB_EXTENSIONS)
+      getExtensionsDb(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.deleteOwn(auth.userId);
     if (error || !data) {
       return c.json(
-        {
-          error: {
-            message: error?.message ?? "Unable to delete developer profile",
-            code: error?.code ?? "DATABASE_ERROR"
-          }
-        },
+        errorBody(error, "Unable to delete developer profile"),
         error?.code === "ACCOUNT_INACTIVE"
           ? 403
           : statusFromErrorCode(error?.code)
@@ -212,7 +207,7 @@ export function registerDeveloperProfileRoutes(
     summary:
       "Re-check the caller's linked GitHub identity against their own developer profile",
     security: [{ Bearer: [] }],
-    middleware: [dependencies.requireAuth()] as const,
+    middleware: [requireActiveAuth()] as const,
     request: { query: ReverifyQuerySchema },
     responses: {
       200: {
@@ -237,11 +232,11 @@ export function registerDeveloperProfileRoutes(
   });
 
   app.openapi(reverifyOwnDeveloperRoute, async (c) => {
-    const auth = dependencies.auth(c);
+    const auth = getAuth(c);
     const { check_url } = c.req.valid("query");
-    const platform = dependencies.platform(c);
+    const platform = getPlatform(c);
     const db = new DeveloperProfilesDatabase(
-      dependencies.database(c.env.DB_EXTENSIONS)
+      getExtensionsDb(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.reverifyOwn(
       auth.userId,
@@ -257,12 +252,7 @@ export function registerDeveloperProfileRoutes(
               statusFromErrorCode(error?.code)
             );
       return c.json(
-        {
-          error: {
-            message: error?.message ?? "Unable to re-verify developer profile",
-            code: error?.code ?? "DATABASE_ERROR"
-          }
-        },
+        errorBody(error, "Unable to re-verify developer profile"),
         status
       );
     }
@@ -295,20 +285,12 @@ export function registerDeveloperProfileRoutes(
   app.openapi(getDeveloperRoute, async (c) => {
     const { id } = c.req.valid("param");
     const db = new DeveloperProfilesDatabase(
-      dependencies.database(c.env.DB_EXTENSIONS)
+      getExtensionsDb(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.getById(id);
     if (error || !data) {
       const status = statusFromErrorCode(error?.code, false);
-      return c.json(
-        {
-          error: {
-            message: error?.message ?? "Developer not found",
-            code: error?.code ?? "DATABASE_ERROR"
-          }
-        },
-        status
-      );
+      return c.json(errorBody(error, "Developer not found"), status);
     }
     return c.json({ result: toPublicDeveloper(data) }, 200);
   });

@@ -32,22 +32,25 @@ const uniqueConstraintMatcher = (target: RegExp) => (error: unknown) =>
 export const isDeveloperOwnerConflict =
   uniqueConstraintMatcher(/owner_user_id/);
 
+// The ownership-transfer and claim-approval batches end with an assertion
+// statement that sets ownership_epoch = 0 when the preceding claim matched no
+// rows, deliberately violating the column's CHECK so D1 rolls the whole batch
+// back (see acceptTransfer/approveClaim). That rollback is the designed
+// signal for "this token was replayed", not a fault, so it is recognised here
+// rather than reported as a database error.
+//
+// Unlike the UNIQUE matchers above this one cannot currently be replaced by a
+// guard: it is how a multi-statement batch reports failure atomically, and
+// D1 exposes no other way to abort one. Changing it means redesigning the
+// batch protocol, not swapping a classifier.
+export const isOwnershipEpochRollback = (error: unknown) =>
+  /CHECK constraint failed.*ownership_epoch/i.test(errorMessageChain(error));
+
 // A concurrent first-time profile creation can lose the developers primary-key
 // race after both requests pass the cheap existence check. Translate that
 // SQLite/D1 constraint failure into the same conflict returned by the
 // pre-flight check instead of exposing it as a generic database error.
 export const isDeveloperIdConflict = uniqueConstraintMatcher(/developers\.id/);
-
-// A second pending claim for the same developer loses the partial unique
-// index race; the route reports it as the same conflict the pre-flight
-// check would have.
-export const isPendingClaimConflict =
-  uniqueConstraintMatcher(/developer_claims/);
-
-// Same race for a second pending submission targeting one extension.
-export const isPendingTargetConflict = uniqueConstraintMatcher(
-  /extension_submissions/
-);
 
 // Logs the real error server-side and returns a generic message to the
 // caller — DB exception text can leak schema/backend details otherwise.

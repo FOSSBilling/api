@@ -1,6 +1,8 @@
 import { request as ghRequest } from "@octokit/request";
 import {
+  AuthError,
   classifyGitHubError,
+  RateLimitError,
   NotFoundError
 } from "../../../../lib/github-errors";
 import { logWarn } from "../../../../lib/logger";
@@ -106,26 +108,15 @@ export async function checkGithubEntity(
     );
     if (githubError instanceof NotFoundError) return { status: "not_found" };
     const message = redactedFailureMessage(githubError.message);
+    const status = githubError.httpStatus;
 
-    const rawError =
-      typeof error === "object" && error !== null
-        ? (error as Record<string, unknown>)
-        : undefined;
-    const status =
-      typeof rawError?.status === "number"
-        ? rawError.status
-        : githubError.httpStatus;
-    const response = rawError?.response as
-      { headers?: Record<string, string> } | undefined;
-    const isRateLimited =
-      status === 429 ||
-      (status === 403 &&
-        ((typeof rawError?.message === "string" &&
-          rawError.message.toLowerCase().includes("rate limit")) ||
-          response?.headers?.["x-ratelimit-remaining"] === "0"));
-
-    if (isRateLimited) return unavailable(id, "rate_limited", status, message);
-    if (status === 401 || status === 403) {
+    // classifyGitHubError owns the rate-limit-versus-authorization decision
+    // for the whole repo, including the 429 and x-ratelimit-remaining signals
+    // this module used to re-derive from the raw error.
+    if (githubError instanceof RateLimitError) {
+      return unavailable(id, "rate_limited", status, message);
+    }
+    if (githubError instanceof AuthError) {
       return unavailable(id, "authentication", status, message);
     }
     if (githubError.errorCode === "validation_error") {

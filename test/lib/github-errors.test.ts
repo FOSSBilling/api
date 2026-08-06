@@ -124,13 +124,38 @@ describe("classifyGitHubError", () => {
     expect(result.message).toBe("GitHub API rate limit exceeded");
   });
 
-  it("should classify 403 non-rate-limit errors as RateLimitError with original message", () => {
+  // A bare 403 carries no rate-limit evidence, so it is an authorization
+  // failure. Reporting it as a rate limit would tell callers to back off and
+  // retry a request that cannot succeed.
+  it("should classify 403 non-rate-limit errors as AuthError with original message", () => {
     const error = { status: 403, message: "Repository access denied" };
     const result = classifyGitHubError(error);
 
-    expect(result).toBeInstanceOf(RateLimitError);
+    expect(result).toBeInstanceOf(AuthError);
     expect(result.message).toBe("Repository access denied");
     expect(result.httpStatus).toBe(403);
+  });
+
+  it("should classify a 403 with an exhausted quota header as RateLimitError", () => {
+    const error = {
+      status: 403,
+      message: "Forbidden",
+      response: { headers: { "x-ratelimit-remaining": "0" } }
+    };
+    const result = classifyGitHubError(error);
+
+    expect(result).toBeInstanceOf(RateLimitError);
+    expect(result.message).toBe("GitHub API rate limit exceeded");
+    expect(result.httpStatus).toBe(403);
+  });
+
+  it("should classify 429 errors as RateLimitError", () => {
+    const error = { status: 429, message: "Too Many Requests" };
+    const result = classifyGitHubError(error);
+
+    expect(result).toBeInstanceOf(RateLimitError);
+    expect(result.message).toBe("GitHub API rate limit exceeded");
+    expect(result.httpStatus).toBe(429);
   });
 
   it("should classify 404 errors as NotFoundError", () => {
