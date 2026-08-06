@@ -136,6 +136,18 @@ describe("classifyGitHubError", () => {
     expect(result.httpStatus).toBe(403);
   });
 
+  // Regression: the rate-limit text was read from String(error), which is
+  // "[object Object]" for a non-Error throw. That was invisible while every
+  // 403 became a RateLimitError; once the message decides the class, it turned
+  // a real rate limit into an AuthError.
+  it("should detect a rate limit on a non-Error 403 payload", () => {
+    const error = { status: 403, message: "API rate limit exceeded" };
+    const result = classifyGitHubError(error);
+
+    expect(result).toBeInstanceOf(RateLimitError);
+    expect(result.httpStatus).toBe(403);
+  });
+
   it("should classify a 403 with an exhausted quota header as RateLimitError", () => {
     const error = {
       status: 403,

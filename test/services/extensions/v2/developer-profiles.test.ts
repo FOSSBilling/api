@@ -23,6 +23,7 @@ import {
   insertDeveloper,
   insertSubmission,
   insertDeveloperClaim,
+  insertDeveloperTransfer,
   getDeveloper,
   hasDeveloper,
   listDevelopers,
@@ -1036,6 +1037,87 @@ describe("Extensions API v2", () => {
 
       const getRes = await get("/extensions/v2/developers/dev-developer", {});
       expect(getRes.status).toBe(404);
+    });
+
+    // The DELETE statements re-check ownership themselves rather than trusting
+    // the SELECT that resolved the caller's profile, because an accepted
+    // transfer or claim can move ownership in between. That guard is the only
+    // authorization check on this path, so both its halves are pinned here:
+    // that the profile survives, and that the batch is all-or-nothing.
+    it("does not delete a profile whose ownership moved after it was resolved", async () => {
+      await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("owner-before"),
+        sampleDeveloper({ id: "raced-delete" })
+      );
+      await insertUser(db, { id: "owner-after" });
+
+      let raced = false;
+      env.DB_EXTENSIONS = wrapD1WithHook(db, async (sql) => {
+        // Fires before the guarded DELETE batch is sent, which is the window
+        // the guard exists to close.
+        if (!raced && sql.includes("DELETE FROM developers")) {
+          raced = true;
+          await db
+            .prepare("UPDATE developers SET owner_user_id = ? WHERE id = ?")
+            .bind("owner-after", "raced-delete")
+            .run();
+        }
+      });
+
+      const res = await del(
+        "/extensions/v2/developers/me",
+        await authHeaders("owner-before")
+      );
+      env.DB_EXTENSIONS = db;
+
+      expect(raced).toBe(true);
+      expect(res.status).toBe(404);
+      expect(await res.json()).toMatchObject({
+        error: { code: "NOT_FOUND" }
+      });
+
+      // The row survives, still owned by whoever won the race.
+      const developer = await getDeveloper(db, "raced-delete");
+      expect(developer?.owner_user_id).toBe("owner-after");
+    });
+
+    it("leaves pending transfers intact when the profile delete is blocked", async () => {
+      await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("owner-before"),
+        sampleDeveloper({ id: "raced-delete" })
+      );
+      await insertUser(db, { id: "owner-after" });
+      await insertDeveloperTransfer(db, {
+        id: "transfer-1",
+        developer_id: "raced-delete",
+        created_by: "owner-before",
+        token_hash: "hash-1",
+        expires_at: "2099-01-01T00:00:00.000Z"
+      });
+
+      let raced = false;
+      env.DB_EXTENSIONS = wrapD1WithHook(db, async (sql) => {
+        if (!raced && sql.includes("DELETE FROM developers")) {
+          raced = true;
+          await db
+            .prepare("UPDATE developers SET owner_user_id = ? WHERE id = ?")
+            .bind("owner-after", "raced-delete")
+            .run();
+        }
+      });
+
+      const res = await del(
+        "/extensions/v2/developers/me",
+        await authHeaders("owner-before")
+      );
+      env.DB_EXTENSIONS = db;
+
+      expect(res.status).toBe(404);
+      // The transfer delete carries the same guard, so a blocked profile
+      // delete must not strip the transfer out from under it.
+      expect(await listDeveloperTransfers(db)).toHaveLength(1);
     });
 
     it("404s for a caller with no developer profile", async () => {

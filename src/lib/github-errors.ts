@@ -90,8 +90,13 @@ export function classifyGitHubError(error: unknown, url?: string): GitHubError {
     ) {
       const response = err.response as
         { headers?: Record<string, string> } | undefined;
+      // err.message, not errorMessage: the latter is String(error) for a
+      // non-Error throw, which stringifies to "[object Object]" and would hide
+      // the "rate limit" text this branch depends on. Getting that wrong now
+      // costs a misclassification rather than just a reworded message, because
+      // this test is what separates RateLimitError from AuthError.
       const rateLimited =
-        errorMessage.toLowerCase().includes("rate limit") ||
+        err.message.toLowerCase().includes("rate limit") ||
         response?.headers?.["x-ratelimit-remaining"] === "0";
       return rateLimited
         ? new RateLimitError("GitHub API rate limit exceeded", err.status, url)
