@@ -5,8 +5,8 @@ import { httpUrl, lowercaseId } from "./common";
 // GET /developers/* routes (claims, me, unapproved), so a developer whose id
 // literally matched one of those words would always hit the static route
 // instead. Rejecting these ids at creation time keeps new profiles
-// resolvable; adopted rows cannot be renamed by a schema, so they are
-// covered by the pre-deploy check in the service README.
+// resolvable; adopted rows cannot be renamed by a schema, so migration 0020
+// fails the deploy if one exists.
 const RESERVED_DEVELOPER_IDS = new Set(["claims", "me", "unapproved"]);
 
 // Exported so the approval boundary can reuse it: submissions store their

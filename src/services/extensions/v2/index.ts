@@ -41,8 +41,7 @@ extensionsV2.openAPIRegistry.registerComponent("securitySchemes", "Bearer", {
 // Register the static owner route before the public parameter route
 // (/extensions/{id}) so the reserved "mine" segment is handled as the
 // owner collection. New submissions reject the reserved id; adopted rows
-// predate that, so see "Reserved id check before adoption" in this
-// service's README.
+// predate that, and migration 0020 fails if one is present.
 registerOwnerExtensionsRoutes(extensionsV2);
 registerPublicExtensionsRoutes(extensionsV2);
 registerAccountRoutes(extensionsV2);
@@ -52,7 +51,7 @@ registerModerationRoutes(extensionsV2);
 // Keep this last: its GET /developers/{id} parameter route would otherwise
 // shadow static GET /developers/* routes registered by the modules above.
 // The "me" namespace is reserved for the owner profile route; adopted rows
-// are covered by the same README check.
+// are covered by the same migration 0020 check.
 registerDeveloperProfileRoutes(extensionsV2);
 
 extensionsV2.doc31("/openapi.json", {

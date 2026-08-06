@@ -49,9 +49,9 @@ export const PendingDeveloperClaimSchema = DeveloperClaimSchema.extend({
 
 export type PendingDeveloperClaim = z.infer<typeof PendingDeveloperClaimSchema>;
 
-// strict like every other request body in v2: the claim route's server-side
-// fields (github_org_verified and friends) are computed at claim() time and
-// must never be accepted from the client, so an unknown key is a mistake
+// strict: the claim route's server-side fields (github_org_verified and
+// friends, on DeveloperClaimSchema above) are computed at claim() time and
+// must never be accepted from the client, so an unknown key here is a mistake
 // worth reporting rather than silently dropping.
 export const ClaimNoteSchema = z
   .object({

@@ -15,8 +15,7 @@ export const EXTENSION_TYPES = [
 // GET /extensions/mine is a static owner-only route registered before
 // GET /extensions/{id}. Reserve its segment for new submissions so a newly
 // published extension cannot become unreachable. This schema cannot rename
-// an already-adopted row, so those are covered by the pre-deploy check in
-// the service README.
+// an already-adopted row, so migration 0020 fails the deploy if one exists.
 // Private: isReservedExtensionId() lowercases before the lookup, and these
 // literals are lowercase — reading the Set directly would miss "Mine".
 const RESERVED_EXTENSION_IDS = new Set(["mine"]);

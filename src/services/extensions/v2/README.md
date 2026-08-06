@@ -48,6 +48,8 @@ Uses the D1 binding `DB_EXTENSIONS`, shared with v1 (read-only there). This serv
 
 Apply migrations **only from this repository**, from `db/migrations`, with `npm run db:migrate:extensions-v2:local` / `:remote`. The Extensions site has no D1 migration source.
 
+Migration `0020` is a check, not a schema change: it fails if an adopted row holds an id that a static route shadows (`extensions.id = 'mine'`, or `developers.id` of `me`/`claims`/`unapproved`), which would make that row's detail page unreachable. If it fails, rename the row deliberately — the id is public and consumers pin it.
+
 ## Code Layout
 
 See `AGENTS.md` for what belongs in `routes/`, `db/`, `schemas/`, `github/`, and `middleware.ts`. This service is the reference layout for larger services.

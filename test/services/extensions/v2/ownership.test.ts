@@ -568,6 +568,33 @@ describe("Extensions API v2", () => {
   });
 
   describe("developer claims", () => {
+    // The claim body is strict so the server-computed verification fields on
+    // DeveloperClaimSchema can never be supplied by the caller. Unknown keys
+    // are reported at the root path, since the body has no nesting.
+    it("rejects an unknown field in the claim body", async () => {
+      await seedUnownedDeveloper("legacy-developer");
+
+      const res = await post(
+        "/extensions/v2/developers/legacy-developer/claim",
+        await authHeaders("user-1"),
+        { note: "mine", github_org_verified: true }
+      );
+
+      expect(res.status).toBe(422);
+      const body = (await res.json()) as {
+        error: { details: Array<{ code: string; path: PropertyKey[] }> };
+      };
+      expect(body.error.details).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            code: "unrecognized_keys",
+            path: []
+          })
+        ])
+      );
+      expect(await countDeveloperClaims(db)).toBe(0);
+    });
+
     it("lets a user claim an unowned developer, visible to the claimant and moderators", async () => {
       await seedUnownedDeveloper("legacy-developer");
 
