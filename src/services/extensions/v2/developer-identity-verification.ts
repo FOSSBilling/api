@@ -101,12 +101,21 @@ export async function verifyGithubOwnership(
   }
   const callerIdentity = identity.data;
 
-  if (!callerIdentity.githubLogin) {
+  // Organization membership is only a definitive non-match when central auth
+  // supplied a valid, unexpired membership snapshot. Missing, malformed, or
+  // expired evidence is inconclusive and must go to manual review instead of
+  // blocking an otherwise valid claimant/profile owner.
+  if (
+    !callerIdentity.githubLogin?.trim() ||
+    (developerType === "organization" && !callerIdentity.githubOrgsAvailable)
+  ) {
     return {
       mismatch: false,
       githubOrgVerified: null,
       githubUrlVerified: null,
-      note: "Caller has no linked GitHub identity yet — reviewed manually."
+      note: !callerIdentity.githubLogin?.trim()
+        ? "Caller has no linked GitHub identity yet — reviewed manually."
+        : "Caller's GitHub organization memberships could not be confirmed — reviewed manually."
     };
   }
 

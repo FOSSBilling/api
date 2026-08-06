@@ -69,13 +69,17 @@ export class DeveloperClaimsDatabase {
     }
   }
 
-  // Shared by claim/approveClaim once a developer/eligibility-guarded write
-  // affects zero rows: distinguishes "no such developer" from the two
-  // possible ownership conflicts for an accurate response, without
-  // reopening the race the guarded write already closed.
+  // Used by claim once a developer/eligibility-guarded write
+  // affects zero rows: distinguishes an inactive claimant, "no such
+  // developer", and the two possible ownership conflicts for an accurate
+  // response, without reopening the race the guarded write already closed.
   private async claimIneligibilityError(
-    developerId: string
-  ): Promise<{ code: "NOT_FOUND" | "CONFLICT"; message: string }> {
+    developerId: string,
+    claimantId: string
+  ): Promise<{
+    code: "NOT_FOUND" | "CONFLICT" | "ACCOUNT_INACTIVE";
+    message: string;
+  }> {
     const [developer] = await this.db
       .select({ ownerUserId: developers.ownerUserId })
       .from(developers)
@@ -83,6 +87,18 @@ export class DeveloperClaimsDatabase {
     if (!developer) {
       return { code: "NOT_FOUND", message: "Developer not found" };
     }
+
+    const [claimant] = await this.db
+      .select({ deletedAt: users.deletedAt })
+      .from(users)
+      .where(eq(users.id, claimantId));
+    if (!claimant || claimant.deletedAt !== null) {
+      return {
+        code: "ACCOUNT_INACTIVE",
+        message: "Active account required"
+      };
+    }
+
     if (developer.ownerUserId !== null) {
       return { code: "CONFLICT", message: "This profile is already owned" };
     }
@@ -207,7 +223,7 @@ export class DeveloperClaimsDatabase {
       if (!result.meta?.changes) {
         return {
           data: null,
-          error: await this.claimIneligibilityError(developerId)
+          error: await this.claimIneligibilityError(developerId, claimantId)
         };
       }
 

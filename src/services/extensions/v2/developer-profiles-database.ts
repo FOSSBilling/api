@@ -9,7 +9,11 @@ import {
   extensionSubmissions,
   users
 } from "./db/schema";
-import { databaseError, isDeveloperOwnerConflict } from "./errors";
+import {
+  databaseError,
+  isDeveloperIdConflict,
+  isDeveloperOwnerConflict
+} from "./errors";
 import { toD1Statement } from "./d1-batch";
 import {
   checkGithubEntity,
@@ -332,6 +336,15 @@ export class DeveloperProfilesDatabase {
       try {
         results = await this.db.$client.batch([mainStmt, historyStmt]);
       } catch (error) {
+        if (isDeveloperIdConflict(error)) {
+          return {
+            data: null,
+            error: {
+              message: "Developer id already exists",
+              code: "DEVELOPER_ID_TAKEN"
+            }
+          };
+        }
         if (isDeveloperOwnerConflict(error)) {
           return {
             data: null,

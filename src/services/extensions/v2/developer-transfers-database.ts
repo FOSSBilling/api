@@ -2,7 +2,11 @@ import { and, eq, isNull, sql } from "drizzle-orm";
 import { DatabaseResult } from "../../../lib/interfaces";
 import { ExtensionsDb } from "../../../lib/db";
 import { developers, developerTransfers, users } from "./db/schema";
-import { databaseError, isDeveloperOwnerConflict } from "./errors";
+import {
+  databaseError,
+  errorMessageChain,
+  isDeveloperOwnerConflict
+} from "./errors";
 import { toD1Statement } from "./d1-batch";
 import { DeveloperProfile, DeveloperTransfer } from "./interfaces";
 import { DeveloperProfilesDatabase } from "./developer-profiles-database";
@@ -30,8 +34,12 @@ export class DeveloperTransfersDatabase {
     userId: string
   ): Promise<{ code: "NOT_FOUND" | "FORBIDDEN"; message: string } | null> {
     const [owner] = await this.db
-      .select({ ownerUserId: developers.ownerUserId })
+      .select({
+        ownerUserId: developers.ownerUserId,
+        ownerDeletedAt: users.deletedAt
+      })
       .from(developers)
+      .leftJoin(users, eq(users.id, developers.ownerUserId))
       .where(eq(developers.id, developerId));
 
     if (!owner) {
@@ -39,6 +47,9 @@ export class DeveloperTransfersDatabase {
     }
     if (owner.ownerUserId !== userId) {
       return { code: "FORBIDDEN", message: "You don't own this profile" };
+    }
+    if (owner.ownerDeletedAt !== null) {
+      return { code: "FORBIDDEN", message: "Active account required" };
     }
     return null;
   }
@@ -233,13 +244,42 @@ export class DeveloperTransfersDatabase {
         params: [userId, tokenHash, userId]
       });
 
-      const rejectPendingStmt = toD1Statement(this.db.$client, {
+      // Re-assert that the ownership update was caused by this batch's fresh
+      // claim before cleaning up the two kinds of pending work attached to
+      // the developer. If claimStmt or updateDeveloperStmt matched zero
+      // rows, this deliberately violates the ownership_epoch CHECK and D1
+      // rolls the whole batch back. The assertion lets both cleanup UPDATEs
+      // run without their own changes() gates, so a zero-row cleanup of one
+      // table cannot suppress cleanup of the other table.
+      const assertTransferStmt = toD1Statement(this.db.$client, {
+        sql: `UPDATE developers
+              SET ownership_epoch = CASE WHEN changes() = 1 THEN ownership_epoch ELSE 0 END
+              WHERE id = (
+                SELECT developer_id FROM developer_transfers
+                WHERE token_hash = ? AND accepted_by = ? AND accepted_at IS NOT NULL
+              )`,
+        params: [tokenHash, userId]
+      });
+
+      const rejectPendingSubmissionsStmt = toD1Statement(this.db.$client, {
         sql: `UPDATE extension_submissions
               SET status = 'rejected',
                   review_note = 'Ownership changed before review',
                   reviewed_at = CURRENT_TIMESTAMP
-              WHERE changes() = 1
-                AND developer_id = (
+              WHERE developer_id = (
+                  SELECT developer_id FROM developer_transfers
+                  WHERE token_hash = ? AND accepted_by = ? AND accepted_at IS NOT NULL
+                )
+                AND status = 'pending'`,
+        params: [tokenHash, userId]
+      });
+
+      const rejectPendingClaimsStmt = toD1Statement(this.db.$client, {
+        sql: `UPDATE developer_claims
+              SET status = 'rejected',
+                  review_note = 'Ownership changed before review',
+                  reviewed_at = CURRENT_TIMESTAMP
+              WHERE developer_id = (
                   SELECT developer_id FROM developer_transfers
                   WHERE token_hash = ? AND accepted_by = ? AND accepted_at IS NOT NULL
                 )
@@ -252,20 +292,34 @@ export class DeveloperTransfersDatabase {
         results = await this.db.$client.batch([
           claimStmt,
           updateDeveloperStmt,
-          rejectPendingStmt
+          assertTransferStmt,
+          rejectPendingSubmissionsStmt,
+          rejectPendingClaimsStmt
         ]);
       } catch (error) {
-        if (isDeveloperOwnerConflict(error)) {
-          return {
-            data: null,
-            error: {
-              code: "CONFLICT",
-              message:
-                "You already have a developer profile — remove or transfer it before accepting a new one"
-            }
-          };
+        // A replayed token reaches the assertion with changes() = 0. The
+        // deliberate CHECK failure rolls back the batch, and is handled like
+        // any other unsuccessful claim below so callers still receive the
+        // documented invalid/used/expired-link response.
+        if (
+          /CHECK constraint failed.*ownership_epoch/i.test(
+            errorMessageChain(error)
+          )
+        ) {
+          results = [{ meta: { changes: 0 } }];
+        } else {
+          if (isDeveloperOwnerConflict(error)) {
+            return {
+              data: null,
+              error: {
+                code: "CONFLICT",
+                message:
+                  "You already have a developer profile — remove or transfer it before accepting a new one"
+              }
+            };
+          }
+          return databaseError("acceptTransfer", error);
         }
-        return databaseError("acceptTransfer", error);
       }
 
       const [claim] = results;

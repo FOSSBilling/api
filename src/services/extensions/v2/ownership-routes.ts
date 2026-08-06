@@ -106,7 +106,7 @@ export function registerOwnershipRoutes(
             code: error?.code ?? "DATABASE_ERROR"
           }
         },
-        error?.code === "GITHUB_MISMATCH"
+        error?.code === "GITHUB_MISMATCH" || error?.code === "ACCOUNT_INACTIVE"
           ? 403
           : statusFromGithubErrorCode(
               error?.code,

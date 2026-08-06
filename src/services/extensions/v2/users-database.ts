@@ -8,6 +8,10 @@ import { toD1Statement } from "./d1-batch";
 export type GithubIdentity = {
   githubLogin: string | null;
   githubOrgs: string[];
+  // Distinguishes a freshly synchronized empty membership list (a confirmed
+  // non-member) from absent, malformed, or expired evidence. The latter must
+  // fall back to moderator review rather than being treated as a mismatch.
+  githubOrgsAvailable: boolean;
 };
 
 export type UserIdentityInput = {
@@ -339,7 +343,8 @@ export class UsersDatabase {
   // linked GitHub identity — see DeveloperClaimsDatabase.claim(). github_orgs is
   // only usable while its central-auth expiry is in the future; absent,
   // malformed, or expired organization evidence resolves to no memberships
-  // rather than throwing.
+  // rather than throwing. githubOrgsAvailable preserves whether that empty
+  // result is a confirmed snapshot or merely unavailable evidence.
   async getGithubIdentity(
     userId: string
   ): Promise<DatabaseResult<GithubIdentity>> {
@@ -355,10 +360,18 @@ export class UsersDatabase {
         .where(eq(users.id, userId));
 
       if (row?.deletedAt !== null && row?.deletedAt !== undefined) {
-        return { data: { githubLogin: null, githubOrgs: [] }, error: null };
+        return {
+          data: {
+            githubLogin: null,
+            githubOrgs: [],
+            githubOrgsAvailable: false
+          },
+          error: null
+        };
       }
 
       let githubOrgs: string[] = [];
+      let githubOrgsAvailable = false;
       if (
         row?.githubOrgs &&
         isFutureGithubOrgsExpiry(row.githubOrgsExpiresAt)
@@ -370,6 +383,7 @@ export class UsersDatabase {
             parsed.every((org) => typeof org === "string")
           ) {
             githubOrgs = parsed;
+            githubOrgsAvailable = true;
           }
         } catch {
           // Malformed JSON is treated the same as "no orgs recorded" —
@@ -378,7 +392,11 @@ export class UsersDatabase {
       }
 
       return {
-        data: { githubLogin: row?.githubLogin ?? null, githubOrgs },
+        data: {
+          githubLogin: row?.githubLogin ?? null,
+          githubOrgs,
+          githubOrgsAvailable
+        },
         error: null
       };
     } catch (error) {
