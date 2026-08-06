@@ -1,15 +1,16 @@
 import { and, eq, isNull, sql } from "drizzle-orm";
-import { DatabaseResult } from "../../../lib/interfaces";
-import { ExtensionsDb } from "../../../lib/db";
-import { developers, developerTransfers, users } from "./db/schema";
+import { DatabaseResult } from "../../../../lib/interfaces";
+import { ExtensionsDb } from "../../../../lib/db";
+import { developers, developerTransfers, users } from "./schema";
 import {
   databaseError,
-  errorMessageChain,
-  isDeveloperOwnerConflict
+  isDeveloperOwnerConflict,
+  isOwnershipEpochRollback
 } from "./errors";
-import { toD1Statement } from "./d1-batch";
-import { DeveloperProfile, DeveloperTransfer } from "./interfaces";
-import { DeveloperProfilesDatabase } from "./developer-profiles-database";
+import { toD1Statement } from "./batch";
+import { DeveloperProfile } from "../schemas/developers";
+import { DeveloperTransfer } from "../schemas/ownership";
+import { DeveloperProfilesDatabase } from "./developer-profiles";
 
 async function sha256Hex(input: string): Promise<string> {
   const digest = await crypto.subtle.digest(
@@ -24,6 +25,13 @@ async function sha256Hex(input: string): Promise<string> {
 function toSqliteDatetime(date: Date): string {
   return date.toISOString().slice(0, 19).replace("T", " ");
 }
+
+// The developer this token has just been accepted for. Every statement in the
+// acceptTransfer batch has to agree on it - a copy that drifted would target a
+// different profile than the one the batch just transferred. Takes the token
+// hash and accepting user as its two parameters, in that order.
+const CLAIMED_DEVELOPER = `SELECT developer_id FROM developer_transfers
+                WHERE token_hash = ? AND accepted_by = ? AND accepted_at IS NOT NULL`;
 
 export class DeveloperTransfersDatabase {
   constructor(private db: ExtensionsDb) {}
@@ -256,10 +264,7 @@ export class DeveloperTransfersDatabase {
                   github_verification_note = NULL, github_verified_at = NULL,
                   updated_at = CURRENT_TIMESTAMP
               WHERE changes() = 1
-                AND id = (
-                  SELECT developer_id FROM developer_transfers
-                  WHERE token_hash = ? AND accepted_by = ? AND accepted_at IS NOT NULL
-                )`,
+                AND id = (${CLAIMED_DEVELOPER})`,
         params: [userId, tokenHash, userId]
       });
 
@@ -273,38 +278,29 @@ export class DeveloperTransfersDatabase {
       const assertTransferStmt = toD1Statement(this.db.$client, {
         sql: `UPDATE developers
               SET ownership_epoch = CASE WHEN changes() = 1 THEN ownership_epoch ELSE 0 END
-              WHERE id = (
-                SELECT developer_id FROM developer_transfers
-                WHERE token_hash = ? AND accepted_by = ? AND accepted_at IS NOT NULL
-              )`,
+              WHERE id = (${CLAIMED_DEVELOPER})`,
         params: [tokenHash, userId]
       });
 
-      const rejectPendingSubmissionsStmt = toD1Statement(this.db.$client, {
-        sql: `UPDATE extension_submissions
+      // Identical apart from the table, and both must stay that way: leaving
+      // pending work attached to a profile whose owner just changed would put
+      // it in front of the wrong moderator.
+      const rejectPendingIn = (
+        table: "extension_submissions" | "developer_claims"
+      ) =>
+        toD1Statement(this.db.$client, {
+          sql: `UPDATE ${table}
               SET status = 'rejected',
                   review_note = 'Ownership changed before review',
                   reviewed_at = CURRENT_TIMESTAMP
-              WHERE developer_id = (
-                  SELECT developer_id FROM developer_transfers
-                  WHERE token_hash = ? AND accepted_by = ? AND accepted_at IS NOT NULL
-                )
+              WHERE developer_id = (${CLAIMED_DEVELOPER})
                 AND status = 'pending'`,
-        params: [tokenHash, userId]
-      });
-
-      const rejectPendingClaimsStmt = toD1Statement(this.db.$client, {
-        sql: `UPDATE developer_claims
-              SET status = 'rejected',
-                  review_note = 'Ownership changed before review',
-                  reviewed_at = CURRENT_TIMESTAMP
-              WHERE developer_id = (
-                  SELECT developer_id FROM developer_transfers
-                  WHERE token_hash = ? AND accepted_by = ? AND accepted_at IS NOT NULL
-                )
-                AND status = 'pending'`,
-        params: [tokenHash, userId]
-      });
+          params: [tokenHash, userId]
+        });
+      const rejectPendingSubmissionsStmt = rejectPendingIn(
+        "extension_submissions"
+      );
+      const rejectPendingClaimsStmt = rejectPendingIn("developer_claims");
 
       let results;
       try {
@@ -320,11 +316,7 @@ export class DeveloperTransfersDatabase {
         // deliberate CHECK failure rolls back the batch, and is handled like
         // any other unsuccessful claim below so callers still receive the
         // documented invalid/used/expired-link response.
-        if (
-          /CHECK constraint failed.*ownership_epoch/i.test(
-            errorMessageChain(error)
-          )
-        ) {
+        if (isOwnershipEpochRollback(error)) {
           results = [{ meta: { changes: 0 } }];
         } else {
           if (isDeveloperOwnerConflict(error)) {

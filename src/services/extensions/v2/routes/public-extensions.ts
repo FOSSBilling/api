@@ -1,19 +1,16 @@
+import { getExtensionsDb } from "../../../../lib/db";
 import { createRoute, z } from "@hono/zod-openapi";
-import { statusFromErrorCode } from "./route-errors";
+import { errorBody, statusFromErrorCode } from "./errors";
+import { IdParamSchema, errorResponse } from "../schemas/common";
 import {
-  ErrorResponseSchema,
   ExtensionListQuerySchema,
   ExtensionListResponseSchema,
-  ExtensionSchema,
-  IdParamSchema
-} from "./interfaces";
-import { ExtensionsDatabase } from "./extensions-database";
-import { ExtensionsV2App, RouteDependencies } from "./route-dependencies";
+  ExtensionSchema
+} from "../schemas/extensions";
+import { ExtensionsDatabase } from "../db/extensions";
+import { ExtensionsV2App } from "./app";
 
-export function registerPublicExtensionsRoutes(
-  app: ExtensionsV2App,
-  dependencies: RouteDependencies
-): void {
+export function registerPublicExtensionsRoutes(app: ExtensionsV2App): void {
   const listExtensionsRoute = createRoute({
     method: "get",
     path: "/extensions",
@@ -29,22 +26,14 @@ export function registerPublicExtensionsRoutes(
         },
         description: "Extensions matching the given filters"
       },
-      422: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Filter or pagination query failed validation"
-      },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      422: errorResponse("Filter or pagination query failed validation"),
+      500: errorResponse("Database error")
     }
   });
 
   app.openapi(listExtensionsRoute, async (c) => {
     const { type, developer_id, limit, cursor } = c.req.valid("query");
-    const db = new ExtensionsDatabase(
-      dependencies.database(c.env.DB_EXTENSIONS)
-    );
+    const db = new ExtensionsDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
     const { data, error } = await db.list({
       type,
       developerId: developer_id,
@@ -53,12 +42,7 @@ export function registerPublicExtensionsRoutes(
     });
     if (error || !data) {
       return c.json(
-        {
-          error: {
-            message: error?.message ?? "Unable to load extensions",
-            code: error?.code ?? "DATABASE_ERROR"
-          }
-        },
+        errorBody(error, "Unable to load extensions"),
         error?.code === "INVALID_CURSOR" ? 422 : 500
       );
     }
@@ -87,38 +71,19 @@ export function registerPublicExtensionsRoutes(
         },
         description: "The extension"
       },
-      404: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "No extension with that id"
-      },
-      422: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "id param failed validation"
-      },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      404: errorResponse("No extension with that id"),
+      422: errorResponse("id param failed validation"),
+      500: errorResponse("Database error")
     }
   });
 
   app.openapi(getExtensionRoute, async (c) => {
     const { id } = c.req.valid("param");
-    const db = new ExtensionsDatabase(
-      dependencies.database(c.env.DB_EXTENSIONS)
-    );
+    const db = new ExtensionsDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
     const { data, error } = await db.getById(id);
     if (error || !data) {
       const status = statusFromErrorCode(error?.code, false);
-      return c.json(
-        {
-          error: {
-            message: error?.message ?? "Extension not found",
-            code: error?.code ?? "DATABASE_ERROR"
-          }
-        },
-        status
-      );
+      return c.json(errorBody(error, "Extension not found"), status);
     }
     return c.json({ result: data }, 200);
   });

@@ -1,6 +1,7 @@
-import { and, asc, desc, eq, isNull, or, sql } from "drizzle-orm";
-import { DatabaseResult } from "../../../lib/interfaces";
-import { ExtensionsDb } from "../../../lib/db";
+import { and, asc, desc, eq, isNull, or, sql, SQL } from "drizzle-orm";
+import { SQLiteColumn } from "drizzle-orm/sqlite-core";
+import { DatabaseResult } from "../../../../lib/interfaces";
+import { ExtensionsDb } from "../../../../lib/db";
 import {
   developers,
   developerHistory,
@@ -8,28 +9,25 @@ import {
   extensions,
   extensionSubmissions,
   users
-} from "./db/schema";
-import {
-  databaseError,
-  isDeveloperIdConflict,
-  isDeveloperOwnerConflict
-} from "./errors";
-import { toD1Statement } from "./d1-batch";
+} from "./schema";
+import { databaseError } from "./errors";
+import { toD1Statement } from "./batch";
+import { optionalBool } from "./columns";
 import {
   checkGithubEntity,
   matchesClaimant,
   urlMatchesGithubBlog
-} from "./github-verification";
+} from "../github/verification";
 import {
   Developer,
   DeveloperHistoryEntry,
   DeveloperProfile
-} from "./interfaces";
+} from "../schemas/developers";
 import {
   githubUnavailableError,
   verifyGithubOwnership
-} from "./developer-identity-verification";
-import { UsersDatabase } from "./users-database";
+} from "../github/identity";
+import { UsersDatabase } from "./users";
 
 const URL_CHECK_COOLDOWN_SECONDS = 60;
 
@@ -44,15 +42,11 @@ function parseDeveloperRow(row: DeveloperRow): DeveloperProfile {
     avatar_url: row.avatarUrl ?? undefined,
     contact_email: row.contactEmail ?? undefined,
     approved:
-      row.approvedAt !== null &&
-      row.approvedAt !== undefined &&
+      row.approvedAt != null &&
       (row.approvedRevision == null ||
         Number(row.approvedRevision) === Number(row.contentRevision ?? 1)),
     content_revision: Number(row.contentRevision ?? 1),
-    github_org_verified:
-      row.githubOrgVerified === null || row.githubOrgVerified === undefined
-        ? undefined
-        : row.githubOrgVerified === 1,
+    github_org_verified: optionalBool(row.githubOrgVerified),
     github_verification_note: row.githubVerificationNote ?? undefined,
     github_verified_at: row.githubVerifiedAt ?? undefined,
     github_url_verified: row.githubUrlVerified === 1 ? true : undefined
@@ -126,15 +120,16 @@ export class DeveloperProfilesDatabase {
     allowCreationAttempt: () => Promise<boolean> = async () => true
   ): Promise<DatabaseResult<DeveloperProfile>> {
     try {
-      const [existingOwn] = await this.db
-        .select()
-        .from(developers)
-        .where(eq(developers.ownerUserId, userId));
-
-      const [existingById] = await this.db
-        .select()
-        .from(developers)
-        .where(eq(developers.id, developer.id));
+      // Independent lookups - "does this caller already own a profile" and
+      // "is this id taken" - so they go out together rather than costing two
+      // serial round trips on every PUT /developers/me.
+      const [[existingOwn], [existingById]] = await Promise.all([
+        this.db
+          .select()
+          .from(developers)
+          .where(eq(developers.ownerUserId, userId)),
+        this.db.select().from(developers).where(eq(developers.id, developer.id))
+      ]);
       const isCreating = !existingOwn;
 
       let githubOrgVerified: number | null = null;
@@ -219,7 +214,8 @@ export class DeveloperProfilesDatabase {
                 WHERE EXISTS (
                   SELECT 1 FROM users
                   WHERE id = ? AND deleted_at IS NULL
-                )`,
+                )
+                ON CONFLICT DO NOTHING`,
           params: [
             developer.id,
             developer.type,
@@ -337,47 +333,13 @@ export class DeveloperProfilesDatabase {
       try {
         results = await this.db.$client.batch([mainStmt, historyStmt]);
       } catch (error) {
-        if (isDeveloperIdConflict(error)) {
-          return {
-            data: null,
-            error: {
-              message: "Developer id already exists",
-              code: "DEVELOPER_ID_TAKEN"
-            }
-          };
-        }
-        if (isDeveloperOwnerConflict(error)) {
-          return {
-            data: null,
-            error: {
-              message: "You already have a developer profile",
-              code: "CONFLICT"
-            }
-          };
-        }
         return databaseError("upsertOwn", error);
       }
 
       if (!results[0]?.meta?.changes) {
-        const [activeUser] = await this.db
-          .select({ id: users.id })
-          .from(users)
-          .where(and(eq(users.id, userId), isNull(users.deletedAt)));
-        if (!activeUser) {
-          return {
-            data: null,
-            error: {
-              message: "Active account required",
-              code: "ACCOUNT_INACTIVE"
-            }
-          };
-        }
         return {
           data: null,
-          error: {
-            message: "Developer ownership changed while updating the profile",
-            code: "CONFLICT"
-          }
+          error: await this.upsertBlockedError(userId, developer.id, isCreating)
         };
       }
 
@@ -403,6 +365,55 @@ export class DeveloperProfilesDatabase {
     } catch (error) {
       return databaseError("upsertOwn", error);
     }
+  }
+
+  // The guarded upsert affected no rows. Either its WHERE rejected the caller
+  // or ON CONFLICT DO NOTHING swallowed a unique violation, so work through
+  // the same conditions the statement checked. DEVELOPER_ID_TAKEN is a
+  // distinct code rather than a generic CONFLICT because the create-profile
+  // form uses it to redirect the user to the claim flow.
+  private async upsertBlockedError(
+    userId: string,
+    developerId: string,
+    isCreating: boolean
+  ): Promise<{ message: string; code: string }> {
+    const [activeUser] = await this.db
+      .select({ id: users.id })
+      .from(users)
+      .where(and(eq(users.id, userId), isNull(users.deletedAt)));
+    if (!activeUser) {
+      return { message: "Active account required", code: "ACCOUNT_INACTIVE" };
+    }
+
+    if (isCreating) {
+      const [takenId, ownProfile] = await Promise.all([
+        this.db
+          .select({ id: developers.id })
+          .from(developers)
+          .where(eq(developers.id, developerId)),
+        this.db
+          .select({ id: developers.id })
+          .from(developers)
+          .where(eq(developers.ownerUserId, userId))
+      ]);
+      if (takenId.length > 0) {
+        return {
+          message: "Developer id already exists",
+          code: "DEVELOPER_ID_TAKEN"
+        };
+      }
+      if (ownProfile.length > 0) {
+        return {
+          message: "You already have a developer profile",
+          code: "CONFLICT"
+        };
+      }
+    }
+
+    return {
+      message: "Developer ownership changed while updating the profile",
+      code: "CONFLICT"
+    };
   }
 
   // Diagnoses why the guarded delete in deleteOwn() below affected zero
@@ -515,62 +526,48 @@ export class DeveloperProfilesDatabase {
       // outer statement's own table name, which the query builder can't
       // express, and this batch needs the raw-D1 escape hatch regardless
       // (see upsertOwn's historyStmt comment).
-      const deleteTransfersStmt = toD1Statement(this.db.$client, {
-        sql: `DELETE FROM developer_transfers
-              WHERE developer_id = ?
-                AND EXISTS (
-                  SELECT 1 FROM developers
-                  WHERE developers.id = developer_transfers.developer_id
-                    AND developers.owner_user_id = ?
-                    AND NOT EXISTS (SELECT 1 FROM extensions WHERE extensions.author_id = developers.id)
+      // Parameterised by the developers-table reference: the two child-table
+      // deletes reach the predicate through a correlated EXISTS, while the
+      // developers delete applies it directly to the row being removed -
+      // wrapping that one in EXISTS (SELECT 1 FROM developers ...) would let
+      // the inner table shadow the outer and pass whenever *any* profile were
+      // deletable. Parameters, in order: owner user id, then active user id.
+      const deletable = (dev: string) => `${dev}.owner_user_id = ?
+                    AND NOT EXISTS (SELECT 1 FROM extensions WHERE extensions.author_id = ${dev}.id)
                     AND NOT EXISTS (
                       SELECT 1 FROM extension_submissions
-                      WHERE extension_submissions.developer_id = developers.id
+                      WHERE extension_submissions.developer_id = ${dev}.id
                         AND extension_submissions.status = 'pending'
                     )
                     AND EXISTS (
                       SELECT 1 FROM users active_user
                       WHERE active_user.id = ? AND active_user.deleted_at IS NULL
-                    )
-                )`,
+                    )`;
+
+      const ownedAndDeletable = (developerIdColumn: string) => `EXISTS (
+                  SELECT 1 FROM developers
+                  WHERE developers.id = ${developerIdColumn}
+                    AND ${deletable("developers")}
+                )`;
+
+      const deleteTransfersStmt = toD1Statement(this.db.$client, {
+        sql: `DELETE FROM developer_transfers
+              WHERE developer_id = ?
+                AND ${ownedAndDeletable("developer_transfers.developer_id")}`,
         params: [developer.id, userId, userId]
       });
 
       const deleteClaimsStmt = toD1Statement(this.db.$client, {
         sql: `DELETE FROM developer_claims
               WHERE developer_id = ?
-                AND EXISTS (
-                  SELECT 1 FROM developers
-                  WHERE developers.id = developer_claims.developer_id
-                    AND developers.owner_user_id = ?
-                    AND NOT EXISTS (SELECT 1 FROM extensions WHERE extensions.author_id = developers.id)
-                    AND NOT EXISTS (
-                      SELECT 1 FROM extension_submissions
-                      WHERE extension_submissions.developer_id = developers.id
-                        AND extension_submissions.status = 'pending'
-                    )
-                    AND EXISTS (
-                      SELECT 1 FROM users active_user
-                      WHERE active_user.id = ? AND active_user.deleted_at IS NULL
-                    )
-                )`,
+                AND ${ownedAndDeletable("developer_claims.developer_id")}`,
         params: [developer.id, userId, userId]
       });
 
       const deleteDeveloperStmt = toD1Statement(this.db.$client, {
         sql: `DELETE FROM developers
               WHERE id = ?
-                AND owner_user_id = ?
-                AND NOT EXISTS (SELECT 1 FROM extensions WHERE extensions.author_id = developers.id)
-                AND NOT EXISTS (
-                  SELECT 1 FROM extension_submissions
-                  WHERE extension_submissions.developer_id = developers.id
-                    AND extension_submissions.status = 'pending'
-                )
-                AND EXISTS (
-                  SELECT 1 FROM users active_user
-                  WHERE active_user.id = ? AND active_user.deleted_at IS NULL
-                )`,
+                AND ${deletable("developers")}`,
         params: [developer.id, userId, userId]
       });
 
@@ -628,7 +625,14 @@ export class DeveloperProfilesDatabase {
     }
   }
 
-  async listAll(): Promise<DatabaseResult<DeveloperProfile[]>> {
+  // The two moderator listings differ only by filter and sort order. They are
+  // the only readers that join users for owner_name/owner_github_login, which
+  // is why DeveloperProfile treats those fields as optional.
+  private async listWithOwner(
+    context: string,
+    where: SQL | undefined,
+    orderBy: SQL | SQLiteColumn
+  ): Promise<DatabaseResult<DeveloperProfile[]>> {
     let rows;
     try {
       rows = await this.db
@@ -639,32 +643,25 @@ export class DeveloperProfilesDatabase {
         })
         .from(developers)
         .leftJoin(users, eq(users.id, developers.ownerUserId))
-        .orderBy(asc(developers.name));
+        .where(where)
+        .orderBy(orderBy);
     } catch (error) {
-      return databaseError("listAll", error);
+      return databaseError(context, error);
     }
 
     return { data: rows.map(parseDeveloperRowWithOwner), error: null };
   }
 
-  async listUnapproved(): Promise<DatabaseResult<DeveloperProfile[]>> {
-    let rows;
-    try {
-      rows = await this.db
-        .select({
-          developer: developers,
-          ownerName: users.name,
-          ownerGithubLogin: users.githubLogin
-        })
-        .from(developers)
-        .leftJoin(users, eq(users.id, developers.ownerUserId))
-        .where(isNull(developers.approvedAt))
-        .orderBy(asc(developers.createdAt));
-    } catch (error) {
-      return databaseError("listUnapproved", error);
-    }
+  async listAll(): Promise<DatabaseResult<DeveloperProfile[]>> {
+    return this.listWithOwner("listAll", undefined, asc(developers.name));
+  }
 
-    return { data: rows.map(parseDeveloperRowWithOwner), error: null };
+  async listUnapproved(): Promise<DatabaseResult<DeveloperProfile[]>> {
+    return this.listWithOwner(
+      "listUnapproved",
+      isNull(developers.approvedAt),
+      asc(developers.createdAt)
+    );
   }
 
   async approve(

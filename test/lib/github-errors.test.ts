@@ -124,13 +124,63 @@ describe("classifyGitHubError", () => {
     expect(result.message).toBe("GitHub API rate limit exceeded");
   });
 
-  it("should classify 403 non-rate-limit errors as RateLimitError with original message", () => {
+  // A bare 403 carries no rate-limit evidence, so it is an authorization
+  // failure. Reporting it as a rate limit would tell callers to back off and
+  // retry a request that cannot succeed.
+  it("should classify 403 non-rate-limit errors as AuthError with original message", () => {
     const error = { status: 403, message: "Repository access denied" };
     const result = classifyGitHubError(error);
 
-    expect(result).toBeInstanceOf(RateLimitError);
+    expect(result).toBeInstanceOf(AuthError);
     expect(result.message).toBe("Repository access denied");
     expect(result.httpStatus).toBe(403);
+  });
+
+  // Regression: the rate-limit text was read from String(error), which is
+  // "[object Object]" for a non-Error throw. That was invisible while every
+  // 403 became a RateLimitError; once the message decides the class, it turned
+  // a real rate limit into an AuthError.
+  it("should detect a rate limit on a non-Error 403 payload", () => {
+    const error = { status: 403, message: "API rate limit exceeded" };
+    const result = classifyGitHubError(error);
+
+    expect(result).toBeInstanceOf(RateLimitError);
+    expect(result.httpStatus).toBe(403);
+  });
+
+  it("should classify a 403 with an exhausted quota header as RateLimitError", () => {
+    const error = {
+      status: 403,
+      message: "Forbidden",
+      response: { headers: { "x-ratelimit-remaining": "0" } }
+    };
+    const result = classifyGitHubError(error);
+
+    expect(result).toBeInstanceOf(RateLimitError);
+    expect(result.message).toBe("GitHub API rate limit exceeded");
+    expect(result.httpStatus).toBe(403);
+  });
+
+  it("should classify 429 errors as RateLimitError", () => {
+    const error = { status: 429, message: "Too Many Requests" };
+    const result = classifyGitHubError(error);
+
+    expect(result).toBeInstanceOf(RateLimitError);
+    expect(result.message).toBe("GitHub API rate limit exceeded");
+    expect(result.httpStatus).toBe(429);
+  });
+
+  // A 5xx has no dedicated class, but dropping its status would make an
+  // upstream outage indistinguishable from a transport failure that never
+  // reached GitHub. extensions/v2 branches on exactly that difference.
+  it("should retain the status for unrecognised HTTP statuses", () => {
+    for (const status of [500, 502, 503]) {
+      const error = Object.assign(new Error("upstream failure"), { status });
+      const result = classifyGitHubError(error);
+
+      expect(result.errorCode).toBe("unknown_error");
+      expect(result.httpStatus).toBe(status);
+    }
   });
 
   it("should classify 404 errors as NotFoundError", () => {

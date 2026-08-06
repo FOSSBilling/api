@@ -1,15 +1,23 @@
+import {
+  requireActiveAuth,
+  requireAuthAllowInactive,
+  requireIdentitySync
+} from "../middleware";
+import { getExtensionsDb } from "../../../../lib/db";
 import { createRoute, z } from "@hono/zod-openapi";
-import { getAuth } from "../../../lib/auth";
-import { statusFromErrorCode } from "./route-errors";
+import { getAuth } from "../../../../lib/auth";
+import { errorBody, statusFromErrorCode } from "./errors";
 import {
   ActiveAccountRequiredResponse,
-  ErrorResponseSchema,
+  errorResponse
+} from "../schemas/common";
+import {
   UserIdentityInputSchema,
   UserProfileUpdateSchema,
   UserSchema
-} from "./interfaces";
-import { UsersDatabase } from "./users-database";
-import { ExtensionsV2App, RouteDependencies } from "./route-dependencies";
+} from "../schemas/users";
+import { UsersDatabase } from "../db/users";
+import { ExtensionsV2App } from "./app";
 
 function toUserResponse(user: {
   displayName: string | null;
@@ -25,17 +33,14 @@ function toUserResponse(user: {
   };
 }
 
-export function registerAccountRoutes(
-  app: ExtensionsV2App,
-  dependencies: RouteDependencies
-): void {
+export function registerAccountRoutes(app: ExtensionsV2App): void {
   const syncIdentityRoute = createRoute({
     method: "put",
     path: "/users/me/identity",
     tags: ["Users"],
     summary: "Synchronize the caller's OIDC identity projection",
     security: [{ Bearer: [] }],
-    middleware: [dependencies.requireIdentitySync()] as const,
+    middleware: [requireIdentitySync()] as const,
     request: {
       body: {
         content: { "application/json": { schema: UserIdentityInputSchema } }
@@ -48,22 +53,13 @@ export function registerAccountRoutes(
         },
         description: "Identity projection synchronized"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
+      401: errorResponse("Missing or invalid bearer token"),
       403: {
         ...ActiveAccountRequiredResponse,
         description: "Identity synchronization requires a trusted assertion"
       },
-      422: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Identity payload failed validation"
-      },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      422: errorResponse("Identity payload failed validation"),
+      500: errorResponse("Database error")
     }
   });
 
@@ -74,7 +70,7 @@ export function registerAccountRoutes(
     // API-owned and is never accepted from the request body.
     const auth = getAuth(c);
     const body = c.req.valid("json");
-    const users = new UsersDatabase(dependencies.database(c.env.DB_EXTENSIONS));
+    const users = new UsersDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
     const result = await users.syncIdentity(auth.userId, {
       name: body.name,
       email: body.email,
@@ -85,15 +81,7 @@ export function registerAccountRoutes(
       githubOrgsExpiresAt: body.github_orgs_expires_at
     });
     if (result.error || !result.data) {
-      return c.json(
-        {
-          error: {
-            message: result.error?.message ?? "Unable to sync identity",
-            code: result.error?.code ?? "DATABASE_ERROR"
-          }
-        },
-        500
-      );
+      return c.json(errorBody(result.error, "Unable to sync identity"), 500);
     }
     return c.json({ result: toUserResponse(result.data) }, 200);
   });
@@ -104,7 +92,7 @@ export function registerAccountRoutes(
     tags: ["Users"],
     summary: "Get the caller's account projection",
     security: [{ Bearer: [] }],
-    middleware: [dependencies.requireAuthAllowInactive()] as const,
+    middleware: [requireAuthAllowInactive()] as const,
     responses: {
       200: {
         content: {
@@ -112,24 +100,15 @@ export function registerAccountRoutes(
         },
         description: "The caller's account projection, including active status"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
-      404: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Account does not exist"
-      },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      401: errorResponse("Missing or invalid bearer token"),
+      404: errorResponse("Account does not exist"),
+      500: errorResponse("Database error")
     }
   });
 
   app.openapi(getUserRoute, async (c) => {
     const auth = getAuth(c);
-    const users = new UsersDatabase(dependencies.database(c.env.DB_EXTENSIONS));
+    const users = new UsersDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
     const result = await users.get(auth.userId);
     if (result.error && result.error.code !== "NOT_FOUND") {
       return c.json(
@@ -157,7 +136,7 @@ export function registerAccountRoutes(
     tags: ["Users"],
     summary: "Update the caller's personal profile",
     security: [{ Bearer: [] }],
-    middleware: [dependencies.requireAuth()] as const,
+    middleware: [requireActiveAuth()] as const,
     request: {
       body: {
         content: { "application/json": { schema: UserProfileUpdateSchema } }
@@ -174,56 +153,28 @@ export function registerAccountRoutes(
         },
         description: "Profile updated"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
+      401: errorResponse("Missing or invalid bearer token"),
       403: ActiveAccountRequiredResponse,
-      404: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Account does not exist or has been deleted"
-      },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      404: errorResponse("Account does not exist or has been deleted"),
+      500: errorResponse("Database error")
     }
   });
 
   app.openapi(updateProfileRoute, async (c) => {
     const auth = getAuth(c);
     const body = c.req.valid("json");
-    const users = new UsersDatabase(dependencies.database(c.env.DB_EXTENSIONS));
-    const current = await users.get(auth.userId);
-    if (current.error && current.error.code !== "NOT_FOUND") {
-      return c.json(
-        {
-          error: {
-            message: current.error.message,
-            code: current.error.code ?? "DATABASE_ERROR"
-          }
-        },
-        500
-      );
-    }
-    if (!current.data || current.data.deletedAt !== null) {
-      return c.json(
-        { error: { message: "User not found", code: "NOT_FOUND" } },
-        404
-      );
-    }
+    const users = new UsersDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
+    // No existence pre-check: updateDisplayName's WHERE already carries
+    // `deleted_at IS NULL` and reports the same NOT_FOUND on zero changes,
+    // so reading the row first only added a round trip to a request that
+    // requireActiveAuth has already validated.
     const result = await users.updateDisplayName(
       auth.userId,
       body.display_name
     );
     if (result.error || !result.data) {
       return c.json(
-        {
-          error: {
-            message: result.error?.message ?? "Unable to update profile",
-            code: result.error?.code ?? "DATABASE_ERROR"
-          }
-        },
+        errorBody(result.error, "Unable to update profile"),
         statusFromErrorCode(result.error?.code, false)
       );
     }
@@ -236,7 +187,7 @@ export function registerAccountRoutes(
     tags: ["Users"],
     summary: "Delete the caller's account and tombstone its user row",
     security: [{ Bearer: [] }],
-    middleware: [dependencies.requireAuthAllowInactive()] as const,
+    middleware: [requireAuthAllowInactive()] as const,
     responses: {
       200: {
         content: {
@@ -246,37 +197,20 @@ export function registerAccountRoutes(
         },
         description: "Account deleted"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
-      404: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Account does not exist"
-      },
-      409: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Account still owns protected domain records"
-      },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      401: errorResponse("Missing or invalid bearer token"),
+      404: errorResponse("Account does not exist"),
+      409: errorResponse("Account still owns protected domain records"),
+      500: errorResponse("Database error")
     }
   });
 
   app.openapi(deleteUserRoute, async (c) => {
     const auth = getAuth(c);
-    const users = new UsersDatabase(dependencies.database(c.env.DB_EXTENSIONS));
+    const users = new UsersDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
     const result = await users.deleteAccount(auth.userId);
     if (result.error || !result.data) {
       return c.json(
-        {
-          error: {
-            message: result.error?.message ?? "Unable to delete account",
-            code: result.error?.code ?? "DATABASE_ERROR"
-          }
-        },
+        errorBody(result.error, "Unable to delete account"),
         statusFromErrorCode(result.error?.code)
       );
     }

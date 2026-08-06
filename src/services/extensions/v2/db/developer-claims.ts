@@ -1,21 +1,18 @@
 import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
-import { DatabaseResult } from "../../../lib/interfaces";
-import { ExtensionsDb } from "../../../lib/db";
-import { developerClaims, developers, users } from "./db/schema";
+import { DatabaseResult } from "../../../../lib/interfaces";
+import { ExtensionsDb } from "../../../../lib/db";
+import { developerClaims, developers, users } from "./schema";
 import {
   databaseError,
-  errorMessageChain,
-  isDeveloperOwnerConflict
+  isDeveloperOwnerConflict,
+  isOwnershipEpochRollback
 } from "./errors";
-import { toD1Statement } from "./d1-batch";
-import {
-  Developer,
-  DeveloperClaim,
-  DeveloperProfile,
-  PendingDeveloperClaim
-} from "./interfaces";
-import { DeveloperProfilesDatabase } from "./developer-profiles-database";
-import { verifyGithubOwnership } from "./developer-identity-verification";
+import { toD1Statement } from "./batch";
+import { optionalBool } from "./columns";
+import { Developer, DeveloperProfile } from "../schemas/developers";
+import { DeveloperClaim, PendingDeveloperClaim } from "../schemas/ownership";
+import { DeveloperProfilesDatabase } from "./developer-profiles";
+import { verifyGithubOwnership } from "../github/identity";
 
 type ClaimRow = typeof developerClaims.$inferSelect;
 
@@ -30,18 +27,9 @@ function parseClaimRow(row: ClaimRow): DeveloperClaim {
     reviewer_id: row.reviewerId ?? undefined,
     created_at: row.createdAt,
     reviewed_at: row.reviewedAt ?? undefined,
-    github_org_verified:
-      row.githubOrgVerified === null || row.githubOrgVerified === undefined
-        ? undefined
-        : row.githubOrgVerified === 1,
+    github_org_verified: optionalBool(row.githubOrgVerified),
     github_verification_note: row.githubVerificationNote ?? undefined
   };
-}
-
-function isPendingClaimConflict(error: unknown): boolean {
-  return /UNIQUE constraint failed.*developer_claims/i.test(
-    errorMessageChain(error)
-  );
 }
 
 export class DeveloperClaimsDatabase {
@@ -102,9 +90,24 @@ export class DeveloperClaimsDatabase {
     if (developer.ownerUserId !== null) {
       return { code: "CONFLICT", message: "This profile is already owned" };
     }
+
+    const [ownProfile] = await this.db
+      .select({ id: developers.id })
+      .from(developers)
+      .where(eq(developers.ownerUserId, claimantId));
+    if (ownProfile) {
+      return {
+        code: "CONFLICT",
+        message: "You already have a developer profile"
+      };
+    }
+
+    // Every condition in the insert's WHERE guard holds, so the row was
+    // rejected by the pending-claim partial unique index instead - the
+    // claimant is replaying a claim they already have open here.
     return {
       code: "CONFLICT",
-      message: "You already have a developer profile"
+      message: "You already have a pending claim on this profile"
     };
   }
 
@@ -200,23 +203,18 @@ export class DeveloperClaimsDatabase {
         // re-checked here — it can't itself grant eligibility.) Kept as raw
         // sql: an INSERT...SELECT...WHERE EXISTS isn't expressible via
         // .insert().values().
+        // ON CONFLICT DO NOTHING turns a lost race against the pending-claim
+        // partial unique index into changes = 0, which the ineligibility
+        // diagnosis below already has to explain.
         result = await this.db.run(sql`
           INSERT INTO ${developerClaims} (id, developer_id, claimant_id, note, github_org_verified, github_verification_note)
              SELECT ${id}, ${developerId}, ${claimantId}, ${note ?? null}, ${githubOrgVerified}, ${githubVerificationNote}
              WHERE EXISTS (SELECT 1 FROM ${developers} WHERE id = ${developerId} AND owner_user_id IS NULL)
                AND NOT EXISTS (SELECT 1 FROM ${developers} WHERE owner_user_id = ${claimantId})
                AND EXISTS (SELECT 1 FROM ${users} WHERE ${users.id} = ${claimantId} AND ${users.deletedAt} IS NULL)
+          ON CONFLICT DO NOTHING
         `);
       } catch (error) {
-        if (isPendingClaimConflict(error)) {
-          return {
-            data: null,
-            error: {
-              code: "CONFLICT",
-              message: "You already have a pending claim on this profile"
-            }
-          };
-        }
         return databaseError("claim", error);
       }
 
@@ -462,11 +460,7 @@ export class DeveloperClaimsDatabase {
         rejectOthersStmt
       ]);
     } catch (error) {
-      if (
-        /CHECK constraint failed.*ownership_epoch/i.test(
-          errorMessageChain(error)
-        )
-      ) {
+      if (isOwnershipEpochRollback(error)) {
         return this.explainClaimApprovalNoOp(claim);
       }
       if (isDeveloperOwnerConflict(error)) {

@@ -3,10 +3,41 @@
 ## Project Structure & Module Organization
 
 - `src/app/index.ts` is the worker entrypoint and route wiring for Hono.
-- Feature logic lives in `src/services/` (for example `central-alerts/v1`, `versions/v1`, `stats/v1`) and should stay runtime-agnostic.
+- Feature logic lives in `src/services/` and should stay runtime-agnostic.
 - Platform interfaces and adapters are in `src/lib/` with Cloudflare and Node implementations under `src/lib/adapters/`.
 - Tests mirror the source layout under `test/`, with shared helpers in `test/utils/` and mocks in `test/mocks/`.
 - Runtime/config files include `wrangler.jsonc`, `worker-configuration.d.ts`, `tsconfig.json`, `eslint.config.ts`, and `prettier.config.ts`.
+
+### Service layout
+
+Small services are flat: `index.ts`, `interfaces.ts`, optionally `database.ts`
+and `db/` (see `central-alerts/v1`, `versions/v1`, `stats/v1`).
+
+`extensions/v2` is the reference layout for anything larger, and new services
+should grow into it rather than inventing a third shape:
+
+- `index.ts` — app assembly only: middleware, route registration, OpenAPI
+  document. Route registration order is load-bearing where static paths must
+  beat parameter paths; those cases carry comments.
+- `middleware.ts` — service-specific Hono middleware.
+- `routes/` — one module per route group, each exporting `register*Routes(app)`.
+  `routes/errors.ts` maps domain error codes to HTTP status; `routes/app.ts`
+  holds the typed app alias.
+- `db/` — `schema.ts`, `migrations/`, one `*Database` class per workflow, plus
+  `errors.ts` (D1 constraint classification) and `batch.ts`.
+- `schemas/` — zod/OpenAPI contract split by domain. There is deliberately **no
+  barrel**: import from `schemas/<domain>` directly so a module's dependencies
+  are visible. This is why `extensions/v2` has no `interfaces.ts`.
+- `github/` — outbound GitHub calls, kept out of the persistence modules.
+
+Route modules import `getExtensionsDb`/`getAuth`/`getPlatform` and middleware
+directly. There is no dependency-injection container; tests drive the real app
+through `app.request`.
+
+Each service documents its own contract and operational detail in its own
+`README.md` (`src/services/<name>/<version>/README.md`). Keep API behaviour
+there rather than here or in the root README: this file is for conventions that
+apply when modifying the code.
 
 ## Build, Test, and Development Commands
 
@@ -49,12 +80,3 @@
   `ASSERTION_SIGNING_SECRET="..."` to `.dev.vars` for local dev; set via
   `wrangler secret put ASSERTION_SIGNING_SECRET` in production, matching the value
   configured in the extensions site's Worker.
-
-## Stats API v1
-
-- Provides release statistics visualization for FOSSBilling versions.
-- HTML endpoint: `GET /stats/v1/` - Returns a client-side rendered page with Chart.js visualizations.
-- Data endpoint: `GET /stats/v1/data` - Returns aggregated statistics data for the charts.
-- Charts include: Release Size Graph (line), PHP Version Requirements (line), Patches Per Release (bar), and Releases Per Year (bar).
-- Stats data is cached with a TTL of 24 hours and reuses release data from the versions service.
-- Service follows the same caching patterns as versions API, including graceful handling of GitHub API errors.

@@ -8,4 +8,4 @@ This directory contains mock data used across the test suite.
 
 ## Usage
 
-Database tests run against a real local D1 (see `@cloudflare/vitest-pool-workers` and `test/utils/apply-migrations.ts`) rather than a mock adapter - see `test/services/extensions/v2/db-fixtures.ts` for seed/read helpers and `test/services/extensions/v2/db-interceptor.ts` for the handful of tests that need to inject a fault or a mid-request race.
+Database tests run against a real local D1 (see `@cloudflare/vitest-pool-workers` and `test/utils/apply-migrations.ts`) rather than a mock adapter - see `test/services/extensions/v2/db-fixtures.ts` for seed/read helpers and `test/services/extensions/v2/db-interceptor.ts` for the handful of tests that need to inject a fault or a mid-request race. The v2 suites are split one file per route module and share `test/services/extensions/v2/harness.ts`, which owns migrations, the per-test database reset, the rate-limiter stub, and the GitHub request mock.

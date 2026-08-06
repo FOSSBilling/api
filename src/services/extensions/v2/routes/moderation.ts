@@ -1,36 +1,34 @@
+import { requireModerator } from "../middleware";
+import { getExtensionsDb } from "../../../../lib/db";
+import { getAuth } from "../../../../lib/auth";
 import { createRoute, z } from "@hono/zod-openapi";
-import { statusFromErrorCode } from "./route-errors";
+import { errorBody, statusFromErrorCode } from "./errors";
 import {
   ActiveAccountRequiredResponse,
-  DeveloperApprovalSchema,
-  DeveloperHistoryEntrySchema,
-  DeveloperProfileSchema,
-  ErrorResponseSchema,
   IdParamSchema,
   PaginationSchema,
-  QueueQuerySchema,
   ReviewNoteOptionalSchema,
   ReviewNoteRequiredSchema,
-  SubmissionSchema
-} from "./interfaces";
-import { DeveloperProfilesDatabase } from "./developer-profiles-database";
-import { SubmissionsDatabase } from "./submissions-database";
-import { ExtensionsV2App, RouteDependencies } from "./route-dependencies";
+  errorResponse
+} from "../schemas/common";
+import {
+  DeveloperApprovalSchema,
+  DeveloperHistoryEntrySchema,
+  DeveloperProfileSchema
+} from "../schemas/developers";
+import { QueueQuerySchema, SubmissionSchema } from "../schemas/submissions";
+import { DeveloperProfilesDatabase } from "../db/developer-profiles";
+import { SubmissionsDatabase } from "../db/submissions";
+import { ExtensionsV2App } from "./app";
 
-export function registerModerationRoutes(
-  app: ExtensionsV2App,
-  dependencies: RouteDependencies
-): void {
+export function registerModerationRoutes(app: ExtensionsV2App): void {
   const queueRoute = createRoute({
     method: "get",
     path: "/submissions/queue",
     tags: ["Moderation"],
     summary: "List submissions in the moderation queue",
     security: [{ Bearer: [] }],
-    middleware: [
-      dependencies.requireAuth(),
-      dependencies.requireModerator()
-    ] as const,
+    middleware: [requireModerator()] as const,
     request: { query: QueueQuerySchema },
     responses: {
       200: {
@@ -45,29 +43,18 @@ export function registerModerationRoutes(
         description:
           "Submissions matching the requested status (default: pending)"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
+      401: errorResponse("Missing or invalid bearer token"),
       403: {
         ...ActiveAccountRequiredResponse,
         description: "The account is inactive or the caller is not a moderator"
       },
-      422: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "status query param failed validation"
-      },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      422: errorResponse("status query param failed validation"),
+      500: errorResponse("Database error")
     }
   });
 
   app.openapi(queueRoute, async (c) => {
-    const db = new SubmissionsDatabase(
-      dependencies.database(c.env.DB_EXTENSIONS)
-    );
+    const db = new SubmissionsDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
     const { status, limit, cursor } = c.req.valid("query");
     const { data, error } = await db.listQueue(
       status ?? "pending",
@@ -76,12 +63,7 @@ export function registerModerationRoutes(
     );
     if (error || !data) {
       return c.json(
-        {
-          error: {
-            message: error?.message ?? "Unable to load queue",
-            code: error?.code ?? "DATABASE_ERROR"
-          }
-        },
+        errorBody(error, "Unable to load queue"),
         error?.code === "INVALID_CURSOR" ? 422 : 500
       );
     }
@@ -103,10 +85,7 @@ export function registerModerationRoutes(
     tags: ["Moderation"],
     summary: "Approve a pending submission",
     security: [{ Bearer: [] }],
-    middleware: [
-      dependencies.requireAuth(),
-      dependencies.requireModerator()
-    ] as const,
+    middleware: [requireModerator()] as const,
     request: {
       params: IdParamSchema,
       body: {
@@ -128,53 +107,29 @@ export function registerModerationRoutes(
         description:
           "Submission approved and written through to the live extension/developer"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
+      401: errorResponse("Missing or invalid bearer token"),
       403: {
         ...ActiveAccountRequiredResponse,
         description: "The account is inactive or the caller is not a moderator"
       },
-      404: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "No submission with that id"
-      },
-      409: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description:
-          "Submission is not pending, or ownership has changed since it was submitted"
-      },
-      422: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "id param or review_note body failed validation"
-      },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      404: errorResponse("No submission with that id"),
+      409: errorResponse(
+        "Submission is not pending, or ownership has changed since it was submitted"
+      ),
+      422: errorResponse("id param or review_note body failed validation"),
+      500: errorResponse("Database error")
     }
   });
 
   app.openapi(approveRoute, async (c) => {
-    const auth = dependencies.auth(c);
+    const auth = getAuth(c);
     const { id } = c.req.valid("param");
     const { review_note } = c.req.valid("json");
-    const db = new SubmissionsDatabase(
-      dependencies.database(c.env.DB_EXTENSIONS)
-    );
+    const db = new SubmissionsDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
     const { data, error } = await db.approve(id, auth.userId, review_note);
     if (error || !data) {
       const status = statusFromErrorCode(error?.code);
-      return c.json(
-        {
-          error: {
-            message: error?.message ?? "Unable to approve submission",
-            code: error?.code ?? "DATABASE_ERROR"
-          }
-        },
-        status
-      );
+      return c.json(errorBody(error, "Unable to approve submission"), status);
     }
     return c.json({ result: data }, 200);
   });
@@ -185,10 +140,7 @@ export function registerModerationRoutes(
     tags: ["Moderation"],
     summary: "Reject a pending submission",
     security: [{ Bearer: [] }],
-    middleware: [
-      dependencies.requireAuth(),
-      dependencies.requireModerator()
-    ] as const,
+    middleware: [requireModerator()] as const,
     request: {
       params: IdParamSchema,
       body: {
@@ -209,52 +161,27 @@ export function registerModerationRoutes(
         },
         description: "Submission rejected"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
+      401: errorResponse("Missing or invalid bearer token"),
       403: {
         ...ActiveAccountRequiredResponse,
         description: "The account is inactive or the caller is not a moderator"
       },
-      404: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "No submission with that id"
-      },
-      409: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Submission is not pending"
-      },
-      422: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "review_note is required"
-      },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      404: errorResponse("No submission with that id"),
+      409: errorResponse("Submission is not pending"),
+      422: errorResponse("review_note is required"),
+      500: errorResponse("Database error")
     }
   });
 
   app.openapi(rejectRoute, async (c) => {
-    const auth = dependencies.auth(c);
+    const auth = getAuth(c);
     const { id } = c.req.valid("param");
     const { review_note } = c.req.valid("json");
-    const db = new SubmissionsDatabase(
-      dependencies.database(c.env.DB_EXTENSIONS)
-    );
+    const db = new SubmissionsDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
     const { data, error } = await db.reject(id, auth.userId, review_note);
     if (error || !data) {
       const status = statusFromErrorCode(error?.code);
-      return c.json(
-        {
-          error: {
-            message: error?.message ?? "Unable to reject submission",
-            code: error?.code ?? "DATABASE_ERROR"
-          }
-        },
-        status
-      );
+      return c.json(errorBody(error, "Unable to reject submission"), status);
     }
     return c.json({ result: data }, 200);
   });
@@ -265,10 +192,7 @@ export function registerModerationRoutes(
     tags: ["Moderation"],
     summary: "List every developer profile, approved or not",
     security: [{ Bearer: [] }],
-    middleware: [
-      dependencies.requireAuth(),
-      dependencies.requireModerator()
-    ] as const,
+    middleware: [requireModerator()] as const,
     responses: {
       200: {
         content: {
@@ -278,24 +202,18 @@ export function registerModerationRoutes(
         },
         description: "All developer profiles"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
+      401: errorResponse("Missing or invalid bearer token"),
       403: {
         ...ActiveAccountRequiredResponse,
         description: "The account is inactive or the caller is not a moderator"
       },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      500: errorResponse("Database error")
     }
   });
 
   app.openapi(allDevelopersRoute, async (c) => {
     const db = new DeveloperProfilesDatabase(
-      dependencies.database(c.env.DB_EXTENSIONS)
+      getExtensionsDb(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.listAll();
     if (error || !data) {
@@ -318,10 +236,7 @@ export function registerModerationRoutes(
     tags: ["Moderation"],
     summary: "List developer profiles awaiting moderator review",
     security: [{ Bearer: [] }],
-    middleware: [
-      dependencies.requireAuth(),
-      dependencies.requireModerator()
-    ] as const,
+    middleware: [requireModerator()] as const,
     responses: {
       200: {
         content: {
@@ -331,24 +246,18 @@ export function registerModerationRoutes(
         },
         description: "Developer profiles not yet approved"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
+      401: errorResponse("Missing or invalid bearer token"),
       403: {
         ...ActiveAccountRequiredResponse,
         description: "The account is inactive or the caller is not a moderator"
       },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      500: errorResponse("Database error")
     }
   });
 
   app.openapi(unapprovedDevelopersRoute, async (c) => {
     const db = new DeveloperProfilesDatabase(
-      dependencies.database(c.env.DB_EXTENSIONS)
+      getExtensionsDb(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.listUnapproved();
     if (error || !data) {
@@ -370,10 +279,7 @@ export function registerModerationRoutes(
     tags: ["Moderation"],
     summary: "Mark a developer profile as reviewed/approved",
     security: [{ Bearer: [] }],
-    middleware: [
-      dependencies.requireAuth(),
-      dependencies.requireModerator()
-    ] as const,
+    middleware: [requireModerator()] as const,
     request: {
       params: IdParamSchema,
       body: {
@@ -391,39 +297,24 @@ export function registerModerationRoutes(
         },
         description: "Developer profile marked approved"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
+      401: errorResponse("Missing or invalid bearer token"),
       403: {
         ...ActiveAccountRequiredResponse,
         description: "The account is inactive or the caller is not a moderator"
       },
-      404: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "No developer with that id"
-      },
-      409: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Profile changed after the reviewed revision"
-      },
-      422: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "id param failed validation"
-      },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      404: errorResponse("No developer with that id"),
+      409: errorResponse("Profile changed after the reviewed revision"),
+      422: errorResponse("id param failed validation"),
+      500: errorResponse("Database error")
     }
   });
 
   app.openapi(approveDeveloperRoute, async (c) => {
-    const auth = dependencies.auth(c);
+    const auth = getAuth(c);
     const { id } = c.req.valid("param");
     const { expected_revision } = c.req.valid("json");
     const db = new DeveloperProfilesDatabase(
-      dependencies.database(c.env.DB_EXTENSIONS)
+      getExtensionsDb(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.approve(
       id,
@@ -435,15 +326,7 @@ export function registerModerationRoutes(
         error?.code === "ACCOUNT_INACTIVE"
           ? 403
           : statusFromErrorCode(error?.code);
-      return c.json(
-        {
-          error: {
-            message: error?.message ?? "Unable to approve developer",
-            code: error?.code ?? "DATABASE_ERROR"
-          }
-        },
-        status
-      );
+      return c.json(errorBody(error, "Unable to approve developer"), status);
     }
     return c.json({ result: data }, 200);
   });
@@ -454,10 +337,7 @@ export function registerModerationRoutes(
     tags: ["Moderation"],
     summary: "List the write history of a developer profile",
     security: [{ Bearer: [] }],
-    middleware: [
-      dependencies.requireAuth(),
-      dependencies.requireModerator()
-    ] as const,
+    middleware: [requireModerator()] as const,
     request: { params: IdParamSchema },
     responses: {
       200: {
@@ -468,41 +348,24 @@ export function registerModerationRoutes(
         },
         description: "Snapshots of the profile, newest first"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
+      401: errorResponse("Missing or invalid bearer token"),
       403: {
         ...ActiveAccountRequiredResponse,
         description: "The account is inactive or the caller is not a moderator"
       },
-      422: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "id param failed validation"
-      },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      422: errorResponse("id param failed validation"),
+      500: errorResponse("Database error")
     }
   });
 
   app.openapi(developerHistoryRoute, async (c) => {
     const { id } = c.req.valid("param");
     const db = new DeveloperProfilesDatabase(
-      dependencies.database(c.env.DB_EXTENSIONS)
+      getExtensionsDb(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.listHistory(id);
     if (error || !data) {
-      return c.json(
-        {
-          error: {
-            message: error?.message ?? "Unable to load developer history",
-            code: error?.code ?? "DATABASE_ERROR"
-          }
-        },
-        500
-      );
+      return c.json(errorBody(error, "Unable to load developer history"), 500);
     }
     return c.json({ result: data }, 200);
   });

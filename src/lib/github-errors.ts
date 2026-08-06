@@ -63,6 +63,17 @@ export function classifyGitHubError(error: unknown, url?: string): GitHubError {
 
   const errorMessage = error instanceof Error ? error.message : String(error);
 
+  // Carried through to the generic fallback below. Statuses this function has
+  // no specific class for - 500, 502, 503 - are still worth reporting: callers
+  // use them to tell an upstream outage apart from a transport failure that
+  // never reached GitHub at all.
+  const httpStatus =
+    typeof error === "object" &&
+    error !== null &&
+    typeof (error as Record<string, unknown>).status === "number"
+      ? ((error as Record<string, unknown>).status as number)
+      : undefined;
+
   if (typeof error === "object" && error !== null) {
     const err = error as Record<string, unknown>;
 
@@ -74,15 +85,31 @@ export function classifyGitHubError(error: unknown, url?: string): GitHubError {
       return new AuthError(err.message, err.status, url);
     }
 
+    // GitHub returns 429 for secondary rate limits, and 403 for both primary
+    // rate limits and plain authorization failures. Only the message text or
+    // an exhausted x-ratelimit-remaining distinguishes the two; a bare 403 is
+    // an authorization problem, and calling it a rate limit would have callers
+    // back off and retry a request that will never succeed.
+    if (typeof err.status === "number" && err.status === 429) {
+      return new RateLimitError("GitHub API rate limit exceeded", 429, url);
+    }
+
     if (
       typeof err.status === "number" &&
       err.status === 403 &&
       typeof err.message === "string"
     ) {
-      const message = errorMessage.toLowerCase().includes("rate limit")
-        ? "GitHub API rate limit exceeded"
-        : err.message;
-      return new RateLimitError(message, err.status, url);
+      const response = err.response as
+        { headers?: Record<string, string> } | undefined;
+      // err.message, not errorMessage: the latter is String(error) for a
+      // non-Error throw, which stringifies to "[object Object]" and would hide
+      // the "rate limit" text this check depends on.
+      const rateLimited =
+        err.message.toLowerCase().includes("rate limit") ||
+        response?.headers?.["x-ratelimit-remaining"] === "0";
+      return rateLimited
+        ? new RateLimitError("GitHub API rate limit exceeded", err.status, url)
+        : new AuthError(err.message, err.status, url);
     }
 
     if (
@@ -110,7 +137,7 @@ export function classifyGitHubError(error: unknown, url?: string): GitHubError {
 
   return new GitHubError(
     errorMessage,
-    undefined,
+    httpStatus,
     "unknown_error",
     ErrorPriority.HIGH,
     url

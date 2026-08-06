@@ -1,17 +1,18 @@
 import { and, asc, eq, or, sql } from "drizzle-orm";
-import { DatabaseResult } from "../../../lib/interfaces";
-import { ExtensionsDb } from "../../../lib/db";
-import { extensions, developers } from "./db/schema";
+import { DatabaseResult } from "../../../../lib/interfaces";
+import { ExtensionsDb } from "../../../../lib/db";
+import { sortReleasesDescending } from "../../../../lib/releases";
+import { parseJSON } from "../../../../lib/json";
+import { extensions, developers } from "./schema";
 import { databaseError } from "./errors";
+import { encodeCursor as encode, decodeCursor as decode } from "./cursor";
 import {
   Extension,
   ExtensionListItem,
   License,
   Release,
-  Repository,
-  sortReleasesDescending,
-  parseJSON
-} from "./interfaces";
+  Repository
+} from "../schemas/extensions";
 
 // LEFT JOIN defensively preserves catalogue reads if a legacy/corrupt row
 // points at a missing developer. The current baseline enforces the
@@ -39,25 +40,13 @@ const EXTENSION_COLUMNS = {
   developerOwnerUserId: developers.ownerUserId
 };
 
-const EXTENSION_LIST_COLUMNS = {
-  id: EXTENSION_COLUMNS.id,
-  type: EXTENSION_COLUMNS.type,
-  name: EXTENSION_COLUMNS.name,
-  description: EXTENSION_COLUMNS.description,
-  website: EXTENSION_COLUMNS.website,
-  license: EXTENSION_COLUMNS.license,
-  iconUrl: EXTENSION_COLUMNS.iconUrl,
-  source: EXTENSION_COLUMNS.source,
-  version: EXTENSION_COLUMNS.version,
-  downloadUrl: EXTENSION_COLUMNS.downloadUrl,
-  developerId: EXTENSION_COLUMNS.developerId,
-  developerType: EXTENSION_COLUMNS.developerType,
-  developerName: EXTENSION_COLUMNS.developerName,
-  developerUrl: EXTENSION_COLUMNS.developerUrl,
-  developerAvatarUrl: EXTENSION_COLUMNS.developerAvatarUrl,
-  developerApprovedAt: EXTENSION_COLUMNS.developerApprovedAt,
-  developerOwnerUserId: EXTENSION_COLUMNS.developerOwnerUserId
-};
+// Derived by subtraction so a column added to EXTENSION_COLUMNS cannot be
+// forgotten here: catalogue cards omit only the two large fields.
+const {
+  readme: _readme,
+  releases: _releases,
+  ...EXTENSION_LIST_COLUMNS
+} = EXTENSION_COLUMNS;
 
 interface ExtensionRow {
   id: string;
@@ -97,7 +86,6 @@ export interface ExtensionListPage {
 }
 
 interface ExtensionCursor {
-  v: 1;
   normalizedId: string;
   id: string;
 }
@@ -192,70 +180,33 @@ export class ExtensionsDatabase {
 }
 
 function encodeCursor(id: string): string {
-  const cursor: ExtensionCursor = { v: 1, normalizedId: id.toLowerCase(), id };
-  const bytes = new TextEncoder().encode(JSON.stringify(cursor));
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary);
+  return encode({ normalizedId: id.toLowerCase(), id });
+}
+
+// normalizedId is checked against id rather than trusted: it drives the
+// keyset comparison, so a tampered cursor could otherwise seek from a
+// position the id itself doesn't correspond to.
+function isExtensionCursor(
+  parsed: Record<string, unknown>
+): parsed is ExtensionCursor & Record<string, unknown> {
+  return (
+    typeof parsed.id === "string" &&
+    typeof parsed.normalizedId === "string" &&
+    parsed.normalizedId === parsed.id.toLowerCase()
+  );
 }
 
 function decodeCursor(value: string): ExtensionCursor | null {
-  try {
-    const binary = atob(value);
-    const bytes = Uint8Array.from(binary, (character) =>
-      character.charCodeAt(0)
-    );
-    const parsed: unknown = JSON.parse(
-      new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes)
-    );
-    if (
-      typeof parsed !== "object" ||
-      parsed === null ||
-      (parsed as Partial<ExtensionCursor>).v !== 1 ||
-      typeof (parsed as Partial<ExtensionCursor>).id !== "string" ||
-      typeof (parsed as Partial<ExtensionCursor>).normalizedId !== "string" ||
-      (parsed as ExtensionCursor).normalizedId !==
-        (parsed as ExtensionCursor).id.toLowerCase()
-    ) {
-      return null;
-    }
-    return parsed as ExtensionCursor;
-  } catch {
-    return null;
-  }
+  return decode(value, isExtensionCursor);
 }
 
 export function isValidExtensionCursor(value: string): boolean {
   return decodeCursor(value) !== null;
 }
 
-function parseExtensionRow(row: ExtensionRow): Extension {
-  const releases = parseJSON<Release[]>(row.releases, []);
-  return {
-    id: row.id,
-    type: row.type as Extension["type"],
-    name: row.name,
-    description: row.description,
-    releases: sortReleasesDescending(releases),
-    website: row.website,
-    license: parseJSON<License>(row.license, { name: "" }),
-    icon_url: row.iconUrl ?? undefined,
-    readme: row.readme,
-    source: parseJSON<Repository>(row.source, { type: "custom", repo: "" }),
-    version: row.version,
-    download_url: row.downloadUrl,
-    developer: {
-      id: row.developerId,
-      type: (row.developerType as "user" | "organization") ?? "user",
-      name: row.developerName ?? "",
-      URL: row.developerUrl ?? undefined,
-      avatar_url: row.developerAvatarUrl ?? undefined,
-      approved: row.developerApprovedAt !== null,
-      unclaimed: row.developerOwnerUserId === null
-    }
-  };
-}
-
+// Shared by both parsers so the catalogue card and the detail view can never
+// disagree about the embedded developer, or about the defaults applied when
+// the LEFT JOIN above found no developer row.
 function parseExtensionListRow(row: ExtensionListRow): ExtensionListItem {
   return {
     id: row.id,
@@ -277,5 +228,15 @@ function parseExtensionListRow(row: ExtensionListRow): ExtensionListItem {
       approved: row.developerApprovedAt !== null,
       unclaimed: row.developerOwnerUserId === null
     }
+  };
+}
+
+// The detail view is the list projection plus the two large fields the
+// catalogue query deliberately omits.
+function parseExtensionRow(row: ExtensionRow): Extension {
+  return {
+    ...parseExtensionListRow(row),
+    readme: row.readme,
+    releases: sortReleasesDescending(parseJSON<Release[]>(row.releases, []))
   };
 }

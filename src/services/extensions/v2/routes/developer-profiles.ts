@@ -1,30 +1,37 @@
+import { requireActiveAuth } from "../middleware";
+import { getExtensionsDb } from "../../../../lib/db";
+import { getPlatform } from "../../../../lib/middleware";
+import { getAuth } from "../../../../lib/auth";
 import { createRoute, z } from "@hono/zod-openapi";
-import { statusFromErrorCode, statusFromGithubErrorCode } from "./route-errors";
+import {
+  errorBody,
+  statusFromErrorCode,
+  statusFromGithubErrorCode
+} from "./errors";
 import {
   ActiveAccountRequiredResponse,
-  DeveloperProfileSchema,
-  DeveloperSchema,
-  ErrorResponseSchema,
   IdParamSchema,
+  errorResponse
+} from "../schemas/common";
+import {
+  DeveloperProfileSchema,
+  DeveloperInputSchema,
   OwnedDeveloperProfileSchema,
   PublicDeveloperSchema,
   ReverifyQuerySchema,
   toPublicDeveloper
-} from "./interfaces";
-import { DeveloperProfilesDatabase } from "./developer-profiles-database";
-import { ExtensionsV2App, RouteDependencies } from "./route-dependencies";
+} from "../schemas/developers";
+import { DeveloperProfilesDatabase } from "../db/developer-profiles";
+import { ExtensionsV2App } from "./app";
 
-export function registerDeveloperProfileRoutes(
-  app: ExtensionsV2App,
-  dependencies: RouteDependencies
-): void {
+export function registerDeveloperProfileRoutes(app: ExtensionsV2App): void {
   const getOwnDeveloperRoute = createRoute({
     method: "get",
     path: "/developers/me",
     tags: ["Developers"],
     summary: "Get the caller's own developer profile",
     security: [{ Bearer: [] }],
-    middleware: [dependencies.requireAuth()] as const,
+    middleware: [requireActiveAuth()] as const,
     responses: {
       200: {
         content: {
@@ -34,22 +41,16 @@ export function registerDeveloperProfileRoutes(
         },
         description: "The caller's profile, or null when none exists"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
+      401: errorResponse("Missing or invalid bearer token"),
       403: ActiveAccountRequiredResponse,
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      500: errorResponse("Database error")
     }
   });
 
   app.openapi(getOwnDeveloperRoute, async (c) => {
-    const auth = dependencies.auth(c);
+    const auth = getAuth(c);
     const db = new DeveloperProfilesDatabase(
-      dependencies.database(c.env.DB_EXTENSIONS)
+      getExtensionsDb(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.getOwn(auth.userId);
     if (error || data === null) {
@@ -75,10 +76,10 @@ export function registerDeveloperProfileRoutes(
     tags: ["Developers"],
     summary: "Create or update the caller's own developer profile",
     security: [{ Bearer: [] }],
-    middleware: [dependencies.requireAuth()] as const,
+    middleware: [requireActiveAuth()] as const,
     request: {
       body: {
-        content: { "application/json": { schema: DeveloperSchema } }
+        content: { "application/json": { schema: DeveloperInputSchema } }
       }
     },
     responses: {
@@ -91,47 +92,32 @@ export function registerDeveloperProfileRoutes(
         description:
           "Developer profile created or updated and usable immediately"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
+      401: errorResponse("Missing or invalid bearer token"),
       403: {
         ...ActiveAccountRequiredResponse,
         description:
           "The account is inactive, or this id matches a real GitHub organization or username that isn't linked to the caller's account"
       },
-      409: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description:
-          "Developer id already taken by someone else, or id was changed on an existing profile"
-      },
-      429: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description:
-          "The account exhausted its profile-creation allowance, or GitHub verification is temporarily rate limited"
-      },
-      503: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "GitHub verification is temporarily unavailable"
-      },
-      422: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description:
-          "Payload failed validation, or the GitHub account type is unsupported"
-      },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      409: errorResponse(
+        "Developer id already taken by someone else, or id was changed on an existing profile"
+      ),
+      429: errorResponse(
+        "The account exhausted its profile-creation allowance, or GitHub verification is temporarily rate limited"
+      ),
+      503: errorResponse("GitHub verification is temporarily unavailable"),
+      422: errorResponse(
+        "Payload failed validation, or the GitHub account type is unsupported"
+      ),
+      500: errorResponse("Database error")
     }
   });
 
   app.openapi(upsertOwnDeveloperRoute, async (c) => {
-    const auth = dependencies.auth(c);
+    const auth = getAuth(c);
     const body = c.req.valid("json");
-    const platform = dependencies.platform(c);
+    const platform = getPlatform(c);
     const db = new DeveloperProfilesDatabase(
-      dependencies.database(c.env.DB_EXTENSIONS)
+      getExtensionsDb(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.upsertOwn(
       auth.userId,
@@ -158,12 +144,7 @@ export function registerDeveloperProfileRoutes(
               ? 409
               : statusFromGithubErrorCode(error?.code, 500);
       const response = c.json(
-        {
-          error: {
-            message: error?.message ?? "Unable to save developer profile",
-            code: error?.code ?? "DATABASE_ERROR"
-          }
-        },
+        errorBody(error, "Unable to save developer profile"),
         status
       );
       if (error?.code === "PROFILE_CREATION_RATE_LIMITED") {
@@ -180,7 +161,7 @@ export function registerDeveloperProfileRoutes(
     tags: ["Developers"],
     summary: "Permanently delete the caller's own developer profile",
     security: [{ Bearer: [] }],
-    middleware: [dependencies.requireAuth()] as const,
+    middleware: [requireActiveAuth()] as const,
     responses: {
       200: {
         content: {
@@ -192,41 +173,25 @@ export function registerDeveloperProfileRoutes(
         },
         description: "Profile deleted"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
+      401: errorResponse("Missing or invalid bearer token"),
       403: ActiveAccountRequiredResponse,
-      404: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Caller has no developer profile"
-      },
-      409: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description:
-          "Profile still has published extensions, or has a pending submission awaiting review"
-      },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      404: errorResponse("Caller has no developer profile"),
+      409: errorResponse(
+        "Profile still has published extensions, or has a pending submission awaiting review"
+      ),
+      500: errorResponse("Database error")
     }
   });
 
   app.openapi(deleteOwnDeveloperRoute, async (c) => {
-    const auth = dependencies.auth(c);
+    const auth = getAuth(c);
     const db = new DeveloperProfilesDatabase(
-      dependencies.database(c.env.DB_EXTENSIONS)
+      getExtensionsDb(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.deleteOwn(auth.userId);
     if (error || !data) {
       return c.json(
-        {
-          error: {
-            message: error?.message ?? "Unable to delete developer profile",
-            code: error?.code ?? "DATABASE_ERROR"
-          }
-        },
+        errorBody(error, "Unable to delete developer profile"),
         error?.code === "ACCOUNT_INACTIVE"
           ? 403
           : statusFromErrorCode(error?.code)
@@ -242,7 +207,7 @@ export function registerDeveloperProfileRoutes(
     summary:
       "Re-check the caller's linked GitHub identity against their own developer profile",
     security: [{ Bearer: [] }],
-    middleware: [dependencies.requireAuth()] as const,
+    middleware: [requireActiveAuth()] as const,
     request: { query: ReverifyQuerySchema },
     responses: {
       200: {
@@ -253,45 +218,25 @@ export function registerDeveloperProfileRoutes(
         },
         description: "Verification re-checked (result may be verified or not)"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
+      401: errorResponse("Missing or invalid bearer token"),
       403: ActiveAccountRequiredResponse,
-      404: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Caller has no developer profile"
-      },
-      409: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Developer ownership changed while re-verifying"
-      },
-      429: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description:
-          "check_url was used again too soon, or GitHub verification is rate limited"
-      },
-      503: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "GitHub verification is temporarily unavailable"
-      },
-      422: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "The GitHub account type is unsupported"
-      },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      404: errorResponse("Caller has no developer profile"),
+      409: errorResponse("Developer ownership changed while re-verifying"),
+      429: errorResponse(
+        "check_url was used again too soon, or GitHub verification is rate limited"
+      ),
+      503: errorResponse("GitHub verification is temporarily unavailable"),
+      422: errorResponse("The GitHub account type is unsupported"),
+      500: errorResponse("Database error")
     }
   });
 
   app.openapi(reverifyOwnDeveloperRoute, async (c) => {
-    const auth = dependencies.auth(c);
+    const auth = getAuth(c);
     const { check_url } = c.req.valid("query");
-    const platform = dependencies.platform(c);
+    const platform = getPlatform(c);
     const db = new DeveloperProfilesDatabase(
-      dependencies.database(c.env.DB_EXTENSIONS)
+      getExtensionsDb(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.reverifyOwn(
       auth.userId,
@@ -307,12 +252,7 @@ export function registerDeveloperProfileRoutes(
               statusFromErrorCode(error?.code)
             );
       return c.json(
-        {
-          error: {
-            message: error?.message ?? "Unable to re-verify developer profile",
-            code: error?.code ?? "DATABASE_ERROR"
-          }
-        },
+        errorBody(error, "Unable to re-verify developer profile"),
         status
       );
     }
@@ -336,38 +276,21 @@ export function registerDeveloperProfileRoutes(
         },
         description: "The developer's public profile"
       },
-      404: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "No developer with that id"
-      },
-      422: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "id param failed validation"
-      },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      404: errorResponse("No developer with that id"),
+      422: errorResponse("id param failed validation"),
+      500: errorResponse("Database error")
     }
   });
 
   app.openapi(getDeveloperRoute, async (c) => {
     const { id } = c.req.valid("param");
     const db = new DeveloperProfilesDatabase(
-      dependencies.database(c.env.DB_EXTENSIONS)
+      getExtensionsDb(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.getById(id);
     if (error || !data) {
       const status = statusFromErrorCode(error?.code, false);
-      return c.json(
-        {
-          error: {
-            message: error?.message ?? "Developer not found",
-            code: error?.code ?? "DATABASE_ERROR"
-          }
-        },
-        status
-      );
+      return c.json(errorBody(error, "Developer not found"), status);
     }
     return c.json({ result: toPublicDeveloper(data) }, 200);
   });

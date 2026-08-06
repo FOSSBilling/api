@@ -1,28 +1,28 @@
+import { errorBody } from "./errors";
+import { requireActiveAuth } from "../middleware";
+import { getExtensionsDb } from "../../../../lib/db";
+import { getAuth } from "../../../../lib/auth";
 import { createRoute } from "@hono/zod-openapi";
 import {
   ActiveAccountRequiredResponse,
-  ErrorResponseSchema,
+  errorResponse
+} from "../schemas/common";
+import {
   ExtensionListResponseSchema,
   ExtensionMineListQuerySchema
-} from "./interfaces";
-import { DeveloperProfilesDatabase } from "./developer-profiles-database";
-import {
-  ExtensionsDatabase,
-  isValidExtensionCursor
-} from "./extensions-database";
-import { ExtensionsV2App, RouteDependencies } from "./route-dependencies";
+} from "../schemas/extensions";
+import { DeveloperProfilesDatabase } from "../db/developer-profiles";
+import { ExtensionsDatabase, isValidExtensionCursor } from "../db/extensions";
+import { ExtensionsV2App } from "./app";
 
-export function registerOwnerExtensionsRoutes(
-  app: ExtensionsV2App,
-  dependencies: RouteDependencies
-): void {
+export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
   const listMineRoute = createRoute({
     method: "get",
     path: "/extensions/mine",
     tags: ["Extensions"],
     summary: "List extensions published under the caller's developer profile",
     security: [{ Bearer: [] }],
-    middleware: [dependencies.requireAuth()] as const,
+    middleware: [requireActiveAuth()] as const,
     request: { query: ExtensionMineListQuerySchema },
     responses: {
       200: {
@@ -31,24 +31,15 @@ export function registerOwnerExtensionsRoutes(
         },
         description: "The caller's published extensions"
       },
-      401: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Missing or invalid bearer token"
-      },
+      401: errorResponse("Missing or invalid bearer token"),
       403: ActiveAccountRequiredResponse,
-      422: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Pagination query failed validation"
-      },
-      500: {
-        content: { "application/json": { schema: ErrorResponseSchema } },
-        description: "Database error"
-      }
+      422: errorResponse("Pagination query failed validation"),
+      500: errorResponse("Database error")
     }
   });
 
   app.openapi(listMineRoute, async (c) => {
-    const auth = dependencies.auth(c);
+    const auth = getAuth(c);
     const { type, limit, cursor } = c.req.valid("query");
 
     // An account without a developer profile normally returns an empty page,
@@ -67,7 +58,7 @@ export function registerOwnerExtensionsRoutes(
     }
 
     const ownerDb = new DeveloperProfilesDatabase(
-      dependencies.database(c.env.DB_EXTENSIONS)
+      getExtensionsDb(c.env.DB_EXTENSIONS)
     );
     const owner = await ownerDb.getOwn(auth.userId);
     if (owner.error) {
@@ -88,9 +79,7 @@ export function registerOwnerExtensionsRoutes(
       );
     }
 
-    const db = new ExtensionsDatabase(
-      dependencies.database(c.env.DB_EXTENSIONS)
-    );
+    const db = new ExtensionsDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
     const { data, error } = await db.list({
       type,
       developerId: owner.data.id,
@@ -99,12 +88,7 @@ export function registerOwnerExtensionsRoutes(
     });
     if (error || !data) {
       return c.json(
-        {
-          error: {
-            message: error?.message ?? "Unable to load extensions",
-            code: error?.code ?? "DATABASE_ERROR"
-          }
-        },
+        errorBody(error, "Unable to load extensions"),
         error?.code === "INVALID_CURSOR" ? 422 : 500
       );
     }

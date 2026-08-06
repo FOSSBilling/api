@@ -2,74 +2,13 @@ import { OpenAPIHono } from "@hono/zod-openapi";
 import { Scalar } from "@scalar/hono-api-reference";
 import { cors } from "hono/cors";
 import { trimTrailingSlash } from "hono/trailing-slash";
-import { type Context, type MiddlewareHandler } from "hono";
-import { getAuth, requireAuth } from "../../../lib/auth";
-import { getExtensionsDb } from "../../../lib/db";
-import { getPlatform } from "../../../lib/middleware";
-import { UsersDatabase } from "./users-database";
-import { registerPublicExtensionsRoutes } from "./public-extensions-routes";
-import { registerOwnerExtensionsRoutes } from "./owner-extensions-routes";
-import { registerSubmissionRoutes } from "./submission-routes";
-import { registerDeveloperProfileRoutes } from "./developer-profile-routes";
-import { registerOwnershipRoutes } from "./ownership-routes";
-import { registerModerationRoutes } from "./moderation-routes";
-import { registerAccountRoutes } from "./account-routes";
-import { RouteDependencies } from "./route-dependencies";
-
-const requireAuthAllowInactive = requireAuth;
-
-type AuthenticatedCheck = (c: Context) => Promise<Response | undefined>;
-
-function withAuthenticatedCheck(check: AuthenticatedCheck): MiddlewareHandler {
-  const authenticate = requireAuth();
-  return async (c, next) => {
-    let response: Response | undefined;
-    const authenticationResult = await authenticate(c, async () => {
-      const checkResponse = await check(c);
-      if (checkResponse) {
-        response = checkResponse;
-      } else {
-        await next();
-      }
-    });
-    return response ?? authenticationResult;
-  };
-}
-
-function requireActiveAuth(): MiddlewareHandler {
-  return withAuthenticatedCheck(async (c) => {
-    const users = new UsersDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
-    const result = await users.isActive(getAuth(c).userId);
-    if (result.error) return c.json({ error: result.error }, 500);
-    if (!result.data) {
-      return c.json(
-        {
-          error: {
-            message: "Active account required",
-            code: "ACCOUNT_INACTIVE"
-          }
-        },
-        403
-      );
-    }
-  });
-}
-
-function requireIdentitySync(): MiddlewareHandler {
-  return withAuthenticatedCheck(async (c) => {
-    if (getAuth(c).scope !== "assertion") {
-      return c.json(
-        {
-          error: {
-            message: "Identity synchronization requires a trusted assertion",
-            code: "FORBIDDEN"
-          }
-        },
-        403
-      );
-    }
-  });
-}
+import { registerPublicExtensionsRoutes } from "./routes/public-extensions";
+import { registerOwnerExtensionsRoutes } from "./routes/owner-extensions";
+import { registerSubmissionRoutes } from "./routes/submissions";
+import { registerDeveloperProfileRoutes } from "./routes/developer-profiles";
+import { registerOwnershipRoutes } from "./routes/ownership";
+import { registerModerationRoutes } from "./routes/moderation";
+import { registerAccountRoutes } from "./routes/account";
 
 const extensionsV2 = new OpenAPIHono<{ Bindings: CloudflareBindings }>({
   defaultHook: (result, c) => {
@@ -90,7 +29,7 @@ const extensionsV2 = new OpenAPIHono<{ Bindings: CloudflareBindings }>({
 
 // exposeHeaders: browsers hide non-safelisted response headers from
 // cross-origin JS by default; Retry-After (set on 429s, see
-// developer-profile-routes.ts) needs an explicit expose so callers can read
+// routes/developer-profiles.ts) needs an explicit expose so callers can read
 // it to schedule their retry.
 extensionsV2.use("/*", cors({ origin: "*", exposeHeaders: ["Retry-After"] }));
 extensionsV2.use("/*", trimTrailingSlash());
@@ -99,46 +38,21 @@ extensionsV2.openAPIRegistry.registerComponent("securitySchemes", "Bearer", {
   scheme: "bearer"
 });
 
-function requireModerator(): MiddlewareHandler {
-  return async (c, next) => {
-    const auth = getAuth(c);
-    const users = new UsersDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
-    const result = await users.isModerator(auth.userId);
-    if (result.error) return c.json({ error: result.error }, 500);
-    if (!result.data)
-      return c.json(
-        { error: { message: "Moderator access required", code: "FORBIDDEN" } },
-        403
-      );
-    await next();
-  };
-}
-
-const dependencies: RouteDependencies = {
-  database: getExtensionsDb,
-  auth: getAuth,
-  platform: getPlatform,
-  requireAuth: requireActiveAuth,
-  requireAuthAllowInactive,
-  requireIdentitySync,
-  requireModerator
-};
-
 // Register the static owner route before the public parameter route
 // (/extensions/{id}) so the reserved "mine" segment is handled as the
-// owner collection. Existing rows require a one-time release data check
-// before this route is enabled; new submissions reject the reserved id.
-registerOwnerExtensionsRoutes(extensionsV2, dependencies);
-registerPublicExtensionsRoutes(extensionsV2, dependencies);
-registerAccountRoutes(extensionsV2, dependencies);
-registerSubmissionRoutes(extensionsV2, dependencies);
-registerOwnershipRoutes(extensionsV2, dependencies);
-registerModerationRoutes(extensionsV2, dependencies);
+// owner collection. New submissions reject the reserved id; adopted rows
+// predate that, and migration 0020 fails if one is present.
+registerOwnerExtensionsRoutes(extensionsV2);
+registerPublicExtensionsRoutes(extensionsV2);
+registerAccountRoutes(extensionsV2);
+registerSubmissionRoutes(extensionsV2);
+registerOwnershipRoutes(extensionsV2);
+registerModerationRoutes(extensionsV2);
 // Keep this last: its GET /developers/{id} parameter route would otherwise
 // shadow static GET /developers/* routes registered by the modules above.
-// The "me" namespace is reserved for the owner profile route; existing rows
-// require the same one-time release data check before enabling the route.
-registerDeveloperProfileRoutes(extensionsV2, dependencies);
+// The "me" namespace is reserved for the owner profile route; adopted rows
+// are covered by the same migration 0020 check.
+registerDeveloperProfileRoutes(extensionsV2);
 
 extensionsV2.doc31("/openapi.json", {
   openapi: "3.1.0",
