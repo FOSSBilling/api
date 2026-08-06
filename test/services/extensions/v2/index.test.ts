@@ -1807,7 +1807,10 @@ describe("Extensions API v2", () => {
       env.DB_EXTENSIONS = db;
 
       expect(tombstoned).toBe(true);
-      expect(res.status).toBe(409);
+      expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({
+        error: { code: "ACCOUNT_INACTIVE", message: "Active account required" }
+      });
       expect(await hasDeveloper(db, "deleted-during-write-profile")).toBe(
         false
       );
@@ -2033,6 +2036,38 @@ describe("Extensions API v2", () => {
       expect(stillThere.status).toBe(200);
       const body = (await stillThere.json()) as { result: { id: string } };
       expect(body.result.id).toBe("dev-developer");
+    });
+
+    it("reports an inactive owner when the account is deactivated during deletion", async () => {
+      await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        sampleDeveloper()
+      );
+
+      let deactivated = false;
+      env.DB_EXTENSIONS = wrapD1WithHook(db, async (sql) => {
+        if (!deactivated && sql.includes("DELETE FROM developer_transfers")) {
+          deactivated = true;
+          await db
+            .prepare("UPDATE users SET deleted_at = ? WHERE id = ?")
+            .bind(new Date().toISOString(), "user-1")
+            .run();
+        }
+      });
+
+      const res = await del(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1")
+      );
+      env.DB_EXTENSIONS = db;
+
+      expect(deactivated).toBe(true);
+      expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({
+        error: { code: "ACCOUNT_INACTIVE", message: "Active account required" }
+      });
+      expect(await hasDeveloper(db, "dev-developer")).toBe(true);
     });
   });
 
@@ -2683,6 +2718,49 @@ describe("Extensions API v2", () => {
       expect(developerRow?.github_org_verified).toBeNull();
     });
 
+    it("refuses to overwrite verification if the profile type changes during the check", async () => {
+      await insertDeveloper(db, {
+        id: "dev-developer",
+        type: "organization",
+        name: "Dev",
+        url: null,
+        owner_user_id: "user-1",
+        github_org_verified: 1,
+        github_verification_note:
+          "Verified: caller's linked GitHub identity matches.",
+        github_verified_at: "2020-01-01T00:00:00.000Z"
+      });
+      await insertUser(db, {
+        id: "user-1",
+        github_login: "someone",
+        github_orgs: JSON.stringify(["dev-developer"])
+      });
+
+      let changed = false;
+      env.DB_EXTENSIONS = wrapD1WithHook(db, async (sql) => {
+        if (!changed && sql.includes("github_verified_at")) {
+          changed = true;
+          await db
+            .prepare("UPDATE developers SET type = ? WHERE id = ?")
+            .bind("user", "dev-developer")
+            .run();
+        }
+      });
+
+      const res = await post(
+        "/extensions/v2/developers/me/reverify",
+        await authHeaders("user-1")
+      );
+      env.DB_EXTENSIONS = db;
+
+      expect(changed).toBe(true);
+      expect(res.status).toBe(409);
+      const developerRow = await getDeveloper(db, "dev-developer");
+      expect(developerRow?.type).toBe("user");
+      expect(developerRow?.github_org_verified).toBe(1);
+      expect(developerRow?.github_verified_at).toBe("2020-01-01T00:00:00.000Z");
+    });
+
     it("refuses to overwrite verification if GitHub identity sync wins the race", async () => {
       await insertDeveloper(db, {
         id: "dev-developer",
@@ -2792,6 +2870,44 @@ describe("Extensions API v2", () => {
       expect((await res.json()) as { error: { code: string } }).toMatchObject({
         error: { code: "DATABASE_ERROR" }
       });
+    });
+
+    it("reports an inactive moderator when the account is deactivated during approval", async () => {
+      await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        sampleDeveloper()
+      );
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+
+      let deactivated = false;
+      env.DB_EXTENSIONS = wrapD1WithHook(db, async (sql) => {
+        if (
+          !deactivated &&
+          /update/i.test(sql) &&
+          sql.includes("approved_at")
+        ) {
+          deactivated = true;
+          await db
+            .prepare("UPDATE users SET deleted_at = ? WHERE id = ?")
+            .bind(new Date().toISOString(), "mod-1")
+            .run();
+        }
+      });
+
+      const res = await post(
+        "/extensions/v2/developers/dev-developer/approve",
+        await authHeaders("mod-1"),
+        { expected_revision: 1 }
+      );
+      env.DB_EXTENSIONS = db;
+
+      expect(deactivated).toBe(true);
+      expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({
+        error: { code: "ACCOUNT_INACTIVE", message: "Active account required" }
+      });
+      expect((await getDeveloper(db, "dev-developer"))?.approved_at).toBeNull();
     });
 
     it("approves a developer and removes it from the unapproved list", async () => {
@@ -3098,6 +3214,52 @@ describe("Extensions API v2", () => {
       expect((await getDeveloper(db, "dev-developer"))?.owner_user_id).toBe(
         "user-2"
       );
+    });
+
+    it("does not turn a committed transfer into a database error if the profile is deleted before the response lookup", async () => {
+      await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        sampleDeveloper()
+      );
+      const initiate = await post(
+        "/extensions/v2/developers/dev-developer/transfer",
+        await authHeaders("user-1")
+      );
+      const token = ((await initiate.json()) as { result: { token: string } })
+        .result.token;
+
+      let deleted = false;
+      env.DB_EXTENSIONS = wrapD1WithHook(db, async (sql) => {
+        if (
+          !deleted &&
+          /^\s*select/i.test(sql) &&
+          /from\s+"developers"/i.test(sql)
+        ) {
+          deleted = true;
+          await db
+            .prepare("DELETE FROM developer_transfers WHERE developer_id = ?")
+            .bind("dev-developer")
+            .run();
+          await db
+            .prepare("DELETE FROM developers WHERE id = ?")
+            .bind("dev-developer")
+            .run();
+        }
+      });
+
+      const accept = await post(
+        "/extensions/v2/developers/transfers/accept",
+        await authHeaders("user-2"),
+        { token }
+      );
+      env.DB_EXTENSIONS = db;
+
+      expect(deleted).toBe(true);
+      expect(accept.status).toBe(404);
+      expect(await accept.json()).toMatchObject({
+        error: { code: "NOT_FOUND" }
+      });
     });
 
     it("rejects pending submissions and claims when ownership changes", async () => {
@@ -4541,6 +4703,37 @@ describe("Extensions API v2", () => {
       expect(await res.json()).toMatchObject({
         result: { github_linked: false }
       });
+    });
+
+    it("does not treat an impossible future organization expiry as usable evidence", async () => {
+      const res = await put(
+        "/extensions/v2/users/me/identity",
+        await authHeaders("impossible-org-date"),
+        {
+          name: "Impossible Date",
+          email: "impossible-date@example.com",
+          email_verified: true,
+          picture: null,
+          github_login: "someone",
+          github_orgs: ["fossbilling"],
+          github_orgs_expires_at: "2099-02-30T00:00:00.000Z"
+        }
+      );
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({
+        result: { github_linked: false }
+      });
+      const row = await db
+        .prepare(
+          "SELECT github_orgs, github_orgs_expires_at FROM users WHERE id = ?"
+        )
+        .bind("impossible-org-date")
+        .first<{
+          github_orgs: string | null;
+          github_orgs_expires_at: string | null;
+        }>();
+      expect(row).toEqual({ github_orgs: null, github_orgs_expires_at: null });
     });
 
     it("tombstones and later reactivates an account", async () => {

@@ -150,7 +150,7 @@ export function registerDeveloperProfileRoutes(
     );
     if (error || !data) {
       const status =
-        error?.code === "GITHUB_MISMATCH"
+        error?.code === "GITHUB_MISMATCH" || error?.code === "ACCOUNT_INACTIVE"
           ? 403
           : error?.code === "PROFILE_CREATION_RATE_LIMITED"
             ? 429
@@ -227,7 +227,9 @@ export function registerDeveloperProfileRoutes(
             code: error?.code ?? "DATABASE_ERROR"
           }
         },
-        statusFromErrorCode(error?.code)
+        error?.code === "ACCOUNT_INACTIVE"
+          ? 403
+          : statusFromErrorCode(error?.code)
       );
     }
     return c.json({ result: data }, 200);

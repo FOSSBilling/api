@@ -135,13 +135,14 @@ export class DeveloperProfilesDatabase {
         .select()
         .from(developers)
         .where(eq(developers.id, developer.id));
+      const isCreating = !existingOwn;
 
       let githubOrgVerified: number | null = null;
       let githubUrlVerified: number | null = null;
       let githubVerificationNote: string | null = null;
 
       let mainStmt: D1PreparedStatement;
-      if (!existingOwn) {
+      if (isCreating) {
         if (existingById) {
           // Distinct from the generic CONFLICT used elsewhere in this file —
           // consumers (the extensions repo's create-profile form) need to
@@ -358,6 +359,21 @@ export class DeveloperProfilesDatabase {
       }
 
       if (!results[0]?.meta?.changes) {
+        if (isCreating) {
+          const [activeUser] = await this.db
+            .select({ id: users.id })
+            .from(users)
+            .where(and(eq(users.id, userId), isNull(users.deletedAt)));
+          if (!activeUser) {
+            return {
+              data: null,
+              error: {
+                message: "Active account required",
+                code: "ACCOUNT_INACTIVE"
+              }
+            };
+          }
+        }
         return {
           data: null,
           error: {
@@ -392,12 +408,16 @@ export class DeveloperProfilesDatabase {
   }
 
   // Diagnoses why the guarded delete in deleteOwn() below affected zero
-  // rows: distinguishes no-longer-owned/nonexistent from the two blocking
-  // conditions, without reopening the race the guard already closed.
+  // rows: distinguishes an inactive caller, no-longer-owned/nonexistent,
+  // and the two blocking conditions, without reopening the race the guard
+  // already closed.
   private async deletionBlockedError(
     developerId: string,
     userId: string
-  ): Promise<{ code: "NOT_FOUND" | "CONFLICT"; message: string }> {
+  ): Promise<{
+    code: "NOT_FOUND" | "CONFLICT" | "ACCOUNT_INACTIVE";
+    message: string;
+  }> {
     const [developer] = await this.db
       .select({ ownerUserId: developers.ownerUserId })
       .from(developers)
@@ -405,6 +425,17 @@ export class DeveloperProfilesDatabase {
 
     if (!developer || developer.ownerUserId !== userId) {
       return { code: "NOT_FOUND", message: "Developer not found" };
+    }
+
+    const [user] = await this.db
+      .select({ deletedAt: users.deletedAt })
+      .from(users)
+      .where(eq(users.id, userId));
+    if (!user || user.deletedAt !== null) {
+      return {
+        code: "ACCOUNT_INACTIVE",
+        message: "Active account required"
+      };
     }
 
     const [extensionCount] = await this.db
@@ -667,6 +698,25 @@ export class DeveloperProfilesDatabase {
     }
 
     if (!result.meta?.changes) {
+      let reviewer: { deletedAt: string | null } | undefined;
+      try {
+        [reviewer] = await this.db
+          .select({ deletedAt: users.deletedAt })
+          .from(users)
+          .where(eq(users.id, reviewerId));
+      } catch (error) {
+        return databaseError("approve", error);
+      }
+      if (!reviewer || reviewer.deletedAt !== null) {
+        return {
+          data: null,
+          error: {
+            code: "ACCOUNT_INACTIVE",
+            message: "Active account required"
+          }
+        };
+      }
+
       const existing = await this.getById(id);
       if (existing.error) {
         // A failed diagnostic lookup is not evidence that the developer is
@@ -924,6 +974,7 @@ export class DeveloperProfilesDatabase {
         .where(
           and(
             eq(developers.id, row.id),
+            eq(developers.type, row.type),
             eq(developers.ownerUserId, userId),
             sql`EXISTS (
               SELECT 1 FROM ${users}

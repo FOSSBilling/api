@@ -43,13 +43,43 @@ export type UserRecord = {
 };
 
 const RFC3339_TIMESTAMP =
-  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+  /^(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
 
 function isFutureGithubOrgsExpiry(
   value: string | null | undefined,
   now = Date.now()
 ): boolean {
-  if (!value || !RFC3339_TIMESTAMP.test(value)) return false;
+  if (!value) return false;
+
+  const match = RFC3339_TIMESTAMP.exec(value);
+  if (!match) return false;
+
+  // Date.parse normalizes out-of-range calendar days (for example,
+  // 2025-02-30 becomes 2025-03-02) instead of rejecting them. Validate the
+  // date portion before parsing so malformed central-auth evidence cannot be
+  // treated as a usable, future membership snapshot.
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (month < 1 || month > 12 || day < 1) return false;
+
+  const isLeapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [
+    31,
+    isLeapYear ? 29 : 28,
+    31,
+    30,
+    31,
+    30,
+    31,
+    31,
+    30,
+    31,
+    30,
+    31
+  ][month - 1];
+  if (day > daysInMonth) return false;
+
   const expiresAt = Date.parse(value);
   return Number.isFinite(expiresAt) && expiresAt > now;
 }

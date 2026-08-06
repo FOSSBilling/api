@@ -177,6 +177,21 @@ export class DeveloperTransfersDatabase {
     try {
       const tokenHash = await sha256Hex(token);
 
+      // Keep the developer id separate from the transfer row that the batch
+      // will claim. The accepting user can delete the newly transferred
+      // profile immediately after the batch commits; deleteOwn() removes the
+      // associated transfer row as part of that same operation. Looking up
+      // the transfer after the commit would then lose the id of the profile
+      // whose ownership was already moved and turn a successful handoff into
+      // a spurious DATABASE_ERROR. This read is only an identity snapshot —
+      // the claim and ownership guards below remain the authorization source
+      // of truth.
+      const [transferBeforeCommit] = await this.db
+        .select({ developerId: developerTransfers.developerId })
+        .from(developerTransfers)
+        .where(eq(developerTransfers.tokenHash, tokenHash));
+      const transferredDeveloperId = transferBeforeCommit?.developerId;
+
       // Claim the transfer and move ownership in the same atomic batch,
       // rather than as two separate writes. Splitting them would leave a
       // window, after the claim commits but before ownership actually
@@ -382,11 +397,7 @@ export class DeveloperTransfersDatabase {
         };
       }
 
-      const [transfer] = await this.db
-        .select({ developerId: developerTransfers.developerId })
-        .from(developerTransfers)
-        .where(eq(developerTransfers.tokenHash, tokenHash));
-      if (!transfer) {
+      if (!transferredDeveloperId) {
         return databaseError(
           "acceptTransfer",
           new Error("Claimed transfer row not found")
@@ -394,7 +405,7 @@ export class DeveloperTransfersDatabase {
       }
 
       return new DeveloperProfilesDatabase(this.db).getById(
-        transfer.developerId
+        transferredDeveloperId
       );
     } catch (error) {
       return databaseError("acceptTransfer", error);
