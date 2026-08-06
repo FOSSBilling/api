@@ -5,8 +5,8 @@ import { logError } from "../../../lib/logger";
 // .message is a generic "Failed to run the query '<sql>'" - the actual
 // SQLite/D1 message (e.g. "UNIQUE constraint failed: ...") lives in
 // .cause, not .message. Regex-matching driver error text (see
-// isOwnerConflict/isPendingClaimConflict/isPendingTargetConflict) needs the
-// whole chain, not just the outermost message.
+// the ownership/id conflict classifiers need the whole chain, not just the
+// outermost message.
 export function errorMessageChain(error: unknown): string {
   const parts: string[] = [];
   let current: unknown = error;
@@ -15,6 +15,25 @@ export function errorMessageChain(error: unknown): string {
     current = (current as Error & { cause?: unknown }).cause;
   }
   return parts.join(" ");
+}
+
+// Matches the SQLite/D1 message for the unique owner index. Several
+// ownership workflows need to translate this race into the same conflict
+// response, so keep the classifier beside the shared database error helpers.
+export function isDeveloperOwnerConflict(error: unknown): boolean {
+  return /UNIQUE constraint failed.*owner_user_id/i.test(
+    errorMessageChain(error)
+  );
+}
+
+// A concurrent first-time profile creation can lose the developers primary-key
+// race after both requests pass the cheap existence check. Translate that
+// SQLite/D1 constraint failure into the same conflict returned by the
+// pre-flight check instead of exposing it as a generic database error.
+export function isDeveloperIdConflict(error: unknown): boolean {
+  return /UNIQUE constraint failed.*developers\.id/i.test(
+    errorMessageChain(error)
+  );
 }
 
 // Logs the real error server-side and returns a generic message to the

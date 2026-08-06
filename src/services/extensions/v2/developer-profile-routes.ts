@@ -11,7 +11,7 @@ import {
   ReverifyQuerySchema,
   toPublicDeveloper
 } from "./interfaces";
-import { DevelopersDatabase } from "./developers-database";
+import { DeveloperProfilesDatabase } from "./developer-profiles-database";
 import { ExtensionsV2App, RouteDependencies } from "./route-dependencies";
 
 export function registerDeveloperProfileRoutes(
@@ -48,7 +48,7 @@ export function registerDeveloperProfileRoutes(
 
   app.openapi(getOwnDeveloperRoute, async (c) => {
     const auth = dependencies.auth(c);
-    const db = new DevelopersDatabase(
+    const db = new DeveloperProfilesDatabase(
       dependencies.database(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.getOwn(auth.userId);
@@ -130,7 +130,7 @@ export function registerDeveloperProfileRoutes(
     const auth = dependencies.auth(c);
     const body = c.req.valid("json");
     const platform = dependencies.platform(c);
-    const db = new DevelopersDatabase(
+    const db = new DeveloperProfilesDatabase(
       dependencies.database(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.upsertOwn(
@@ -150,7 +150,7 @@ export function registerDeveloperProfileRoutes(
     );
     if (error || !data) {
       const status =
-        error?.code === "GITHUB_MISMATCH"
+        error?.code === "GITHUB_MISMATCH" || error?.code === "ACCOUNT_INACTIVE"
           ? 403
           : error?.code === "PROFILE_CREATION_RATE_LIMITED"
             ? 429
@@ -215,7 +215,7 @@ export function registerDeveloperProfileRoutes(
 
   app.openapi(deleteOwnDeveloperRoute, async (c) => {
     const auth = dependencies.auth(c);
-    const db = new DevelopersDatabase(
+    const db = new DeveloperProfilesDatabase(
       dependencies.database(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.deleteOwn(auth.userId);
@@ -227,7 +227,9 @@ export function registerDeveloperProfileRoutes(
             code: error?.code ?? "DATABASE_ERROR"
           }
         },
-        statusFromErrorCode(error?.code)
+        error?.code === "ACCOUNT_INACTIVE"
+          ? 403
+          : statusFromErrorCode(error?.code)
       );
     }
     return c.json({ result: data }, 200);
@@ -288,7 +290,7 @@ export function registerDeveloperProfileRoutes(
     const auth = dependencies.auth(c);
     const { check_url } = c.req.valid("query");
     const platform = dependencies.platform(c);
-    const db = new DevelopersDatabase(
+    const db = new DeveloperProfilesDatabase(
       dependencies.database(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.reverifyOwn(
@@ -297,10 +299,13 @@ export function registerDeveloperProfileRoutes(
       platform.getEnv("GITHUB_TOKEN")
     );
     if (error || !data) {
-      const status = statusFromGithubErrorCode(
-        error?.code,
-        statusFromErrorCode(error?.code)
-      );
+      const status =
+        error?.code === "ACCOUNT_INACTIVE"
+          ? 403
+          : statusFromGithubErrorCode(
+              error?.code,
+              statusFromErrorCode(error?.code)
+            );
       return c.json(
         {
           error: {
@@ -348,7 +353,7 @@ export function registerDeveloperProfileRoutes(
 
   app.openapi(getDeveloperRoute, async (c) => {
     const { id } = c.req.valid("param");
-    const db = new DevelopersDatabase(
+    const db = new DeveloperProfilesDatabase(
       dependencies.database(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.getById(id);

@@ -5,7 +5,7 @@ import {
   ExtensionListResponseSchema,
   ExtensionMineListQuerySchema
 } from "./interfaces";
-import { DevelopersDatabase } from "./developers-database";
+import { DeveloperProfilesDatabase } from "./developer-profiles-database";
 import {
   ExtensionsDatabase,
   isValidExtensionCursor
@@ -66,7 +66,7 @@ export function registerOwnerExtensionsRoutes(
       );
     }
 
-    const ownerDb = new DevelopersDatabase(
+    const ownerDb = new DeveloperProfilesDatabase(
       dependencies.database(c.env.DB_EXTENSIONS)
     );
     const owner = await ownerDb.getOwn(auth.userId);

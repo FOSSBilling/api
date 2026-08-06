@@ -45,6 +45,20 @@ All version responses include a `stale` field that indicates whether the data wa
 
 - `GET /central-alerts/v1/list` - Public endpoint for fetching active alerts.
 
+### Extensions v2 ownership verification
+
+For organization developer IDs, GitHub membership is used for automatic
+verification only when the API has a valid, unexpired membership snapshot. A
+fresh snapshot that does not contain the organization remains a confirmed
+mismatch and is rejected. Missing, malformed, or expired evidence is
+inconclusive instead: a new profile remains unapproved and a claim remains
+pending for manual moderator review. Moderators must verify ownership through
+their normal out-of-band process before approving either workflow.
+
+`github_org_verified` being absent or `null` is a review signal, not proof of
+ownership or an authorization grant. Consumers and moderation tooling must not
+treat an inconclusive result as verified.
+
 ## Configuration
 
 If you're running this yourself, you'll need a few things set up.

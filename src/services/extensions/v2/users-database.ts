@@ -8,6 +8,16 @@ import { toD1Statement } from "./d1-batch";
 export type GithubIdentity = {
   githubLogin: string | null;
   githubOrgs: string[];
+  // Distinguishes a freshly synchronized empty membership list (a confirmed
+  // non-member) from absent, malformed, or expired evidence. The latter must
+  // fall back to moderator review rather than being treated as a mismatch.
+  githubOrgsAvailable: boolean;
+  // Raw values used to make a re-verification write conditional on the same
+  // identity snapshot that was read. The parsed fields above are sufficient
+  // for matching, but cannot distinguish a concurrent sync from an unchanged
+  // empty/missing membership list on their own.
+  githubOrgsSnapshot: string | null;
+  githubOrgsExpiresAt: string | null;
 };
 
 export type UserIdentityInput = {
@@ -33,13 +43,52 @@ export type UserRecord = {
 };
 
 const RFC3339_TIMESTAMP =
-  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-](\d{2}):(\d{2}))$/;
 
 function isFutureGithubOrgsExpiry(
   value: string | null | undefined,
   now = Date.now()
 ): boolean {
-  if (!value || !RFC3339_TIMESTAMP.test(value)) return false;
+  if (!value) return false;
+
+  const match = RFC3339_TIMESTAMP.exec(value);
+  if (!match) return false;
+
+  // Date.parse normalizes out-of-range calendar days (for example,
+  // 2025-02-30 becomes 2025-03-02) instead of rejecting them. Validate the
+  // date portion before parsing so malformed central-auth evidence cannot be
+  // treated as a usable, future membership snapshot.
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (month < 1 || month > 12 || day < 1) return false;
+
+  const isLeapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [
+    31,
+    isLeapYear ? 29 : 28,
+    31,
+    30,
+    31,
+    30,
+    31,
+    31,
+    30,
+    31,
+    30,
+    31
+  ][month - 1];
+  if (day > daysInMonth) return false;
+
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  if (hour > 23 || minute > 59 || second > 59) return false;
+
+  const offsetHour = match[7] === undefined ? 0 : Number(match[7]);
+  const offsetMinute = match[8] === undefined ? 0 : Number(match[8]);
+  if (offsetHour > 23 || offsetMinute > 59) return false;
+
   const expiresAt = Date.parse(value);
   return Number.isFinite(expiresAt) && expiresAt > now;
 }
@@ -336,10 +385,11 @@ export class UsersDatabase {
   }
 
   // Used to verify developer-profile claims against the claimant's own
-  // linked GitHub identity — see DevelopersDatabase.claim(). github_orgs is
+  // linked GitHub identity — see DeveloperClaimsDatabase.claim(). github_orgs is
   // only usable while its central-auth expiry is in the future; absent,
   // malformed, or expired organization evidence resolves to no memberships
-  // rather than throwing.
+  // rather than throwing. githubOrgsAvailable preserves whether that empty
+  // result is a confirmed snapshot or merely unavailable evidence.
   async getGithubIdentity(
     userId: string
   ): Promise<DatabaseResult<GithubIdentity>> {
@@ -355,10 +405,20 @@ export class UsersDatabase {
         .where(eq(users.id, userId));
 
       if (row?.deletedAt !== null && row?.deletedAt !== undefined) {
-        return { data: { githubLogin: null, githubOrgs: [] }, error: null };
+        return {
+          data: {
+            githubLogin: null,
+            githubOrgs: [],
+            githubOrgsAvailable: false,
+            githubOrgsSnapshot: null,
+            githubOrgsExpiresAt: null
+          },
+          error: null
+        };
       }
 
       let githubOrgs: string[] = [];
+      let githubOrgsAvailable = false;
       if (
         row?.githubOrgs &&
         isFutureGithubOrgsExpiry(row.githubOrgsExpiresAt)
@@ -370,6 +430,7 @@ export class UsersDatabase {
             parsed.every((org) => typeof org === "string")
           ) {
             githubOrgs = parsed;
+            githubOrgsAvailable = true;
           }
         } catch {
           // Malformed JSON is treated the same as "no orgs recorded" —
@@ -378,7 +439,13 @@ export class UsersDatabase {
       }
 
       return {
-        data: { githubLogin: row?.githubLogin ?? null, githubOrgs },
+        data: {
+          githubLogin: row?.githubLogin ?? null,
+          githubOrgs,
+          githubOrgsAvailable,
+          githubOrgsSnapshot: row?.githubOrgs ?? null,
+          githubOrgsExpiresAt: row?.githubOrgsExpiresAt ?? null
+        },
         error: null
       };
     } catch (error) {
