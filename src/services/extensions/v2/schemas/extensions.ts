@@ -1,4 +1,5 @@
 import { z } from "@hono/zod-openapi";
+import SPDX_LICENSE_IDS from "spdx-license-ids/index.json";
 import { httpUrl, lowercaseId, PaginationSchema } from "./common";
 import { PublicDeveloperSchema } from "./developers";
 
@@ -47,9 +48,33 @@ export const RepositorySchema = z
 
 export type Repository = z.infer<typeof RepositorySchema>;
 
+// Re-exported so callers (and tests) validate against the exact same set
+// this schema uses, rather than a hand-copied list that can drift.
+// `spdx-license-ids` ships only the current (non-deprecated) identifiers —
+// https://github.com/jslicense/spdx-license-ids — so submitters are steered
+// toward the license SPDX currently recommends, not a retired alias.
+export { SPDX_LICENSE_IDS };
+
+const spdxLicenseId = () =>
+  z
+    .string()
+    .refine(
+      (value) => (SPDX_LICENSE_IDS as readonly string[]).includes(value),
+      {
+        message: "must be a current (non-deprecated) SPDX license identifier"
+      }
+    )
+    .openapi({
+      description:
+        "A current SPDX license identifier (https://spdx.org/licenses/). " +
+        "Omitted for custom or proprietary licenses.",
+      example: "MIT"
+    });
+
 export const LicenseSchema = z
   .object({
     name: z.string().min(1).max(100),
+    spdx_id: spdxLicenseId().optional(),
     URL: httpUrl().optional()
   })
   .strict()
