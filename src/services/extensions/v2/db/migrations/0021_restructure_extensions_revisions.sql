@@ -7,17 +7,40 @@
 -- the first approval), and extension_submissions becomes extension_revisions:
 -- one proposed content version, always attached to a real extension row.
 --
--- The tables are rebuilt rather than ALTERed because SQLite cannot relax NOT
--- NULL, add a CHECK, or add a foreign key in place. Two renames ride along,
--- since the rebuild is already paid for: extensions.author_id becomes
--- developer_id, and developers' created_at/updated_at lose the placeholder 1970
--- default that migration 0002 was forced to use and no writer ever produced.
+-- extensions is rebuilt rather than ALTERed because SQLite cannot relax NOT
+-- NULL, add a CHECK, or add a foreign key in place. author_id becomes
+-- developer_id on the way through, since the rebuild is already paid for.
 --
 -- Hand-written, not drizzle-kit-generated: the generated diff cannot infer the
 -- table rename or the backfills below non-interactively, so only the snapshot
 -- in meta/0021_snapshot.json comes from drizzle-kit. The end state is verified
 -- against schema.ts by test/services/extensions/v2/migrations.test.ts.
-PRAGMA foreign_keys=OFF;--> statement-breakpoint
+--
+-- This migration relaxes foreign keys nowhere, and cannot. An earlier version
+-- opened with PRAGMA foreign_keys=OFF, passed locally and failed on the first
+-- remote apply with a bare "FOREIGN KEY constraint failed". Two reasons, and
+-- the first is the one that matters:
+--
+--   * PRAGMA foreign_keys is a documented no-op inside a transaction, and
+--     wrangler wraps each migration file in one. The pragma silently did
+--     nothing remotely. The tests ran statements outside a transaction, where
+--     it works, which is exactly why they could not see the difference.
+--   * PRAGMA defer_foreign_keys is not a substitute. DROP TABLE on a parent
+--     performs an implicit DELETE FROM that increments SQLite's deferred
+--     violation counter once per child row, and renaming a replacement into
+--     place never decrements it - so COMMIT fails even though
+--     PRAGMA foreign_key_check reports nothing wrong.
+--
+-- So the ordering below is load-bearing: nothing here ever drops a table that
+-- still has children. extension_submissions is copied aside and dropped first,
+-- which leaves extensions childless at the moment it is replaced, and
+-- extension_revisions is created only afterwards. Verified by
+-- "applies on D1's terms" in migrations.test.ts, which runs the whole chain
+-- with foreign keys enforced and 0021 inside a transaction.
+--
+-- The same constraint is why developers is not rebuilt here: three tables
+-- reference it, so it can never be dropped this way. See the note on its
+-- created_at default in schema.ts.
 
 -- idx_extensions_id_nocase, created further down, is the constraint that stops
 -- a new lowercase id colliding with an adopted mixed-case one. A catalogue
@@ -104,59 +127,13 @@ WHERE LOWER(COALESCE(extension_id, json_extract(payload, '$.extension.id')))
 
 DROP TABLE _reserved_submission_targets;--> statement-breakpoint
 
--- developers first, while every table that references it is still the old one:
--- the drop-and-rename re-parses every schema, and doing it with a referrer
--- pointing at a dropped table is the case that errors.
-CREATE TABLE `__new_developers` (
-	`id` text PRIMARY KEY NOT NULL,
-	`type` text NOT NULL,
-	`name` text NOT NULL,
-	`url` text,
-	`owner_user_id` text,
-	`approved_at` text,
-	`created_at` text DEFAULT CURRENT_TIMESTAMP NOT NULL,
-	`updated_at` text DEFAULT CURRENT_TIMESTAMP NOT NULL,
-	`avatar_url` text,
-	`contact_email` text,
-	`ownership_epoch` integer DEFAULT 1 NOT NULL,
-	`content_revision` integer DEFAULT 1 NOT NULL,
-	`approved_revision` integer,
-	`approved_by` text,
-	`github_org_verified` integer,
-	`github_verification_note` text,
-	`github_verified_at` text,
-	`github_url_verified` integer,
-	`url_check_cooldown_until` text,
-	FOREIGN KEY (`owner_user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE no action,
-	CONSTRAINT "developers_ownership_epoch_check" CHECK("__new_developers"."ownership_epoch" >= 1),
-	CONSTRAINT "developers_content_revision_check" CHECK("__new_developers"."content_revision" >= 1),
-	CONSTRAINT "developers_github_org_verified_check" CHECK("__new_developers"."github_org_verified" IN (0, 1)),
-	CONSTRAINT "developers_github_url_verified_check" CHECK("__new_developers"."github_url_verified" = 1)
-);--> statement-breakpoint
+-- extension_submissions is the only table referencing extensions, so it goes
+-- first. CREATE TABLE ... AS SELECT copies the rows without carrying any
+-- constraints across, which is what makes this holding table safe to keep
+-- across the rebuild.
+CREATE TABLE `_submissions_backup` AS SELECT * FROM `extension_submissions`;--> statement-breakpoint
 
--- Existing 1970 values stay. They are wrong, but they are the only record
--- those rows have, and a timestamp invented here would look real without
--- being so.
-INSERT INTO `__new_developers` (
-  id, type, name, url, owner_user_id, approved_at, created_at, updated_at,
-  avatar_url, contact_email, ownership_epoch, content_revision,
-  approved_revision, approved_by, github_org_verified,
-  github_verification_note, github_verified_at, github_url_verified,
-  url_check_cooldown_until
-)
-SELECT
-  id, type, name, url, owner_user_id, approved_at, created_at, updated_at,
-  avatar_url, contact_email, ownership_epoch, content_revision,
-  approved_revision, approved_by, github_org_verified,
-  github_verification_note, github_verified_at, github_url_verified,
-  url_check_cooldown_until
-FROM `developers`;--> statement-breakpoint
-
-DROP TABLE `developers`;--> statement-breakpoint
-ALTER TABLE `__new_developers` RENAME TO `developers`;--> statement-breakpoint
-
-CREATE UNIQUE INDEX `idx_developers_owner_unique` ON `developers` (`owner_user_id`);--> statement-breakpoint
-CREATE INDEX `idx_developers_approved` ON `developers` (`approved_at`);--> statement-breakpoint
+DROP TABLE `extension_submissions`;--> statement-breakpoint
 
 CREATE TABLE `__new_extensions` (
 	`id` text PRIMARY KEY NOT NULL,
@@ -216,7 +193,7 @@ SELECT
   target.target_id,
   (
     SELECT s.developer_id
-    FROM extension_submissions s
+    FROM _submissions_backup s
     WHERE LOWER(COALESCE(s.extension_id, json_extract(s.payload, '$.extension.id'))) = target.target_id
     ORDER BY s.created_at DESC, s.id DESC
     LIMIT 1
@@ -227,7 +204,7 @@ SELECT
 FROM (
   SELECT DISTINCT
     LOWER(COALESCE(extension_id, json_extract(payload, '$.extension.id'))) AS target_id
-  FROM extension_submissions
+  FROM _submissions_backup
 ) AS target
 WHERE target.target_id IS NOT NULL
   AND NOT EXISTS (
@@ -288,7 +265,7 @@ SELECT
   s.created_at,
   s.reviewed_at,
   s.ownership_epoch
-FROM extension_submissions s
+FROM _submissions_backup s
 JOIN extensions e
   ON LOWER(e.id) = LOWER(COALESCE(s.extension_id, json_extract(s.payload, '$.extension.id')))
 -- A payload without an extension object cannot become a revision. This has
@@ -327,15 +304,12 @@ CREATE INDEX `idx_extension_revisions_extension_page` ON `extension_revisions` (
 CREATE INDEX `idx_extension_revisions_submitter_page` ON `extension_revisions` (`submitted_by`,"created_at" desc,"id" desc);--> statement-breakpoint
 CREATE INDEX `idx_extension_revisions_queue_page` ON `extension_revisions` (`status`,`created_at`,`id`);--> statement-breakpoint
 
-DROP TABLE `extension_submissions`;--> statement-breakpoint
+DROP TABLE `_submissions_backup`;--> statement-breakpoint
 
--- The rebuilds above run with foreign_keys=OFF, which means SQLite does not
--- re-validate the copied rows against the new declarations - a pre-existing
--- extension pointing at a developer that no longer exists would be carried
--- through silently, and every read would then have to defend against it
--- forever. Fail the deploy instead, and let the reads assume the join always
--- matches. Same CHECK-on-a-scratch-table trick as migration 0020, for the
--- same reason: SQLite has no RAISE() outside a trigger.
+-- Deferred foreign keys are checked when the transaction commits, which will
+-- catch a dangling reference - but as an unattributed constraint failure at
+-- the very end. Check explicitly first so the failure names what is wrong,
+-- and so the reads below can assume the join always matches.
 CREATE TABLE _unresolved_references (
   kind TEXT NOT NULL,
   row_id TEXT NOT NULL,
@@ -350,5 +324,3 @@ SELECT 'revision.extension_id', r.id FROM extension_revisions r
 WHERE NOT EXISTS (SELECT 1 FROM extensions e WHERE e.id = r.extension_id);--> statement-breakpoint
 
 DROP TABLE _unresolved_references;--> statement-breakpoint
-
-PRAGMA foreign_keys=ON;

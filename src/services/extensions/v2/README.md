@@ -104,15 +104,22 @@ guaranteeing a published row is never half-written. `extension_revisions`
 (renamed from `extension_submissions` in migration 0021) holds proposed
 content, always attached to a real extension row and cascading with it.
 
-Migration 0021 rebuilds `extensions`, `extension_revisions` and `developers`
-in one step, because SQLite cannot relax `NOT NULL`, add a `CHECK`, or add a
-foreign key in place. It also renames `extensions.author_id` to `developer_id`
-(nothing public depended on the old name — v1's response field is `author`
-either way) and replaces `developers.created_at`/`updated_at`'s placeholder
-1970 default with `CURRENT_TIMESTAMP`, which is what every writer already
-uses. Existing 1970 values are left alone: they are the only record those rows
-have, and a timestamp invented at migration time would look real without being
-so.
+Migration 0021 rebuilds `extensions` and replaces `extension_submissions` with
+`extension_revisions`, because SQLite cannot relax `NOT NULL`, add a `CHECK`, or
+add a foreign key in place. It also renames `extensions.author_id` to
+`developer_id` — nothing public depended on the old name, since v1's response
+field is `author` either way.
+
+**Ordering in 0021 is load-bearing.** It never drops a table that still has
+children, so `extension_submissions` is copied aside and dropped before
+`extensions` is rebuilt. Foreign keys cannot be relaxed to avoid this:
+`PRAGMA foreign_keys` is a no-op inside a transaction and wrangler wraps each
+migration file in one, while `PRAGMA defer_foreign_keys` does not help either —
+dropping a parent increments SQLite's deferred-violation counter per child row
+and nothing decrements it, so the commit fails even when the data is sound. The
+same constraint is why `developers` is not rebuilt: three tables reference it.
+`migrations.test.ts` applies the chain under those conditions so this cannot
+regress.
 
 Apply migrations **only from this repository**, from `db/migrations`, with `npm run db:migrate:extensions-v2:local` / `:remote`. The Extensions site has no D1 migration source.
 
