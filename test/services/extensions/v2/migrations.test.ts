@@ -314,10 +314,36 @@ describe("Extensions D1 migrations", () => {
     const db = new DatabaseSync(":memory:");
 
     try {
-      applyAllAsD1(db, seedSubmissionFixture);
+      applyAllAsD1(db, (seeded) => {
+        seedSubmissionFixture(seeded);
+        // extension_id must be set, not null. It is what makes extensions a
+        // parent with a child row, and so the only thing that makes dropping
+        // it a foreign key violation - without it this test passes on the very
+        // ordering it exists to reject.
+        seeded
+          .prepare(
+            `INSERT INTO extension_submissions
+               (id, extension_id, developer_id, submitted_by, status, payload, target_key)
+             VALUES (?,?,?,?,?,?,?)`
+          )
+          .run(
+            "edit-of-live",
+            "live-ext",
+            "acme",
+            "submitter",
+            "pending",
+            '{"developer":{"id":"acme"},"extension":{"id":"live-ext","name":"E"}}',
+            "live-ext"
+          );
+      });
 
       // Committed, so the deferred counter reached zero and the data is sound.
       expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+      expect(
+        db
+          .prepare("SELECT extension_id FROM extension_revisions WHERE id = ?")
+          .get("edit-of-live")
+      ).toEqual({ extension_id: "live-ext" });
       expect(db.prepare("SELECT COUNT(*) AS n FROM extensions").get()).toEqual({
         n: 1
       });
