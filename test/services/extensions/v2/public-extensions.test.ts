@@ -24,7 +24,7 @@ describe("Extensions API v2", () => {
         await insertExtension(db, {
           id,
           type: "mod",
-          author_id: "catalogue-developer",
+          developer_id: "catalogue-developer",
           name: id,
           description: `Description for ${id}`,
           releases: '[{"tag":"1.0.0"}]',

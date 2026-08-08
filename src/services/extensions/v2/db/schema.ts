@@ -11,7 +11,7 @@ import {
 // The API owns the complete Extensions domain, including this user projection.
 // The row is keyed by the central auth service's `sub`; authentication itself
 // remains in the Extensions site, while this projection is the domain-side
-// authorization and foreign-key anchor for developers, submissions, claims,
+// authorization and foreign-key anchor for developers, revisions, claims,
 // transfers, and audit history.
 export const users = sqliteTable("users", {
   id: text("id").primaryKey(),
@@ -29,46 +29,79 @@ export const users = sqliteTable("users", {
   deletedAt: text("deleted_at")
 });
 
-// Legacy catalogue table, now owned by the API along with the rest of the
-// Extensions domain. The v1 read-only routes import this model rather than
-// maintaining a second table definition. author_id's column name is kept for
-// compatibility with the public v1 response, while its target followed
-// developers in migration 0008.
+// An extension record exists from the moment a developer creates it, before
+// any moderator has seen it. The content columns are therefore the *published*
+// projection and are NULL until the first revision is approved (migration
+// 0021); published_at is the marker the public catalogue filters on, and the
+// CHECK below is what keeps "published" from ever meaning "half a row".
+//
+// The column was author_id until migration 0021. It never had to be: the only
+// thing that kept the pre-v2 name was v1's public JSON field, which is called
+// "author" and is produced by a mapping in v1/database.ts either way.
 export const extensions = sqliteTable(
   "extensions",
   {
     id: text("id").primaryKey(),
-    type: text("type").notNull(),
-    authorId: text("author_id")
+    developerId: text("developer_id")
       .notNull()
       .references(() => developers.id),
-    name: text("name").notNull(),
-    description: text("description").notNull(),
-    releases: text("releases").notNull(),
-    website: text("website").notNull(),
-    license: text("license").notNull(),
+    publishedAt: text("published_at"),
+    // Which revision produced the current published content. Deliberately not
+    // a FK: extension_revisions.extension_id already points the other way, and
+    // a second FK between the same two tables would make them mutually
+    // dependent for both inserts and the SQLite table rebuilds that migrations
+    // need. NULL for rows adopted from the pre-v2 catalogue, which were never
+    // published through a revision.
+    publishedRevisionId: text("published_revision_id"),
+    type: text("type"),
+    name: text("name"),
+    description: text("description"),
+    releases: text("releases"),
+    website: text("website"),
+    license: text("license"),
     iconUrl: text("icon_url"),
-    readme: text("readme").notNull(),
-    source: text("source").notNull(),
-    version: text("version").notNull(),
-    downloadUrl: text("download_url").notNull()
+    readme: text("readme"),
+    source: text("source"),
+    version: text("version"),
+    downloadUrl: text("download_url"),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`)
   },
   (table) => [
-    index("idx_extensions_type").on(table.type),
-    index("idx_extensions_author").on(table.authorId),
-    index("idx_extensions_catalogue_order").on(
-      sql`lower(${table.id})`,
-      table.id
-    ),
-    index("idx_extensions_type_catalogue_order").on(
-      table.type,
-      sql`lower(${table.id})`,
-      table.id
-    ),
-    index("idx_extensions_author_catalogue_order").on(
-      table.authorId,
-      sql`lower(${table.id})`,
-      table.id
+    // Case-insensitive id uniqueness. The id is a lowercase slug by schema,
+    // but adopted rows predate that, and this is what stops two developers
+    // racing for ids that differ only in case — the job migration 0011's
+    // extension_submissions.target_key index used to do from the other side.
+    uniqueIndex("idx_extensions_id_nocase").on(sql`lower(${table.id})`),
+    index("idx_extensions_developer").on(table.developerId),
+    // The catalogue-order indexes are partial: every public read filters on
+    // published_at IS NOT NULL, and unpublished rows would otherwise sit in
+    // the index the catalogue scans. The owner list, which does not filter,
+    // seeks through idx_extensions_developer instead.
+    index("idx_extensions_catalogue_order")
+      .on(sql`lower(${table.id})`, table.id)
+      .where(sql`${table.publishedAt} IS NOT NULL`),
+    index("idx_extensions_type_catalogue_order")
+      .on(table.type, sql`lower(${table.id})`, table.id)
+      .where(sql`${table.publishedAt} IS NOT NULL`),
+    index("idx_extensions_developer_catalogue_order")
+      .on(table.developerId, sql`lower(${table.id})`, table.id)
+      .where(sql`${table.publishedAt} IS NOT NULL`),
+    // "Published" must mean every column the public contract declares
+    // non-optional is present. icon_url is genuinely optional and is left out.
+    check(
+      "extensions_published_content_check",
+      sql`${table.publishedAt} IS NULL OR (
+        ${table.type} IS NOT NULL AND ${table.name} IS NOT NULL AND
+        ${table.description} IS NOT NULL AND ${table.releases} IS NOT NULL AND
+        ${table.website} IS NOT NULL AND ${table.license} IS NOT NULL AND
+        ${table.readme} IS NOT NULL AND ${table.source} IS NOT NULL AND
+        ${table.version} IS NOT NULL AND ${table.downloadUrl} IS NOT NULL
+      )`
     )
   ]
 );
@@ -86,13 +119,16 @@ export const developers = sqliteTable(
     url: text("url"),
     ownerUserId: text("owner_user_id").references(() => users.id),
     approvedAt: text("approved_at"),
-    // Placeholder default from migration 0002 (SQLite rejects non-constant
-    // ALTER TABLE ADD COLUMN defaults). Every write sets this explicitly
-    // (see db/developer-profiles.ts) - the literal default is never actually
-    // read, but it's part of the real column definition so it's kept here
-    // for baseline-diff fidelity against the existing database.
-    createdAt: text("created_at").notNull().default("1970-01-01T00:00:00.000Z"),
-    updatedAt: text("updated_at").notNull().default("1970-01-01T00:00:00.000Z"),
+    // Migration 0002 could only give these a constant default (SQLite rejects
+    // non-constant ALTER TABLE ADD COLUMN defaults), so they carried a
+    // placeholder 1970 epoch that no write ever produced. 0021 rebuilds the
+    // table and replaces it with the value every writer already uses.
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
     avatarUrl: text("avatar_url"),
     contactEmail: text("contact_email"),
     ownershipEpoch: integer("ownership_epoch").notNull().default(1),
@@ -143,58 +179,72 @@ export const developers = sqliteTable(
   ]
 );
 
-export const extensionSubmissions = sqliteTable(
-  "extension_submissions",
+// A proposed version of one extension's content, awaiting or carrying a
+// moderator decision. Renamed from extension_submissions by migration 0021,
+// which also made extension_id NOT NULL: an extension row now exists before
+// its first revision does, so a revision no longer has to name its target
+// indirectly through the payload. `content` is the extension content only —
+// developer edits go through PUT /developers/me and are no longer smuggled
+// through the review queue.
+export const extensionRevisions = sqliteTable(
+  "extension_revisions",
   {
     id: text("id").primaryKey(),
-    extensionId: text("extension_id").references(() => extensions.id),
-    // Deliberately NOT a hard FK to developers - a brand-new-developer
-    // submission names a developer_id that doesn't exist yet until
-    // approval. See migration 0001 (as author_id) / 0008 (renamed).
+    extensionId: text("extension_id")
+      .notNull()
+      .references(() => extensions.id, { onDelete: "cascade" }),
+    // Which developer the revision was proposed under, kept as an audit fact
+    // even after the extension is transferred. Deliberately NOT a FK, so
+    // DELETE /developers/me can hard-delete a profile without erasing the
+    // review record (same reasoning as developer_history — migration 0009).
     developerId: text("developer_id").notNull(),
     submittedBy: text("submitted_by")
       .notNull()
       .references(() => users.id),
     status: text("status").notNull().default("pending"),
-    payload: text("payload").notNull(),
+    content: text("content").notNull(),
     reviewerId: text("reviewer_id").references(() => users.id),
     reviewNote: text("review_note"),
     createdAt: text("created_at")
       .notNull()
       .default(sql`CURRENT_TIMESTAMP`),
     reviewedAt: text("reviewed_at"),
-    ownershipEpoch: integer("ownership_epoch").notNull().default(1),
-    targetKey: text("target_key")
+    ownershipEpoch: integer("ownership_epoch").notNull().default(1)
   },
   (table) => [
-    index("idx_submissions_status").on(table.status),
-    index("idx_submissions_submitted_by").on(table.submittedBy),
-    index("idx_submissions_developer").on(table.developerId),
-    index("idx_submissions_extension").on(table.extensionId),
-    uniqueIndex("idx_extension_submissions_pending_target")
-      .on(table.targetKey)
+    index("idx_extension_revisions_submitted_by").on(table.submittedBy),
+    index("idx_extension_revisions_developer").on(table.developerId),
+    // At most one unreviewed revision per extension. This replaces migration
+    // 0011's target_key index: the target is now a real column, so the
+    // constraint no longer depends on a denormalised copy of an id that also
+    // lived inside the payload JSON.
+    uniqueIndex("idx_extension_revisions_pending")
+      .on(table.extensionId)
       .where(sql`${table.status} = 'pending'`),
-    // created_at/id are DESC in the real index (migration 0011).
-    // SQLiteColumn has no .desc() (confirmed via tsc - that's a pg-core-only
-    // builder method), so the ordering is expressed as raw SQL fragments
-    // instead; verified this produces "desc" in the generated SQL during
-    // the baseline-diff step.
-    index("idx_extension_submissions_submitter_page").on(
+    // created_at/id are DESC in the real index. SQLiteColumn has no .desc()
+    // (confirmed via tsc - that's a pg-core-only builder method), so the
+    // ordering is expressed as raw SQL fragments instead.
+    index("idx_extension_revisions_extension_page").on(
+      table.extensionId,
+      sql`${table.createdAt} desc`,
+      sql`${table.id} desc`
+    ),
+    index("idx_extension_revisions_submitter_page").on(
       table.submittedBy,
       sql`${table.createdAt} desc`,
       sql`${table.id} desc`
     ),
-    index("idx_extension_submissions_queue_page").on(
+    index("idx_extension_revisions_queue_page").on(
       table.status,
       table.createdAt,
       table.id
     ),
     check(
-      "extension_submissions_status_check",
+      "extension_revisions_status_check",
       sql`${table.status} IN ('pending', 'approved', 'rejected')`
     ),
     check(
-      "extension_submissions_ownership_epoch_check",
+      "extension_revisions_ownership_epoch_check",
       sql`${table.ownershipEpoch} >= 1`
     )
   ]

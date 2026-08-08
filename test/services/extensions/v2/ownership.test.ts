@@ -9,7 +9,7 @@ import {
   post,
   get,
   put,
-  samplePayload,
+  sampleContent,
   sampleDeveloper,
   seedUnownedDeveloper,
   mockGithubEntity,
@@ -18,10 +18,11 @@ import {
 import {
   insertUser,
   insertDeveloper,
-  insertSubmission,
+  insertUnpublishedExtension,
+  insertRevision,
   insertDeveloperClaim,
   getDeveloper,
-  getSubmission,
+  getRevision,
   countDeveloperClaims,
   getDeveloperClaim,
   listDeveloperClaims,
@@ -168,7 +169,7 @@ describe("Extensions API v2", () => {
       });
     });
 
-    it("rejects pending submissions and claims when ownership changes", async () => {
+    it("rejects pending revisions and claims when ownership changes", async () => {
       await put(
         "/extensions/v2/developers/me",
         await authHeaders("user-1"),
@@ -179,11 +180,16 @@ describe("Extensions API v2", () => {
         developer_id: "dev-developer",
         claimant_id: "user-3"
       });
-      await insertSubmission(db, {
-        id: "transfer-pending-submission",
+      await insertUnpublishedExtension(db, {
+        id: "transfer-pending-ext",
+        developer_id: "dev-developer"
+      });
+      await insertRevision(db, {
+        id: "transfer-pending-revision",
+        extension_id: "transfer-pending-ext",
         developer_id: "dev-developer",
         submitted_by: "user-3",
-        payload: JSON.stringify(samplePayload({ developerId: "dev-developer" }))
+        content: JSON.stringify(sampleContent())
       });
 
       const initiate = await post(
@@ -206,9 +212,7 @@ describe("Extensions API v2", () => {
         status: "rejected",
         review_note: "Ownership changed before review"
       });
-      expect(
-        await getSubmission(db, "transfer-pending-submission")
-      ).toMatchObject({
+      expect(await getRevision(db, "transfer-pending-revision")).toMatchObject({
         status: "rejected",
         review_note: "Ownership changed before review"
       });

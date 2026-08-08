@@ -75,9 +75,15 @@ describe("Extensions D1 migrations", () => {
       // Apply the complete API chain, including the idempotent bootstrap, to
       // the already-populated users table. 0019 is kept separate so the
       // assertions prove that the adoption migration is the only schema
-      // change needed for the old split-owned database.
+      // change needed for the old split-owned database. 0021 is held back
+      // with it so this test can seed pre-0021 rows and then watch them
+      // migrate; the assertions after it cover the restructure.
+      const heldBack = new Set([
+        "0019_add_user_deleted_at.sql",
+        "0021_restructure_extensions_revisions.sql"
+      ]);
       for (const name of migrationNames.filter(
-        (candidate) => candidate !== "0019_add_user_deleted_at.sql"
+        (candidate) => !heldBack.has(candidate)
       )) {
         db.exec(migration(name));
       }
@@ -142,6 +148,7 @@ describe("Extensions D1 migrations", () => {
       );
 
       db.exec(migration("0019_add_user_deleted_at.sql"));
+      db.exec(migration("0021_restructure_extensions_revisions.sql"));
 
       expect(columnNames(db, "users")).toEqual([
         "id",
@@ -178,9 +185,7 @@ describe("Extensions D1 migrations", () => {
       ).toEqual({ owner_user_id: "legacy-user" });
       expect(
         db
-          .prepare(
-            "SELECT submitted_by FROM extension_submissions WHERE id = ?"
-          )
+          .prepare("SELECT submitted_by FROM extension_revisions WHERE id = ?")
           .get("legacy-submission")
       ).toEqual({ submitted_by: "legacy-user" });
       expect(
@@ -189,6 +194,204 @@ describe("Extensions D1 migrations", () => {
           .get("legacy-history")
       ).toEqual({ changed_by: "legacy-user" });
       expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+
+      // 0021 rebuilds developers only to replace the placeholder 1970 default
+      // migration 0002 was forced to use. Rows keep whatever they had - a
+      // wrong-but-real timestamp beats one invented here - while a new insert
+      // that omits the column now gets the value every writer already uses.
+      expect(
+        db
+          .prepare("SELECT created_at FROM developers WHERE id = ?")
+          .get("legacy-developer")
+      ).toEqual({ created_at: "1970-01-01T00:00:00.000Z" });
+
+      db.prepare(
+        "INSERT INTO developers (id, type, name, owner_user_id) VALUES (?,?,?,?)"
+      ).run("post-migration", "user", "After", null);
+      const fresh = db
+        .prepare("SELECT created_at, updated_at FROM developers WHERE id = ?")
+        .get("post-migration") as { created_at: string; updated_at: string };
+      expect(fresh.created_at).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+      expect(fresh.updated_at).toBe(fresh.created_at);
+    } finally {
+      db.close();
+    }
+  });
+
+  // The reads in db/extensions.ts and v1/database.ts inner-join developers and
+  // treat the result as always present. That is only sound because 0021
+  // refuses to carry a dangling reference through its foreign_keys=OFF
+  // rebuild, so the refusal is worth pinning.
+  it("0021 refuses to migrate an extension whose developer is missing", () => {
+    const db = new DatabaseSync(":memory:");
+
+    try {
+      for (const name of migrationNames.filter(
+        (candidate) => !candidate.startsWith("0021")
+      )) {
+        db.exec(migration(name));
+      }
+
+      // Enforcement off, which is exactly how such a row could have come to
+      // exist before the constraint was there to stop it.
+      db.exec("PRAGMA foreign_keys = OFF;");
+      db.prepare(
+        `INSERT INTO extensions (
+          id, type, author_id, name, description, releases, website, license,
+          icon_url, readme, source, version, download_url
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      ).run(
+        "dangling",
+        "mod",
+        "developer-that-never-existed",
+        "Dangling",
+        "d",
+        "[]",
+        "https://example.com",
+        '{"name":"MIT"}',
+        null,
+        "# d",
+        '{"type":"github","repo":"example/d"}',
+        "1.0.0",
+        "https://example.com/d.zip"
+      );
+
+      expect(() =>
+        db.exec(migration("0021_restructure_extensions_revisions.sql"))
+      ).toThrow(/CHECK constraint failed/);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("0021 gives every submission a real extension row to hang off", () => {
+    const db = new DatabaseSync(":memory:");
+
+    try {
+      db.exec("PRAGMA foreign_keys = ON;");
+      for (const name of migrationNames.filter(
+        (candidate) => !candidate.startsWith("0021")
+      )) {
+        db.exec(migration(name));
+      }
+
+      const now = "2026-01-01T00:00:00.000Z";
+      db.prepare(
+        "INSERT INTO users (id, created_at, updated_at) VALUES (?,?,?)"
+      ).run("submitter", now, now);
+      db.prepare(
+        "INSERT INTO developers (id, type, name, owner_user_id) VALUES (?,?,?,?)"
+      ).run("acme", "organization", "Acme", "submitter");
+      db.prepare(
+        `INSERT INTO extensions (
+          id, type, author_id, name, description, releases, website, license,
+          icon_url, readme, source, version, download_url
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      ).run(
+        "live-ext",
+        "mod",
+        "acme",
+        "Live",
+        "description",
+        "[]",
+        "https://example.com",
+        '{"name":"MIT"}',
+        null,
+        "# Live",
+        '{"type":"github","repo":"example/live"}',
+        "1.0.0",
+        "https://example.com/live.zip"
+      );
+
+      const payload = (extensionId: string) =>
+        JSON.stringify({
+          developer: { id: "acme", type: "organization", name: "Acme" },
+          extension: { id: extensionId, name: "Proposed", type: "mod" }
+        });
+      const insertSubmission = db.prepare(
+        `INSERT INTO extension_submissions
+           (id, extension_id, developer_id, submitted_by, status, payload, created_at, target_key)
+         VALUES (?,?,?,?,?,?,?,?)`
+      );
+      insertSubmission.run(
+        "edit-of-live",
+        "live-ext",
+        "acme",
+        "submitter",
+        "pending",
+        payload("live-ext"),
+        "2026-01-02",
+        "live-ext"
+      );
+      insertSubmission.run(
+        "brand-new",
+        null,
+        "acme",
+        "submitter",
+        "pending",
+        payload("not-yet-approved"),
+        "2026-01-03",
+        "not-yet-approved"
+      );
+      // Filed under a developer that no longer exists: there is no developer_id
+      // that would satisfy the foreign key, so this one is dropped.
+      insertSubmission.run(
+        "orphaned",
+        null,
+        "ghost",
+        "submitter",
+        "rejected",
+        payload("orphan-ext"),
+        "2026-01-04",
+        "orphan-ext"
+      );
+
+      db.exec(migration("0021_restructure_extensions_revisions.sql"));
+
+      // Rows that were already in the catalogue are published; a submission
+      // that only ever proposed an id becomes an unpublished extension.
+      expect(
+        db
+          .prepare(
+            "SELECT id, developer_id, published_at IS NOT NULL AS published FROM extensions ORDER BY id"
+          )
+          .all()
+      ).toEqual([
+        { id: "live-ext", developer_id: "acme", published: 1 },
+        { id: "not-yet-approved", developer_id: "acme", published: 0 }
+      ]);
+
+      expect(
+        db
+          .prepare(
+            "SELECT id, extension_id, status FROM extension_revisions ORDER BY id"
+          )
+          .all()
+      ).toEqual([
+        {
+          id: "brand-new",
+          extension_id: "not-yet-approved",
+          status: "pending"
+        },
+        { id: "edit-of-live", extension_id: "live-ext", status: "pending" }
+      ]);
+
+      // The payload's developer half and the extension id are both gone: a
+      // revision proposes content, and nothing else.
+      expect(
+        db
+          .prepare("SELECT content FROM extension_revisions WHERE id = ?")
+          .get("edit-of-live")
+      ).toEqual({ content: '{"name":"Proposed","type":"mod"}' });
+
+      expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+
+      // published_at cannot be set on a row with no content.
+      expect(() =>
+        db
+          .prepare("UPDATE extensions SET published_at = ? WHERE id = ?")
+          .run(now, "not-yet-approved")
+      ).toThrow(/extensions_published_content_check/);
     } finally {
       db.close();
     }

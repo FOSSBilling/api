@@ -16,7 +16,7 @@ const testExtensionRows = [
   {
     id: "Example",
     type: "mod" as const,
-    authorId: "fossbilling",
+    developerId: "fossbilling",
     name: "Example Module",
     description: "An example module for developers.",
     releases: JSON.stringify([
@@ -58,7 +58,7 @@ const testExtensionRows = [
   {
     id: "TestTheme",
     type: "theme" as const,
-    authorId: "fossbilling",
+    developerId: "fossbilling",
     name: "Test Theme",
     description: "A test theme.",
     releases: JSON.stringify([
@@ -92,7 +92,14 @@ describe("Extensions API v1", () => {
       name: "fossbilling",
       url: "https://fossbilling.org"
     });
-    await db.insert(extensions).values(testExtensionRows);
+    // publishedAt is what v1 filters on since migration 0021 - an extension
+    // row can now exist before a moderator has approved anything.
+    await db.insert(extensions).values(
+      testExtensionRows.map((row) => ({
+        ...row,
+        publishedAt: "2026-01-01T00:00:00.000Z"
+      }))
+    );
   });
 
   describe("GET /list", () => {

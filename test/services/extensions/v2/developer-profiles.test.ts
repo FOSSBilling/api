@@ -11,7 +11,7 @@ import {
   get,
   put,
   del,
-  samplePayload,
+  sampleCreate,
   sampleDeveloper,
   seedUnownedDeveloper,
   seedOwnedExtension,
@@ -21,7 +21,6 @@ import {
 import {
   insertUser,
   insertDeveloper,
-  insertSubmission,
   insertDeveloperClaim,
   insertDeveloperTransfer,
   getDeveloper,
@@ -1041,7 +1040,7 @@ describe("Extensions API v2", () => {
   });
 
   describe("DELETE /developers/me", () => {
-    it("deletes a profile with no extensions or pending submissions", async () => {
+    it("deletes a profile with no extensions", async () => {
       await put(
         "/extensions/v2/developers/me",
         await authHeaders("user-1"),
@@ -1165,23 +1164,24 @@ describe("Extensions API v2", () => {
         error: { code: string; message: string };
       };
       expect(body.error.code).toBe("CONFLICT");
-      expect(body.error.message).toContain("1 published extension(s)");
+      expect(body.error.message).toContain("1 extension(s)");
     });
 
-    it("409s when a submission is pending", async () => {
+    it("409s when an unpublished extension is still owned", async () => {
       await put(
         "/extensions/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
-      await insertSubmission(db, {
-        id: "sub-1",
-        extension_id: null,
-        developer_id: "dev-developer",
-        submitted_by: "user-1",
-        status: "pending",
-        payload: JSON.stringify(samplePayload())
-      });
+      expect(
+        (
+          await post(
+            "/extensions/v2/extensions",
+            await authHeaders("user-1"),
+            sampleCreate()
+          )
+        ).status
+      ).toBe(201);
 
       const res = await del(
         "/extensions/v2/developers/me",

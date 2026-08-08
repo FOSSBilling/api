@@ -50,6 +50,13 @@
       "when": 1785916611193,
       "tag": "0020_check_reserved_route_ids",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1785916611194,
+      "tag": "0021_restructure_extensions_revisions",
+      "breakpoints": true
     }
   ]
 }

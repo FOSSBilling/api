@@ -7,7 +7,6 @@ import {
   developerHistory,
   developerTransfers,
   extensions,
-  extensionSubmissions,
   users
 } from "./schema";
 import { databaseError } from "./errors";
@@ -68,6 +67,33 @@ function parseDeveloperRowWithOwner(row: {
 
 export class DeveloperProfilesDatabase {
   constructor(private db: ExtensionsDb) {}
+
+  // The minimum an extension write needs about the caller's profile: which
+  // developer to publish under, and the ownership epoch to pin the write to.
+  // getOwn() is the full profile projection and deliberately does not expose
+  // ownership_epoch, which is an internal concurrency token rather than part
+  // of the public contract.
+  async getOwnRef(
+    userId: string
+  ): Promise<DatabaseResult<{ id: string; ownershipEpoch: number } | null>> {
+    try {
+      const [row] = await this.db
+        .select({
+          id: developers.id,
+          ownershipEpoch: developers.ownershipEpoch
+        })
+        .from(developers)
+        .where(eq(developers.ownerUserId, userId));
+      return {
+        data: row
+          ? { id: row.id, ownershipEpoch: Number(row.ownershipEpoch ?? 1) }
+          : null,
+        error: null
+      };
+    } catch (error) {
+      return databaseError("getOwnRef", error);
+    }
+  }
   async getOwn(
     userId: string
   ): Promise<
@@ -450,36 +476,19 @@ export class DeveloperProfilesDatabase {
     const [extensionCount] = await this.db
       .select({ count: sql<number>`COUNT(*)` })
       .from(extensions)
-      .where(eq(extensions.authorId, developerId));
+      .where(eq(extensions.developerId, developerId));
     const extensionsCount = extensionCount?.count ?? 0;
     if (extensionsCount > 0) {
       return {
         code: "CONFLICT",
-        message: `You have ${extensionsCount} published extension(s) under this profile. Transfer ownership or remove them before deleting it.`
-      };
-    }
-
-    const [pendingCount] = await this.db
-      .select({ count: sql<number>`COUNT(*)` })
-      .from(extensionSubmissions)
-      .where(
-        and(
-          eq(extensionSubmissions.developerId, developerId),
-          eq(extensionSubmissions.status, "pending")
-        )
-      );
-    if ((pendingCount?.count ?? 0) > 0) {
-      return {
-        code: "CONFLICT",
-        message:
-          "You have a pending submission under review. Wait for it to be resolved before deleting your profile."
+        message: `You have ${extensionsCount} extension(s) under this profile. Transfer ownership, or withdraw the unpublished ones, before deleting it.`
       };
     }
 
     // The guard failed but a fresh look finds nothing wrong — whatever
-    // blocked it (someone else's transfer/claim landing, a submission
-    // that has since been resolved) has already cleared. Ask the caller
-    // to retry rather than guessing at a reason that's no longer true.
+    // blocked it (someone else's transfer/claim landing, an extension that
+    // has since been withdrawn) has already cleared. Ask the caller to retry
+    // rather than guessing at a reason that's no longer true.
     return {
       code: "CONFLICT",
       message:
@@ -490,9 +499,12 @@ export class DeveloperProfilesDatabase {
   // Permanently removes the caller's own developer profile, for a
   // privacy-focused account-deletion flow. Refuses while anything would be
   // left dangling in a way that isn't just historical record-keeping:
-  // published extensions (someone still needs to own them) and pending
-  // submissions (nothing left to approve/reject against once the named
-  // developer is gone). developer_history is deliberately left alone —
+  // any extensions at all (someone still needs to own them, and extensions
+  // .developer_id is a hard FK). Unpublished ones count: withdrawing them is
+  // owner's own one-call operation. Pending revisions need no separate check
+  // since migration 0021 - every revision belongs to an extension and
+  // cascades with it, so "no extensions" already implies "nothing left to
+  // review". developer_history is deliberately left alone —
   // it's an append-only audit log, moderator-only, never rendered publicly,
   // and 0009_drop_developer_history_fk.sql dropped its FK to developers(id)
   // specifically so a deleted developer's history rows can outlive it.
@@ -513,10 +525,9 @@ export class DeveloperProfilesDatabase {
       }
 
       // Every statement re-checks eligibility (still owned by this caller,
-      // no published extensions, no pending submission) at the moment it
-      // runs, rather than trusting the SELECT above: ownership can move
-      // (an accepted transfer/claim) and a new extension or pending
-      // submission can appear between that check and this write, and this
+      // no extensions attached) at the moment it runs, rather than trusting
+      // the SELECT above: ownership can move (an accepted transfer/claim) and
+      // a new extension can appear between that check and this write, and this
       // delete is the caller's only authorization check. The same guard is
       // repeated on all three statements — not just the last — so they're
       // all-or-nothing: if it fails, nothing here is touched, instead of
@@ -533,12 +544,7 @@ export class DeveloperProfilesDatabase {
       // the inner table shadow the outer and pass whenever *any* profile were
       // deletable. Parameters, in order: owner user id, then active user id.
       const deletable = (dev: string) => `${dev}.owner_user_id = ?
-                    AND NOT EXISTS (SELECT 1 FROM extensions WHERE extensions.author_id = ${dev}.id)
-                    AND NOT EXISTS (
-                      SELECT 1 FROM extension_submissions
-                      WHERE extension_submissions.developer_id = ${dev}.id
-                        AND extension_submissions.status = 'pending'
-                    )
+                    AND NOT EXISTS (SELECT 1 FROM extensions WHERE extensions.developer_id = ${dev}.id)
                     AND EXISTS (
                       SELECT 1 FROM users active_user
                       WHERE active_user.id = ? AND active_user.deleted_at IS NULL

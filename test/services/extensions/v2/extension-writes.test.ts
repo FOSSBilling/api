@@ -1,0 +1,552 @@
+import { describe, it, expect, vi } from "vitest";
+import {
+  setupExtensionsV2Tests,
+  db,
+  authHeaders,
+  post,
+  get,
+  put,
+  del,
+  sampleContent,
+  sampleCreate,
+  seedDeveloper,
+  seedOwnedExtension
+} from "./harness";
+import {
+  countRevisions,
+  getExtension,
+  getRevision,
+  listRevisions
+} from "./db-fixtures";
+
+// Hoisted so no v2 suite can make a real GitHub call. harness.ts applies the
+// default "not found" behaviour in beforeEach and documents why.
+vi.mock("@octokit/request", async () =>
+  (await import("../../../mocks/octokit")).octokitRequestMock()
+);
+
+setupExtensionsV2Tests();
+
+async function createExtension(
+  user: string,
+  overrides?: { extensionId?: string; name?: string }
+) {
+  return post(
+    "/extensions/v2/extensions",
+    await authHeaders(user),
+    sampleCreate(overrides)
+  );
+}
+
+describe("Extensions API v2 writes", () => {
+  describe("POST /extensions", () => {
+    it("requires auth", async () => {
+      const res = await post(
+        "/extensions/v2/extensions",
+        { "Content-Type": "application/json" },
+        sampleCreate()
+      );
+      expect(res.status).toBe(401);
+    });
+
+    it("rejects an invalid body", async () => {
+      const res = await post(
+        "/extensions/v2/extensions",
+        await authHeaders("user-1"),
+        {}
+      );
+      expect(res.status).toBe(422);
+      const data = (await res.json()) as { error: { code: string } };
+      expect(data.error.code).toBe("VALIDATION_ERROR");
+    });
+
+    it("rejects the reserved extension id mine", async () => {
+      await seedDeveloper("new-developer", "user-1");
+      const res = await createExtension("user-1", { extensionId: "mine" });
+
+      expect(res.status).toBe(422);
+      expect(await countRevisions(db)).toBe(0);
+    });
+
+    it("refuses a caller with no developer profile to publish under", async () => {
+      const res = await createExtension("user-1");
+
+      expect(res.status).toBe(403);
+      expect(await countRevisions(db)).toBe(0);
+    });
+
+    it("creates the extension record and its first pending revision", async () => {
+      await seedDeveloper("new-developer", "user-1");
+      const res = await createExtension("user-1");
+
+      expect(res.status).toBe(201);
+      const data = (await res.json()) as {
+        result: { id: string; revision_id: string; status: string };
+      };
+      expect(data.result).toMatchObject({ id: "new-ext", status: "pending" });
+
+      // Holds its id immediately, but stays unpublished until a moderator
+      // approves.
+      const stored = await getExtension(db, "new-ext");
+      expect(stored).toMatchObject({
+        developer_id: "new-developer",
+        published_at: null,
+        published_revision_id: null,
+        name: null
+      });
+
+      const revision = await getRevision(db, data.result.revision_id);
+      expect(revision).toMatchObject({
+        extension_id: "new-ext",
+        submitted_by: "user-1",
+        status: "pending"
+      });
+      // The id is the extension's identity, not something a revision proposes.
+      expect(JSON.parse(revision!.content)).not.toHaveProperty("id");
+    });
+
+    it("leaves no extension behind when the revision cannot be written", async () => {
+      await seedDeveloper("new-developer", "user-1");
+      expect((await createExtension("user-1")).status).toBe(201);
+
+      // Same id, different owner: the insert is swallowed by ON CONFLICT and
+      // the batch's changes()-gate must stop the revision too.
+      await seedDeveloper("other-developer", "user-2");
+      const res = await createExtension("user-2");
+
+      expect(res.status).toBe(409);
+      expect(await countRevisions(db)).toBe(1);
+    });
+
+    it("rejects an id already taken by a published extension", async () => {
+      await seedOwnedExtension();
+      const res = await createExtension("owner-1", {
+        extensionId: "existing-ext"
+      });
+
+      expect(res.status).toBe(409);
+      await expect(res.json()).resolves.toMatchObject({
+        error: { code: "CONFLICT" }
+      });
+    });
+
+    it("rejects an id that differs from an existing one only in case", async () => {
+      await seedOwnedExtension();
+      const res = await post(
+        "/extensions/v2/extensions",
+        await authHeaders("owner-1"),
+        { ...sampleCreate(), id: "existing-ext" }
+      );
+      expect(res.status).toBe(409);
+    });
+
+    it("bounds content size, unknown fields, and the number of releases", async () => {
+      await seedDeveloper("new-developer", "user-1");
+      const headers = await authHeaders("user-1");
+      const body = sampleCreate();
+
+      const oversized = await post("/extensions/v2/extensions", headers, {
+        ...body,
+        readme: "x".repeat(100_001)
+      });
+      expect(oversized.status).toBe(422);
+
+      const unknownField = await post("/extensions/v2/extensions", headers, {
+        ...body,
+        padding: "x"
+      });
+      expect(unknownField.status).toBe(422);
+      const unknownBody = (await unknownField.json()) as {
+        error: { details: Array<{ code: string; path: PropertyKey[] }> };
+      };
+      expect(unknownBody.error.details).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ code: "unrecognized_keys", path: [] })
+        ])
+      );
+
+      const unknownReleaseField = await post(
+        "/extensions/v2/extensions",
+        headers,
+        { ...body, releases: [{ ...body.releases[0], padding: "x" }] }
+      );
+      expect(unknownReleaseField.status).toBe(422);
+      const unknownReleaseBody = (await unknownReleaseField.json()) as {
+        error: { details: Array<{ code: string; path: PropertyKey[] }> };
+      };
+      expect(unknownReleaseBody.error.details).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            code: "unrecognized_keys",
+            path: ["releases", 0]
+          })
+        ])
+      );
+
+      const tooManyReleases = await post("/extensions/v2/extensions", headers, {
+        ...body,
+        releases: Array.from({ length: 101 }, () => body.releases[0])
+      });
+      expect(tooManyReleases.status).toBe(422);
+    });
+
+    it("preserves compatibility with stored slug ids over 100 characters", async () => {
+      await seedDeveloper("d".repeat(120), "user-1");
+      const res = await createExtension("user-1", {
+        extensionId: "e".repeat(120)
+      });
+      expect(res.status).toBe(201);
+    });
+
+    it("caps each user's unreviewed backlog", async () => {
+      await seedDeveloper("new-developer", "user-1");
+      for (let index = 0; index < 10; index++) {
+        const result = await createExtension("user-1", {
+          extensionId: `new-ext-${index}`
+        });
+        expect(result.status).toBe(201);
+      }
+
+      const overLimit = await createExtension("user-1", {
+        extensionId: "over-limit"
+      });
+      expect(overLimit.status).toBe(409);
+      expect(await countRevisions(db)).toBe(10);
+      expect(await getExtension(db, "over-limit")).toBeNull();
+    });
+  });
+
+  describe("PUT /extensions/{id}", () => {
+    it("requires auth", async () => {
+      const res = await put(
+        "/extensions/v2/extensions/existing-ext",
+        { "Content-Type": "application/json" },
+        sampleContent()
+      );
+      expect(res.status).toBe(401);
+    });
+
+    it("reports an unknown extension as 404, not 403", async () => {
+      const res = await put(
+        "/extensions/v2/extensions/no-such-ext",
+        await authHeaders("user-1"),
+        sampleContent()
+      );
+      expect(res.status).toBe(404);
+    });
+
+    it("rejects an edit from someone who does not own the extension", async () => {
+      await seedOwnedExtension();
+      const res = await put(
+        "/extensions/v2/extensions/existing-ext",
+        await authHeaders("intruder"),
+        sampleContent()
+      );
+
+      expect(res.status).toBe(403);
+      expect(await countRevisions(db)).toBe(0);
+    });
+
+    it("accepts an edit from the owner without changing the published content", async () => {
+      await seedOwnedExtension();
+      const res = await put(
+        "/extensions/v2/extensions/existing-ext",
+        await authHeaders("owner-1"),
+        sampleContent({ name: "Renamed" })
+      );
+
+      expect(res.status).toBe(202);
+      const [revision] = await listRevisions(db);
+      expect(revision).toMatchObject({
+        extension_id: "existing-ext",
+        status: "pending"
+      });
+      expect(JSON.parse(revision.content).name).toBe("Renamed");
+
+      // Still the pre-edit content: an edit is a proposal, not a write.
+      const stored = await getExtension(db, "existing-ext");
+      expect(stored?.name).toBe("Existing");
+      expect(stored?.published_at).not.toBeNull();
+    });
+
+    it("allows only one unreviewed edit per extension", async () => {
+      await seedOwnedExtension();
+      const headers = await authHeaders("owner-1");
+      expect(
+        (
+          await put(
+            "/extensions/v2/extensions/existing-ext",
+            headers,
+            sampleContent()
+          )
+        ).status
+      ).toBe(202);
+
+      const second = await put(
+        "/extensions/v2/extensions/existing-ext",
+        headers,
+        sampleContent({ name: "Again" })
+      );
+      expect(second.status).toBe(409);
+      expect(await countRevisions(db)).toBe(1);
+    });
+
+    it("cannot rename an extension: the id comes from the path", async () => {
+      await seedOwnedExtension();
+      const res = await put(
+        "/extensions/v2/extensions/existing-ext",
+        await authHeaders("owner-1"),
+        { ...sampleContent(), id: "renamed" }
+      );
+
+      expect(res.status).toBe(422);
+      expect(await getExtension(db, "renamed")).toBeNull();
+    });
+  });
+
+  describe("DELETE /extensions/{id}", () => {
+    it("withdraws an unpublished extension and releases its id", async () => {
+      await seedDeveloper("new-developer", "user-1");
+      expect((await createExtension("user-1")).status).toBe(201);
+
+      const res = await del(
+        "/extensions/v2/extensions/new-ext",
+        await authHeaders("user-1")
+      );
+
+      expect(res.status).toBe(200);
+      expect(await getExtension(db, "new-ext")).toBeNull();
+      // The revision cascades with it - there is nothing left to review.
+      expect(await countRevisions(db)).toBe(0);
+
+      expect((await createExtension("user-1")).status).toBe(201);
+    });
+
+    it("refuses to withdraw a published extension", async () => {
+      await seedOwnedExtension();
+      const res = await del(
+        "/extensions/v2/extensions/existing-ext",
+        await authHeaders("owner-1")
+      );
+
+      expect(res.status).toBe(409);
+      expect(await getExtension(db, "existing-ext")).not.toBeNull();
+    });
+
+    it("refuses to withdraw someone else's extension", async () => {
+      await seedDeveloper("new-developer", "user-1");
+      await createExtension("user-1");
+
+      const res = await del(
+        "/extensions/v2/extensions/new-ext",
+        await authHeaders("intruder")
+      );
+
+      expect(res.status).toBe(403);
+      expect(await getExtension(db, "new-ext")).not.toBeNull();
+    });
+  });
+
+  describe("GET /extensions/mine", () => {
+    it("returns published and unpublished extensions in one page", async () => {
+      await seedOwnedExtension();
+      const headers = await authHeaders("owner-1");
+      expect(
+        (
+          await post("/extensions/v2/extensions", headers, {
+            ...sampleCreate({ extensionId: "draft-ext" })
+          })
+        ).status
+      ).toBe(201);
+
+      const res = await get("/extensions/v2/extensions/mine", headers);
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as {
+        result: Array<{
+          id: string;
+          published: { name: string } | null;
+          pending_revision: { id: string } | null;
+          last_review: unknown;
+        }>;
+      };
+
+      expect(data.result.map((item) => item.id)).toEqual([
+        "draft-ext",
+        "existing-ext"
+      ]);
+      const [draft, published] = data.result;
+      expect(draft.published).toBeNull();
+      expect(draft.pending_revision).not.toBeNull();
+      expect(draft.last_review).toBeNull();
+      expect(published.published).toMatchObject({ name: "Existing" });
+      expect(published.pending_revision).toBeNull();
+    });
+
+    it("shows a published extension and its unreviewed edit together", async () => {
+      await seedOwnedExtension();
+      const headers = await authHeaders("owner-1");
+      await put(
+        "/extensions/v2/extensions/existing-ext",
+        headers,
+        sampleContent({ name: "Renamed" })
+      );
+
+      const res = await get("/extensions/v2/extensions/mine", headers);
+      const data = (await res.json()) as {
+        result: Array<{
+          published: { name: string } | null;
+          pending_revision: { id: string } | null;
+        }>;
+      };
+      expect(data.result[0].published).toMatchObject({ name: "Existing" });
+      expect(data.result[0].pending_revision).not.toBeNull();
+    });
+
+    it("excludes other developers' extensions", async () => {
+      await seedOwnedExtension();
+      await seedDeveloper("other-developer", "user-2");
+      await createExtension("user-2", { extensionId: "other-ext" });
+
+      const res = await get(
+        "/extensions/v2/extensions/mine",
+        await authHeaders("owner-1")
+      );
+      const data = (await res.json()) as { result: Array<{ id: string }> };
+      expect(data.result.map((item) => item.id)).toEqual(["existing-ext"]);
+    });
+
+    it("requires auth", async () => {
+      const res = await get("/extensions/v2/extensions/mine", {});
+      expect(res.status).toBe(401);
+    });
+
+    it("identifies invalid cursors", async () => {
+      const res = await get(
+        "/extensions/v2/extensions/mine?cursor=not-a-cursor",
+        await authHeaders("user-1")
+      );
+      expect(res.status).toBe(422);
+      await expect(res.json()).resolves.toMatchObject({
+        error: { code: "INVALID_CURSOR" }
+      });
+    });
+
+    it("paginates deterministically with an opaque cursor", async () => {
+      await seedDeveloper("new-developer", "user-1");
+      const headers = await authHeaders("user-1");
+      for (const extensionId of ["page-a", "page-b", "page-c"]) {
+        expect((await createExtension("user-1", { extensionId })).status).toBe(
+          201
+        );
+      }
+
+      const first = await get(
+        "/extensions/v2/extensions/mine?limit=2",
+        headers
+      );
+      const firstBody = (await first.json()) as {
+        result: Array<{ id: string }>;
+        pagination: { has_more: boolean; next_cursor: string };
+      };
+      expect(firstBody.result.map((item) => item.id)).toEqual([
+        "page-a",
+        "page-b"
+      ]);
+      expect(firstBody.pagination.has_more).toBe(true);
+
+      const second = await get(
+        `/extensions/v2/extensions/mine?limit=2&cursor=${encodeURIComponent(firstBody.pagination.next_cursor)}`,
+        headers
+      );
+      const secondBody = (await second.json()) as {
+        result: Array<{ id: string }>;
+        pagination: { has_more: boolean; next_cursor: null };
+      };
+      expect(secondBody.result.map((item) => item.id)).toEqual(["page-c"]);
+      expect(secondBody.pagination).toEqual({
+        has_more: false,
+        next_cursor: null
+      });
+    });
+  });
+
+  describe("GET /extensions/mine/{id}", () => {
+    it("returns an unpublished extension with its pending content", async () => {
+      await seedDeveloper("new-developer", "user-1");
+      await createExtension("user-1");
+
+      const res = await get(
+        "/extensions/v2/extensions/mine/new-ext",
+        await authHeaders("user-1")
+      );
+
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as {
+        result: {
+          published: unknown;
+          pending_revision: { content: { name: string } };
+        };
+      };
+      expect(data.result.published).toBeNull();
+      expect(data.result.pending_revision.content.name).toBe("New Extension");
+    });
+
+    it("refuses to show someone else's extension", async () => {
+      await seedOwnedExtension();
+      const res = await get(
+        "/extensions/v2/extensions/mine/existing-ext",
+        await authHeaders("intruder")
+      );
+      expect(res.status).toBe(403);
+    });
+
+    it("404s an unknown id", async () => {
+      const res = await get(
+        "/extensions/v2/extensions/mine/no-such-ext",
+        await authHeaders("user-1")
+      );
+      expect(res.status).toBe(404);
+    });
+
+    // "mine" is a reserved extension id, so /extensions/mine/revisions can
+    // only be the owner detail route - see the registration order in index.ts.
+    it("resolves /extensions/mine/revisions as an owner detail read", async () => {
+      const res = await get(
+        "/extensions/v2/extensions/mine/revisions",
+        await authHeaders("user-1")
+      );
+      expect(res.status).toBe(404);
+    });
+  });
+
+  describe("GET /extensions/{id}/revisions", () => {
+    it("lists an extension's revisions newest first", async () => {
+      await seedDeveloper("new-developer", "user-1");
+      await createExtension("user-1");
+      const headers = await authHeaders("user-1");
+
+      const res = await get(
+        "/extensions/v2/extensions/new-ext/revisions",
+        headers
+      );
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as {
+        result: Array<{ extension_id: string; status: string }>;
+      };
+      expect(data.result).toHaveLength(1);
+      expect(data.result[0]).toMatchObject({
+        extension_id: "new-ext",
+        status: "pending"
+      });
+    });
+
+    it("refuses a caller who neither owns the extension nor moderates", async () => {
+      await seedOwnedExtension();
+      const res = await get(
+        "/extensions/v2/extensions/existing-ext/revisions",
+        await authHeaders("intruder")
+      );
+      expect(res.status).toBe(403);
+    });
+  });
+});

@@ -27,33 +27,36 @@ export interface DeveloperRow {
 
 export interface ExtensionRow {
   id: string;
-  type: string;
-  author_id: string;
-  name: string;
-  description: string;
-  releases: string;
-  website: string;
-  license: string;
+  developer_id: string;
+  published_at: string | null;
+  published_revision_id: string | null;
+  type: string | null;
+  name: string | null;
+  description: string | null;
+  releases: string | null;
+  website: string | null;
+  license: string | null;
   icon_url: string | null;
-  readme: string;
-  source: string;
-  version: string;
-  download_url: string;
+  readme: string | null;
+  source: string | null;
+  version: string | null;
+  download_url: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
-export interface SubmissionRow {
+export interface RevisionRow {
   id: string;
-  extension_id: string | null;
+  extension_id: string;
   developer_id: string;
   submitted_by: string;
   status: string;
-  payload: string;
+  content: string;
   reviewer_id: string | null;
   review_note: string | null;
   created_at: string;
   reviewed_at: string | null;
   ownership_epoch: number;
-  target_key: string | null;
 }
 
 export interface DeveloperClaimRow {
@@ -128,7 +131,7 @@ async function clearDeveloperHistory(db: D1Database): Promise<void> {
 export async function resetExtensionsDb(db: D1Database): Promise<void> {
   await clearDeveloperHistory(db);
   for (const table of [
-    "extension_submissions",
+    "extension_revisions",
     "developer_transfers",
     "developer_claims",
     "extensions",
@@ -234,42 +237,67 @@ export async function insertDeveloper(
     .run();
 }
 
+// Seeds a published extension: the content columns and published_at go in
+// together, which is what extensions_published_content_check requires.
 export async function insertExtension(
   db: D1Database,
-  row: ExtensionRow
+  row: Partial<ExtensionRow> & { id: string; developer_id: string }
 ): Promise<void> {
+  const now = new Date().toISOString();
   await db
     .prepare(
       `INSERT INTO extensions
-         (id, type, author_id, name, description, releases, website, license,
-          icon_url, readme, source, version, download_url)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (id, developer_id, published_at, published_revision_id, type, name,
+          description, releases, website, license, icon_url, readme, source,
+          version, download_url, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .bind(
       row.id,
-      row.type,
-      row.author_id,
-      row.name,
-      row.description,
-      row.releases,
-      row.website,
-      row.license,
+      row.developer_id,
+      row.published_at !== undefined ? row.published_at : now,
+      row.published_revision_id ?? null,
+      row.type ?? "mod",
+      row.name ?? "Extension",
+      row.description ?? "d",
+      row.releases ?? "[]",
+      row.website ?? "https://e.com",
+      row.license ?? '{"name":"MIT"}',
       row.icon_url ?? null,
-      row.readme,
-      row.source,
-      row.version,
-      row.download_url
+      row.readme ?? "r",
+      row.source ?? '{"type":"github","repo":"example/ext"}',
+      row.version ?? "1.0.0",
+      row.download_url ?? "https://e.com/d.zip",
+      row.created_at ?? now,
+      row.updated_at ?? now
     )
     .run();
 }
 
-export async function insertSubmission(
+// An extension that exists but has never been published: no content, no
+// published_at. This is the state a POST /extensions leaves behind.
+export async function insertUnpublishedExtension(
   db: D1Database,
-  row: Partial<SubmissionRow> & {
+  row: { id: string; developer_id: string; created_at?: string }
+): Promise<void> {
+  const now = new Date().toISOString();
+  await db
+    .prepare(
+      `INSERT INTO extensions (id, developer_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?)`
+    )
+    .bind(row.id, row.developer_id, row.created_at ?? now, now)
+    .run();
+}
+
+export async function insertRevision(
+  db: D1Database,
+  row: Partial<RevisionRow> & {
     id: string;
+    extension_id: string;
     developer_id: string;
     submitted_by: string;
-    payload: string;
+    content: string;
   }
 ): Promise<void> {
   await ensureUser(db, row.submitted_by);
@@ -278,24 +306,23 @@ export async function insertSubmission(
   }
   await db
     .prepare(
-      `INSERT INTO extension_submissions
-         (id, extension_id, developer_id, submitted_by, status, payload,
-          reviewer_id, review_note, created_at, reviewed_at, ownership_epoch, target_key)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO extension_revisions
+         (id, extension_id, developer_id, submitted_by, status, content,
+          reviewer_id, review_note, created_at, reviewed_at, ownership_epoch)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .bind(
       row.id,
-      row.extension_id ?? null,
+      row.extension_id,
       row.developer_id,
       row.submitted_by,
       row.status ?? "pending",
-      row.payload,
+      row.content,
       row.reviewer_id ?? null,
       row.review_note ?? null,
       row.created_at ?? new Date().toISOString(),
       row.reviewed_at ?? null,
-      row.ownership_epoch ?? 1,
-      row.target_key ?? null
+      row.ownership_epoch ?? 1
     )
     .run();
 }
@@ -440,30 +467,28 @@ export async function getExtension(
     .first<ExtensionRow>();
 }
 
-export async function countSubmissions(db: D1Database): Promise<number> {
+export async function countRevisions(db: D1Database): Promise<number> {
   const row = await db
-    .prepare("SELECT COUNT(*) AS count FROM extension_submissions")
+    .prepare("SELECT COUNT(*) AS count FROM extension_revisions")
     .first<{ count: number }>();
   return row?.count ?? 0;
 }
 
-export async function listSubmissions(
-  db: D1Database
-): Promise<SubmissionRow[]> {
+export async function listRevisions(db: D1Database): Promise<RevisionRow[]> {
   const result = await db
-    .prepare("SELECT * FROM extension_submissions")
-    .all<SubmissionRow>();
+    .prepare("SELECT * FROM extension_revisions")
+    .all<RevisionRow>();
   return result.results ?? [];
 }
 
-export async function getSubmission(
+export async function getRevision(
   db: D1Database,
   id: string
-): Promise<SubmissionRow | null> {
+): Promise<RevisionRow | null> {
   return db
-    .prepare("SELECT * FROM extension_submissions WHERE id = ?")
+    .prepare("SELECT * FROM extension_revisions WHERE id = ?")
     .bind(id)
-    .first<SubmissionRow>();
+    .first<RevisionRow>();
 }
 
 export async function countDeveloperClaims(db: D1Database): Promise<number> {

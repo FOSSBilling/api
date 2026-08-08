@@ -286,7 +286,7 @@ export class DeveloperTransfersDatabase {
       // pending work attached to a profile whose owner just changed would put
       // it in front of the wrong moderator.
       const rejectPendingIn = (
-        table: "extension_submissions" | "developer_claims"
+        table: "extension_revisions" | "developer_claims"
       ) =>
         toD1Statement(this.db.$client, {
           sql: `UPDATE ${table}
@@ -297,9 +297,7 @@ export class DeveloperTransfersDatabase {
                 AND status = 'pending'`,
           params: [tokenHash, userId]
         });
-      const rejectPendingSubmissionsStmt = rejectPendingIn(
-        "extension_submissions"
-      );
+      const rejectPendingRevisionsStmt = rejectPendingIn("extension_revisions");
       const rejectPendingClaimsStmt = rejectPendingIn("developer_claims");
 
       let results;
@@ -308,7 +306,7 @@ export class DeveloperTransfersDatabase {
           claimStmt,
           updateDeveloperStmt,
           assertTransferStmt,
-          rejectPendingSubmissionsStmt,
+          rejectPendingRevisionsStmt,
           rejectPendingClaimsStmt
         ]);
       } catch (error) {
