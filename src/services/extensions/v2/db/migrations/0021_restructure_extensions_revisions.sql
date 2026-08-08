@@ -48,6 +48,35 @@ GROUP BY LOWER(id) HAVING COUNT(*) > 1;--> statement-breakpoint
 
 DROP TABLE _extension_id_case_conflicts;--> statement-breakpoint
 
+-- A submission naming a developer that does not exist cannot become an
+-- extension row: developer_id is NOT NULL with a foreign key. Such a
+-- submission is already unapprovable today - the pre-0021 approve() only ever
+-- UPDATEs a developer, never inserts one, so it would mark the submission
+-- approved and publish nothing - but dropping the row here would lose that
+-- record silently, which is not a migration's decision to make.
+--
+-- The developer is deliberately NOT backfilled from payload.developer.
+-- Creating a profile would mint an ownership grant that no moderator ever
+-- approved, which is the exact thing the claim and approval flows exist to
+-- prevent. Create the developer deliberately, or delete the submission, then
+-- re-run.
+CREATE TABLE _submissions_without_a_developer (
+  submission_id TEXT NOT NULL,
+  missing_developer_id TEXT NOT NULL,
+  CONSTRAINT submissions_must_name_an_existing_developer CHECK (1 = 0)
+);--> statement-breakpoint
+
+INSERT INTO _submissions_without_a_developer (submission_id, missing_developer_id)
+SELECT s.id, s.developer_id
+FROM extension_submissions s
+WHERE NOT EXISTS (SELECT 1 FROM developers d WHERE d.id = s.developer_id)
+  AND NOT EXISTS (
+    SELECT 1 FROM extensions e
+    WHERE LOWER(e.id) = LOWER(COALESCE(s.extension_id, json_extract(s.payload, '$.extension.id')))
+  );--> statement-breakpoint
+
+DROP TABLE _submissions_without_a_developer;--> statement-breakpoint
+
 -- A submission whose target id is reserved would materialise an extension
 -- that GET /extensions/{id} can never serve, because the static
 -- GET /extensions/mine route is registered first. The old code rejected these
@@ -204,19 +233,7 @@ WHERE target.target_id IS NOT NULL
   AND NOT EXISTS (
     SELECT 1 FROM `__new_extensions` e WHERE LOWER(e.id) = target.target_id
   )
-  -- A submission whose developer no longer exists cannot produce a row that
-  -- satisfies the developer_id foreign key. Dropping it here loses only an
-  -- unreviewable record: the developer it was filed under is already gone.
-  AND EXISTS (
-    SELECT 1 FROM developers d
-    WHERE d.id = (
-      SELECT s.developer_id
-      FROM extension_submissions s
-      WHERE LOWER(COALESCE(s.extension_id, json_extract(s.payload, '$.extension.id'))) = target.target_id
-      ORDER BY s.created_at DESC, s.id DESC
-      LIMIT 1
-    )
-  );--> statement-breakpoint
+  ;--> statement-breakpoint
 
 DROP TABLE `extensions`;--> statement-breakpoint
 ALTER TABLE `__new_extensions` RENAME TO `extensions`;--> statement-breakpoint

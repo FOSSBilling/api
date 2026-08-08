@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { env } from "cloudflare:workers";
 import { wrapD1WithHook } from "./db-interceptor";
+import { ExtensionRevisionSchema } from "../../../../src/services/extensions/v2/schemas/revisions";
 import {
   setupExtensionsV2Tests,
   db,
@@ -322,9 +323,9 @@ describe("Extensions API v2", () => {
         extension_id: "legacy-ext",
         developer_id: "new-developer",
         submitted_by: "user-1",
-        // Carried through by migration 0021 from a submission that predates
-        // the releases requirement.
-        content: JSON.stringify({ ...sampleContent(), releases: [] })
+        // Carried through by migration 0021 from a submission written under
+        // rules that required far less than today's.
+        content: JSON.stringify({ type: "mod", name: "Legacy" })
       });
 
       const res = await post(
@@ -346,9 +347,22 @@ describe("Extensions API v2", () => {
       );
       expect(history.status).toBe(200);
       const body = (await history.json()) as {
-        result: Array<{ content: { releases: unknown[] } }>;
+        result: Array<{ content: Record<string, unknown> }>;
       };
-      expect(body.result[0].content.releases).toEqual([]);
+      // Served as stored, with the fields it never had simply absent.
+      expect(body.result[0].content).toMatchObject({
+        type: "mod",
+        name: "Legacy"
+      });
+      expect(body.result[0].content.description).toBeUndefined();
+
+      // The advertised contract has to accept what is actually served. Hono
+      // does not validate responses at runtime, so nothing else catches a
+      // response schema that disagrees with the data - the generated client
+      // would be the first to find out.
+      expect(ExtensionRevisionSchema.safeParse(body.result[0]).success).toBe(
+        true
+      );
     });
 
     // reviewed_at is only second-granular, so two reviews can share one and
@@ -386,6 +400,38 @@ describe("Extensions API v2", () => {
       );
       await expect(mine.json()).resolves.toMatchObject({
         result: { last_review: { review_note: "second decision" } }
+      });
+    });
+
+    // The reject guard can fail for two reasons at once. Asking about the
+    // account first keeps the documented 403 rather than reporting the
+    // revision as missing.
+    it("reports a deactivated moderator ahead of a missing revision", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await seedDeveloper("new-developer", "user-1");
+      const { id } = await createPending("user-1");
+      const headers = await authHeaders("mod-1");
+
+      let done = false;
+      env.DB_EXTENSIONS = wrapD1WithHook(db, async (sql) => {
+        if (!done && sql.toLowerCase().includes("update")) {
+          done = true;
+          await db
+            .prepare("UPDATE users SET deleted_at = ? WHERE id = ?")
+            .bind(new Date().toISOString(), "mod-1")
+            .run();
+        }
+      });
+
+      const res = await post(
+        reviewPath(id, "no-such-revision", "reject"),
+        headers,
+        { review_note: "note" }
+      );
+
+      expect(res.status).toBe(403);
+      await expect(res.json()).resolves.toMatchObject({
+        error: { code: "ACCOUNT_INACTIVE" }
       });
     });
 

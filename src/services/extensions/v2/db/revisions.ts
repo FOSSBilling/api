@@ -311,6 +311,9 @@ export class ExtensionRevisionsDatabase {
     id: string,
     reviewerId: string
   ): Promise<DatabaseResult<never>> {
+    const inactive = await inactiveActorError(this.db, reviewerId);
+    if (inactive) return { data: null, error: inactive };
+
     const existing = await this.getById(extensionId, id);
     if (existing.error || !existing.data) {
       return {
@@ -318,13 +321,9 @@ export class ExtensionRevisionsDatabase {
         error: existing.error ?? revisionNotFound(id).error
       };
     }
-    const inactive = await inactiveActorError(this.db, reviewerId);
     return {
       data: null,
-      error: inactive ?? {
-        message: "Revision is not pending",
-        code: "CONFLICT"
-      }
+      error: { message: "Revision is not pending", code: "CONFLICT" }
     };
   }
 

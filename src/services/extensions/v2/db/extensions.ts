@@ -15,6 +15,7 @@ import {
   License,
   OwnedExtension,
   OwnedExtensionListItem,
+  StoredExtensionContent,
   Release,
   Repository
 } from "../schemas/extensions";
@@ -684,11 +685,8 @@ function parseOwnedRow(row: OwnedRow): OwnedExtension {
 
 // Migrated revisions can hold content that predates the current schema (see
 // migration 0021), so releases is defaulted rather than assumed.
-export function parseContent(stored: string | null): ExtensionContent {
-  const content = parseJSON<ExtensionContent>(
-    stored ?? "",
-    {} as ExtensionContent
-  );
+export function parseContent(stored: string | null): StoredExtensionContent {
+  const content = parseJSON<StoredExtensionContent>(stored ?? "", {});
   return {
     ...content,
     releases: sortReleasesDescending(content.releases ?? [])

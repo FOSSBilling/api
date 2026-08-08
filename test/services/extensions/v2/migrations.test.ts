@@ -300,6 +300,87 @@ describe("Extensions D1 migrations", () => {
     }
   });
 
+  // The pre-0021 flow could leave a submission naming a developer that does
+  // not exist. Such a row is already unapprovable - the old approve() only
+  // ever UPDATEd a developer - but it must not vanish without saying so.
+  it("0021 refuses to drop a submission whose developer does not exist", () => {
+    const db = new DatabaseSync(":memory:");
+
+    try {
+      for (const name of migrationNames.filter(
+        (candidate) => !candidate.startsWith("0021")
+      )) {
+        db.exec(migration(name));
+      }
+      seedSubmissionFixture(db);
+      db.prepare(
+        `INSERT INTO extension_submissions
+           (id, extension_id, developer_id, submitted_by, status, payload, target_key)
+         VALUES (?,?,?,?,?,?,?)`
+      ).run(
+        "introduces-a-developer",
+        null,
+        "not-yet-created",
+        "submitter",
+        "pending",
+        '{"developer":{"id":"not-yet-created"},"extension":{"id":"brand-new"}}',
+        "brand-new"
+      );
+
+      expect(() =>
+        db.exec(migration("0021_restructure_extensions_revisions.sql"))
+      ).toThrow(
+        /CHECK constraint failed: submissions_must_name_an_existing_developer/
+      );
+    } finally {
+      db.close();
+    }
+  });
+
+  // The same row targeting an extension that already exists is fine: it
+  // becomes a revision, and the ownership pass rejects it rather than leaving
+  // it pending forever.
+  it("0021 keeps a submission whose developer is missing but whose extension exists", () => {
+    const db = new DatabaseSync(":memory:");
+
+    try {
+      for (const name of migrationNames.filter(
+        (candidate) => !candidate.startsWith("0021")
+      )) {
+        db.exec(migration(name));
+      }
+      seedSubmissionFixture(db);
+      db.prepare(
+        `INSERT INTO extension_submissions
+           (id, extension_id, developer_id, submitted_by, status, payload, target_key)
+         VALUES (?,?,?,?,?,?,?)`
+      ).run(
+        "ghost-developer",
+        "live-ext",
+        "vanished",
+        "submitter",
+        "pending",
+        '{"developer":{"id":"vanished"},"extension":{"id":"live-ext"}}',
+        "live-ext"
+      );
+
+      db.exec(migration("0021_restructure_extensions_revisions.sql"));
+
+      expect(
+        db
+          .prepare(
+            "SELECT status, review_note FROM extension_revisions WHERE id = ?"
+          )
+          .get("ghost-developer")
+      ).toEqual({
+        status: "rejected",
+        review_note: "Ownership changed before review"
+      });
+    } finally {
+      db.close();
+    }
+  });
+
   // Approval no longer looks at the proposed id - there is nothing to look at,
   // since the id lives on the extension row. So the reserved-id check that
   // used to run at the approval boundary has to run here instead, before a
@@ -535,18 +616,6 @@ describe("Extensions D1 migrations", () => {
         payload("not-yet-approved"),
         "2026-01-03",
         "not-yet-approved"
-      );
-      // Filed under a developer that no longer exists: there is no developer_id
-      // that would satisfy the foreign key, so this one is dropped.
-      insertSubmission.run(
-        "orphaned",
-        null,
-        "ghost",
-        "submitter",
-        "rejected",
-        payload("orphan-ext"),
-        "2026-01-04",
-        "orphan-ext"
       );
 
       db.exec(migration("0021_restructure_extensions_revisions.sql"));

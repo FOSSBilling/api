@@ -83,13 +83,23 @@ export type ExtensionContent = z.infer<typeof ExtensionContentSchema>;
 // under, so promising that every historical record satisfies today's input
 // validation is a promise this service cannot keep - migration 0021 carries
 // submissions through verbatim, and any future tightening would break older
-// rows the same way. Only the constraints that are genuinely input-side are
-// relaxed: releases must be non-empty to *publish*, which approve() enforces
-// at the boundary that matters, but a revision that never got that far may
-// legitimately have none.
+// rows the same way.
+//
+// Every field is therefore optional, and releases loses its minimum: this
+// describes what is *there*, and a consumer reading history has to cope with
+// a record written under rules that no longer exist. Field types and upper
+// bounds are kept, since those still say something true about the shape.
+// Nothing is weakened for publication - approve() revalidates against the
+// strict schema before anything reaches the catalogue.
 export const StoredExtensionContentSchema = ExtensionContentSchema.extend({
   releases: z.array(ReleaseSchema).max(100)
-}).openapi("StoredExtensionContent");
+})
+  .partial()
+  .openapi("StoredExtensionContent");
+
+export type StoredExtensionContent = z.infer<
+  typeof StoredExtensionContentSchema
+>;
 
 const MAX_CONTENT_BYTES = 256 * 1024;
 
