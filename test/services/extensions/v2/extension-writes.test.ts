@@ -83,6 +83,60 @@ describe("Extensions API v2 writes", () => {
       expect(data.error.code).toBe("VALIDATION_ERROR");
     });
 
+    it("rejects a spdx_id that isn't a current SPDX license identifier", async () => {
+      await seedDeveloper("new-developer", "user-1");
+      const res = await post(
+        "/extensions/v2/extensions",
+        await authHeaders("user-1"),
+        {
+          ...sampleCreate(),
+          license: { name: "Not Real", spdx_id: "NOT-A-REAL-SPDX-ID" }
+        }
+      );
+      expect(res.status).toBe(422);
+      expect(await countRevisions(db)).toBe(0);
+    });
+
+    it("rejects a deprecated SPDX identifier", async () => {
+      await seedDeveloper("new-developer", "user-1");
+      const res = await post(
+        "/extensions/v2/extensions",
+        await authHeaders("user-1"),
+        // "GPL-3.0" is deprecated in favor of GPL-3.0-only / GPL-3.0-or-later.
+        { ...sampleCreate(), license: { name: "GPL 3.0", spdx_id: "GPL-3.0" } }
+      );
+      expect(res.status).toBe(422);
+    });
+
+    it("stores a recognized spdx_id alongside the display name", async () => {
+      await seedDeveloper("new-developer", "user-1");
+      const res = await post(
+        "/extensions/v2/extensions",
+        await authHeaders("user-1"),
+        {
+          ...sampleCreate(),
+          license: { name: "Apache License 2.0", spdx_id: "Apache-2.0" }
+        }
+      );
+      expect(res.status).toBe(201);
+      const data = (await res.json()) as { result: { revision_id: string } };
+      const revision = await getRevision(db, data.result.revision_id);
+      expect(JSON.parse(revision!.content).license).toEqual({
+        name: "Apache License 2.0",
+        spdx_id: "Apache-2.0"
+      });
+    });
+
+    it("accepts a license with no spdx_id, for custom/proprietary licenses", async () => {
+      await seedDeveloper("new-developer", "user-1");
+      const res = await post(
+        "/extensions/v2/extensions",
+        await authHeaders("user-1"),
+        { ...sampleCreate(), license: { name: "Acme Proprietary License" } }
+      );
+      expect(res.status).toBe(201);
+    });
+
     it("rejects the reserved extension id mine", async () => {
       await seedDeveloper("new-developer", "user-1");
       const res = await createExtension("user-1", { extensionId: "mine" });
