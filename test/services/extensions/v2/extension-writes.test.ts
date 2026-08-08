@@ -361,6 +361,70 @@ describe("Extensions API v2 writes", () => {
       expect(data.result).toHaveLength(1);
     });
 
+    // One walk over every path that addresses an extension by id, each asked
+    // in a case that does not match the stored spelling. The finding was that
+    // reads and writes disagreed, so the guard has to cover all of them at
+    // once rather than one endpoint at a time.
+    it("resolves every id-addressed path regardless of case", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await seedMixedCaseExtension();
+      const owner = await authHeaders("owner-1");
+      const mod = await authHeaders("mod-1");
+
+      expect(
+        (await get("/extensions/v2/extensions/existing-EXT", {})).status
+      ).toBe(200);
+      expect(
+        (await get("/extensions/v2/extensions/mine/EXISTING-ext", owner)).status
+      ).toBe(200);
+
+      const edit = await put(
+        "/extensions/v2/extensions/existing-ext",
+        owner,
+        sampleContent({ name: "Renamed" })
+      );
+      expect(edit.status).toBe(202);
+      const first = (await edit.json()) as { result: { revision_id: string } };
+
+      expect(
+        (await get("/extensions/v2/extensions/EXISTING-EXT/revisions", owner))
+          .status
+      ).toBe(200);
+      expect(
+        (
+          await post(
+            `/extensions/v2/extensions/existing-EXT/revisions/${first.result.revision_id}/reject`,
+            mod,
+            { review_note: "no" }
+          )
+        ).status
+      ).toBe(200);
+
+      const retry = await put(
+        "/extensions/v2/extensions/EXISTING-ext",
+        owner,
+        sampleContent({ name: "Second" })
+      );
+      const second = (await retry.json()) as {
+        result: { revision_id: string };
+      };
+      expect(
+        (
+          await post(
+            `/extensions/v2/extensions/existing-ext/revisions/${second.result.revision_id}/approve`,
+            mod,
+            {}
+          )
+        ).status
+      ).toBe(200);
+
+      // Published through the stored spelling, not a second lowercase row.
+      expect(await countExtensions(db)).toBe(1);
+      expect(await getExtension(db, "Existing-Ext")).toMatchObject({
+        name: "Second"
+      });
+    });
+
     it("withdraws an unpublished extension addressed in the other case", async () => {
       await seedDeveloper("new-developer", "user-1");
       await createExtension("user-1", { extensionId: "new-ext" });
