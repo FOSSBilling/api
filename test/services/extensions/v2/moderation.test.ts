@@ -269,6 +269,41 @@ describe("Extensions API v2", () => {
       expect(afterEdit?.name).toBe("Second Version");
     });
 
+    // requireModerator() runs before the write; the statement repeats the
+    // active check, so the zero-row diagnosis has to recognise it rather than
+    // reporting the revision as no longer pending.
+    it.each(["approve", "reject"] as const)(
+      "reports 403 when the moderator is deactivated mid-%s",
+      async (action) => {
+        await insertUser(db, { id: "mod-1", is_moderator: 1 });
+        await seedDeveloper("new-developer", "user-1");
+        const { id, revisionId } = await createPending("user-1");
+        const headers = await authHeaders("mod-1");
+
+        let done = false;
+        env.DB_EXTENSIONS = wrapD1WithHook(db, async (sql) => {
+          if (!done && sql.includes("extension_revisions")) {
+            done = true;
+            await db
+              .prepare("UPDATE users SET deleted_at = ? WHERE id = ?")
+              .bind(new Date().toISOString(), "mod-1")
+              .run();
+          }
+        });
+
+        const res = await post(reviewPath(id, revisionId, action), headers, {
+          review_note: "note"
+        });
+
+        expect(res.status).toBe(403);
+        await expect(res.json()).resolves.toMatchObject({
+          error: { code: "ACCOUNT_INACTIVE" }
+        });
+        // The revision is untouched, which is why 409 was the wrong answer.
+        expect((await getRevision(db, revisionId))?.status).toBe("pending");
+      }
+    );
+
     it("blocks non-moderators from approving", async () => {
       await seedDeveloper("new-developer", "user-1");
       const { id, revisionId } = await createPending("user-1");

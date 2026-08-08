@@ -250,6 +250,54 @@ describe("Extensions D1 migrations", () => {
     }
   });
 
+  // idx_extensions_id_nocase cannot be created over a catalogue that already
+  // holds a case-colliding pair. Without a check first, the failure lands
+  // mid-rebuild as a bare UNIQUE constraint error naming no rows.
+  it("0021 refuses to run against ids that differ only in case", () => {
+    const db = new DatabaseSync(":memory:");
+
+    try {
+      for (const name of migrationNames.filter(
+        (candidate) => !candidate.startsWith("0021")
+      )) {
+        db.exec(migration(name));
+      }
+      seedSubmissionFixture(db);
+      db.prepare(
+        `INSERT INTO extensions (
+          id, type, author_id, name, description, releases, website, license,
+          icon_url, readme, source, version, download_url
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      ).run(
+        "LIVE-EXT",
+        "mod",
+        "acme",
+        "Colliding",
+        "description",
+        "[]",
+        "https://example.com",
+        '{"name":"MIT"}',
+        null,
+        "# Colliding",
+        '{"type":"github","repo":"example/colliding"}',
+        "1.0.0",
+        "https://example.com/colliding.zip"
+      );
+
+      expect(() =>
+        db.exec(migration("0021_restructure_extensions_revisions.sql"))
+      ).toThrow(/CHECK constraint failed/);
+
+      // Failed before touching anything, not halfway through the rebuild.
+      expect(
+        db.prepare("SELECT COUNT(*) AS n FROM extension_submissions").get()
+      ).toEqual({ n: 0 });
+      expect(columnNames(db, "extensions")).toContain("author_id");
+    } finally {
+      db.close();
+    }
+  });
+
   // Approval no longer looks at the proposed id - there is nothing to look at,
   // since the id lives on the extension row. So the reserved-id check that
   // used to run at the approval boundary has to run here instead, before a

@@ -111,6 +111,8 @@ Apply migrations **only from this repository**, from `db/migrations`, with `npm 
 
 Migration `0020` is a check, not a schema change: it fails if an adopted row holds an id that a static route shadows (`extensions.id = 'mine'`, or `developers.id` of `me`/`claims`/`unapproved`), which would make that row's detail page unreachable. If it fails, rename the row deliberately — the id is public and consumers pin it.
 
+Migration `0021` runs three pre-flight checks before it rewrites anything, each failing the deploy with a `CHECK` violation rather than aborting halfway: ids differing only in case (which `idx_extensions_id_nocase` cannot accept), submissions targeting a reserved id, and — at the end — a dangling developer or extension reference that the `foreign_keys=OFF` rebuild would otherwise carry through. It also rejects pending submissions whose ownership state can never satisfy approval, since one pending revision per extension would otherwise block the owner's next edit forever.
+
 Migration `0021` also drops any submission filed under a developer that no longer exists: there is no `developer_id` such a row could carry that satisfies the new foreign key, and the profile it was filed under is already gone.
 
 ## Code Layout

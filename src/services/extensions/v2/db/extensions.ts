@@ -1,11 +1,11 @@
 import { and, asc, eq, isNotNull, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
-import { DatabaseResult } from "../../../../lib/interfaces";
+import { DatabaseError, DatabaseResult } from "../../../../lib/interfaces";
 import { ExtensionsDb } from "../../../../lib/db";
 import { sortReleasesDescending } from "../../../../lib/releases";
 import { parseJSON } from "../../../../lib/json";
 import { extensions, extensionRevisions, developers, users } from "./schema";
-import { databaseError } from "./errors";
+import { databaseError, inactiveActorError } from "./errors";
 import { toD1Statement } from "./batch";
 import { encodeCursor as encode, decodeCursor as decode } from "./cursor";
 import {
@@ -422,7 +422,10 @@ export class ExtensionsDatabase {
   // specific message, so look for the row that would have caused it.
   private async createBlockedError(
     input: CreateExtensionInput
-  ): Promise<{ message: string; code: string }> {
+  ): Promise<DatabaseError> {
+    const inactive = await inactiveActorError(this.db, input.submittedBy);
+    if (inactive) return inactive;
+
     const [taken] = await this.db
       .select({ one: sql`1` })
       .from(extensions)
@@ -505,9 +508,13 @@ export class ExtensionsDatabase {
         error: { message: "You do not own this extension", code: "FORBIDDEN" }
       };
     }
+    const inactive = await inactiveActorError(this.db, ownerUserId);
     return {
       data: null,
-      error: { message: "Active account required", code: "ACCOUNT_INACTIVE" }
+      error: inactive ?? {
+        message: "Extension could not be withdrawn",
+        code: "CONFLICT"
+      }
     };
   }
 }

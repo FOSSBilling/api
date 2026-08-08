@@ -29,6 +29,29 @@ export function statusFromGithubErrorCode<T extends number>(
   return fallback;
 }
 
+// Guarded writes can fail for any of four reasons, including an account
+// deactivated between requireActiveAuth() and the statement itself, so their
+// routes need one mapper rather than a chain of ternaries per handler.
+// includeNotFound follows statusFromErrorCode's includeConflict: a route that
+// creates rather than addresses a row has no 404 to declare, and passes false
+// so an unexpected NOT_FOUND cannot escape its OpenAPI contract.
+export function statusFromWriteErrorCode(
+  code: string | undefined,
+  includeNotFound: false
+): 403 | 409 | 500;
+export function statusFromWriteErrorCode(
+  code?: string,
+  includeNotFound?: true
+): 403 | 404 | 409 | 500;
+export function statusFromWriteErrorCode(
+  code?: string,
+  includeNotFound = true
+): 403 | 404 | 409 | 500 {
+  if (code === "FORBIDDEN" || code === "ACCOUNT_INACTIVE") return 403;
+  if (!includeNotFound && code === "NOT_FOUND") return 500;
+  return statusFromErrorCode(code);
+}
+
 export function statusFromOwnershipErrorCode(code?: string): 403 | 404 | 500 {
   if (code === "NOT_FOUND") return 404;
   if (code === "FORBIDDEN" || code === "ACCOUNT_INACTIVE") return 403;

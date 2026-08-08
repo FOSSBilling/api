@@ -19,6 +19,25 @@
 -- against schema.ts by test/services/extensions/v2/migrations.test.ts.
 PRAGMA foreign_keys=OFF;--> statement-breakpoint
 
+-- idx_extensions_id_nocase, created further down, is the constraint that stops
+-- two developers racing for ids that differ only in case. A catalogue adopted
+-- from v1 predates it and may already hold such a pair, in which case CREATE
+-- UNIQUE INDEX would abort the migration halfway through the rebuild with a
+-- bare "UNIQUE constraint failed" and no indication of which rows caused it.
+--
+-- Check first, so the failure happens before anything is rewritten and names
+-- the problem. Reconcile the duplicates by hand and re-run: both ids are
+-- public and consumers pin them, so which one survives is not a decision this
+-- migration can make.
+CREATE TABLE _nocase_duplicate_check (ok INTEGER NOT NULL CHECK (ok = 1));--> statement-breakpoint
+
+INSERT INTO _nocase_duplicate_check (ok)
+SELECT CASE WHEN EXISTS (
+    SELECT 1 FROM extensions GROUP BY LOWER(id) HAVING COUNT(*) > 1
+  ) THEN 0 ELSE 1 END;--> statement-breakpoint
+
+DROP TABLE _nocase_duplicate_check;--> statement-breakpoint
+
 -- A submission whose target id is reserved would materialise an extension
 -- that GET /extensions/{id} can never serve, because the static
 -- GET /extensions/mine route is registered first. The old code rejected these

@@ -1,3 +1,6 @@
+import { DatabaseError } from "../../../../lib/interfaces";
+import { ExtensionsDb } from "../../../../lib/db";
+import { UsersDatabase } from "./users";
 import { DatabaseResult } from "../../../../lib/interfaces";
 import { logError } from "../../../../lib/logger";
 
@@ -65,4 +68,21 @@ export function databaseError(
     data: null,
     error: { message: "A database error occurred", code: "DATABASE_ERROR" }
   };
+}
+
+// Every guarded write in this service repeats an active-account check inside
+// its own statement, because requireActiveAuth() can only reject before the
+// write. When such a statement affects no rows the diagnosis has to ask this
+// first: otherwise a deactivation lands in whatever branch the diagnosis falls
+// through to, and the caller is told their edit conflicted rather than that
+// their account is gone.
+export async function inactiveActorError(
+  db: ExtensionsDb,
+  userId: string
+): Promise<DatabaseError | null> {
+  const { data, error } = await new UsersDatabase(db).isActive(userId);
+  if (error) return error;
+  return data
+    ? null
+    : { message: "Active account required", code: "ACCOUNT_INACTIVE" };
 }

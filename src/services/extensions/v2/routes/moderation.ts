@@ -2,7 +2,11 @@ import { requireModerator } from "../middleware";
 import { getExtensionsDb } from "../../../../lib/db";
 import { getAuth } from "../../../../lib/auth";
 import { createRoute, z } from "@hono/zod-openapi";
-import { errorBody, statusFromErrorCode } from "./errors";
+import {
+  errorBody,
+  statusFromErrorCode,
+  statusFromWriteErrorCode
+} from "./errors";
 import {
   ActiveAccountRequiredResponse,
   IdParamSchema,
@@ -145,7 +149,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
       review_note
     );
     if (error || !data) {
-      const status = statusFromErrorCode(error?.code);
+      const status = statusFromWriteErrorCode(error?.code);
       return c.json(errorBody(error, "Unable to approve revision"), status);
     }
     return c.json({ result: data }, 200);
@@ -205,7 +209,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
       review_note
     );
     if (error || !data) {
-      const status = statusFromErrorCode(error?.code);
+      const status = statusFromWriteErrorCode(error?.code);
       return c.json(errorBody(error, "Unable to reject revision"), status);
     }
     return c.json({ result: data }, 200);

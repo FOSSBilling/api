@@ -1,8 +1,8 @@
 import { and, asc, desc, eq, gt, lt, or, sql, SQL } from "drizzle-orm";
-import { DatabaseResult } from "../../../../lib/interfaces";
+import { DatabaseError, DatabaseResult } from "../../../../lib/interfaces";
 import { ExtensionsDb } from "../../../../lib/db";
 import { extensionRevisions, developers, extensions, users } from "./schema";
-import { databaseError } from "./errors";
+import { databaseError, inactiveActorError } from "./errors";
 import { toD1Statement } from "./batch";
 import { encodeCursor as encode, decodeCursor as decode } from "./cursor";
 import { MAX_PENDING_REVISIONS_PER_USER, parseContent } from "./extensions";
@@ -140,7 +140,10 @@ export class ExtensionRevisionsDatabase {
   private async proposeBlockedError(input: {
     extensionId: string;
     callerId: string;
-  }): Promise<{ message: string; code: string }> {
+  }): Promise<DatabaseError> {
+    const inactive = await inactiveActorError(this.db, input.callerId);
+    if (inactive) return inactive;
+
     const [existing] = await this.db
       .select({ ownerUserId: developers.ownerUserId })
       .from(extensions)
@@ -302,7 +305,8 @@ export class ExtensionRevisionsDatabase {
   // either it never existed, or someone else already moved it off 'pending'.
   private async explainNoOpTransition(
     extensionId: string,
-    id: string
+    id: string,
+    reviewerId: string
   ): Promise<DatabaseResult<never>> {
     const existing = await this.getById(extensionId, id);
     if (existing.error || !existing.data) {
@@ -311,9 +315,13 @@ export class ExtensionRevisionsDatabase {
         error: existing.error ?? revisionNotFound(id).error
       };
     }
+    const inactive = await inactiveActorError(this.db, reviewerId);
     return {
       data: null,
-      error: { message: "Revision is not pending", code: "CONFLICT" }
+      error: inactive ?? {
+        message: "Revision is not pending",
+        code: "CONFLICT"
+      }
     };
   }
 
@@ -351,7 +359,7 @@ export class ExtensionRevisionsDatabase {
     }
 
     if (!result.meta?.changes) {
-      return this.explainNoOpTransition(extensionId, id);
+      return this.explainNoOpTransition(extensionId, id, reviewerId);
     }
 
     return { data: { id, status: "rejected" }, error: null };
@@ -454,9 +462,10 @@ export class ExtensionRevisionsDatabase {
     }
 
     if (!results[0]?.meta?.changes) {
+      const inactive = await inactiveActorError(this.db, reviewerId);
       return {
         data: null,
-        error: {
+        error: inactive ?? {
           message:
             "Revision is not pending, or ownership changed since it was proposed",
           code: "CONFLICT"

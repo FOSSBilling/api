@@ -1,7 +1,7 @@
 import {
   errorBody,
   statusFromErrorCode,
-  statusFromOwnershipErrorCode
+  statusFromWriteErrorCode
 } from "./errors";
 import { requireActiveAuth } from "../middleware";
 import { getExtensionsDb } from "../../../../lib/db";
@@ -234,7 +234,7 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
     if (error || !data) {
       return c.json(
         errorBody(error, "Unable to create extension"),
-        error?.code === "CONFLICT" ? 409 : 500
+        statusFromWriteErrorCode(error?.code, false)
       );
     }
     return c.json(
@@ -298,7 +298,7 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
     if (error || !data) {
       return c.json(
         errorBody(error, "Unable to submit edit"),
-        error?.code === "FORBIDDEN" ? 403 : statusFromErrorCode(error?.code)
+        statusFromWriteErrorCode(error?.code)
       );
     }
     return c.json(
@@ -346,9 +346,7 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
     if (error || !data) {
       return c.json(
         errorBody(error, "Unable to withdraw extension"),
-        statusFromOwnershipErrorCode(error?.code) === 403
-          ? 403
-          : statusFromErrorCode(error?.code)
+        statusFromWriteErrorCode(error?.code)
       );
     }
     return c.json({ result: { id: data.id, deleted: true as const } }, 200);

@@ -329,6 +329,61 @@ describe("Extensions API v2 writes", () => {
   // Every read resolves an extension id case-insensitively, so the writes have
   // to agree: otherwise a legacy mixed-case extension is visible but not
   // editable, and its own revision list comes back empty.
+  // requireActiveAuth() can only reject before a write. Each guarded statement
+  // repeats the check, so each blocked-write diagnosis has to recognise it —
+  // otherwise a deactivated caller is told their write conflicted.
+  describe("account deactivated mid-request", () => {
+    function deactivateBefore(match: string, userId: string) {
+      let done = false;
+      env.DB_EXTENSIONS = wrapD1WithHook(db, async (sql) => {
+        if (!done && sql.includes(match)) {
+          done = true;
+          await db
+            .prepare("UPDATE users SET deleted_at = ? WHERE id = ?")
+            .bind(new Date().toISOString(), userId)
+            .run();
+        }
+      });
+    }
+
+    it("reports 403 from create, not a conflict", async () => {
+      await seedDeveloper("new-developer", "user-1");
+      const headers = await authHeaders("user-1");
+      deactivateBefore("INSERT INTO extensions", "user-1");
+
+      const res = await post(
+        "/extensions/v2/extensions",
+        headers,
+        sampleCreate()
+      );
+
+      expect(res.status).toBe(403);
+      await expect(res.json()).resolves.toMatchObject({
+        error: { code: "ACCOUNT_INACTIVE" }
+      });
+      expect(await getExtension(db, "new-ext")).toBeNull();
+    });
+
+    it("reports 403 from an edit, not the pending-limit conflict", async () => {
+      await seedOwnedExtension();
+      const headers = await authHeaders("owner-1");
+      // The propose insert is the first statement of the PUT to touch this table.
+      deactivateBefore("extension_revisions", "owner-1");
+
+      const res = await put(
+        "/extensions/v2/extensions/existing-ext",
+        headers,
+        sampleContent()
+      );
+
+      expect(res.status).toBe(403);
+      await expect(res.json()).resolves.toMatchObject({
+        error: { code: "ACCOUNT_INACTIVE" }
+      });
+      expect(await countRevisions(db)).toBe(0);
+    });
+  });
+
   describe("mixed-case legacy ids", () => {
     it("accepts an edit addressed in lower case", async () => {
       await seedMixedCaseExtension();
