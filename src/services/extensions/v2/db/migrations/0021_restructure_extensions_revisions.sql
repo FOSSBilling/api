@@ -16,31 +16,17 @@
 -- in meta/0021_snapshot.json comes from drizzle-kit. The end state is verified
 -- against schema.ts by test/services/extensions/v2/migrations.test.ts.
 --
--- This migration relaxes foreign keys nowhere, and cannot. An earlier version
--- opened with PRAGMA foreign_keys=OFF, passed locally and failed on the first
--- remote apply with a bare "FOREIGN KEY constraint failed". Two reasons, and
--- the first is the one that matters:
---
---   * PRAGMA foreign_keys is a documented no-op inside a transaction, and
---     wrangler wraps each migration file in one. The pragma silently did
---     nothing remotely. The tests ran statements outside a transaction, where
---     it works, which is exactly why they could not see the difference.
---   * PRAGMA defer_foreign_keys is not a substitute. DROP TABLE on a parent
---     performs an implicit DELETE FROM that increments SQLite's deferred
---     violation counter once per child row, and renaming a replacement into
---     place never decrements it - so COMMIT fails even though
---     PRAGMA foreign_key_check reports nothing wrong.
---
--- So the ordering below is load-bearing: nothing here ever drops a table that
--- still has children. extension_submissions is copied aside and dropped first,
--- which leaves extensions childless at the moment it is replaced, and
--- extension_revisions is created only afterwards. Verified by
--- "applies on D1's terms" in migrations.test.ts, which runs the whole chain
--- with foreign keys enforced and 0021 inside a transaction.
---
--- The same constraint is why developers is not rebuilt here: three tables
--- reference it, so it can never be dropped this way. See the note on its
--- created_at default in schema.ts.
+-- The ordering below is load-bearing: nothing here drops a table that still
+-- has children, which is why extension_submissions is copied aside and dropped
+-- before extensions is rebuilt. Neither pragma can buy you out of this.
+-- foreign_keys=OFF is a no-op inside a transaction, and wrangler wraps each
+-- migration file in one - an earlier version of this file opened with it,
+-- passed locally where statements run outside a transaction, and failed the
+-- first remote apply. defer_foreign_keys is not a substitute either: DROP
+-- TABLE on a parent increments SQLite's deferred-violation counter once per
+-- child row and nothing ever decrements it, so COMMIT fails even when
+-- foreign_key_check is clean. It is also why developers is not rebuilt here -
+-- three tables reference it. See migrations.test.ts's applyAllAsD1().
 
 -- idx_extensions_id_nocase, created further down, is the constraint that stops
 -- a new lowercase id colliding with an adopted mixed-case one. A catalogue
@@ -70,6 +56,22 @@ SELECT LOWER(id), COUNT(*) FROM extensions
 GROUP BY LOWER(id) HAVING COUNT(*) > 1;--> statement-breakpoint
 
 DROP TABLE _extension_id_case_conflicts;--> statement-breakpoint
+
+-- A dangling developer reference would be caught by the real foreign key on
+-- the rebuilt table, but as a bare "FOREIGN KEY constraint failed" from the
+-- middle of the copy. Check it here, before anything is copied, so the failure
+-- names what is wrong and points at the rows.
+CREATE TABLE _unresolved_references (
+  kind TEXT NOT NULL,
+  row_id TEXT NOT NULL,
+  CONSTRAINT extension_references_must_resolve CHECK (1 = 0)
+);--> statement-breakpoint
+
+INSERT INTO _unresolved_references (kind, row_id)
+SELECT 'extension.developer_id', e.id FROM extensions e
+WHERE NOT EXISTS (SELECT 1 FROM developers d WHERE d.id = e.author_id);--> statement-breakpoint
+
+DROP TABLE _unresolved_references;--> statement-breakpoint
 
 -- A submission naming a developer that does not exist cannot become an
 -- extension row: developer_id is NOT NULL with a foreign key. Such a
@@ -128,9 +130,8 @@ WHERE LOWER(COALESCE(extension_id, json_extract(payload, '$.extension.id')))
 DROP TABLE _reserved_submission_targets;--> statement-breakpoint
 
 -- extension_submissions is the only table referencing extensions, so it goes
--- first. CREATE TABLE ... AS SELECT copies the rows without carrying any
--- constraints across, which is what makes this holding table safe to keep
--- across the rebuild.
+-- first. AS SELECT rather than a declared table: it carries no constraints
+-- across, so the holding table survives the rebuild it spans.
 CREATE TABLE `_submissions_backup` AS SELECT * FROM `extension_submissions`;--> statement-breakpoint
 
 DROP TABLE `extension_submissions`;--> statement-breakpoint
@@ -305,22 +306,3 @@ CREATE INDEX `idx_extension_revisions_submitter_page` ON `extension_revisions` (
 CREATE INDEX `idx_extension_revisions_queue_page` ON `extension_revisions` (`status`,`created_at`,`id`);--> statement-breakpoint
 
 DROP TABLE `_submissions_backup`;--> statement-breakpoint
-
--- Deferred foreign keys are checked when the transaction commits, which will
--- catch a dangling reference - but as an unattributed constraint failure at
--- the very end. Check explicitly first so the failure names what is wrong,
--- and so the reads below can assume the join always matches.
-CREATE TABLE _unresolved_references (
-  kind TEXT NOT NULL,
-  row_id TEXT NOT NULL,
-  CONSTRAINT extension_references_must_resolve CHECK (1 = 0)
-);--> statement-breakpoint
-
-INSERT INTO _unresolved_references (kind, row_id)
-SELECT 'extension.developer_id', e.id FROM extensions e
-WHERE NOT EXISTS (SELECT 1 FROM developers d WHERE d.id = e.developer_id)
-UNION ALL
-SELECT 'revision.extension_id', r.id FROM extension_revisions r
-WHERE NOT EXISTS (SELECT 1 FROM extensions e WHERE e.id = r.extension_id);--> statement-breakpoint
-
-DROP TABLE _unresolved_references;--> statement-breakpoint

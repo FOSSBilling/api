@@ -131,14 +131,10 @@ export const developers = sqliteTable(
     // but it is part of the real column definition, so it is kept here for
     // baseline-diff fidelity against the existing database.
     //
-    // Replacing it needs a table rebuild, and this table cannot be rebuilt on
-    // D1: developer_claims, developer_transfers and extensions all reference
-    // it, D1 does not allow foreign keys to be switched off, and deferring
-    // them is not equivalent - DROP TABLE on a parent increments SQLite's
-    // deferred-violation counter for every child row, renaming the replacement
-    // into place never decrements it, and COMMIT then fails even though the
-    // data is consistent. Doing it anyway would mean rebuilding all three
-    // children too, which is a lot of risk for a default nothing reads.
+    // Replacing it needs a table rebuild, which this table cannot have: three
+    // tables reference it and a parent cannot be dropped with foreign keys
+    // enforced (see migration 0021's header). Rebuilding all three children
+    // too is a lot of risk for a default nothing reads.
     createdAt: text("created_at").notNull().default("1970-01-01T00:00:00.000Z"),
     updatedAt: text("updated_at").notNull().default("1970-01-01T00:00:00.000Z"),
     avatarUrl: text("avatar_url"),

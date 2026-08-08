@@ -76,14 +76,10 @@ function seedSubmissionFixture(db: DatabaseSync): void {
   );
 }
 
-// Applies the whole chain the way D1 does, which is not how the other tests
-// here run it. Two differences matter and the second one cost a failed
-// production deploy: D1 keeps foreign keys enabled and silently ignores an
-// attempt to turn them off, and wrangler wraps each migration file in a single
-// transaction. Under those conditions a migration can pass every statement,
-// leave PRAGMA foreign_key_check clean, and still fail at COMMIT - DROP TABLE
-// on a parent increments SQLite's deferred-violation counter once per child
-// row and nothing ever decrements it.
+// Applies the chain the way D1 does, which is not how the other tests here run
+// it: foreign keys enforced, and 0021 inside the transaction wrangler wraps
+// each migration file in. That combination is what a local apply cannot see,
+// and it is what let a broken 0021 reach production.
 function applyAllAsD1(
   db: DatabaseSync,
   seed?: (db: DatabaseSync) => void
@@ -548,38 +544,38 @@ describe("Extensions D1 migrations", () => {
     const db = new DatabaseSync(":memory:");
 
     try {
-      for (const name of migrationNames.filter(
-        (candidate) => !candidate.startsWith("0021")
-      )) {
-        db.exec(migration(name));
-      }
-
-      // Enforcement off, which is exactly how such a row could have come to
-      // exist before the constraint was there to stop it.
-      db.exec("PRAGMA foreign_keys = OFF;");
-      db.prepare(
-        `INSERT INTO extensions (
-          id, type, author_id, name, description, releases, website, license,
-          icon_url, readme, source, version, download_url
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
-      ).run(
-        "dangling",
-        "mod",
-        "developer-that-never-existed",
-        "Dangling",
-        "d",
-        "[]",
-        "https://example.com",
-        '{"name":"MIT"}',
-        null,
-        "# d",
-        '{"type":"github","repo":"example/d"}',
-        "1.0.0",
-        "https://example.com/d.zip"
-      );
-
+      // Run on D1's terms: the pre-flight check has to fire before the copy,
+      // because the rebuilt table's real foreign key would otherwise reject
+      // the row first with a bare, unattributed error.
       expect(() =>
-        db.exec(migration("0021_restructure_extensions_revisions.sql"))
+        applyAllAsD1(db, (seeded) => {
+          // Enforcement off only while seeding, which is how such a row could
+          // have come to exist before the constraint was there to stop it.
+          seeded.exec("PRAGMA foreign_keys = OFF;");
+          seeded
+            .prepare(
+              `INSERT INTO extensions (
+                id, type, author_id, name, description, releases, website,
+                license, icon_url, readme, source, version, download_url
+              ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
+            )
+            .run(
+              "dangling",
+              "mod",
+              "developer-that-never-existed",
+              "Dangling",
+              "d",
+              "[]",
+              "https://example.com",
+              '{"name":"MIT"}',
+              null,
+              "# d",
+              '{"type":"github","repo":"example/d"}',
+              "1.0.0",
+              "https://example.com/d.zip"
+            );
+          seeded.exec("PRAGMA foreign_keys = ON;");
+        })
       ).toThrow(/CHECK constraint failed: extension_references_must_resolve/);
     } finally {
       db.close();
