@@ -242,18 +242,17 @@ export class UsersDatabase {
                 AND NOT EXISTS (
                   SELECT 1 FROM developers d
                   WHERE d.owner_user_id = ?
-                    AND EXISTS (SELECT 1 FROM extensions e WHERE e.author_id = d.id)
-                )
-                AND NOT EXISTS (
-                  SELECT 1 FROM developers d
-                  JOIN extension_submissions s ON s.developer_id = d.id
-                  WHERE d.owner_user_id = ? AND s.status = 'pending'
+                    AND EXISTS (SELECT 1 FROM extensions e WHERE e.developer_id = d.id)
                 )`,
-        params: [deletedAt, deletedAt, userId, userId, userId]
+        params: [deletedAt, deletedAt, userId, userId]
       });
 
-      const rejectSubmissionsStmt = toD1Statement(this.db.$client, {
-        sql: `UPDATE extension_submissions
+      // Still needed after the guard above: a revision the caller proposed
+      // before transferring the developer away is pending under someone
+      // else's profile, so "no extensions under a developer I own" is true
+      // while their unreviewed work is still in a moderator's queue.
+      const rejectRevisionsStmt = toD1Statement(this.db.$client, {
+        sql: `UPDATE extension_revisions
               SET status = 'rejected',
                   review_note = 'Submitter account deleted',
                   reviewed_at = CURRENT_TIMESTAMP
@@ -293,11 +292,7 @@ export class UsersDatabase {
       const deleteDeveloperStmt = toD1Statement(this.db.$client, {
         sql: `DELETE FROM developers
               WHERE owner_user_id = ?
-                AND NOT EXISTS (SELECT 1 FROM extensions WHERE author_id = developers.id)
-                AND NOT EXISTS (
-                  SELECT 1 FROM extension_submissions
-                  WHERE developer_id = developers.id AND status = 'pending'
-                )
+                AND NOT EXISTS (SELECT 1 FROM extensions WHERE developer_id = developers.id)
                 AND EXISTS (SELECT 1 FROM users WHERE id = ? AND deleted_at = ?)`,
         params: [userId, userId, deletedAt]
       });
@@ -320,7 +315,7 @@ export class UsersDatabase {
 
       const results = await this.db.$client.batch([
         reserveStmt,
-        rejectSubmissionsStmt,
+        rejectRevisionsStmt,
         rejectClaimsStmt,
         deleteTransfersStmt,
         deleteClaimsStmt,
@@ -332,8 +327,7 @@ export class UsersDatabase {
         return {
           data: null,
           error: {
-            message:
-              "The account cannot be deleted while it owns published extensions or pending submissions",
+            message: "The account cannot be deleted while it owns extensions",
             code: "CONFLICT"
           }
         };

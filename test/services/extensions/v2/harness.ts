@@ -96,37 +96,38 @@ export async function authHeaders(
   };
 }
 
-export function samplePayload(overrides?: {
+// The PUT /extensions/{id} body: content only, no id and no developer. Both
+// are now properties of the extension record rather than of the edit.
+export function sampleContent(overrides?: { name?: string }) {
+  return {
+    type: "mod",
+    name: overrides?.name ?? "New Extension",
+    description: "A new extension",
+    releases: [
+      {
+        tag: "1.0.0",
+        date: "2026-01-01T00:00:00Z",
+        download_url: "https://example.com/download.zip",
+        min_fossbilling_version: "0.6"
+      }
+    ],
+    website: "https://example.com",
+    license: { name: "MIT" },
+    readme: "# Readme",
+    source: { type: "github", repo: "example/new-ext" },
+    version: "1.0.0",
+    download_url: "https://example.com/download.zip"
+  };
+}
+
+// The POST /extensions body: the same content plus the id being claimed.
+export function sampleCreate(overrides?: {
   extensionId?: string;
-  developerId?: string;
+  name?: string;
 }) {
   return {
-    developer: {
-      id: overrides?.developerId ?? "new-developer",
-      type: "user",
-      name: "Some Developer",
-      URL: "https://example.com"
-    },
-    extension: {
-      id: overrides?.extensionId ?? "new-ext",
-      type: "mod",
-      name: "New Extension",
-      description: "A new extension",
-      releases: [
-        {
-          tag: "1.0.0",
-          date: "2026-01-01T00:00:00Z",
-          download_url: "https://example.com/download.zip",
-          min_fossbilling_version: "0.6"
-        }
-      ],
-      website: "https://example.com",
-      license: { name: "MIT" },
-      readme: "# Readme",
-      source: { type: "github", repo: "example/new-ext" },
-      version: "1.0.0",
-      download_url: "https://example.com/download.zip"
-    }
+    id: overrides?.extensionId ?? "new-ext",
+    ...sampleContent(overrides)
   };
 }
 
@@ -139,8 +140,8 @@ export function sampleDeveloper(overrides?: { id?: string; name?: string }) {
   };
 }
 
-// Extension submissions now require the named developer to already exist
-// (created via PUT /developers/me) and be owned by the caller.
+// Creating an extension requires the caller to already own a developer
+// profile (created via PUT /developers/me).
 export async function seedDeveloper(
   id: string,
   ownerUserId: string
@@ -177,18 +178,9 @@ export async function seedOwnedExtension(): Promise<void> {
   });
   await insertExtension(db, {
     id: "existing-ext",
-    type: "mod",
-    author_id: "owner-developer",
+    developer_id: "owner-developer",
     name: "Existing",
-    description: "d",
-    releases: "[]",
-    website: "https://e.com",
-    license: '{"name":"MIT"}',
-    icon_url: null,
-    readme: "r",
-    source: '{"type":"github","repo":"example/existing"}',
-    version: "1.0.0",
-    download_url: "https://e.com/d.zip"
+    source: '{"type":"github","repo":"example/existing"}'
   });
 }
 

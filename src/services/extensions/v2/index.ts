@@ -4,7 +4,6 @@ import { cors } from "hono/cors";
 import { trimTrailingSlash } from "hono/trailing-slash";
 import { registerPublicExtensionsRoutes } from "./routes/public-extensions";
 import { registerOwnerExtensionsRoutes } from "./routes/owner-extensions";
-import { registerSubmissionRoutes } from "./routes/submissions";
 import { registerDeveloperProfileRoutes } from "./routes/developer-profiles";
 import { registerOwnershipRoutes } from "./routes/ownership";
 import { registerModerationRoutes } from "./routes/moderation";
@@ -38,14 +37,18 @@ extensionsV2.openAPIRegistry.registerComponent("securitySchemes", "Bearer", {
   scheme: "bearer"
 });
 
-// Register the static owner route before the public parameter route
-// (/extensions/{id}) so the reserved "mine" segment is handled as the
-// owner collection. New submissions reject the reserved id; adopted rows
-// predate that, and migration 0020 fails if one is present.
+// Register the owner routes before the public parameter route
+// (/extensions/{id}) so the reserved "mine" segment is handled as the owner
+// collection rather than an extension id. New extensions reject the reserved
+// id; adopted rows predate that, and migration 0020 fails if one is present.
+//
+// GET /extensions/mine/{id} and GET /extensions/{id}/revisions are both three
+// segments and would collide on /extensions/mine/revisions — that request can
+// only mean the first, because "mine" is not a usable extension id, and
+// registering the owner routes first is what resolves it that way.
 registerOwnerExtensionsRoutes(extensionsV2);
 registerPublicExtensionsRoutes(extensionsV2);
 registerAccountRoutes(extensionsV2);
-registerSubmissionRoutes(extensionsV2);
 registerOwnershipRoutes(extensionsV2);
 registerModerationRoutes(extensionsV2);
 // Keep this last: its GET /developers/{id} parameter route would otherwise
@@ -60,7 +63,7 @@ extensionsV2.doc31("/openapi.json", {
     title: "FOSSBilling Extensions API (v2)",
     version: "2.0.0",
     description:
-      "Self-service extension submission, ownership, moderation, and public browsing. v1 (/extensions/v1) remains available for existing integrations."
+      "Self-service extension publishing, ownership, moderation, and public browsing. v1 (/extensions/v1) remains available for existing integrations."
   },
   servers: [{ url: "/extensions/v2" }]
 });

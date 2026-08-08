@@ -1,4 +1,4 @@
-import { eq, sql } from "drizzle-orm";
+import { and, eq, isNotNull, sql } from "drizzle-orm";
 import { ExtensionsDb } from "../../../lib/db";
 import { extensions, developers } from "../v2/db/schema";
 import { DatabaseResult } from "../../../lib/interfaces";
@@ -14,7 +14,7 @@ import {
 const EXTENSION_COLUMNS = {
   id: extensions.id,
   type: extensions.type,
-  authorId: extensions.authorId,
+  developerId: extensions.developerId,
   authorType: developers.type,
   authorName: developers.name,
   authorUrl: developers.url,
@@ -30,16 +30,22 @@ const EXTENSION_COLUMNS = {
   downloadUrl: extensions.downloadUrl
 };
 
-// A LEFT JOIN can produce no matching developers row, so every joined
-// (author*) column is nullable regardless of developers' own NOT NULL
-// constraints - only extensions' own columns (besides iconUrl) are
-// guaranteed non-null.
+// An inner join: extensions.developer_id is NOT NULL with an enforced foreign
+// key, so the author* columns are as non-null as developers' own constraints
+// make them.
+//
+// extensions' own content columns became nullable in migration 0021, where an
+// extension row starts existing before it is published. They are still
+// non-null here because both queries below filter on published_at IS NOT NULL
+// and extensions_published_content_check makes that filter sufficient - a
+// published row cannot be missing any of them. That filter is also what keeps
+// unreviewed extensions out of the v1 catalogue.
 interface ExtensionRow {
   id: string;
   type: string;
-  authorId: string;
-  authorType: string | null;
-  authorName: string | null;
+  developerId: string;
+  authorType: string;
+  authorName: string;
   authorUrl: string | null;
   name: string;
   description: string;
@@ -59,11 +65,14 @@ export class ExtensionsDatabase {
   async getAllExtensions(type?: string): Promise<DatabaseResult<Extension[]>> {
     let rows: ExtensionRow[];
     try {
-      const query = this.db
+      const published = isNotNull(extensions.publishedAt);
+      rows = (await this.db
         .select(EXTENSION_COLUMNS)
         .from(extensions)
-        .leftJoin(developers, eq(extensions.authorId, developers.id));
-      rows = type ? await query.where(eq(extensions.type, type)) : await query;
+        .innerJoin(developers, eq(extensions.developerId, developers.id))
+        .where(
+          type ? and(published, eq(extensions.type, type)) : published
+        )) as ExtensionRow[];
     } catch (error) {
       return {
         data: null,
@@ -80,11 +89,16 @@ export class ExtensionsDatabase {
   async getExtensionById(id: string): Promise<DatabaseResult<Extension>> {
     let rows: ExtensionRow[];
     try {
-      rows = await this.db
+      rows = (await this.db
         .select(EXTENSION_COLUMNS)
         .from(extensions)
-        .leftJoin(developers, eq(extensions.authorId, developers.id))
-        .where(sql`LOWER(${extensions.id}) = LOWER(${id})`);
+        .innerJoin(developers, eq(extensions.developerId, developers.id))
+        .where(
+          and(
+            sql`LOWER(${extensions.id}) = LOWER(${id})`,
+            isNotNull(extensions.publishedAt)
+          )
+        )) as ExtensionRow[];
     } catch (error) {
       return {
         data: null,
@@ -118,9 +132,9 @@ function parseExtensionRow(row: ExtensionRow): Extension {
     name: row.name,
     description: row.description,
     author: {
-      type: (row.authorType as "organization" | "user") ?? "user",
-      name: row.authorName ?? "",
-      id: (row.authorId as Lowercase<string>) ?? ("" as Lowercase<string>),
+      type: row.authorType as "organization" | "user",
+      name: row.authorName,
+      id: row.developerId as Lowercase<string>,
       URL: row.authorUrl ?? undefined
     } as Author,
     releases: sortReleasesDescending(releases),

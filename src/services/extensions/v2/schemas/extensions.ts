@@ -13,9 +13,9 @@ export const EXTENSION_TYPES = [
 ] as const;
 
 // GET /extensions/mine is a static owner-only route registered before
-// GET /extensions/{id}. Reserve its segment for new submissions so a newly
-// published extension cannot become unreachable. This schema cannot rename
-// an already-adopted row, so migration 0020 fails the deploy if one exists.
+// GET /extensions/{id}. Reserve its segment so a newly created extension
+// cannot become unreachable. This schema cannot rename an already-adopted
+// row, so migration 0020 fails the deploy if one exists.
 // Private: isReservedExtensionId() lowercases before the lookup, and these
 // literals are lowercase — reading the Set directly would miss "Mine".
 const RESERVED_EXTENSION_IDS = new Set(["mine"]);
@@ -57,9 +57,11 @@ export const LicenseSchema = z
 
 export type License = z.infer<typeof LicenseSchema>;
 
-export const ExtensionPayloadSchema = z
+// Everything about an extension that a developer can edit. Excludes `id`,
+// which is the resource's identity and is carried by the URL. This is what a
+// revision stores and what moderators approve.
+export const ExtensionContentSchema = z
   .object({
-    id: lowercaseId("extension"),
     type: z.enum(EXTENSION_TYPES),
     name: z.string().min(1).max(120),
     description: z.string().min(1).max(4000),
@@ -72,10 +74,68 @@ export const ExtensionPayloadSchema = z
     version: z.string().min(1).max(100),
     download_url: httpUrl()
   })
-  .strict()
-  .openapi("ExtensionPayload");
+  .openapi("ExtensionContent");
 
-export const ExtensionSchema = ExtensionPayloadSchema.extend({
+export type ExtensionContent = z.infer<typeof ExtensionContentSchema>;
+
+// What a *stored* revision may hold, as opposed to what may be submitted now.
+// Revision history is an audit log that outlives the rules content was written
+// under, so promising that every historical record satisfies today's input
+// validation is a promise this service cannot keep - migration 0021 carries
+// submissions through verbatim, and any future tightening would break older
+// rows the same way.
+//
+// Every field is therefore optional, and releases loses its minimum: this
+// describes what is *there*, and a consumer reading history has to cope with
+// a record written under rules that no longer exist. Field types and upper
+// bounds are kept, since those still say something true about the shape.
+// Nothing is weakened for publication - approve() revalidates against the
+// strict schema before anything reaches the catalogue.
+export const StoredExtensionContentSchema = ExtensionContentSchema.extend({
+  releases: z.array(ReleaseSchema).max(100)
+})
+  .partial()
+  .openapi("StoredExtensionContent");
+
+export type StoredExtensionContent = z.infer<
+  typeof StoredExtensionContentSchema
+>;
+
+const MAX_CONTENT_BYTES = 256 * 1024;
+
+// Applied to both the create and the edit body. The stored revision is this
+// object verbatim, so bounding it here bounds the row.
+function refineContentSize(content: unknown, ctx: z.RefinementCtx): void {
+  const size = new TextEncoder().encode(JSON.stringify(content)).byteLength;
+  if (size > MAX_CONTENT_BYTES) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Extension content must not exceed 256 KiB"
+    });
+  }
+}
+
+// POST /extensions. The id is chosen once here and is immutable afterwards.
+// No developer field: a user owns at most one profile, so the server knows it.
+export const ExtensionCreateSchema = ExtensionContentSchema.extend({
+  id: lowercaseId("extension").refine((id) => !isReservedExtensionId(id), {
+    message: "This extension id is reserved"
+  })
+})
+  .strict()
+  .superRefine(refineContentSize)
+  .openapi("ExtensionCreate");
+
+// PUT /extensions/{id}. Same content, no id — that comes from the path.
+// .strict() belongs here and not on ExtensionContentSchema, which is also a
+// branch of the responses below; see DeveloperInputSchema for why.
+export const ExtensionUpdateSchema = ExtensionContentSchema.strict()
+  .superRefine(refineContentSize)
+  .openapi("ExtensionUpdate");
+
+// The public projection: published content plus the developer that owns it.
+export const ExtensionSchema = ExtensionContentSchema.extend({
+  id: z.string(),
   developer: PublicDeveloperSchema
 }).openapi("Extension");
 
@@ -90,6 +150,70 @@ export const ExtensionListItemSchema = ExtensionSchema.omit({
 }).openapi("ExtensionListItem");
 
 export type ExtensionListItem = z.infer<typeof ExtensionListItemSchema>;
+
+const ExtensionCardContentSchema = ExtensionContentSchema.omit({
+  readme: true,
+  releases: true
+});
+
+// The published projection as its *owner* sees it. Identical to the
+// catalogue's, except releases may be empty: v1 constrained
+// extensions.releases to NOT NULL and nothing more, so a row adopted by
+// migration 0021 can legitimately have none, and the owner view is where
+// someone looks at what is actually there rather than at an idealised copy.
+// This can only ever describe a pre-v2 row - approve() requires a release
+// before anything reaches the catalogue through v2.
+const PublishedExtensionContentSchema = ExtensionContentSchema.extend({
+  releases: z.array(ReleaseSchema).max(100)
+});
+
+// The most recent decision, kept alongside a later pending revision so the
+// site can still show why the previous attempt was rejected.
+export const RevisionReviewSchema = z
+  .object({
+    revision_id: z.string(),
+    status: z.enum(["approved", "rejected"]),
+    review_note: z.string().nullable(),
+    reviewed_at: z.string().nullable()
+  })
+  .openapi("RevisionReview");
+
+const PendingRevisionRefSchema = z
+  .object({
+    id: z.string(),
+    created_at: z.string()
+  })
+  .openapi("PendingRevisionRef");
+
+// published, pending_revision and last_review are independent — a live
+// extension with an unreviewed edit has all three. There is deliberately no
+// derived `status` field on top; see the README for how they map to a UI.
+export const OwnedExtensionListItemSchema = z
+  .object({
+    id: z.string(),
+    developer: PublicDeveloperSchema,
+    published: ExtensionCardContentSchema.nullable(),
+    pending_revision: PendingRevisionRefSchema.nullable(),
+    last_review: RevisionReviewSchema.nullable(),
+    created_at: z.string(),
+    updated_at: z.string()
+  })
+  .openapi("OwnedExtensionListItem");
+
+export type OwnedExtensionListItem = z.infer<
+  typeof OwnedExtensionListItemSchema
+>;
+
+// The detail view carries the full content on both sides, so an owner can
+// render a published-vs-pending diff from one request.
+export const OwnedExtensionSchema = OwnedExtensionListItemSchema.extend({
+  published: PublishedExtensionContentSchema.nullable(),
+  pending_revision: PendingRevisionRefSchema.extend({
+    content: StoredExtensionContentSchema
+  }).nullable()
+}).openapi("OwnedExtension");
+
+export type OwnedExtension = z.infer<typeof OwnedExtensionSchema>;
 
 export const ExtensionListQuerySchema = z.object({
   type: z
@@ -136,3 +260,10 @@ export const ExtensionListResponseSchema = z
     pagination: PaginationSchema
   })
   .openapi("ExtensionListResponse");
+
+export const OwnedExtensionListResponseSchema = z
+  .object({
+    result: z.array(OwnedExtensionListItemSchema),
+    pagination: PaginationSchema
+  })
+  .openapi("OwnedExtensionListResponse");

@@ -2,7 +2,11 @@ import { requireModerator } from "../middleware";
 import { getExtensionsDb } from "../../../../lib/db";
 import { getAuth } from "../../../../lib/auth";
 import { createRoute, z } from "@hono/zod-openapi";
-import { errorBody, statusFromErrorCode } from "./errors";
+import {
+  errorBody,
+  statusFromErrorCode,
+  statusFromWriteErrorCode
+} from "./errors";
 import {
   ActiveAccountRequiredResponse,
   IdParamSchema,
@@ -16,32 +20,36 @@ import {
   DeveloperHistoryEntrySchema,
   DeveloperProfileSchema
 } from "../schemas/developers";
-import { QueueQuerySchema, SubmissionSchema } from "../schemas/submissions";
+import {
+  ExtensionRevisionSchema,
+  RevisionIdParamSchema,
+  RevisionQueueQuerySchema
+} from "../schemas/revisions";
 import { DeveloperProfilesDatabase } from "../db/developer-profiles";
-import { SubmissionsDatabase } from "../db/submissions";
+import { ExtensionRevisionsDatabase } from "../db/revisions";
 import { ExtensionsV2App } from "./app";
 
 export function registerModerationRoutes(app: ExtensionsV2App): void {
   const queueRoute = createRoute({
     method: "get",
-    path: "/submissions/queue",
+    path: "/moderation/extensions",
     tags: ["Moderation"],
-    summary: "List submissions in the moderation queue",
+    summary: "List extension revisions awaiting review",
     security: [{ Bearer: [] }],
     middleware: [requireModerator()] as const,
-    request: { query: QueueQuerySchema },
+    request: { query: RevisionQueueQuerySchema },
     responses: {
       200: {
         content: {
           "application/json": {
             schema: z.object({
-              result: z.array(SubmissionSchema),
+              result: z.array(ExtensionRevisionSchema),
               pagination: PaginationSchema
             })
           }
         },
         description:
-          "Submissions matching the requested status (default: pending)"
+          "Revisions matching the requested status (default: pending), oldest first"
       },
       401: errorResponse("Missing or invalid bearer token"),
       403: {
@@ -54,7 +62,9 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
   });
 
   app.openapi(queueRoute, async (c) => {
-    const db = new SubmissionsDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
+    const db = new ExtensionRevisionsDatabase(
+      getExtensionsDb(c.env.DB_EXTENSIONS)
+    );
     const { status, limit, cursor } = c.req.valid("query");
     const { data, error } = await db.listQueue(
       status ?? "pending",
@@ -79,15 +89,19 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
     );
   });
 
+  // Reviews are addressed through the extension they belong to. The revision
+  // id alone would be enough to find the row, but scoping the path to the
+  // extension means a moderator acting from a queue entry cannot approve a
+  // revision of a different extension than the one they were looking at.
   const approveRoute = createRoute({
     method: "post",
-    path: "/submissions/{id}/approve",
+    path: "/extensions/{id}/revisions/{revisionId}/approve",
     tags: ["Moderation"],
-    summary: "Approve a pending submission",
+    summary: "Approve a pending revision and publish it",
     security: [{ Bearer: [] }],
     middleware: [requireModerator()] as const,
     request: {
-      params: IdParamSchema,
+      params: RevisionIdParamSchema,
       body: {
         content: { "application/json": { schema: ReviewNoteOptionalSchema } }
       }
@@ -105,44 +119,51 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
           }
         },
         description:
-          "Submission approved and written through to the live extension/developer"
+          "Revision approved and published as the extension's live content"
       },
       401: errorResponse("Missing or invalid bearer token"),
       403: {
         ...ActiveAccountRequiredResponse,
         description: "The account is inactive or the caller is not a moderator"
       },
-      404: errorResponse("No submission with that id"),
+      404: errorResponse("No such revision on that extension"),
       409: errorResponse(
-        "Submission is not pending, or ownership has changed since it was submitted"
+        "Revision is not pending, or ownership has changed since it was proposed"
       ),
-      422: errorResponse("id param or review_note body failed validation"),
+      422: errorResponse("Path params or review_note body failed validation"),
       500: errorResponse("Database error")
     }
   });
 
   app.openapi(approveRoute, async (c) => {
     const auth = getAuth(c);
-    const { id } = c.req.valid("param");
+    const { id, revisionId } = c.req.valid("param");
     const { review_note } = c.req.valid("json");
-    const db = new SubmissionsDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
-    const { data, error } = await db.approve(id, auth.userId, review_note);
+    const db = new ExtensionRevisionsDatabase(
+      getExtensionsDb(c.env.DB_EXTENSIONS)
+    );
+    const { data, error } = await db.approve(
+      id,
+      revisionId,
+      auth.userId,
+      review_note
+    );
     if (error || !data) {
-      const status = statusFromErrorCode(error?.code);
-      return c.json(errorBody(error, "Unable to approve submission"), status);
+      const status = statusFromWriteErrorCode(error?.code);
+      return c.json(errorBody(error, "Unable to approve revision"), status);
     }
     return c.json({ result: data }, 200);
   });
 
   const rejectRoute = createRoute({
     method: "post",
-    path: "/submissions/{id}/reject",
+    path: "/extensions/{id}/revisions/{revisionId}/reject",
     tags: ["Moderation"],
-    summary: "Reject a pending submission",
+    summary: "Reject a pending revision",
     security: [{ Bearer: [] }],
     middleware: [requireModerator()] as const,
     request: {
-      params: IdParamSchema,
+      params: RevisionIdParamSchema,
       body: {
         content: { "application/json": { schema: ReviewNoteRequiredSchema } }
       }
@@ -159,15 +180,16 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
             })
           }
         },
-        description: "Submission rejected"
+        description:
+          "Revision rejected. The extension's published content is unchanged."
       },
       401: errorResponse("Missing or invalid bearer token"),
       403: {
         ...ActiveAccountRequiredResponse,
         description: "The account is inactive or the caller is not a moderator"
       },
-      404: errorResponse("No submission with that id"),
-      409: errorResponse("Submission is not pending"),
+      404: errorResponse("No such revision on that extension"),
+      409: errorResponse("Revision is not pending"),
       422: errorResponse("review_note is required"),
       500: errorResponse("Database error")
     }
@@ -175,13 +197,20 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
 
   app.openapi(rejectRoute, async (c) => {
     const auth = getAuth(c);
-    const { id } = c.req.valid("param");
+    const { id, revisionId } = c.req.valid("param");
     const { review_note } = c.req.valid("json");
-    const db = new SubmissionsDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
-    const { data, error } = await db.reject(id, auth.userId, review_note);
+    const db = new ExtensionRevisionsDatabase(
+      getExtensionsDb(c.env.DB_EXTENSIONS)
+    );
+    const { data, error } = await db.reject(
+      id,
+      revisionId,
+      auth.userId,
+      review_note
+    );
     if (error || !data) {
-      const status = statusFromErrorCode(error?.code);
-      return c.json(errorBody(error, "Unable to reject submission"), status);
+      const status = statusFromWriteErrorCode(error?.code);
+      return c.json(errorBody(error, "Unable to reject revision"), status);
     }
     return c.json({ result: data }, 200);
   });

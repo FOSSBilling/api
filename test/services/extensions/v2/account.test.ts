@@ -7,7 +7,7 @@ import {
   put,
   patch,
   del,
-  samplePayload,
+  sampleContent,
   sampleDeveloper,
   seedDeveloper,
   seedUnownedDeveloper,
@@ -17,10 +17,11 @@ import {
   insertUser,
   insertDeveloper,
   insertExtension,
-  insertSubmission,
+  insertUnpublishedExtension,
+  insertRevision,
   insertDeveloperClaim,
   hasDeveloper,
-  getSubmission,
+  getRevision,
   getDeveloperClaim,
   insertDeveloperTransfer,
   insertDeveloperHistory,
@@ -80,7 +81,7 @@ describe("Extensions API v2", () => {
       await insertExtension(db, {
         id: "account-extension",
         type: "mod",
-        author_id: "account-developer",
+        developer_id: "account-developer",
         name: "Account Extension",
         description: "description",
         releases: "[]",
@@ -264,15 +265,18 @@ describe("Extensions API v2", () => {
       expect(row?.deleted_at).toBeNull();
     });
 
-    it("blocks deletion while a pending submission targets the owned developer", async () => {
+    it("blocks deletion while an unpublished extension is still owned", async () => {
       await seedDeveloper("pending-developer", "pending-owner");
-      await insertSubmission(db, {
-        id: "pending-submission",
+      await insertUnpublishedExtension(db, {
+        id: "pending-ext",
+        developer_id: "pending-developer"
+      });
+      await insertRevision(db, {
+        id: "pending-revision",
+        extension_id: "pending-ext",
         developer_id: "pending-developer",
         submitted_by: "pending-owner",
-        payload: JSON.stringify(
-          samplePayload({ developerId: "pending-developer" })
-        )
+        content: JSON.stringify(sampleContent())
       });
 
       const deleted = await del(
@@ -280,7 +284,7 @@ describe("Extensions API v2", () => {
         await authHeaders("pending-owner")
       );
       expect(deleted.status).toBe(409);
-      expect(await getSubmission(db, "pending-submission")).toMatchObject({
+      expect(await getRevision(db, "pending-revision")).toMatchObject({
         status: "pending"
       });
       const user = await db
@@ -310,11 +314,18 @@ describe("Extensions API v2", () => {
         developer_id: "claim-target",
         claimant_id: "cleanup-user"
       });
-      await insertSubmission(db, {
-        id: "cleanup-pending-submission",
+      // Under claim-target, a developer this user does not own - which is the
+      // only way a pending revision survives the "no owned extensions" guard.
+      await insertUnpublishedExtension(db, {
+        id: "cleanup-pending-ext",
+        developer_id: "claim-target"
+      });
+      await insertRevision(db, {
+        id: "cleanup-pending-revision",
+        extension_id: "cleanup-pending-ext",
         developer_id: "claim-target",
         submitted_by: "cleanup-user",
-        payload: JSON.stringify(samplePayload({ developerId: "claim-target" }))
+        content: JSON.stringify(sampleContent())
       });
       await insertDeveloperHistory(db, {
         id: "cleanup-history",
@@ -357,9 +368,7 @@ describe("Extensions API v2", () => {
           ({ id }) => id === "cleanup-owned-claim"
         )
       ).toBeUndefined();
-      expect(
-        await getSubmission(db, "cleanup-pending-submission")
-      ).toMatchObject({
+      expect(await getRevision(db, "cleanup-pending-revision")).toMatchObject({
         status: "rejected",
         review_note: "Submitter account deleted"
       });

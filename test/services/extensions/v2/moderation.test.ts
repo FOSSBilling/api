@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { env } from "cloudflare:workers";
 import { wrapD1WithHook } from "./db-interceptor";
+import { ExtensionRevisionSchema } from "../../../../src/services/extensions/v2/schemas/revisions";
 import {
   setupExtensionsV2Tests,
   db,
@@ -8,7 +9,8 @@ import {
   post,
   get,
   put,
-  samplePayload,
+  sampleContent,
+  sampleCreate,
   sampleDeveloper,
   seedDeveloper
 } from "./harness";
@@ -16,11 +18,12 @@ import {
   insertUser,
   insertDeveloper,
   insertExtension,
-  insertSubmission,
+  insertUnpublishedExtension,
+  insertRevision,
   getDeveloper,
   countExtensions,
   getExtension,
-  getSubmission,
+  getRevision,
   bumpDeveloperOwnership
 } from "./db-fixtures";
 
@@ -32,11 +35,36 @@ vi.mock("@octokit/request", async () =>
 
 setupExtensionsV2Tests();
 
+// Creates an extension and returns the ids the review routes are addressed by.
+async function createPending(
+  user: string,
+  overrides?: { extensionId?: string; name?: string }
+): Promise<{ id: string; revisionId: string }> {
+  const res = await post(
+    "/extensions/v2/extensions",
+    await authHeaders(user),
+    sampleCreate(overrides)
+  );
+  expect(res.status).toBe(201);
+  const { result } = (await res.json()) as {
+    result: { id: string; revision_id: string };
+  };
+  return { id: result.id, revisionId: result.revision_id };
+}
+
+function reviewPath(
+  id: string,
+  revisionId: string,
+  action: "approve" | "reject"
+): string {
+  return `/extensions/v2/extensions/${id}/revisions/${revisionId}/${action}`;
+}
+
 describe("Extensions API v2", () => {
-  describe("GET /submissions/queue", () => {
+  describe("GET /moderation/extensions", () => {
     it("requires moderator access", async () => {
       const res = await get(
-        "/extensions/v2/submissions/queue",
+        "/extensions/v2/moderation/extensions",
         await authHeaders("user-1")
       );
       expect(res.status).toBe(403);
@@ -45,7 +73,7 @@ describe("Extensions API v2", () => {
     it("identifies invalid cursors", async () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       const res = await get(
-        "/extensions/v2/submissions/queue?cursor=not-a-cursor",
+        "/extensions/v2/moderation/extensions?cursor=not-a-cursor",
         await authHeaders("mod-1")
       );
       expect(res.status).toBe(422);
@@ -54,174 +82,114 @@ describe("Extensions API v2", () => {
       });
     });
 
-    it("returns pending submissions for a moderator", async () => {
+    it("returns pending revisions for a moderator", async () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await seedDeveloper("new-developer", "user-1");
-      await post(
-        "/extensions/v2/submissions",
-        await authHeaders("user-1"),
-        samplePayload()
-      );
+      await createPending("user-1");
 
       const res = await get(
-        "/extensions/v2/submissions/queue",
+        "/extensions/v2/moderation/extensions",
         await authHeaders("mod-1")
       );
       expect(res.status).toBe(200);
-      const data = (await res.json()) as { result: Array<{ status: string }> };
+      const data = (await res.json()) as {
+        result: Array<{ status: string; extension_id: string }>;
+      };
       expect(data.result).toHaveLength(1);
-      expect(data.result[0].status).toBe("pending");
+      expect(data.result[0]).toMatchObject({
+        status: "pending",
+        extension_id: "new-ext"
+      });
     });
   });
 
   describe("approve / reject", () => {
-    it("does not approve a former owner's payload when ownership changes at approval", async () => {
+    it("does not approve a former owner's content when ownership changes at approval", async () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await seedDeveloper("new-developer", "user-1");
-      const created = await post(
-        "/extensions/v2/submissions",
-        await authHeaders("user-1"),
-        samplePayload()
-      );
-      const { result } = (await created.json()) as { result: { id: string } };
+      const { id, revisionId } = await createPending("user-1");
 
-      // ownership_epoch is captured on the submission at creation time and
-      // only compared later, so unlike the deleteOwn/upsertOwn races below,
-      // simply changing ownership before the approve call (rather than
-      // mid-request) reproduces this exactly.
+      // ownership_epoch is captured on the revision at creation time and only
+      // compared later, so unlike the deleteOwn/upsertOwn races below, simply
+      // changing ownership before the approve call (rather than mid-request)
+      // reproduces this exactly.
       await bumpDeveloperOwnership(db, "new-developer", "user-2");
       const approved = await post(
-        `/extensions/v2/submissions/${result.id}/approve`,
+        reviewPath(id, revisionId, "approve"),
         await authHeaders("mod-1"),
         {}
       );
       expect(approved.status).toBe(409);
-      expect((await getSubmission(db, result.id))?.status).toBe("pending");
-      expect(await countExtensions(db)).toBe(0);
+      expect((await getRevision(db, revisionId))?.status).toBe("pending");
+      expect((await getExtension(db, id))?.published_at).toBeNull();
     });
 
-    it("does not approve a legacy pending submission with a reserved extension id", async () => {
+    it("refuses a revision that belongs to a different extension", async () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await seedDeveloper("new-developer", "user-1");
-      const legacyPayload = samplePayload({ extensionId: "mine" });
-      await insertSubmission(db, {
-        id: "legacy-mine-submission",
-        developer_id: "new-developer",
-        submitted_by: "user-1",
-        payload: JSON.stringify(legacyPayload),
-        target_key: "mine"
-      });
+      const first = await createPending("user-1", { extensionId: "ext-one" });
+      await createPending("user-1", { extensionId: "ext-two" });
 
-      const approved = await post(
-        "/extensions/v2/submissions/legacy-mine-submission/approve",
+      const res = await post(
+        reviewPath("ext-two", first.revisionId, "approve"),
         await authHeaders("mod-1"),
         {}
       );
 
-      expect(approved.status).toBe(409);
-      expect(await getSubmission(db, "legacy-mine-submission")).toMatchObject({
-        status: "pending"
-      });
-      expect(await countExtensions(db)).toBe(0);
+      expect(res.status).toBe(404);
+      expect((await getRevision(db, first.revisionId))?.status).toBe("pending");
     });
 
-    // The developer half of the same guard. Approval only ever UPDATEs an
-    // existing developer row, so this cannot create a reserved profile - but a
-    // profile predating the reservation would otherwise gain a new extension
-    // pointing at an id that GET /developers/{id} can never serve.
-    it("does not approve a legacy pending submission with a reserved developer id", async () => {
-      await insertUser(db, { id: "mod-1", is_moderator: 1 });
-      await insertDeveloper(db, {
-        id: "me",
-        type: "user",
-        name: "Legacy Reserved",
-        url: null,
-        owner_user_id: "user-1"
-      });
-      const legacyPayload = samplePayload({ developerId: "me" });
-      await insertSubmission(db, {
-        id: "legacy-me-submission",
-        developer_id: "me",
-        submitted_by: "user-1",
-        payload: JSON.stringify(legacyPayload)
-      });
-
-      const approved = await post(
-        "/extensions/v2/submissions/legacy-me-submission/approve",
-        await authHeaders("mod-1"),
-        {}
-      );
-
-      expect(approved.status).toBe(409);
-      expect(await approved.json()).toMatchObject({
-        error: { message: "This developer id is reserved" }
-      });
-      expect(await getSubmission(db, "legacy-me-submission")).toMatchObject({
-        status: "pending"
-      });
-      expect(await countExtensions(db)).toBe(0);
-    });
-    it("leaves the submission pending if the extension write-through fails mid-batch", async () => {
+    it("leaves the revision pending if the publish fails mid-batch", async () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await seedDeveloper("new-developer", "user-1");
+      const { id, revisionId } = await createPending("user-1");
 
-      const created = await post(
-        "/extensions/v2/submissions",
-        await authHeaders("user-1"),
-        samplePayload()
-      );
-      const { result } = (await created.json()) as { result: { id: string } };
-
-      // approve()'s three statements (submission status, developer, extension)
-      // run as one atomic db.batch() call, so D1 itself rolls back the whole
-      // thing on any failure - there's no app-level "revert" to test, and no
-      // way to make the earlier statements really commit before this one
-      // fails (see db-interceptor.ts). This verifies that guarantee end to
-      // end: a failure on the last statement still leaves nothing committed.
+      // approve()'s two statements (claim the revision, publish it into the
+      // extension) run as one atomic db.batch() call, so D1 itself rolls back
+      // the whole thing on any failure - there's no app-level "revert" to
+      // test, and no way to make the earlier statement really commit before
+      // this one fails (see db-interceptor.ts). This verifies that guarantee
+      // end to end: a failure on the last statement still leaves nothing
+      // committed.
       env.DB_EXTENSIONS = wrapD1WithHook(db, (sql) => {
-        if (
-          sql.includes("INSERT INTO") &&
-          sql.includes("extensions") &&
-          !sql.includes("extension_submissions")
-        ) {
-          throw new Error("simulated write-through failure");
+        if (sql.includes("UPDATE extensions")) {
+          throw new Error("simulated publish failure");
         }
       });
       const approved = await post(
-        `/extensions/v2/submissions/${result.id}/approve`,
+        reviewPath(id, revisionId, "approve"),
         await authHeaders("mod-1"),
         {}
       );
       expect(approved.status).toBe(500);
-      expect(await countExtensions(db)).toBe(0);
-
-      const stored = await getSubmission(db, result.id);
-      expect(stored?.status).toBe("pending");
+      expect((await getExtension(db, id))?.published_at).toBeNull();
+      expect((await getRevision(db, revisionId))?.status).toBe("pending");
 
       // Recovers cleanly once the underlying failure is gone.
       env.DB_EXTENSIONS = db;
       const retried = await post(
-        `/extensions/v2/submissions/${result.id}/approve`,
+        reviewPath(id, revisionId, "approve"),
         await authHeaders("mod-1"),
         {}
       );
       expect(retried.status).toBe(200);
-      expect(await countExtensions(db)).toBe(1);
+      expect((await getExtension(db, id))?.published_at).not.toBeNull();
     });
 
-    it("approves a submission and it becomes visible via the v1 read path", async () => {
+    it("publishes on approval and it becomes visible via the v1 read path", async () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await seedDeveloper("new-developer", "user-1");
+      const { id, revisionId } = await createPending("user-1");
 
-      const created = await post(
-        "/extensions/v2/submissions",
-        await authHeaders("user-1"),
-        samplePayload()
+      // Until approval the extension exists but is in neither catalogue.
+      expect((await get("/extensions/v1/new-ext", {})).status).toBe(404);
+      expect((await get("/extensions/v2/extensions/new-ext", {})).status).toBe(
+        404
       );
-      const { result } = (await created.json()) as { result: { id: string } };
 
       const approved = await post(
-        `/extensions/v2/submissions/${result.id}/approve`,
+        reviewPath(id, revisionId, "approve"),
         await authHeaders("mod-1"),
         {}
       );
@@ -230,6 +198,11 @@ describe("Extensions API v2", () => {
         result: { status: string };
       };
       expect(approvedBody.result.status).toBe("approved");
+
+      const stored = await getExtension(db, "new-ext");
+      expect(stored?.published_at).not.toBeNull();
+      expect(stored?.published_revision_id).toBe(revisionId);
+      expect(stored?.name).toBe("New Extension");
 
       // v1's read-only API keeps calling this field "author" — its JSON
       // response shape is intentionally unchanged by the v2 rename.
@@ -242,49 +215,258 @@ describe("Extensions API v2", () => {
       expect(v1Body.result.author.id).toBe("new-developer");
     });
 
-    it("blocks non-moderators from approving", async () => {
+    // Approving an extension used to rewrite the developer row from the
+    // submission payload and clear its approval as a side effect. A revision
+    // carries extension content only, so there is nothing left to write.
+    it("does not touch the developer profile", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await seedDeveloper("new-developer", "user-1");
-      const created = await post(
-        "/extensions/v2/submissions",
-        await authHeaders("user-1"),
-        samplePayload()
+      const before = await getDeveloper(db, "new-developer");
+      const { id, revisionId } = await createPending("user-1");
+
+      expect(
+        (
+          await post(
+            reviewPath(id, revisionId, "approve"),
+            await authHeaders("mod-1"),
+            {}
+          )
+        ).status
+      ).toBe(200);
+
+      expect(await getDeveloper(db, "new-developer")).toEqual(before);
+    });
+
+    it("keeps published_at at the first publication across later edits", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await seedDeveloper("new-developer", "user-1");
+      const first = await createPending("user-1");
+      await post(
+        reviewPath(first.id, first.revisionId, "approve"),
+        await authHeaders("mod-1"),
+        {}
       );
-      const { result } = (await created.json()) as { result: { id: string } };
+      const afterFirst = await getExtension(db, first.id);
+
+      const edit = await put(
+        `/extensions/v2/extensions/${first.id}`,
+        await authHeaders("user-1"),
+        sampleContent({ name: "Second Version" })
+      );
+      const { result } = (await edit.json()) as {
+        result: { revision_id: string };
+      };
+      expect(
+        (
+          await post(
+            reviewPath(first.id, result.revision_id, "approve"),
+            await authHeaders("mod-1"),
+            {}
+          )
+        ).status
+      ).toBe(200);
+
+      const afterEdit = await getExtension(db, first.id);
+      expect(afterEdit?.published_at).toBe(afterFirst?.published_at);
+      expect(afterEdit?.published_revision_id).toBe(result.revision_id);
+      expect(afterEdit?.name).toBe("Second Version");
+    });
+
+    // requireModerator() runs before the write; the statement repeats the
+    // active check, so the zero-row diagnosis has to recognise it rather than
+    // reporting the revision as no longer pending.
+    it.each(["approve", "reject"] as const)(
+      "reports 403 when the moderator is deactivated mid-%s",
+      async (action) => {
+        await insertUser(db, { id: "mod-1", is_moderator: 1 });
+        await seedDeveloper("new-developer", "user-1");
+        const { id, revisionId } = await createPending("user-1");
+        const headers = await authHeaders("mod-1");
+
+        let done = false;
+        env.DB_EXTENSIONS = wrapD1WithHook(db, async (sql) => {
+          if (!done && sql.includes("extension_revisions")) {
+            done = true;
+            await db
+              .prepare("UPDATE users SET deleted_at = ? WHERE id = ?")
+              .bind(new Date().toISOString(), "mod-1")
+              .run();
+          }
+        });
+
+        const res = await post(reviewPath(id, revisionId, action), headers, {
+          review_note: "note"
+        });
+
+        expect(res.status).toBe(403);
+        await expect(res.json()).resolves.toMatchObject({
+          error: { code: "ACCOUNT_INACTIVE" }
+        });
+        // The revision is untouched, which is why 409 was the wrong answer.
+        expect((await getRevision(db, revisionId))?.status).toBe("pending");
+      }
+    );
+
+    // Revision history outlives the rules its content was written under, so
+    // the response schema tolerates a stored revision with no releases. The
+    // public catalogue does not, which makes approval the boundary that has to
+    // re-check rather than trust submission-time validation.
+    it("refuses to publish a revision that predates current content rules", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await seedDeveloper("new-developer", "user-1");
+      await insertUnpublishedExtension(db, {
+        id: "legacy-ext",
+        developer_id: "new-developer"
+      });
+      await insertRevision(db, {
+        id: "legacy-revision",
+        extension_id: "legacy-ext",
+        developer_id: "new-developer",
+        submitted_by: "user-1",
+        // Carried through by migration 0021 from a submission written under
+        // rules that required far less than today's.
+        content: JSON.stringify({ type: "mod", name: "Legacy" })
+      });
 
       const res = await post(
-        `/extensions/v2/submissions/${result.id}/approve`,
+        reviewPath("legacy-ext", "legacy-revision", "approve"),
+        await authHeaders("mod-1"),
+        {}
+      );
+
+      expect(res.status).toBe(409);
+      await expect(res.json()).resolves.toMatchObject({
+        error: { code: "CONFLICT" }
+      });
+      expect((await getExtension(db, "legacy-ext"))?.published_at).toBeNull();
+
+      // But it is still readable as history, with the empty releases intact.
+      const history = await get(
+        "/extensions/v2/extensions/legacy-ext/revisions",
+        await authHeaders("user-1")
+      );
+      expect(history.status).toBe(200);
+      const body = (await history.json()) as {
+        result: Array<{ content: Record<string, unknown> }>;
+      };
+      // Served as stored, with the fields it never had simply absent.
+      expect(body.result[0].content).toMatchObject({
+        type: "mod",
+        name: "Legacy"
+      });
+      expect(body.result[0].content.description).toBeUndefined();
+
+      // The advertised contract has to accept what is actually served. Hono
+      // does not validate responses at runtime, so nothing else catches a
+      // response schema that disagrees with the data - the generated client
+      // would be the first to find out.
+      expect(ExtensionRevisionSchema.safeParse(body.result[0]).success).toBe(
+        true
+      );
+    });
+
+    // reviewed_at is only second-granular, so two reviews can share one and
+    // the tie-break decides which decision the owner sees.
+    it("reports the newer decision when two reviews share a timestamp", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await seedDeveloper("new-developer", "user-1");
+      const first = await createPending("user-1");
+      const mod = await authHeaders("mod-1");
+
+      await post(reviewPath(first.id, first.revisionId, "reject"), mod, {
+        review_note: "first decision"
+      });
+      const second = await put(
+        `/extensions/v2/extensions/${first.id}`,
+        await authHeaders("user-1"),
+        sampleContent({ name: "Second" })
+      );
+      const secondId = (
+        (await second.json()) as { result: { revision_id: string } }
+      ).result.revision_id;
+      await post(reviewPath(first.id, secondId, "reject"), mod, {
+        review_note: "second decision"
+      });
+
+      // Force the collision the tie-break exists for.
+      await db
+        .prepare("UPDATE extension_revisions SET reviewed_at = ?")
+        .bind("2026-01-01 00:00:00")
+        .run();
+
+      const mine = await get(
+        `/extensions/v2/extensions/mine/${first.id}`,
+        await authHeaders("user-1")
+      );
+      await expect(mine.json()).resolves.toMatchObject({
+        result: { last_review: { review_note: "second decision" } }
+      });
+    });
+
+    // The reject guard can fail for two reasons at once. Asking about the
+    // account first keeps the documented 403 rather than reporting the
+    // revision as missing.
+    it("reports a deactivated moderator ahead of a missing revision", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await seedDeveloper("new-developer", "user-1");
+      const { id } = await createPending("user-1");
+      const headers = await authHeaders("mod-1");
+
+      let done = false;
+      env.DB_EXTENSIONS = wrapD1WithHook(db, async (sql) => {
+        if (!done && sql.toLowerCase().includes("update")) {
+          done = true;
+          await db
+            .prepare("UPDATE users SET deleted_at = ? WHERE id = ?")
+            .bind(new Date().toISOString(), "mod-1")
+            .run();
+        }
+      });
+
+      const res = await post(
+        reviewPath(id, "no-such-revision", "reject"),
+        headers,
+        { review_note: "note" }
+      );
+
+      expect(res.status).toBe(403);
+      await expect(res.json()).resolves.toMatchObject({
+        error: { code: "ACCOUNT_INACTIVE" }
+      });
+    });
+
+    it("blocks non-moderators from approving", async () => {
+      await seedDeveloper("new-developer", "user-1");
+      const { id, revisionId } = await createPending("user-1");
+
+      const res = await post(
+        reviewPath(id, revisionId, "approve"),
         await authHeaders("user-1"),
         {}
       );
       expect(res.status).toBe(403);
     });
 
-    it("rejects approving a submission that is not pending", async () => {
+    it("rejects approving a revision that is not pending", async () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await seedDeveloper("new-developer", "user-1");
-      const created = await post(
-        "/extensions/v2/submissions",
-        await authHeaders("user-1"),
-        samplePayload()
-      );
-      const { result } = (await created.json()) as { result: { id: string } };
+      const { id, revisionId } = await createPending("user-1");
+      const headers = await authHeaders("mod-1");
 
-      await post(
-        `/extensions/v2/submissions/${result.id}/approve`,
-        await authHeaders("mod-1"),
-        {}
-      );
+      await post(reviewPath(id, revisionId, "approve"), headers, {});
       const secondApprove = await post(
-        `/extensions/v2/submissions/${result.id}/approve`,
-        await authHeaders("mod-1"),
+        reviewPath(id, revisionId, "approve"),
+        headers,
         {}
       );
       expect(secondApprove.status).toBe(409);
-      // The second (raced) approve must not write through again.
       expect(await countExtensions(db)).toBe(1);
     });
 
-    it("updates the existing row instead of duplicating it when an edit's id differs only by case", async () => {
+    // Legacy v1 data can have mixed-case ids. The id now comes from the path
+    // rather than a payload field, so an edit addresses that row directly and
+    // cannot fork a second, lowercase one.
+    it("edits a mixed-case legacy extension in place", async () => {
       await insertDeveloper(db, {
         id: "owner-developer",
         type: "user",
@@ -292,83 +474,100 @@ describe("Extensions API v2", () => {
         url: null,
         owner_user_id: "owner-1"
       });
-      // Legacy v1 data can have mixed-case ids; v2 submissions must be lowercase.
       await insertExtension(db, {
         id: "Existing-Ext",
-        type: "mod",
-        author_id: "owner-developer",
-        name: "Existing",
-        description: "d",
-        releases: "[]",
-        website: "https://e.com",
-        license: '{"name":"MIT"}',
-        icon_url: null,
-        readme: "r",
-        source: '{"type":"github","repo":"example/existing"}',
-        version: "1.0.0",
-        download_url: "https://e.com/d.zip"
+        developer_id: "owner-developer",
+        name: "Existing"
       });
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
 
-      const created = await post(
-        "/extensions/v2/submissions",
+      const edit = await put(
+        "/extensions/v2/extensions/Existing-Ext",
         await authHeaders("owner-1"),
-        samplePayload({
-          extensionId: "existing-ext",
-          developerId: "owner-developer"
-        })
+        sampleContent()
       );
-      const { result } = (await created.json()) as { result: { id: string } };
+      expect(edit.status).toBe(202);
+      const { result } = (await edit.json()) as {
+        result: { revision_id: string };
+      };
 
       const approved = await post(
-        `/extensions/v2/submissions/${result.id}/approve`,
+        reviewPath("Existing-Ext", result.revision_id, "approve"),
         await authHeaders("mod-1"),
         {}
       );
       expect(approved.status).toBe(200);
 
       expect(await countExtensions(db)).toBe(1);
-      const stored = await getExtension(db, "Existing-Ext");
-      expect(stored?.name).toBe("New Extension");
+      expect((await getExtension(db, "Existing-Ext"))?.name).toBe(
+        "New Extension"
+      );
     });
 
     it("requires a review_note to reject", async () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await seedDeveloper("new-developer", "user-1");
-      const created = await post(
-        "/extensions/v2/submissions",
-        await authHeaders("user-1"),
-        samplePayload()
-      );
-      const { result } = (await created.json()) as { result: { id: string } };
+      const { id, revisionId } = await createPending("user-1");
 
       const res = await post(
-        `/extensions/v2/submissions/${result.id}/reject`,
+        reviewPath(id, revisionId, "reject"),
         await authHeaders("mod-1"),
         {}
       );
       expect(res.status).toBe(422);
     });
 
-    it("rejects a submission with a note", async () => {
+    it("rejects a revision with a note and leaves the extension unpublished", async () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await seedDeveloper("new-developer", "user-1");
-      const created = await post(
-        "/extensions/v2/submissions",
-        await authHeaders("user-1"),
-        samplePayload()
-      );
-      const { result } = (await created.json()) as { result: { id: string } };
+      const { id, revisionId } = await createPending("user-1");
 
       const res = await post(
-        `/extensions/v2/submissions/${result.id}/reject`,
+        reviewPath(id, revisionId, "reject"),
         await authHeaders("mod-1"),
         { review_note: "Needs a valid license URL" }
       );
       expect(res.status).toBe(200);
       const body = (await res.json()) as { result: { status: string } };
       expect(body.result.status).toBe("rejected");
-      expect(await countExtensions(db)).toBe(0);
+
+      // The record survives so the owner can see the reason and resubmit.
+      const stored = await getExtension(db, id);
+      expect(stored).not.toBeNull();
+      expect(stored?.published_at).toBeNull();
+
+      const mine = await get(
+        `/extensions/v2/extensions/mine/${id}`,
+        await authHeaders("user-1")
+      );
+      await expect(mine.json()).resolves.toMatchObject({
+        result: {
+          published: null,
+          pending_revision: null,
+          last_review: {
+            status: "rejected",
+            review_note: "Needs a valid license URL"
+          }
+        }
+      });
+    });
+
+    it("lets the owner resubmit after a rejection", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await seedDeveloper("new-developer", "user-1");
+      const { id, revisionId } = await createPending("user-1");
+      await post(
+        reviewPath(id, revisionId, "reject"),
+        await authHeaders("mod-1"),
+        { review_note: "no" }
+      );
+
+      const retry = await put(
+        `/extensions/v2/extensions/${id}`,
+        await authHeaders("user-1"),
+        sampleContent({ name: "Fixed" })
+      );
+      expect(retry.status).toBe(202);
     });
 
     // Both review-note bodies are strict: the reviewer decision is derived
@@ -377,20 +576,14 @@ describe("Extensions API v2", () => {
     it("rejects an unknown field in the approve and reject bodies", async () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await seedDeveloper("new-developer", "user-1");
-      await insertSubmission(db, {
-        id: "strict-body-submission",
-        developer_id: "new-developer",
-        submitted_by: "user-1",
-        payload: JSON.stringify(samplePayload({ developerId: "new-developer" }))
-      });
+      const { id, revisionId } = await createPending("user-1");
       const headers = await authHeaders("mod-1");
 
-      for (const path of ["approve", "reject"]) {
-        const res = await post(
-          `/extensions/v2/submissions/strict-body-submission/${path}`,
-          headers,
-          { review_note: "looks fine", reviewer_id: "someone-else" }
-        );
+      for (const action of ["approve", "reject"] as const) {
+        const res = await post(reviewPath(id, revisionId, action), headers, {
+          review_note: "looks fine",
+          reviewer_id: "someone-else"
+        });
 
         expect(res.status).toBe(422);
         const body = (await res.json()) as {
@@ -403,7 +596,7 @@ describe("Extensions API v2", () => {
         );
       }
 
-      expect(await getSubmission(db, "strict-body-submission")).toMatchObject({
+      expect(await getRevision(db, revisionId)).toMatchObject({
         status: "pending"
       });
     });

@@ -2,7 +2,7 @@
 
 **Base Path:** `/extensions/v2`
 
-Self-service extension submission, developer-profile ownership, moderation, and public catalogue browsing.
+Self-service extension publishing, developer-profile ownership, moderation, and public catalogue browsing.
 
 This service owns the complete Extensions domain and its `DB_EXTENSIONS` schema: users, developers, submissions, claims, transfers, history, and catalogue data. The separate Extensions site keeps OIDC/session state but reaches this domain through the generated HTTPS API client; it must not bind or migrate `DB_EXTENSIONS`.
 
@@ -12,6 +12,57 @@ Endpoints are not listed here. The service publishes its own contract:
 
 - **OpenAPI document:** `GET /extensions/v2/openapi.json`
 - **Reference UI:** `GET /extensions/v2/docs`
+
+## The Extension Lifecycle
+
+An extension is a resource from the moment a developer creates it, not from the
+moment a moderator approves it. There is no separate "submission" to reconcile
+against it.
+
+- `POST /extensions` creates the record. It holds its id immediately and stays
+  out of both catalogues until its first revision is approved.
+- `PUT /extensions/{id}` proposes an edit. The published content does not
+  change until a moderator approves the revision, and only one revision per
+  extension may be unreviewed at a time.
+- `DELETE /extensions/{id}` withdraws an extension that has never been
+  published, releasing its id. A published extension cannot be withdrawn by its
+  owner — consumers pin the id.
+- `POST /extensions/{id}/revisions/{revisionId}/approve` publishes the
+  revision's content. `reject` leaves the published content untouched and the
+  extension available to edit and resubmit.
+
+The id and the developer are properties of the extension, not of a revision: an
+edit cannot rename an extension or move it to another developer, and approving
+one no longer rewrites the developer profile as a side effect. A user owns at
+most one developer profile, so no request body names one.
+
+### Reading Owner State
+
+`GET /extensions/mine` and `GET /extensions/mine/{id}` return three independent
+fields rather than a single derived status, because together they are the
+state and a derived enum could only disagree with them:
+
+| `published` | `pending_revision` | `last_review` | Meaning                                 |
+| ----------- | ------------------ | ------------- | --------------------------------------- |
+| `null`      | set                | `null`        | Awaiting first review                   |
+| `null`      | set                | rejected      | Rejected, and already resubmitted       |
+| `null`      | `null`             | rejected      | Rejected; edit and resubmit             |
+| set         | `null`             | approved      | Live, no unreviewed edit                |
+| set         | `null`             | `null`        | Live, adopted from the pre-v2 catalogue |
+| set         | set                | either        | Live, with an edit awaiting review      |
+
+The adopted row is the one worth reading twice: migration 0021 published every
+extension that already existed, and those have no revisions at all, so a live
+extension with no review history is normal rather than a gap. `published`
+being set is the only thing that means "in the catalogue".
+
+These are separate routes from the public `GET /extensions` and
+`GET /extensions/{id}`, which only ever return published content. A single path
+whose 200 changes shape with the caller would force every generated client to
+narrow a union at each call site, and the public read is the hotter path.
+
+`GET /extensions/{id}/revisions` lists the full history for the extension's
+owner or any moderator.
 
 ## Authentication
 
@@ -38,7 +89,7 @@ For organization developer IDs, GitHub membership is used for automatic verifica
 
 ## List Pagination
 
-`GET /extensions/v2/extensions` returns bounded pages of lightweight catalogue items. List items intentionally omit `readme` and `releases`; retrieve the full object from `GET /extensions/v2/extensions/{id}` for detail views. Follow `pagination.next_cursor` by passing it unchanged as `cursor`, and treat cursors as opaque. The default page size is 50 and `limit` may be set from 1 through 100.
+`GET /extensions/v2/extensions` returns bounded pages of lightweight catalogue items, filtered to published extensions. List items intentionally omit `readme` and `releases`; retrieve the full object from `GET /extensions/v2/extensions/{id}` for detail views. Follow `pagination.next_cursor` by passing it unchanged as `cursor`, and treat cursors as opaque. The default page size is 50 and `limit` may be set from 1 through 100.
 
 Cursors carry a version field and are validated on decode, so a cursor from an older format is rejected with `INVALID_CURSOR` (HTTP 422) rather than being misread. Clients should treat that as "restart pagination from the first page", not as an error to surface.
 
@@ -46,9 +97,40 @@ Cursors carry a version field and are validated on decode, so a cursor from an o
 
 Uses the D1 binding `DB_EXTENSIONS`, shared with v1 (read-only there). This service owns the schema and the migrations.
 
+`extensions` holds the record; its content columns are the _published_
+projection and are NULL until a first approval, with `published_at` as the
+marker both catalogues filter on and `extensions_published_content_check`
+guaranteeing a published row is never half-written. `extension_revisions`
+(renamed from `extension_submissions` in migration 0021) holds proposed
+content, always attached to a real extension row and cascading with it.
+
+Migration 0021 rebuilds `extensions`, `extension_revisions` and `developers`
+in one step, because SQLite cannot relax `NOT NULL`, add a `CHECK`, or add a
+foreign key in place. It also renames `extensions.author_id` to `developer_id`
+(nothing public depended on the old name — v1's response field is `author`
+either way) and replaces `developers.created_at`/`updated_at`'s placeholder
+1970 default with `CURRENT_TIMESTAMP`, which is what every writer already
+uses. Existing 1970 values are left alone: they are the only record those rows
+have, and a timestamp invented at migration time would look real without being
+so.
+
 Apply migrations **only from this repository**, from `db/migrations`, with `npm run db:migrate:extensions-v2:local` / `:remote`. The Extensions site has no D1 migration source.
 
 Migration `0020` is a check, not a schema change: it fails if an adopted row holds an id that a static route shadows (`extensions.id = 'mine'`, or `developers.id` of `me`/`claims`/`unapproved`), which would make that row's detail page unreachable. If it fails, rename the row deliberately — the id is public and consumers pin it.
+
+Migration `0021` refuses to run against data it cannot migrate, rather than aborting halfway through the rebuild. Each check selects the offending rows into a scratch table whose named `CHECK` can never hold, so the constraint name is the error message — SQLite has no `RAISE()` outside a trigger:
+
+| Failure                                      | Meaning                                                                 |
+| -------------------------------------------- | ----------------------------------------------------------------------- |
+| `extension_ids_must_not_differ_only_by_case` | Two catalogue ids collide under `idx_extensions_id_nocase`              |
+| `submission_target_ids_must_not_be_reserved` | A submission targets an id a static route shadows                       |
+| `extension_references_must_resolve`          | The `foreign_keys=OFF` rebuild would carry a dangling reference through |
+
+None of these are repaired automatically: each is a decision about published data that belongs to a human. Reconcile and re-run — the migration has touched nothing at that point.
+
+It does resolve one case itself: pending submissions whose ownership state can never satisfy approval are rejected, since one pending revision per extension would otherwise block the owner's next edit forever.
+
+Migration `0021` also drops any submission filed under a developer that no longer exists: there is no `developer_id` such a row could carry that satisfies the new foreign key, and the profile it was filed under is already gone.
 
 ## Code Layout
 

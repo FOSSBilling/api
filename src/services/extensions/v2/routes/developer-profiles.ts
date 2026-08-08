@@ -177,7 +177,7 @@ export function registerDeveloperProfileRoutes(app: ExtensionsV2App): void {
       403: ActiveAccountRequiredResponse,
       404: errorResponse("Caller has no developer profile"),
       409: errorResponse(
-        "Profile still has published extensions, or has a pending submission awaiting review"
+        "Profile still has extensions attached, published or not"
       ),
       500: errorResponse("Database error")
     }

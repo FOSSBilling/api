@@ -9,11 +9,8 @@ import { httpUrl, lowercaseId } from "./common";
 // fails the deploy if one exists.
 const RESERVED_DEVELOPER_IDS = new Set(["claims", "me", "unapproved"]);
 
-// Exported so the approval boundary can reuse it: submissions store their
-// payload as JSON and are re-read without re-running this schema, so the one
-// check has to be callable from there too. Lowercases like
-// isReservedExtensionId, since route matching is case-sensitive but these
-// literals are not.
+// Lowercases like isReservedExtensionId, since route matching is
+// case-sensitive but these literals are not.
 export function isReservedDeveloperId(id: string): boolean {
   return RESERVED_DEVELOPER_IDS.has(id.toLowerCase());
 }
@@ -44,19 +41,6 @@ export type Developer = z.infer<typeof DeveloperSchema>;
 // Naming follows UserIdentityInputSchema.
 export const DeveloperInputSchema =
   DeveloperSchema.strict().openapi("DeveloperInput");
-
-// Submissions go through moderation and only ever touch identity fields —
-// profile fields (avatar_url/contact_email) are direct-write-only via
-// PUT /developers/me, so this schema rejects them instead of silently
-// accepting-then-dropping them when a submission is approved.
-export const SubmissionDeveloperSchema = DeveloperSchema.pick({
-  id: true,
-  type: true,
-  name: true,
-  URL: true
-})
-  .strict()
-  .openapi("SubmissionDeveloper");
 
 export const DeveloperProfileSchema = DeveloperSchema.extend({
   approved: z.boolean(),
