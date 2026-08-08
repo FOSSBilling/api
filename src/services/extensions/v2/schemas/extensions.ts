@@ -156,6 +156,17 @@ const ExtensionCardContentSchema = ExtensionContentSchema.omit({
   releases: true
 });
 
+// The published projection as its *owner* sees it. Identical to the
+// catalogue's, except releases may be empty: v1 constrained
+// extensions.releases to NOT NULL and nothing more, so a row adopted by
+// migration 0021 can legitimately have none, and the owner view is where
+// someone looks at what is actually there rather than at an idealised copy.
+// This can only ever describe a pre-v2 row - approve() requires a release
+// before anything reaches the catalogue through v2.
+const PublishedExtensionContentSchema = ExtensionContentSchema.extend({
+  releases: z.array(ReleaseSchema).max(100)
+});
+
 // The most recent decision, kept alongside a later pending revision so the
 // site can still show why the previous attempt was rejected.
 export const RevisionReviewSchema = z
@@ -196,7 +207,7 @@ export type OwnedExtensionListItem = z.infer<
 // The detail view carries the full content on both sides, so an owner can
 // render a published-vs-pending diff from one request.
 export const OwnedExtensionSchema = OwnedExtensionListItemSchema.extend({
-  published: ExtensionContentSchema.nullable(),
+  published: PublishedExtensionContentSchema.nullable(),
   pending_revision: PendingRevisionRefSchema.extend({
     content: StoredExtensionContentSchema
   }).nullable()

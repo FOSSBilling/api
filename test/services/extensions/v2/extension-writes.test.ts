@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { env } from "cloudflare:workers";
 import { wrapD1WithHook } from "./db-interceptor";
+import { OwnedExtensionSchema } from "../../../../src/services/extensions/v2/schemas/extensions";
 import {
   setupExtensionsV2Tests,
   db,
@@ -841,6 +842,38 @@ describe("Extensions API v2 writes", () => {
       };
       expect(data.result.published).toBeNull();
       expect(data.result.pending_revision.content.name).toBe("New Extension");
+    });
+
+    // v1 constrained extensions.releases to NOT NULL and nothing more, so a
+    // row adopted by migration 0021 can be published with none. The owner view
+    // has to describe that rather than a shape the data cannot take. Hono does
+    // not validate responses, so only parsing the body back through the
+    // advertised schema catches the disagreement.
+    it("serves an adopted extension with no releases against its own schema", async () => {
+      await insertDeveloper(db, {
+        id: "owner-developer",
+        type: "user",
+        name: "Owner",
+        owner_user_id: "owner-1"
+      });
+      await insertExtension(db, {
+        id: "adopted-ext",
+        developer_id: "owner-developer",
+        name: "Adopted",
+        releases: "[]"
+      });
+
+      const res = await get(
+        "/extensions/v2/extensions/mine/adopted-ext",
+        await authHeaders("owner-1")
+      );
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        result: { published: { releases: unknown[] } };
+      };
+      expect(body.result.published.releases).toEqual([]);
+      expect(OwnedExtensionSchema.safeParse(body.result).success).toBe(true);
     });
 
     it("refuses to show someone else's extension", async () => {
