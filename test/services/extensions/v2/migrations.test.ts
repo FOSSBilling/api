@@ -286,7 +286,9 @@ describe("Extensions D1 migrations", () => {
 
       expect(() =>
         db.exec(migration("0021_restructure_extensions_revisions.sql"))
-      ).toThrow(/CHECK constraint failed/);
+      ).toThrow(
+        /CHECK constraint failed: extension_ids_must_not_differ_only_by_case/
+      );
 
       // Failed before touching anything, not halfway through the rebuild.
       expect(
@@ -328,7 +330,9 @@ describe("Extensions D1 migrations", () => {
 
       expect(() =>
         db.exec(migration("0021_restructure_extensions_revisions.sql"))
-      ).toThrow(/CHECK constraint failed/);
+      ).toThrow(
+        /CHECK constraint failed: submission_target_ids_must_not_be_reserved/
+      );
     } finally {
       db.close();
     }
@@ -457,7 +461,7 @@ describe("Extensions D1 migrations", () => {
 
       expect(() =>
         db.exec(migration("0021_restructure_extensions_revisions.sql"))
-      ).toThrow(/CHECK constraint failed/);
+      ).toThrow(/CHECK constraint failed: extension_references_must_resolve/);
     } finally {
       db.close();
     }

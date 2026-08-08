@@ -20,23 +20,33 @@
 PRAGMA foreign_keys=OFF;--> statement-breakpoint
 
 -- idx_extensions_id_nocase, created further down, is the constraint that stops
--- two developers racing for ids that differ only in case. A catalogue adopted
--- from v1 predates it and may already hold such a pair, in which case CREATE
--- UNIQUE INDEX would abort the migration halfway through the rebuild with a
--- bare "UNIQUE constraint failed" and no indication of which rows caused it.
+-- a new lowercase id colliding with an adopted mixed-case one. A catalogue
+-- adopted from v1 predates it and may already hold such a pair, in which case
+-- CREATE UNIQUE INDEX would abort the migration halfway through the rebuild.
 --
--- Check first, so the failure happens before anything is rewritten and names
--- the problem. Reconcile the duplicates by hand and re-run: both ids are
--- public and consumers pin them, so which one survives is not a decision this
--- migration can make.
-CREATE TABLE _nocase_duplicate_check (ok INTEGER NOT NULL CHECK (ok = 1));--> statement-breakpoint
+-- This and the two checks that follow are written the same way: select the
+-- offending rows into a scratch table whose CHECK can never hold, so a clean
+-- database inserts nothing and passes, and a dirty one fails with the
+-- constraint's name as the message. SQLite has no RAISE() outside a trigger,
+-- so the constraint name is the only place a diagnosis can be put.
+--
+-- These duplicates are not reconciled automatically. Both ids are public, and
+-- the pair is already ambiguous to every reader - v1 and v2 both resolve ids
+-- with LOWER(), so one of the two rows is currently unreachable depending on
+-- which the query happens to return first. Choosing which one survives, and
+-- whether the other is renamed or removed, is a decision about published data
+-- that belongs to a human. Run the query in the INSERT below to list them.
+CREATE TABLE _extension_id_case_conflicts (
+  lowercased_id TEXT NOT NULL,
+  copies INTEGER NOT NULL,
+  CONSTRAINT extension_ids_must_not_differ_only_by_case CHECK (copies = 0)
+);--> statement-breakpoint
 
-INSERT INTO _nocase_duplicate_check (ok)
-SELECT CASE WHEN EXISTS (
-    SELECT 1 FROM extensions GROUP BY LOWER(id) HAVING COUNT(*) > 1
-  ) THEN 0 ELSE 1 END;--> statement-breakpoint
+INSERT INTO _extension_id_case_conflicts (lowercased_id, copies)
+SELECT LOWER(id), COUNT(*) FROM extensions
+GROUP BY LOWER(id) HAVING COUNT(*) > 1;--> statement-breakpoint
 
-DROP TABLE _nocase_duplicate_check;--> statement-breakpoint
+DROP TABLE _extension_id_case_conflicts;--> statement-breakpoint
 
 -- A submission whose target id is reserved would materialise an extension
 -- that GET /extensions/{id} can never serve, because the static
@@ -49,16 +59,21 @@ DROP TABLE _nocase_duplicate_check;--> statement-breakpoint
 -- re-run - unlike 0020's case the id is not yet public, so nothing pins it and
 -- there is nothing to preserve. Comparison is on the lowercased target because
 -- that is what the materialisation below would insert.
-CREATE TABLE _reserved_target_check (ok INTEGER NOT NULL CHECK (ok = 1));--> statement-breakpoint
+CREATE TABLE _reserved_submission_targets (
+  submission_id TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  CONSTRAINT submission_target_ids_must_not_be_reserved CHECK (1 = 0)
+);--> statement-breakpoint
 
-INSERT INTO _reserved_target_check (ok)
-SELECT CASE WHEN EXISTS (
-    SELECT 1 FROM extension_submissions
-    WHERE LOWER(COALESCE(extension_id, json_extract(payload, '$.extension.id')))
-          IN ('mine')
-  ) THEN 0 ELSE 1 END;--> statement-breakpoint
+INSERT INTO _reserved_submission_targets (submission_id, target_id)
+SELECT
+  id,
+  LOWER(COALESCE(extension_id, json_extract(payload, '$.extension.id')))
+FROM extension_submissions
+WHERE LOWER(COALESCE(extension_id, json_extract(payload, '$.extension.id')))
+      IN ('mine');--> statement-breakpoint
 
-DROP TABLE _reserved_target_check;--> statement-breakpoint
+DROP TABLE _reserved_submission_targets;--> statement-breakpoint
 
 -- developers first, while every table that references it is still the old one:
 -- the drop-and-rename re-parses every schema, and doing it with a referrer
@@ -304,17 +319,19 @@ DROP TABLE `extension_submissions`;--> statement-breakpoint
 -- forever. Fail the deploy instead, and let the reads assume the join always
 -- matches. Same CHECK-on-a-scratch-table trick as migration 0020, for the
 -- same reason: SQLite has no RAISE() outside a trigger.
-CREATE TABLE _orphan_check (ok INTEGER NOT NULL CHECK (ok = 1));--> statement-breakpoint
+CREATE TABLE _unresolved_references (
+  kind TEXT NOT NULL,
+  row_id TEXT NOT NULL,
+  CONSTRAINT extension_references_must_resolve CHECK (1 = 0)
+);--> statement-breakpoint
 
-INSERT INTO _orphan_check (ok)
-SELECT CASE WHEN EXISTS (
-    SELECT 1 FROM extensions e
-    WHERE NOT EXISTS (SELECT 1 FROM developers d WHERE d.id = e.developer_id)
-  ) OR EXISTS (
-    SELECT 1 FROM extension_revisions r
-    WHERE NOT EXISTS (SELECT 1 FROM extensions e WHERE e.id = r.extension_id)
-  ) THEN 0 ELSE 1 END;--> statement-breakpoint
+INSERT INTO _unresolved_references (kind, row_id)
+SELECT 'extension.developer_id', e.id FROM extensions e
+WHERE NOT EXISTS (SELECT 1 FROM developers d WHERE d.id = e.developer_id)
+UNION ALL
+SELECT 'revision.extension_id', r.id FROM extension_revisions r
+WHERE NOT EXISTS (SELECT 1 FROM extensions e WHERE e.id = r.extension_id);--> statement-breakpoint
 
-DROP TABLE _orphan_check;--> statement-breakpoint
+DROP TABLE _unresolved_references;--> statement-breakpoint
 
 PRAGMA foreign_keys=ON;
