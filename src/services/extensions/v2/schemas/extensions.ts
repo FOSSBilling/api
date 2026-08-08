@@ -78,6 +78,19 @@ export const ExtensionContentSchema = z
 
 export type ExtensionContent = z.infer<typeof ExtensionContentSchema>;
 
+// What a *stored* revision may hold, as opposed to what may be submitted now.
+// Revision history is an audit log that outlives the rules content was written
+// under, so promising that every historical record satisfies today's input
+// validation is a promise this service cannot keep - migration 0021 carries
+// submissions through verbatim, and any future tightening would break older
+// rows the same way. Only the constraints that are genuinely input-side are
+// relaxed: releases must be non-empty to *publish*, which approve() enforces
+// at the boundary that matters, but a revision that never got that far may
+// legitimately have none.
+export const StoredExtensionContentSchema = ExtensionContentSchema.extend({
+  releases: z.array(ReleaseSchema).max(100)
+}).openapi("StoredExtensionContent");
+
 const MAX_CONTENT_BYTES = 256 * 1024;
 
 // Applied to both the create and the edit body. The stored revision is this
@@ -175,7 +188,7 @@ export type OwnedExtensionListItem = z.infer<
 export const OwnedExtensionSchema = OwnedExtensionListItemSchema.extend({
   published: ExtensionContentSchema.nullable(),
   pending_revision: PendingRevisionRefSchema.extend({
-    content: ExtensionContentSchema
+    content: StoredExtensionContentSchema
   }).nullable()
 }).openapi("OwnedExtension");
 

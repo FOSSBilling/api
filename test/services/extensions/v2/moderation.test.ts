@@ -17,6 +17,8 @@ import {
   insertUser,
   insertDeveloper,
   insertExtension,
+  insertUnpublishedExtension,
+  insertRevision,
   getDeveloper,
   countExtensions,
   getExtension,
@@ -303,6 +305,89 @@ describe("Extensions API v2", () => {
         expect((await getRevision(db, revisionId))?.status).toBe("pending");
       }
     );
+
+    // Revision history outlives the rules its content was written under, so
+    // the response schema tolerates a stored revision with no releases. The
+    // public catalogue does not, which makes approval the boundary that has to
+    // re-check rather than trust submission-time validation.
+    it("refuses to publish a revision that predates current content rules", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await seedDeveloper("new-developer", "user-1");
+      await insertUnpublishedExtension(db, {
+        id: "legacy-ext",
+        developer_id: "new-developer"
+      });
+      await insertRevision(db, {
+        id: "legacy-revision",
+        extension_id: "legacy-ext",
+        developer_id: "new-developer",
+        submitted_by: "user-1",
+        // Carried through by migration 0021 from a submission that predates
+        // the releases requirement.
+        content: JSON.stringify({ ...sampleContent(), releases: [] })
+      });
+
+      const res = await post(
+        reviewPath("legacy-ext", "legacy-revision", "approve"),
+        await authHeaders("mod-1"),
+        {}
+      );
+
+      expect(res.status).toBe(409);
+      await expect(res.json()).resolves.toMatchObject({
+        error: { code: "CONFLICT" }
+      });
+      expect((await getExtension(db, "legacy-ext"))?.published_at).toBeNull();
+
+      // But it is still readable as history, with the empty releases intact.
+      const history = await get(
+        "/extensions/v2/extensions/legacy-ext/revisions",
+        await authHeaders("user-1")
+      );
+      expect(history.status).toBe(200);
+      const body = (await history.json()) as {
+        result: Array<{ content: { releases: unknown[] } }>;
+      };
+      expect(body.result[0].content.releases).toEqual([]);
+    });
+
+    // reviewed_at is only second-granular, so two reviews can share one and
+    // the tie-break decides which decision the owner sees.
+    it("reports the newer decision when two reviews share a timestamp", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await seedDeveloper("new-developer", "user-1");
+      const first = await createPending("user-1");
+      const mod = await authHeaders("mod-1");
+
+      await post(reviewPath(first.id, first.revisionId, "reject"), mod, {
+        review_note: "first decision"
+      });
+      const second = await put(
+        `/extensions/v2/extensions/${first.id}`,
+        await authHeaders("user-1"),
+        sampleContent({ name: "Second" })
+      );
+      const secondId = (
+        (await second.json()) as { result: { revision_id: string } }
+      ).result.revision_id;
+      await post(reviewPath(first.id, secondId, "reject"), mod, {
+        review_note: "second decision"
+      });
+
+      // Force the collision the tie-break exists for.
+      await db
+        .prepare("UPDATE extension_revisions SET reviewed_at = ?")
+        .bind("2026-01-01 00:00:00")
+        .run();
+
+      const mine = await get(
+        `/extensions/v2/extensions/mine/${first.id}`,
+        await authHeaders("user-1")
+      );
+      await expect(mine.json()).resolves.toMatchObject({
+        result: { last_review: { review_note: "second decision" } }
+      });
+    });
 
     it("blocks non-moderators from approving", async () => {
       await seedDeveloper("new-developer", "user-1");

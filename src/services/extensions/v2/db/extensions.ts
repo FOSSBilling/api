@@ -67,6 +67,12 @@ const {
 // edit (at most one - idx_extension_revisions_pending), once for the most
 // recent decision. "Most recently reviewed" is not expressible as a join
 // predicate, so that side matches on a correlated subquery instead.
+//
+// The tie-break is rowid, not id. reviewed_at comes from CURRENT_TIMESTAMP and
+// is only second-granular, so two reviews can share one, and id is a random
+// UUID that would then pick a winner at random. rowid is assigned in insert
+// order, and revisions on one extension are strictly serialised - only one may
+// be pending at a time - so insert order is review order.
 const PENDING = alias(extensionRevisions, "pending");
 const REVIEWED = alias(extensionRevisions, "reviewed");
 
@@ -81,7 +87,7 @@ const REVIEWED_JOIN = eq(
     SELECT r.id FROM ${extensionRevisions} r
     WHERE r.extension_id = ${extensions.id}
       AND r.status IN ('approved', 'rejected')
-    ORDER BY r.reviewed_at DESC, r.id DESC
+    ORDER BY r.reviewed_at DESC, r.rowid DESC
     LIMIT 1
   )`
 );
@@ -484,6 +490,9 @@ export class ExtensionsDatabase {
     id: string,
     ownerUserId: string
   ): Promise<DatabaseResult<never>> {
+    const inactive = await inactiveActorError(this.db, ownerUserId);
+    if (inactive) return { data: null, error: inactive };
+
     const [existing] = await this.db
       .select({
         publishedAt: extensions.publishedAt,
@@ -508,10 +517,9 @@ export class ExtensionsDatabase {
         error: { message: "You do not own this extension", code: "FORBIDDEN" }
       };
     }
-    const inactive = await inactiveActorError(this.db, ownerUserId);
     return {
       data: null,
-      error: inactive ?? {
+      error: {
         message: "Extension could not be withdrawn",
         code: "CONFLICT"
       }

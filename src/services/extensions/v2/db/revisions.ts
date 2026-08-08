@@ -6,7 +6,10 @@ import { databaseError, inactiveActorError } from "./errors";
 import { toD1Statement } from "./batch";
 import { encodeCursor as encode, decodeCursor as decode } from "./cursor";
 import { MAX_PENDING_REVISIONS_PER_USER, parseContent } from "./extensions";
-import { ExtensionContent } from "../schemas/extensions";
+import {
+  ExtensionContent,
+  ExtensionContentSchema
+} from "../schemas/extensions";
 import { ExtensionRevision, RevisionStatus } from "../schemas/revisions";
 
 export interface RevisionPage {
@@ -391,7 +394,24 @@ export class ExtensionRevisionsDatabase {
       };
     }
 
-    const content = revision.content;
+    // The stored content is deliberately validated again here rather than
+    // trusted from submission time. A revision can predate the current content
+    // rules - migration 0021 carries legacy submissions through verbatim - and
+    // publishing is the one boundary where the public catalogue's stricter
+    // contract has to hold. This is the same reason the pre-0021 code
+    // re-checked reserved ids at approval.
+    const parsed = ExtensionContentSchema.safeParse(revision.content);
+    if (!parsed.success) {
+      return {
+        data: null,
+        error: {
+          message:
+            "This revision predates the current content requirements and cannot be published as-is; ask the developer to resubmit it",
+          code: "CONFLICT"
+        }
+      };
+    }
+    const content = parsed.data;
 
     // Kept as raw sql via the raw D1 client (see toD1Statement) rather than
     // the query builder: D1's batch() executes these two statements as one

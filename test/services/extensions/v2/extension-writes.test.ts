@@ -549,6 +549,36 @@ describe("Extensions API v2 writes", () => {
       expect(await getExtension(db, "new-ext")).not.toBeNull();
     });
 
+    // The inactive check has to run before the published and ownership
+    // branches, or a deactivated caller is told their extension is published
+    // (409) instead of that their account is gone. The deactivation has to
+    // land mid-request: done beforehand, requireActiveAuth() answers first and
+    // the diagnosis never runs.
+    it("reports a deactivated account ahead of any other reason", async () => {
+      await seedOwnedExtension();
+      const headers = await authHeaders("owner-1");
+
+      let done = false;
+      env.DB_EXTENSIONS = wrapD1WithHook(db, async (sql) => {
+        if (!done && sql.toLowerCase().includes("delete from")) {
+          done = true;
+          await db
+            .prepare("UPDATE users SET deleted_at = ? WHERE id = ?")
+            .bind(new Date().toISOString(), "owner-1")
+            .run();
+        }
+      });
+
+      // Published *and* deactivated: the 409 branch would otherwise win.
+      const res = await del("/extensions/v2/extensions/existing-ext", headers);
+
+      expect(res.status).toBe(403);
+      await expect(res.json()).resolves.toMatchObject({
+        error: { code: "ACCOUNT_INACTIVE" }
+      });
+      expect(await getExtension(db, "existing-ext")).not.toBeNull();
+    });
+
     it("refuses to withdraw someone else's extension", async () => {
       await seedDeveloper("new-developer", "user-1");
       await createExtension("user-1");
@@ -616,6 +646,62 @@ describe("Extensions API v2 writes", () => {
       };
       expect(data.result[0].published).toMatchObject({ name: "Existing" });
       expect(data.result[0].pending_revision).not.toBeNull();
+    });
+
+    // Both of these are states the README's mapping table now documents, and
+    // both were reachable before it did.
+    it("reports a live extension adopted from the pre-v2 catalogue", async () => {
+      await seedOwnedExtension();
+
+      const res = await get(
+        "/extensions/v2/extensions/mine",
+        await authHeaders("owner-1")
+      );
+      const data = (await res.json()) as {
+        result: Array<{
+          published: unknown;
+          pending_revision: unknown;
+          last_review: unknown;
+        }>;
+      };
+      // Published with no review history at all: migration 0021 published
+      // every extension that already existed, and those have no revisions.
+      expect(data.result[0].published).not.toBeNull();
+      expect(data.result[0].pending_revision).toBeNull();
+      expect(data.result[0].last_review).toBeNull();
+    });
+
+    it("reports a rejected extension that has already been resubmitted", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await seedDeveloper("new-developer", "user-1");
+      const created = await createExtension("user-1");
+      const { result } = (await created.json()) as {
+        result: { revision_id: string };
+      };
+      await post(
+        `/extensions/v2/extensions/new-ext/revisions/${result.revision_id}/reject`,
+        await authHeaders("mod-1"),
+        { review_note: "no" }
+      );
+      await put(
+        "/extensions/v2/extensions/new-ext",
+        await authHeaders("user-1"),
+        sampleContent({ name: "Fixed" })
+      );
+
+      const res = await get(
+        "/extensions/v2/extensions/mine",
+        await authHeaders("user-1")
+      );
+      await expect(res.json()).resolves.toMatchObject({
+        result: [
+          {
+            published: null,
+            pending_revision: { id: expect.any(String) },
+            last_review: { status: "rejected" }
+          }
+        ]
+      });
     });
 
     it("excludes other developers' extensions", async () => {

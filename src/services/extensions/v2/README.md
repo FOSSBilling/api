@@ -42,12 +42,19 @@ most one developer profile, so no request body names one.
 fields rather than a single derived status, because together they are the
 state and a derived enum could only disagree with them:
 
-| `published` | `pending_revision` | `last_review` | Meaning                            |
-| ----------- | ------------------ | ------------- | ---------------------------------- |
-| `null`      | set                | `null`        | Awaiting first review              |
-| `null`      | `null`             | rejected      | Rejected; edit and resubmit        |
-| set         | `null`             | approved      | Live, no unreviewed edit           |
-| set         | set                | either        | Live, with an edit awaiting review |
+| `published` | `pending_revision` | `last_review` | Meaning                                 |
+| ----------- | ------------------ | ------------- | --------------------------------------- |
+| `null`      | set                | `null`        | Awaiting first review                   |
+| `null`      | set                | rejected      | Rejected, and already resubmitted       |
+| `null`      | `null`             | rejected      | Rejected; edit and resubmit             |
+| set         | `null`             | approved      | Live, no unreviewed edit                |
+| set         | `null`             | `null`        | Live, adopted from the pre-v2 catalogue |
+| set         | set                | either        | Live, with an edit awaiting review      |
+
+The adopted row is the one worth reading twice: migration 0021 published every
+extension that already existed, and those have no revisions at all, so a live
+extension with no review history is normal rather than a gap. `published`
+being set is the only thing that means "in the catalogue".
 
 These are separate routes from the public `GET /extensions` and
 `GET /extensions/{id}`, which only ever return published content. A single path

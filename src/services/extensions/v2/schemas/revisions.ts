@@ -1,5 +1,5 @@
 import { z } from "@hono/zod-openapi";
-import { ExtensionContentSchema } from "./extensions";
+import { StoredExtensionContentSchema } from "./extensions";
 
 export const RevisionStatusSchema = z.enum(["pending", "approved", "rejected"]);
 
@@ -14,7 +14,7 @@ export const ExtensionRevisionSchema = z
     developer_id: z.string(),
     submitted_by: z.string(),
     status: RevisionStatusSchema,
-    content: ExtensionContentSchema,
+    content: StoredExtensionContentSchema,
     reviewer_id: z.string().nullable(),
     review_note: z.string().nullable(),
     created_at: z.string(),
