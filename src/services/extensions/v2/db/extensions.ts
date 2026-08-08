@@ -4,7 +4,7 @@ import { DatabaseResult } from "../../../../lib/interfaces";
 import { ExtensionsDb } from "../../../../lib/db";
 import { sortReleasesDescending } from "../../../../lib/releases";
 import { parseJSON } from "../../../../lib/json";
-import { extensions, extensionRevisions, developers } from "./schema";
+import { extensions, extensionRevisions, developers, users } from "./schema";
 import { databaseError } from "./errors";
 import { toD1Statement } from "./batch";
 import { encodeCursor as encode, decodeCursor as decode } from "./cursor";
@@ -281,7 +281,19 @@ export class ExtensionsDatabase {
   }): Promise<DatabaseResult<OwnedExtensionListPage>> {
     const limit = filters.limit ?? 50;
     const conditions = [eq(extensions.developerId, filters.developerId)];
-    if (filters.type) conditions.push(eq(extensions.type, filters.type));
+    // extensions.type is NULL until a first approval, so filtering the column
+    // alone would hide every draft and every rejected extension from their own
+    // owner. Fall back to the type the unreviewed edit proposes, then to the
+    // last reviewed one, which between them cover both unpublished states.
+    if (filters.type) {
+      conditions.push(
+        sql`COALESCE(
+          ${extensions.type},
+          json_extract(${PENDING.content}, '$.type'),
+          json_extract(${REVIEWED.content}, '$.type')
+        ) = ${filters.type}`
+      );
+    }
     if (filters.cursor) {
       const cursor = decodeCursor(filters.cursor);
       if (!cursor) return invalidCursor();
@@ -439,10 +451,14 @@ export class ExtensionsDatabase {
     try {
       result = await this.db.run(sql`
         DELETE FROM ${extensions}
-        WHERE id = ${id}
+        WHERE LOWER(id) = LOWER(${id})
           AND published_at IS NULL
           AND developer_id IN (
             SELECT d.id FROM ${developers} d WHERE d.owner_user_id = ${ownerUserId}
+          )
+          AND EXISTS (
+            SELECT 1 FROM ${users} u
+            WHERE u.id = ${ownerUserId} AND u.deleted_at IS NULL
           )
       `);
     } catch (error) {
@@ -450,23 +466,49 @@ export class ExtensionsDatabase {
     }
 
     if (!result.meta?.changes) {
-      const [existing] = await this.db
-        .select({ publishedAt: extensions.publishedAt })
-        .from(extensions)
-        .where(eq(extensions.id, id));
-      if (!existing) return notFound(id);
-      return {
-        data: null,
-        error: existing.publishedAt
-          ? {
-              message: "A published extension cannot be withdrawn",
-              code: "CONFLICT"
-            }
-          : { message: "You do not own this extension", code: "FORBIDDEN" }
-      };
+      return this.withdrawBlockedError(id, ownerUserId);
     }
 
     return { data: { id }, error: null };
+  }
+
+  // Separates the four ways the delete can affect no rows, so the route can
+  // answer 404/403/409 rather than one opaque failure. The active-account
+  // check is repeated inside the statement above rather than trusted from
+  // requireActiveAuth(), which can only reject before the write; a deletion
+  // landing in between would otherwise still take effect.
+  private async withdrawBlockedError(
+    id: string,
+    ownerUserId: string
+  ): Promise<DatabaseResult<never>> {
+    const [existing] = await this.db
+      .select({
+        publishedAt: extensions.publishedAt,
+        ownerUserId: developers.ownerUserId
+      })
+      .from(extensions)
+      .innerJoin(developers, eq(extensions.developerId, developers.id))
+      .where(sql`LOWER(${extensions.id}) = LOWER(${id})`);
+    if (!existing) return notFound(id);
+    if (existing.publishedAt) {
+      return {
+        data: null,
+        error: {
+          message: "A published extension cannot be withdrawn",
+          code: "CONFLICT"
+        }
+      };
+    }
+    if (existing.ownerUserId !== ownerUserId) {
+      return {
+        data: null,
+        error: { message: "You do not own this extension", code: "FORBIDDEN" }
+      };
+    }
+    return {
+      data: null,
+      error: { message: "Active account required", code: "ACCOUNT_INACTIVE" }
+    };
   }
 }
 

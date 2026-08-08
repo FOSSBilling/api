@@ -77,19 +77,25 @@ export const extensions = sqliteTable(
     // racing for ids that differ only in case — the job migration 0011's
     // extension_submissions.target_key index used to do from the other side.
     uniqueIndex("idx_extensions_id_nocase").on(sql`lower(${table.id})`),
-    index("idx_extensions_developer").on(table.developerId),
-    // The catalogue-order indexes are partial: every public read filters on
-    // published_at IS NOT NULL, and unpublished rows would otherwise sit in
-    // the index the catalogue scans. The owner list, which does not filter,
-    // seeks through idx_extensions_developer instead.
+    // Not partial, unlike the two below: this one serves both the public
+    // developer_id filter and GET /extensions/mine, which pages every owned
+    // extension and so cannot filter on published_at. A partial index would
+    // leave the owner query sorting into a temporary B-tree once a developer
+    // has more than one page. The public read gets its ordered seek from the
+    // same index and checks published_at per row.
+    index("idx_extensions_developer_order").on(
+      table.developerId,
+      sql`lower(${table.id})`,
+      table.id
+    ),
+    // These two are partial: every read that uses them filters on
+    // published_at IS NOT NULL, so unpublished rows would only bloat the
+    // index the catalogue scans.
     index("idx_extensions_catalogue_order")
       .on(sql`lower(${table.id})`, table.id)
       .where(sql`${table.publishedAt} IS NOT NULL`),
     index("idx_extensions_type_catalogue_order")
       .on(table.type, sql`lower(${table.id})`, table.id)
-      .where(sql`${table.publishedAt} IS NOT NULL`),
-    index("idx_extensions_developer_catalogue_order")
-      .on(table.developerId, sql`lower(${table.id})`, table.id)
       .where(sql`${table.publishedAt} IS NOT NULL`),
     // "Published" must mean every column the public contract declares
     // non-optional is present. icon_url is genuinely optional and is left out.

@@ -19,6 +19,28 @@
 -- against schema.ts by test/services/extensions/v2/migrations.test.ts.
 PRAGMA foreign_keys=OFF;--> statement-breakpoint
 
+-- A submission whose target id is reserved would materialise an extension
+-- that GET /extensions/{id} can never serve, because the static
+-- GET /extensions/mine route is registered first. The old code rejected these
+-- at submission time and again at approval; with approval no longer looking at
+-- the id, the check has to happen here, before the row exists.
+--
+-- This fails the deploy rather than dropping the submission, matching
+-- migration 0020. If it fires, reject or delete the offending row by hand and
+-- re-run - unlike 0020's case the id is not yet public, so nothing pins it and
+-- there is nothing to preserve. Comparison is on the lowercased target because
+-- that is what the materialisation below would insert.
+CREATE TABLE _reserved_target_check (ok INTEGER NOT NULL CHECK (ok = 1));--> statement-breakpoint
+
+INSERT INTO _reserved_target_check (ok)
+SELECT CASE WHEN EXISTS (
+    SELECT 1 FROM extension_submissions
+    WHERE LOWER(COALESCE(extension_id, json_extract(payload, '$.extension.id')))
+          IN ('mine')
+  ) THEN 0 ELSE 1 END;--> statement-breakpoint
+
+DROP TABLE _reserved_target_check;--> statement-breakpoint
+
 -- developers first, while every table that references it is still the old one:
 -- the drop-and-rename re-parses every schema, and doing it with a referrer
 -- pointing at a dropped table is the case that errors.
@@ -166,10 +188,9 @@ DROP TABLE `extensions`;--> statement-breakpoint
 ALTER TABLE `__new_extensions` RENAME TO `extensions`;--> statement-breakpoint
 
 CREATE UNIQUE INDEX `idx_extensions_id_nocase` ON `extensions` (lower("id"));--> statement-breakpoint
-CREATE INDEX `idx_extensions_developer` ON `extensions` (`developer_id`);--> statement-breakpoint
+CREATE INDEX `idx_extensions_developer_order` ON `extensions` (`developer_id`,lower("id"),`id`);--> statement-breakpoint
 CREATE INDEX `idx_extensions_catalogue_order` ON `extensions` (lower("id"),`id`) WHERE "extensions"."published_at" IS NOT NULL;--> statement-breakpoint
 CREATE INDEX `idx_extensions_type_catalogue_order` ON `extensions` (`type`,lower("id"),`id`) WHERE "extensions"."published_at" IS NOT NULL;--> statement-breakpoint
-CREATE INDEX `idx_extensions_developer_catalogue_order` ON `extensions` (`developer_id`,lower("id"),`id`) WHERE "extensions"."published_at" IS NOT NULL;--> statement-breakpoint
 
 CREATE TABLE `extension_revisions` (
 	`id` text PRIMARY KEY NOT NULL,
@@ -222,6 +243,31 @@ JOIN extensions e
 -- A payload without an extension object cannot become a revision. This has
 -- never been writable through the API: SubmissionPayloadSchema required it.
 WHERE json_extract(s.payload, '$.extension') IS NOT NULL;--> statement-breakpoint
+
+-- A pending revision is only approvable if its developer still exists, still
+-- belongs to the submitter, still has the ownership epoch the revision was
+-- filed under, and is still the extension's developer - that is exactly the
+-- EXISTS predicate in ExtensionRevisionsDatabase.approve(). Legacy rows that
+-- fail it can never be approved, and because at most one revision per
+-- extension may be pending they would also block the owner's next edit
+-- indefinitely.
+--
+-- Rejecting rather than deleting keeps the record and frees the slot, and uses
+-- the same note the transfer and account-deletion paths already write when
+-- they invalidate pending work.
+UPDATE extension_revisions
+SET status = 'rejected',
+    review_note = 'Ownership changed before review',
+    reviewed_at = CURRENT_TIMESTAMP
+WHERE status = 'pending'
+  AND NOT EXISTS (
+    SELECT 1 FROM developers d
+    JOIN extensions e ON e.id = extension_revisions.extension_id
+    WHERE d.id = extension_revisions.developer_id
+      AND d.id = e.developer_id
+      AND d.owner_user_id = extension_revisions.submitted_by
+      AND d.ownership_epoch = extension_revisions.ownership_epoch
+  );--> statement-breakpoint
 
 CREATE INDEX `idx_extension_revisions_submitted_by` ON `extension_revisions` (`submitted_by`);--> statement-breakpoint
 CREATE INDEX `idx_extension_revisions_developer` ON `extension_revisions` (`developer_id`);--> statement-breakpoint

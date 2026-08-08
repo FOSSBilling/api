@@ -818,9 +818,9 @@
           "columns": ["lower(\"id\")"],
           "isUnique": true
         },
-        "idx_extensions_developer": {
-          "name": "idx_extensions_developer",
-          "columns": ["developer_id"],
+        "idx_extensions_developer_order": {
+          "name": "idx_extensions_developer_order",
+          "columns": ["developer_id", "lower(\"id\")", "id"],
           "isUnique": false
         },
         "idx_extensions_catalogue_order": {
@@ -832,12 +832,6 @@
         "idx_extensions_type_catalogue_order": {
           "name": "idx_extensions_type_catalogue_order",
           "columns": ["type", "lower(\"id\")", "id"],
-          "isUnique": false,
-          "where": "\"extensions\".\"published_at\" IS NOT NULL"
-        },
-        "idx_extensions_developer_catalogue_order": {
-          "name": "idx_extensions_developer_catalogue_order",
-          "columns": ["developer_id", "lower(\"id\")", "id"],
           "isUnique": false,
           "where": "\"extensions\".\"published_at\" IS NOT NULL"
         }
@@ -1002,6 +996,13 @@
           }
         }
       },
+      "idx_extensions_developer_order": {
+        "columns": {
+          "lower(\"id\")": {
+            "isExpression": true
+          }
+        }
+      },
       "idx_extensions_catalogue_order": {
         "columns": {
           "lower(\"id\")": {
@@ -1010,13 +1011,6 @@
         }
       },
       "idx_extensions_type_catalogue_order": {
-        "columns": {
-          "lower(\"id\")": {
-            "isExpression": true
-          }
-        }
-      },
-      "idx_extensions_developer_catalogue_order": {
         "columns": {
           "lower(\"id\")": {
             "isExpression": true

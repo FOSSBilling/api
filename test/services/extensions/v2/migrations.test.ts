@@ -44,6 +44,38 @@ const historicalUsersSchema = `
   );
 `;
 
+// A published extension owned by an active submitter, the starting point for
+// the legacy-submission cases below.
+function seedSubmissionFixture(db: DatabaseSync): void {
+  const now = "2026-01-01T00:00:00.000Z";
+  db.prepare(
+    "INSERT INTO users (id, created_at, updated_at) VALUES (?,?,?)"
+  ).run("submitter", now, now);
+  db.prepare(
+    "INSERT INTO developers (id, type, name, owner_user_id) VALUES (?,?,?,?)"
+  ).run("acme", "organization", "Acme", "submitter");
+  db.prepare(
+    `INSERT INTO extensions (
+      id, type, author_id, name, description, releases, website, license,
+      icon_url, readme, source, version, download_url
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
+  ).run(
+    "live-ext",
+    "mod",
+    "acme",
+    "Live",
+    "description",
+    "[]",
+    "https://example.com",
+    '{"name":"MIT"}',
+    null,
+    "# Live",
+    '{"type":"github","repo":"example/live"}',
+    "1.0.0",
+    "https://example.com/live.zip"
+  );
+}
+
 describe("Extensions D1 migrations", () => {
   it("upgrades the split-owned schema without losing users or domain references", () => {
     const db = new DatabaseSync(":memory:");
@@ -213,6 +245,125 @@ describe("Extensions D1 migrations", () => {
         .get("post-migration") as { created_at: string; updated_at: string };
       expect(fresh.created_at).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
       expect(fresh.updated_at).toBe(fresh.created_at);
+    } finally {
+      db.close();
+    }
+  });
+
+  // Approval no longer looks at the proposed id - there is nothing to look at,
+  // since the id lives on the extension row. So the reserved-id check that
+  // used to run at the approval boundary has to run here instead, before a
+  // submission can materialise an extension the public route cannot serve.
+  it("0021 refuses to materialise a submission targeting a reserved id", () => {
+    const db = new DatabaseSync(":memory:");
+
+    try {
+      for (const name of migrationNames.filter(
+        (candidate) => !candidate.startsWith("0021")
+      )) {
+        db.exec(migration(name));
+      }
+      seedSubmissionFixture(db);
+      db.prepare(
+        `INSERT INTO extension_submissions
+           (id, extension_id, developer_id, submitted_by, status, payload, target_key)
+         VALUES (?,?,?,?,?,?,?)`
+      ).run(
+        "reserved",
+        null,
+        "acme",
+        "submitter",
+        "pending",
+        '{"developer":{"id":"acme"},"extension":{"id":"Mine"}}',
+        "mine"
+      );
+
+      expect(() =>
+        db.exec(migration("0021_restructure_extensions_revisions.sql"))
+      ).toThrow(/CHECK constraint failed/);
+    } finally {
+      db.close();
+    }
+  });
+
+  // At most one revision per extension may be pending, so a legacy row that
+  // can never satisfy approve()'s ownership predicate would sit there forever
+  // and block the owner from ever submitting another edit.
+  it("0021 rejects pending submissions that could never be approved", () => {
+    const db = new DatabaseSync(":memory:");
+
+    try {
+      for (const name of migrationNames.filter(
+        (candidate) => !candidate.startsWith("0021")
+      )) {
+        db.exec(migration(name));
+      }
+      seedSubmissionFixture(db);
+      db.prepare(
+        "INSERT INTO developers (id, type, name, owner_user_id) VALUES (?,?,?,?)"
+      ).run("other", "user", "Other", null);
+
+      const insert = db.prepare(
+        `INSERT INTO extension_submissions
+           (id, extension_id, developer_id, submitted_by, status, payload, ownership_epoch, target_key)
+         VALUES (?,?,?,?,?,?,?,?)`
+      );
+      // Approvable: developer exists, owned by the submitter, epoch matches,
+      // and is the extension's own developer.
+      insert.run(
+        "ok",
+        "live-ext",
+        "acme",
+        "submitter",
+        "pending",
+        '{"developer":{"id":"acme"},"extension":{"id":"live-ext","name":"A"}}',
+        1,
+        "live-ext"
+      );
+      // Names a developer that is not the extension's.
+      insert.run(
+        "wrong-developer",
+        "live-ext",
+        "other",
+        "submitter",
+        "pending",
+        '{"developer":{"id":"other"},"extension":{"id":"live-ext","name":"B"}}',
+        1,
+        "live-ext-2"
+      );
+      // Filed under an ownership epoch that has since moved on.
+      insert.run(
+        "stale-epoch",
+        "live-ext",
+        "acme",
+        "submitter",
+        "pending",
+        '{"developer":{"id":"acme"},"extension":{"id":"live-ext","name":"C"}}',
+        7,
+        "live-ext-3"
+      );
+
+      db.exec(migration("0021_restructure_extensions_revisions.sql"));
+
+      expect(
+        db
+          .prepare(
+            "SELECT id, status, review_note FROM extension_revisions ORDER BY id"
+          )
+          .all()
+      ).toEqual([
+        { id: "ok", status: "pending", review_note: null },
+        {
+          id: "stale-epoch",
+          status: "rejected",
+          review_note: "Ownership changed before review"
+        },
+        {
+          id: "wrong-developer",
+          status: "rejected",
+          review_note: "Ownership changed before review"
+        }
+      ]);
     } finally {
       db.close();
     }

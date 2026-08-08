@@ -1,4 +1,8 @@
-import { errorBody, statusFromErrorCode } from "./errors";
+import {
+  errorBody,
+  statusFromErrorCode,
+  statusFromOwnershipErrorCode
+} from "./errors";
 import { requireActiveAuth } from "../middleware";
 import { getExtensionsDb } from "../../../../lib/db";
 import { getAuth } from "../../../../lib/auth";
@@ -342,7 +346,9 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
     if (error || !data) {
       return c.json(
         errorBody(error, "Unable to withdraw extension"),
-        error?.code === "FORBIDDEN" ? 403 : statusFromErrorCode(error?.code)
+        statusFromOwnershipErrorCode(error?.code) === 403
+          ? 403
+          : statusFromErrorCode(error?.code)
       );
     }
     return c.json({ result: { id: data.id, deleted: true as const } }, 200);
@@ -421,7 +427,11 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
     const db = new ExtensionRevisionsDatabase(
       getExtensionsDb(c.env.DB_EXTENSIONS)
     );
-    const { data, error } = await db.listByExtension(id, limit, cursor);
+    const { data, error } = await db.listByExtension(
+      owned.data.extension.id,
+      limit,
+      cursor
+    );
     if (error || !data) {
       return c.json(
         errorBody(error, "Unable to load revisions"),

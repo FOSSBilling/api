@@ -108,7 +108,7 @@ export class ExtensionRevisionsDatabase {
            SELECT ${id}, e.id, d.id, ${input.callerId}, 'pending', ${JSON.stringify(input.content)}, d.ownership_epoch
            FROM ${extensions} e
            JOIN ${developers} d ON d.id = e.developer_id
-           WHERE e.id = ${input.extensionId}
+           WHERE LOWER(e.id) = LOWER(${input.extensionId})
              AND d.owner_user_id = ${input.callerId}
              AND EXISTS (
                SELECT 1 FROM ${users} u
@@ -145,7 +145,7 @@ export class ExtensionRevisionsDatabase {
       .select({ ownerUserId: developers.ownerUserId })
       .from(extensions)
       .innerJoin(developers, eq(extensions.developerId, developers.id))
-      .where(eq(extensions.id, input.extensionId));
+      .where(sql`LOWER(${extensions.id}) = LOWER(${input.extensionId})`);
 
     if (!existing) {
       return {
@@ -165,7 +165,7 @@ export class ExtensionRevisionsDatabase {
       .from(extensionRevisions)
       .where(
         and(
-          eq(extensionRevisions.extensionId, input.extensionId),
+          sql`LOWER(${extensionRevisions.extensionId}) = LOWER(${input.extensionId})`,
           eq(extensionRevisions.status, "pending")
         )
       );
@@ -287,7 +287,7 @@ export class ExtensionRevisionsDatabase {
         .where(
           and(
             eq(extensionRevisions.id, id),
-            eq(extensionRevisions.extensionId, extensionId)
+            sql`LOWER(${extensionRevisions.extensionId}) = LOWER(${extensionId})`
           )
         );
     } catch (error) {
@@ -338,7 +338,7 @@ export class ExtensionRevisionsDatabase {
         .where(
           and(
             eq(extensionRevisions.id, id),
-            eq(extensionRevisions.extensionId, extensionId),
+            sql`LOWER(${extensionRevisions.extensionId}) = LOWER(${extensionId})`,
             eq(extensionRevisions.status, "pending"),
             sql`EXISTS (
               SELECT 1 FROM ${users}
@@ -410,7 +410,13 @@ export class ExtensionRevisionsDatabase {
                   SELECT 1 FROM users u
                   WHERE u.id = ? AND u.deleted_at IS NULL
                 )`,
-        params: [reviewerId, reviewNote ?? null, id, extensionId, reviewerId]
+        params: [
+          reviewerId,
+          reviewNote ?? null,
+          id,
+          revision.extension_id,
+          reviewerId
+        ]
       });
 
       // published_at is COALESCEd rather than overwritten: it records when the
@@ -438,7 +444,7 @@ export class ExtensionRevisionsDatabase {
           content.version,
           content.download_url,
           id,
-          extensionId
+          revision.extension_id
         ]
       });
 

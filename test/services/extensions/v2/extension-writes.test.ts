@@ -1,4 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
+import { env } from "cloudflare:workers";
+import { wrapD1WithHook } from "./db-interceptor";
 import {
   setupExtensionsV2Tests,
   db,
@@ -13,9 +15,13 @@ import {
   seedOwnedExtension
 } from "./harness";
 import {
+  countExtensions,
   countRevisions,
+  insertUser,
   getExtension,
   getRevision,
+  insertDeveloper,
+  insertExtension,
   listRevisions
 } from "./db-fixtures";
 
@@ -26,6 +32,22 @@ vi.mock("@octokit/request", async () =>
 );
 
 setupExtensionsV2Tests();
+
+// Adopted pre-v2 rows can carry mixed-case ids; new ones cannot, since
+// lowercaseId() rejects them at validation.
+async function seedMixedCaseExtension() {
+  await insertDeveloper(db, {
+    id: "owner-developer",
+    type: "user",
+    name: "Owner",
+    owner_user_id: "owner-1"
+  });
+  await insertExtension(db, {
+    id: "Existing-Ext",
+    developer_id: "owner-developer",
+    name: "Existing"
+  });
+}
 
 async function createExtension(
   user: string,
@@ -131,13 +153,13 @@ describe("Extensions API v2 writes", () => {
     });
 
     it("rejects an id that differs from an existing one only in case", async () => {
-      await seedOwnedExtension();
-      const res = await post(
-        "/extensions/v2/extensions",
-        await authHeaders("owner-1"),
-        { ...sampleCreate(), id: "existing-ext" }
-      );
+      await seedMixedCaseExtension();
+      const res = await createExtension("owner-1", {
+        extensionId: "existing-ext"
+      });
+
       expect(res.status).toBe(409);
+      expect(await countExtensions(db)).toBe(1);
     });
 
     it("bounds content size, unknown fields, and the number of releases", async () => {
@@ -304,6 +326,54 @@ describe("Extensions API v2 writes", () => {
     });
   });
 
+  // Every read resolves an extension id case-insensitively, so the writes have
+  // to agree: otherwise a legacy mixed-case extension is visible but not
+  // editable, and its own revision list comes back empty.
+  describe("mixed-case legacy ids", () => {
+    it("accepts an edit addressed in lower case", async () => {
+      await seedMixedCaseExtension();
+      const res = await put(
+        "/extensions/v2/extensions/existing-ext",
+        await authHeaders("owner-1"),
+        sampleContent({ name: "Renamed" })
+      );
+
+      expect(res.status).toBe(202);
+      // The revision must hang off the stored spelling, not the requested one.
+      const [revision] = await listRevisions(db);
+      expect(revision.extension_id).toBe("Existing-Ext");
+    });
+
+    it("lists revisions addressed in lower case", async () => {
+      await seedMixedCaseExtension();
+      await put(
+        "/extensions/v2/extensions/existing-ext",
+        await authHeaders("owner-1"),
+        sampleContent()
+      );
+
+      const res = await get(
+        "/extensions/v2/extensions/existing-ext/revisions",
+        await authHeaders("owner-1")
+      );
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as { result: unknown[] };
+      expect(data.result).toHaveLength(1);
+    });
+
+    it("withdraws an unpublished extension addressed in the other case", async () => {
+      await seedDeveloper("new-developer", "user-1");
+      await createExtension("user-1", { extensionId: "new-ext" });
+
+      const res = await del(
+        "/extensions/v2/extensions/NEW-EXT",
+        await authHeaders("user-1")
+      );
+      expect(res.status).toBe(200);
+      expect(await getExtension(db, "new-ext")).toBeNull();
+    });
+  });
+
   describe("DELETE /extensions/{id}", () => {
     it("withdraws an unpublished extension and releases its id", async () => {
       await seedDeveloper("new-developer", "user-1");
@@ -331,6 +401,33 @@ describe("Extensions API v2 writes", () => {
 
       expect(res.status).toBe(409);
       expect(await getExtension(db, "existing-ext")).not.toBeNull();
+    });
+
+    // requireActiveAuth() can only reject before the write; a deletion landing
+    // between it and the DELETE has to be caught by the statement itself.
+    it("refuses to withdraw once the account is deactivated mid-request", async () => {
+      await seedDeveloper("new-developer", "user-1");
+      await createExtension("user-1");
+      const headers = await authHeaders("user-1");
+
+      let tombstoned = false;
+      env.DB_EXTENSIONS = wrapD1WithHook(db, async (sql) => {
+        if (!tombstoned && sql.includes('DELETE FROM "extensions"')) {
+          tombstoned = true;
+          await db
+            .prepare("UPDATE users SET deleted_at = ? WHERE id = ?")
+            .bind(new Date().toISOString(), "user-1")
+            .run();
+        }
+      });
+
+      const res = await del("/extensions/v2/extensions/new-ext", headers);
+
+      expect(res.status).toBe(403);
+      await expect(res.json()).resolves.toMatchObject({
+        error: { code: "ACCOUNT_INACTIVE" }
+      });
+      expect(await getExtension(db, "new-ext")).not.toBeNull();
     });
 
     it("refuses to withdraw someone else's extension", async () => {
@@ -413,6 +510,56 @@ describe("Extensions API v2 writes", () => {
       );
       const data = (await res.json()) as { result: Array<{ id: string }> };
       expect(data.result.map((item) => item.id)).toEqual(["existing-ext"]);
+    });
+
+    // extensions.type is NULL until a first approval, so filtering the column
+    // alone would hide an owner's own drafts from them.
+    it("filters by type across published, pending and rejected states", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await seedDeveloper("new-developer", "user-1");
+      const headers = await authHeaders("user-1");
+
+      // Published.
+      const live = await createExtension("user-1", { extensionId: "live-ext" });
+      const liveIds = (await live.json()) as {
+        result: { revision_id: string };
+      };
+      await post(
+        `/extensions/v2/extensions/live-ext/revisions/${liveIds.result.revision_id}/approve`,
+        await authHeaders("mod-1"),
+        {}
+      );
+
+      // Never reviewed.
+      await createExtension("user-1", { extensionId: "draft-ext" });
+
+      // Reviewed and rejected: no pending revision left to read a type from.
+      const rejected = await createExtension("user-1", {
+        extensionId: "rejected-ext"
+      });
+      const rejectedIds = (await rejected.json()) as {
+        result: { revision_id: string };
+      };
+      await post(
+        `/extensions/v2/extensions/rejected-ext/revisions/${rejectedIds.result.revision_id}/reject`,
+        await authHeaders("mod-1"),
+        { review_note: "no" }
+      );
+
+      const res = await get("/extensions/v2/extensions/mine?type=mod", headers);
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as { result: Array<{ id: string }> };
+      expect(data.result.map((item) => item.id)).toEqual([
+        "draft-ext",
+        "live-ext",
+        "rejected-ext"
+      ]);
+
+      const other = await get(
+        "/extensions/v2/extensions/mine?type=theme",
+        headers
+      );
+      await expect(other.json()).resolves.toMatchObject({ result: [] });
     });
 
     it("requires auth", async () => {
