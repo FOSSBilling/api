@@ -76,6 +76,31 @@ function seedSubmissionFixture(db: DatabaseSync): void {
   );
 }
 
+// Applies the chain the way D1 does, which is not how the other tests here run
+// it: foreign keys enforced, and 0021 inside the transaction wrangler wraps
+// each migration file in. That combination is what a local apply cannot see,
+// and it is what let a broken 0021 reach production.
+function applyAllAsD1(
+  db: DatabaseSync,
+  seed?: (db: DatabaseSync) => void
+): void {
+  db.exec("PRAGMA foreign_keys = ON;");
+  for (const name of migrationNames.filter(
+    (candidate) => !candidate.startsWith("0021")
+  )) {
+    db.exec(migration(name));
+  }
+  seed?.(db);
+  db.exec("BEGIN");
+  try {
+    db.exec(migration("0021_restructure_extensions_revisions.sql"));
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 describe("Extensions D1 migrations", () => {
   it("upgrades the split-owned schema without losing users or domain references", () => {
     const db = new DatabaseSync(":memory:");
@@ -226,25 +251,6 @@ describe("Extensions D1 migrations", () => {
           .get("legacy-history")
       ).toEqual({ changed_by: "legacy-user" });
       expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-
-      // 0021 rebuilds developers only to replace the placeholder 1970 default
-      // migration 0002 was forced to use. Rows keep whatever they had - a
-      // wrong-but-real timestamp beats one invented here - while a new insert
-      // that omits the column now gets the value every writer already uses.
-      expect(
-        db
-          .prepare("SELECT created_at FROM developers WHERE id = ?")
-          .get("legacy-developer")
-      ).toEqual({ created_at: "1970-01-01T00:00:00.000Z" });
-
-      db.prepare(
-        "INSERT INTO developers (id, type, name, owner_user_id) VALUES (?,?,?,?)"
-      ).run("post-migration", "user", "After", null);
-      const fresh = db
-        .prepare("SELECT created_at, updated_at FROM developers WHERE id = ?")
-        .get("post-migration") as { created_at: string; updated_at: string };
-      expect(fresh.created_at).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
-      expect(fresh.updated_at).toBe(fresh.created_at);
     } finally {
       db.close();
     }
@@ -295,6 +301,60 @@ describe("Extensions D1 migrations", () => {
         db.prepare("SELECT COUNT(*) AS n FROM extension_submissions").get()
       ).toEqual({ n: 0 });
       expect(columnNames(db, "extensions")).toContain("author_id");
+    } finally {
+      db.close();
+    }
+  });
+
+  // Regression guard for the failed remote apply of 0021: it worked locally,
+  // where PRAGMA foreign_keys=OFF is honoured, and failed on D1, where it is
+  // not. Everything else in this file runs statements outside a transaction
+  // with foreign keys off, which cannot see the difference.
+  it("applies on D1's terms: foreign keys on, one transaction", () => {
+    const db = new DatabaseSync(":memory:");
+
+    try {
+      applyAllAsD1(db, (seeded) => {
+        seedSubmissionFixture(seeded);
+        // extension_id must be set, not null. It is what makes extensions a
+        // parent with a child row, and so the only thing that makes dropping
+        // it a foreign key violation - without it this test passes on the very
+        // ordering it exists to reject.
+        seeded
+          .prepare(
+            `INSERT INTO extension_submissions
+               (id, extension_id, developer_id, submitted_by, status, payload, target_key)
+             VALUES (?,?,?,?,?,?,?)`
+          )
+          .run(
+            "edit-of-live",
+            "live-ext",
+            "acme",
+            "submitter",
+            "pending",
+            '{"developer":{"id":"acme"},"extension":{"id":"live-ext","name":"E"}}',
+            "live-ext"
+          );
+      });
+
+      // Committed, so the deferred counter reached zero and the data is sound.
+      expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+      expect(
+        db
+          .prepare("SELECT extension_id FROM extension_revisions WHERE id = ?")
+          .get("edit-of-live")
+      ).toEqual({ extension_id: "live-ext" });
+      expect(db.prepare("SELECT COUNT(*) AS n FROM extensions").get()).toEqual({
+        n: 1
+      });
+      // The holding table used to carry submissions across the rebuild is gone.
+      expect(
+        db
+          .prepare(
+            "SELECT COUNT(*) AS n FROM sqlite_master WHERE name LIKE '\\_%' ESCAPE '\\'"
+          )
+          .get()
+      ).toEqual({ n: 0 });
     } finally {
       db.close();
     }
@@ -510,38 +570,38 @@ describe("Extensions D1 migrations", () => {
     const db = new DatabaseSync(":memory:");
 
     try {
-      for (const name of migrationNames.filter(
-        (candidate) => !candidate.startsWith("0021")
-      )) {
-        db.exec(migration(name));
-      }
-
-      // Enforcement off, which is exactly how such a row could have come to
-      // exist before the constraint was there to stop it.
-      db.exec("PRAGMA foreign_keys = OFF;");
-      db.prepare(
-        `INSERT INTO extensions (
-          id, type, author_id, name, description, releases, website, license,
-          icon_url, readme, source, version, download_url
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
-      ).run(
-        "dangling",
-        "mod",
-        "developer-that-never-existed",
-        "Dangling",
-        "d",
-        "[]",
-        "https://example.com",
-        '{"name":"MIT"}',
-        null,
-        "# d",
-        '{"type":"github","repo":"example/d"}',
-        "1.0.0",
-        "https://example.com/d.zip"
-      );
-
+      // Run on D1's terms: the pre-flight check has to fire before the copy,
+      // because the rebuilt table's real foreign key would otherwise reject
+      // the row first with a bare, unattributed error.
       expect(() =>
-        db.exec(migration("0021_restructure_extensions_revisions.sql"))
+        applyAllAsD1(db, (seeded) => {
+          // Enforcement off only while seeding, which is how such a row could
+          // have come to exist before the constraint was there to stop it.
+          seeded.exec("PRAGMA foreign_keys = OFF;");
+          seeded
+            .prepare(
+              `INSERT INTO extensions (
+                id, type, author_id, name, description, releases, website,
+                license, icon_url, readme, source, version, download_url
+              ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
+            )
+            .run(
+              "dangling",
+              "mod",
+              "developer-that-never-existed",
+              "Dangling",
+              "d",
+              "[]",
+              "https://example.com",
+              '{"name":"MIT"}',
+              null,
+              "# d",
+              '{"type":"github","repo":"example/d"}',
+              "1.0.0",
+              "https://example.com/d.zip"
+            );
+          seeded.exec("PRAGMA foreign_keys = ON;");
+        })
       ).toThrow(/CHECK constraint failed: extension_references_must_resolve/);
     } finally {
       db.close();

@@ -125,16 +125,18 @@ export const developers = sqliteTable(
     url: text("url"),
     ownerUserId: text("owner_user_id").references(() => users.id),
     approvedAt: text("approved_at"),
-    // Migration 0002 could only give these a constant default (SQLite rejects
-    // non-constant ALTER TABLE ADD COLUMN defaults), so they carried a
-    // placeholder 1970 epoch that no write ever produced. 0021 rebuilds the
-    // table and replaces it with the value every writer already uses.
-    createdAt: text("created_at")
-      .notNull()
-      .default(sql`CURRENT_TIMESTAMP`),
-    updatedAt: text("updated_at")
-      .notNull()
-      .default(sql`CURRENT_TIMESTAMP`),
+    // Placeholder default from migration 0002 (SQLite rejects non-constant
+    // ALTER TABLE ADD COLUMN defaults). Every write sets this explicitly (see
+    // db/developer-profiles.ts) - the literal default is never actually read,
+    // but it is part of the real column definition, so it is kept here for
+    // baseline-diff fidelity against the existing database.
+    //
+    // Replacing it needs a table rebuild, which this table cannot have: three
+    // tables reference it and a parent cannot be dropped with foreign keys
+    // enforced (see migration 0021's header). Rebuilding all three children
+    // too is a lot of risk for a default nothing reads.
+    createdAt: text("created_at").notNull().default("1970-01-01T00:00:00.000Z"),
+    updatedAt: text("updated_at").notNull().default("1970-01-01T00:00:00.000Z"),
     avatarUrl: text("avatar_url"),
     contactEmail: text("contact_email"),
     ownershipEpoch: integer("ownership_epoch").notNull().default(1),
