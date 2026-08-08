@@ -168,11 +168,21 @@ describe("Extensions API v2 writes", () => {
       const headers = await authHeaders("user-1");
       const body = sampleCreate();
 
-      const oversized = await post("/extensions/v2/extensions", headers, {
+      // The readme's own bound, which fires at ~100 KB. Asserted by path so it
+      // cannot quietly become the reason some other case passes.
+      const oversizedReadme = await post("/extensions/v2/extensions", headers, {
         ...body,
         readme: "x".repeat(100_001)
       });
-      expect(oversized.status).toBe(422);
+      expect(oversizedReadme.status).toBe(422);
+      const oversizedReadmeBody = (await oversizedReadme.json()) as {
+        error: { details: Array<{ code: string; path: PropertyKey[] }> };
+      };
+      expect(oversizedReadmeBody.error.details).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ code: "too_big", path: ["readme"] })
+        ])
+      );
 
       const unknownField = await post("/extensions/v2/extensions", headers, {
         ...body,
@@ -211,6 +221,56 @@ describe("Extensions API v2 writes", () => {
         releases: Array.from({ length: 101 }, () => body.releases[0])
       });
       expect(tooManyReleases.status).toBe(422);
+    });
+
+    // The 256 KiB guard is a separate limit from the per-field bounds, and
+    // nothing else reaches it: the largest single field is the readme at
+    // ~100 KB. Only content that is valid field-by-field yet large in
+    // aggregate exercises it - 100 releases (the maximum) carrying
+    // maximum-length URLs comes to roughly 440 KB.
+    it("rejects content that is within every field bound but over 256 KiB", async () => {
+      await seedDeveloper("new-developer", "user-1");
+      const headers = await authHeaders("user-1");
+      const longUrl = `https://example.com/${"x".repeat(2028)}`;
+      expect(longUrl).toHaveLength(2048);
+
+      const releases = Array.from({ length: 100 }, (_unused, index) => ({
+        tag: `1.0.${index}`.padEnd(100, "0"),
+        date: "2026-01-01T00:00:00Z",
+        download_url: longUrl,
+        changelog_url: longUrl,
+        min_fossbilling_version: "0.6"
+      }));
+      const body = { ...sampleCreate(), releases };
+      expect(
+        new TextEncoder().encode(JSON.stringify(body)).byteLength
+      ).toBeGreaterThan(256 * 1024);
+
+      const created = await post("/extensions/v2/extensions", headers, body);
+      expect(created.status).toBe(422);
+      const detail = (await created.json()) as {
+        error: { details: Array<{ code: string; message: string }> };
+      };
+      // Specifically the size guard, not some field constraint tripping first.
+      expect(detail.error.details).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            message: "Extension content must not exceed 256 KiB"
+          })
+        ])
+      );
+      expect(await countExtensions(db)).toBe(0);
+
+      // The edit body carries the same guard.
+      await seedOwnedExtension();
+      const { id: _id, ...content } = body;
+      const edited = await put(
+        "/extensions/v2/extensions/existing-ext",
+        await authHeaders("owner-1"),
+        content
+      );
+      expect(edited.status).toBe(422);
+      expect(await countRevisions(db)).toBe(0);
     });
 
     it("preserves compatibility with stored slug ids over 100 characters", async () => {
