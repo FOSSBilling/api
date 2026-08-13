@@ -45,6 +45,18 @@ const MainPreviewSchema = z
   .object({
     commit_sha: z.string().nullable(),
     short_sha: z.string().nullable(),
+    // Always null - main isn't a PR. Present for shape parity with
+    // ArtifactPreview.
+    pr_number: z.number().nullable(),
+    // Enrichment from that commit's GitHub Actions artifact, when
+    // resolvable - null if the commit has no known artifact (e.g. expired
+    // past GitHub's 14-day retention) or GitHub is unavailable. Never
+    // blocks or degrades the response: download_url/digest below are the
+    // load-bearing, R2-sourced fields and don't depend on this resolving.
+    run_id: z.number().nullable(),
+    artifact_id: z.number().nullable(),
+    created_at: z.string().nullable(),
+    expires_at: z.string().nullable(),
     digest: z.string().nullable(),
     size_bytes: z.number(),
     last_modified: z.string(),

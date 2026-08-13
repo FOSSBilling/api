@@ -6,11 +6,42 @@ import {
   errorResponse
 } from "../schemas/previews";
 import { getMainPreviewObject } from "../r2";
+import { findPreviewArtifactByCommitSha } from "../github/artifacts";
 import { notFoundBody } from "./errors";
 import { PreviewsV1App } from "./app";
 
 const MAIN_CACHE_KEY = "preview:main";
 const MAIN_CACHE_TTL_SECONDS = 60;
+
+// Enrichment only - run_id/artifact_id/created_at/expires_at come from
+// that commit's GitHub Actions artifact when resolvable. A miss for any
+// reason (no commit_sha yet, artifact expired, GitHub unavailable) just
+// leaves them null; it never fails or degrades the response, since
+// download_url/digest below are R2-sourced and don't depend on this.
+async function resolveArtifactFields(
+  githubToken: string,
+  commitSha: string | null
+): Promise<
+  Pick<MainPreview, "run_id" | "artifact_id" | "created_at" | "expires_at">
+> {
+  const empty = {
+    run_id: null,
+    artifact_id: null,
+    created_at: null,
+    expires_at: null
+  };
+  if (!commitSha) return empty;
+
+  const artifact = await findPreviewArtifactByCommitSha(githubToken, commitSha);
+  if (artifact.status !== "found") return empty;
+
+  return {
+    run_id: artifact.data.runId,
+    artifact_id: artifact.data.artifactId,
+    created_at: artifact.data.createdAt,
+    expires_at: artifact.data.expiresAt
+  };
+}
 
 // Shared by /main and /main/download - both need the same cache-then-R2
 // lookup, just to different ends (the full body vs. only download_url).
@@ -25,9 +56,16 @@ async function resolveMainPreview(
   const object = await getMainPreviewObject(c.env.PREVIEW_BUCKET);
   if (!object) return null;
 
+  const artifactFields = await resolveArtifactFields(
+    c.env.GITHUB_TOKEN,
+    object.commitSha
+  );
+
   const result: MainPreview = {
     commit_sha: object.commitSha,
     short_sha: object.commitSha?.slice(0, 7) ?? null,
+    pr_number: null,
+    ...artifactFields,
     digest: object.digest,
     size_bytes: object.sizeBytes,
     last_modified: object.lastModified,

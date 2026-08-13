@@ -8,13 +8,16 @@ uploads one artifact per commit, named `FOSSBilling-preview-{short_sha}.zip`
 (`archive: false`, so the zip itself is the artifact - no extra wrapping),
 for every PR build, non-main branch push, and main push. This service
 resolves by querying that exact name rather than listing every preview
-artifact and filtering. The `main` preview is answered from R2 instead,
-sourced from `digest`/`commit-sha` custom object metadata the same CI job
-sets on the R2 upload - kept separate from the GitHub-artifact path because
-the R2 zip and the GitHub artifact zip for a given commit are two
-independently-built files (a `cp` of the same bytes, in the current CI job,
-but not guaranteed to stay that way), so whichever one is reported as the
-digest has to match the bytes `main` actually serves.
+artifact and filtering. The `main` preview's `download_url`/`digest` are
+answered from R2 instead, sourced from `digest`/`commit-sha` custom object
+metadata the same CI job sets on the R2 upload - kept separate from the
+GitHub-artifact path because the R2 zip and the GitHub artifact zip for a
+given commit are two independently-built files (a `cp` of the same bytes,
+in the current CI job, but not guaranteed to stay that way), so whichever
+one is reported as the digest has to match the bytes `main` actually
+serves. `GET /main` does still cross-reference that commit's GitHub Actions
+artifact for `run_id`/`artifact_id`/`created_at`/`expires_at` - see its
+section below - but only as best-effort enrichment, never as a dependency.
 
 There is no publish/write endpoint: nothing pushes data into this service,
 it only resolves and redirects.
@@ -33,7 +36,16 @@ it only resolves and redirects.
 
 ### GET `/main`
 
-Current main preview, sourced from an R2 object HEAD (no GitHub API call).
+Current main preview. `download_url`, `digest`, `commit_sha`,
+`size_bytes`, and `last_modified` are sourced from an R2 object HEAD (no
+GitHub API call). `run_id`, `artifact_id`, `created_at`, and `expires_at`
+are enrichment: resolved from that commit's GitHub Actions artifact (same
+lookup `GET /commit/{sha}` uses) purely for shape parity with
+`ArtifactPreview`, so a client reading either response doesn't have to
+special-case field availability. That enrichment is best-effort and never
+load-bearing - if the commit has no known artifact (e.g. it's aged out of
+GitHub's 14-day retention) or GitHub is unavailable, those four fields are
+just `null`; the response still succeeds with everything R2-sourced intact.
 
 **Response:**
 
@@ -42,6 +54,11 @@ Current main preview, sourced from an R2 object HEAD (no GitHub API call).
   "result": {
     "commit_sha": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
     "short_sha": "a1b2c3d",
+    "pr_number": null,
+    "run_id": 999999,
+    "artifact_id": 555555,
+    "created_at": "2026-08-13T10:00:00Z",
+    "expires_at": "2026-08-27T10:00:00Z",
     "digest": "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
     "size_bytes": 31229553,
     "last_modified": "2026-08-13T13:11:41.000Z",
@@ -54,7 +71,10 @@ Current main preview, sourced from an R2 object HEAD (no GitHub API call).
 `commit_sha` and `digest` come straight from the R2 object's `commit-sha`/
 `digest` custom metadata (`digest` already carries the `sha256:` prefix) -
 both are `null` if that object has no custom metadata (e.g. it predates the
-CI job setting it).
+CI job setting it), which also means the GitHub Actions enrichment above is
+skipped entirely (nothing to look up by). `source` stays `"r2"` regardless
+of whether the enrichment resolved - it describes where `download_url`/
+`digest` come from, which never changes.
 
 ### GET `/main/download`
 
