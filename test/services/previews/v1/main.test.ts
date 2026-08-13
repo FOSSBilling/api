@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
   createExecutionContext,
   waitOnExecutionContext
@@ -96,5 +96,43 @@ describe("Previews API v1 - GET /previews/v1/main", () => {
       result: { commit_sha: string };
     };
     expect(secondBody.result.commit_sha).toBe("111");
+  });
+});
+
+describe("Previews API v1 - GET /previews/v1/main/download", () => {
+  beforeEach(async () => {
+    await env.CACHE_KV.delete("preview:main");
+    await env.PREVIEW_BUCKET.delete(MAIN_PREVIEW_KEY);
+  });
+
+  it("returns 404 when no main preview has been published", async () => {
+    const res = await get("/previews/v1/main/download");
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("NOT_FOUND");
+  });
+
+  it("redirects to the permanent main preview download URL", async () => {
+    await env.PREVIEW_BUCKET.put(MAIN_PREVIEW_KEY, "test archive contents");
+
+    const res = await get("/previews/v1/main/download");
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe(
+      "https://download.fossbilling.org/FOSSBilling-preview.zip"
+    );
+  });
+
+  it("shares the metadata route's cache instead of re-reading R2", async () => {
+    await env.PREVIEW_BUCKET.put(MAIN_PREVIEW_KEY, "test archive contents");
+    const headSpy = vi.spyOn(env.PREVIEW_BUCKET, "head");
+
+    await get("/previews/v1/main");
+    const res = await get("/previews/v1/main/download");
+
+    expect(res.status).toBe(302);
+    // The R2 HEAD ran once (warming the cache on the first request) - the
+    // download request reused it rather than reading R2 again.
+    expect(headSpy).toHaveBeenCalledTimes(1);
+    headSpy.mockRestore();
   });
 });

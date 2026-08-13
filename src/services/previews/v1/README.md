@@ -56,6 +56,16 @@ Current main preview, sourced from an R2 object HEAD (no GitHub API call).
 both are `null` if that object has no custom metadata (e.g. it predates the
 CI job setting it).
 
+### GET `/main/download`
+
+302 redirect to `download_url` - the same permanent URL `GET /main` already
+reports. Exists purely for uniform addressing (every resource under
+`/previews/v1` has a `/download` sub-route, so callers never need to
+special-case main to reach a download link instead of reading one out of a
+JSON body). Unlike `/pr/{number}/download` and `/commit/{sha}/download`,
+this target URL is fixed rather than short-lived, so it's answered from the
+same cache as `GET /main` instead of re-resolving anything live.
+
 ### GET `/pr/{number}` and GET `/commit/{sha}`
 
 Preview build for a pull request's current head, or for one exact commit.
