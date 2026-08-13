@@ -206,4 +206,20 @@ describe("Previews API v1 - GET /previews/v1/commit/:sha", () => {
     // artifacts again just to find the same artifact_id.
     expect(artifactsListCalls).toBe(1);
   });
+
+  it("caches the commit lookup for longer than the default 60s", async () => {
+    (vi.mocked(ghRequest) as MockGitHubRequest).mockImplementation(
+      async () => ({ data: SAMPLE_ARTIFACTS })
+    );
+    const putSpy = vi.spyOn(env.CACHE_KV, "put");
+
+    await get(`/previews/v1/commit/${SHA}`);
+
+    expect(putSpy).toHaveBeenCalledWith(
+      `preview:commit:${SHA.toLowerCase()}`,
+      expect.any(String),
+      { expirationTtl: 3600 }
+    );
+    putSpy.mockRestore();
+  });
 });

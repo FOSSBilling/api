@@ -174,4 +174,23 @@ describe("Previews API v1 - GET /previews/v1/pr/:number", () => {
     expect(pullsCalls).toBe(1);
     expect(artifactsListCalls).toBe(1);
   });
+
+  it("caches the PR lookup at the default 60s, unlike commit's longer TTL", async () => {
+    mockGithub({
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}": {
+        data: { head: { sha: SHA } }
+      },
+      "GET /repos/{owner}/{repo}/actions/artifacts": { data: SAMPLE_ARTIFACTS }
+    });
+    const putSpy = vi.spyOn(env.CACHE_KV, "put");
+
+    await get(`/previews/v1/pr/${PR_NUMBER}`);
+
+    expect(putSpy).toHaveBeenCalledWith(
+      `preview:pr:${PR_NUMBER}`,
+      expect.any(String),
+      { expirationTtl: 60 }
+    );
+    putSpy.mockRestore();
+  });
 });

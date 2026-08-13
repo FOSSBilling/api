@@ -9,6 +9,14 @@ import { cachedLookup } from "../cache";
 import { respondWithDownloadRedirect, respondWithLookup } from "./respond";
 import { PreviewsV1App } from "./app";
 
+// A commit's build never changes once it exists, unlike main/pr's moving
+// pointers - safe to cache far longer than the 60s default, well within
+// GitHub's 14-day artifact retention. Cuts repeat-download GitHub calls by
+// 60x for the same commit within an hour.
+const COMMIT_CACHE_TTL_SECONDS = 3600;
+
+const cacheKeyForSha = (sha: string) => `preview:commit:${sha.toLowerCase()}`;
+
 export function registerCommitRoutes(app: PreviewsV1App): void {
   const commitRoute = createRoute({
     method: "get",
@@ -37,8 +45,9 @@ export function registerCommitRoutes(app: PreviewsV1App): void {
 
     const result = await cachedLookup(
       c.env.CACHE_KV,
-      `preview:commit:${sha.toLowerCase()}`,
-      () => resolveArtifactPreview(githubToken, sha, null)
+      cacheKeyForSha(sha),
+      () => resolveArtifactPreview(githubToken, sha, null),
+      COMMIT_CACHE_TTL_SECONDS
     );
 
     return respondWithLookup(
@@ -69,15 +78,14 @@ export function registerCommitRoutes(app: PreviewsV1App): void {
     const githubToken = c.env.GITHUB_TOKEN;
 
     // Shares the metadata route's cache entry for which artifact to
-    // download - only the redirect URL itself (resolved inside
-    // respondWithDownloadRedirect) has to be live on every hit, since
-    // that's the part that expires in about a minute. Reusing the cache
-    // here is what keeps a burst of downloads for the same commit to ~1
-    // GitHub API call per cache window instead of 1 per request.
+    // download - only the signed URL itself (resolved inside
+    // respondWithDownloadRedirect, on its own short-lived cache) has to be
+    // re-checked often, since that's the part that actually expires.
     const artifact = await cachedLookup(
       c.env.CACHE_KV,
-      `preview:commit:${sha.toLowerCase()}`,
-      () => resolveArtifactPreview(githubToken, sha, null)
+      cacheKeyForSha(sha),
+      () => resolveArtifactPreview(githubToken, sha, null),
+      COMMIT_CACHE_TTL_SECONDS
     );
     return respondWithDownloadRedirect(
       c,

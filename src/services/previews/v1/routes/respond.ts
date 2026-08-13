@@ -22,7 +22,12 @@ export function respondWithLookup(
   );
 }
 
-// Shared by /commit/{sha}/download and /pr/{number}/download.
+// Shared by /commit/{sha}/download and /pr/{number}/download. Always
+// resolved live, never cached - GitHub's signed URL expires in ~60s, and
+// KV enforces a hard 60s minimum TTL, so there's no safe margin available
+// to cache it without risking handing out an already-expired URL. See
+// preview:redirect caching's revert in git history for why that was tried
+// and abandoned.
 export async function respondWithDownloadRedirect(
   c: Context,
   githubToken: string,
