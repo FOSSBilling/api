@@ -50,7 +50,12 @@ async function resolveMainPreview(
 ): Promise<MainPreview | null> {
   const cached = await c.env.CACHE_KV.get(MAIN_CACHE_KEY);
   if (cached) {
-    return JSON.parse(cached) as MainPreview;
+    try {
+      return JSON.parse(cached) as MainPreview;
+    } catch {
+      // Corrupt cache entry - fall through to a fresh R2 lookup, matching
+      // cachedLookup()'s handling of the same situation.
+    }
   }
 
   const object = await getMainPreviewObject(c.env.PREVIEW_BUCKET);

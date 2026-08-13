@@ -222,4 +222,108 @@ describe("Previews API v1 - GET /previews/v1/commit/:sha", () => {
     );
     putSpy.mockRestore();
   });
+
+  it("caps the cache TTL at the artifact's own remaining GitHub retention", async () => {
+    // Expires in ~500s - well under the 3600s default, so the capped
+    // value (not 3600) must be what's actually written.
+    const expiresAt = new Date(Date.now() + 500_000).toISOString();
+    (vi.mocked(ghRequest) as MockGitHubRequest).mockImplementation(
+      async () => ({
+        data: {
+          total_count: 1,
+          artifacts: [
+            { ...SAMPLE_ARTIFACTS.artifacts[0], expires_at: expiresAt }
+          ]
+        }
+      })
+    );
+    const putSpy = vi.spyOn(env.CACHE_KV, "put");
+
+    await get(`/previews/v1/commit/${SHA}`);
+
+    expect(putSpy).toHaveBeenCalledTimes(1);
+    const ttl = (putSpy.mock.calls[0][2] as { expirationTtl: number })
+      .expirationTtl;
+    expect(ttl).toBeGreaterThan(400);
+    expect(ttl).toBeLessThanOrEqual(500);
+    putSpy.mockRestore();
+  });
+
+  it("skips caching when the artifact expires within KV's 60s minimum TTL", async () => {
+    const expiresAt = new Date(Date.now() + 30_000).toISOString();
+    (vi.mocked(ghRequest) as MockGitHubRequest).mockImplementation(
+      async () => ({
+        data: {
+          total_count: 1,
+          artifacts: [
+            { ...SAMPLE_ARTIFACTS.artifacts[0], expires_at: expiresAt }
+          ]
+        }
+      })
+    );
+    const putSpy = vi.spyOn(env.CACHE_KV, "put");
+
+    const res = await get(`/previews/v1/commit/${SHA}`);
+
+    expect(res.status).toBe(200);
+    expect(putSpy).not.toHaveBeenCalled();
+    putSpy.mockRestore();
+  });
+
+  it("resolves an uppercase SHA by querying the lowercased artifact name", async () => {
+    (vi.mocked(ghRequest) as MockGitHubRequest).mockImplementation(
+      async () => ({ data: SAMPLE_ARTIFACTS })
+    );
+
+    const res = await get(`/previews/v1/commit/${SHA.toUpperCase()}`);
+
+    expect(res.status).toBe(200);
+    expect(ghRequest).toHaveBeenCalledWith(
+      "GET /repos/{owner}/{repo}/actions/artifacts",
+      expect.objectContaining({
+        name: `FOSSBilling-preview-${SHA.slice(0, 7)}.zip`
+      })
+    );
+  });
+
+  it("falls back to a broad scan when the exact artifact name misses (fork PR merge-SHA mismatch)", async () => {
+    // Simulates a fork PR: CI named the artifact after the pull_request
+    // event's ephemeral merge commit ("deadbeef..."), not the PR's real
+    // head SHA (SHA) - so the exact-name query for SHA's derived name
+    // returns nothing, and only a name-less scan (filtered by the run's
+    // real head_sha) finds it.
+    const mergeShaArtifact = {
+      id: 777,
+      name: "FOSSBilling-preview-deadbee.zip",
+      size_in_bytes: 99,
+      created_at: "2026-08-13T11:00:00Z",
+      expires_at: "2026-08-27T11:00:00Z",
+      expired: false,
+      digest: "sha256:fromfork",
+      workflow_run: { id: 888, head_sha: SHA }
+    };
+    (vi.mocked(ghRequest) as MockGitHubRequest).mockImplementation(
+      async (route: string, params?: { name?: string }) => {
+        if (route !== "GET /repos/{owner}/{repo}/actions/artifacts") {
+          throw new Error(`Unexpected route: ${route}`);
+        }
+        if (params?.name) {
+          // The exact-name fast path - misses.
+          return { data: { total_count: 0, artifacts: [] } };
+        }
+        // The fallback broad scan.
+        return { data: { total_count: 1, artifacts: [mergeShaArtifact] } };
+      }
+    );
+
+    const res = await get(`/previews/v1/commit/${SHA}`);
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      result: { artifact_id: number; digest: string | null };
+    };
+    expect(body.result.artifact_id).toBe(777);
+    expect(body.result.digest).toBe("sha256:fromfork");
+    expect(ghRequest).toHaveBeenCalledTimes(2);
+  });
 });

@@ -199,7 +199,23 @@ describe("Previews API v1 - GET /previews/v1/main", () => {
       result: { commit_sha: string };
     };
     expect(secondBody.result.commit_sha).toBe("111");
-    expect(ghRequest).toHaveBeenCalledTimes(1);
+    // 2, not 1: findPreviewArtifactByCommitSha's exact-name query misses
+    // (no artifact was mocked), so it falls back to a second, broader
+    // query before giving up - both happen on the first /main request
+    // only, since the second is served entirely from cache.
+    expect(ghRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it("falls back to R2 instead of erroring on a corrupt cache entry", async () => {
+    await env.PREVIEW_BUCKET.put(MAIN_PREVIEW_KEY, "test archive contents", {
+      customMetadata: { "commit-sha": COMMIT_SHA }
+    });
+    await env.CACHE_KV.put("preview:main", "not valid json{");
+
+    const res = await get("/previews/v1/main");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { result: { commit_sha: string } };
+    expect(body.result.commit_sha).toBe(COMMIT_SHA);
   });
 });
 

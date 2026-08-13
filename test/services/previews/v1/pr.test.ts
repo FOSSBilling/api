@@ -193,4 +193,47 @@ describe("Previews API v1 - GET /previews/v1/pr/:number", () => {
     );
     putSpy.mockRestore();
   });
+
+  it("resolves a fork PR whose artifact was named from the merge SHA, not the head SHA", async () => {
+    // ci.yml's pull_request-triggered job (fork PRs only) names its
+    // artifact after $GITHUB_SHA, which GitHub sets to the ephemeral
+    // pull_request merge commit rather than the PR's real head commit -
+    // see the comment on findPreviewArtifactByCommitSha. The exact-name
+    // query built from the real head SHA (SHA) therefore misses, and only
+    // the fallback scan (matched by the run's real head_sha, unaffected by
+    // what name the artifact was given) finds it.
+    const mergeShaArtifact = {
+      id: 777,
+      name: "FOSSBilling-preview-deadbee.zip",
+      size_in_bytes: 99,
+      created_at: "2026-08-13T11:00:00Z",
+      expires_at: "2026-08-27T11:00:00Z",
+      expired: false,
+      digest: "sha256:fromfork",
+      workflow_run: { id: 888, head_sha: SHA }
+    };
+    (vi.mocked(ghRequest) as MockGitHubRequest).mockImplementation(
+      async (route: string, params?: { name?: string }) => {
+        if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}") {
+          return { data: { head: { sha: SHA } } };
+        }
+        if (route === "GET /repos/{owner}/{repo}/actions/artifacts") {
+          if (params?.name) {
+            return { data: { total_count: 0, artifacts: [] } };
+          }
+          return { data: { total_count: 1, artifacts: [mergeShaArtifact] } };
+        }
+        throw new Error(`Unexpected route: ${route}`);
+      }
+    );
+
+    const res = await get(`/previews/v1/pr/${PR_NUMBER}`);
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      result: { artifact_id: number; pr_number: number | null };
+    };
+    expect(body.result.artifact_id).toBe(777);
+    expect(body.result.pr_number).toBe(PR_NUMBER);
+  });
 });

@@ -145,13 +145,14 @@ etc., surfaced as 429/503/500 depending on severity).
 
 - Responses are cached in `CACHE_KV`, only for successful lookups - a
   not-yet-built PR or a transient GitHub error always re-resolves on the
-  next request. `GET /pr/{number}` (`preview:pr:{number}`) and `GET /main`
-  (`preview:main`) use the 60s default, matching how often a moving
-  pointer can realistically change. `GET /commit/{sha}`
-  (`preview:commit:{sha}`, also used by `/commit/{sha}/download` and
+  next request. `GET /pr/{number}` (`preview:pr:{number}`, also used by
   `/pr/{number}/download` to avoid re-resolving what the metadata route
-  already cached) uses 3600s instead - a commit's build never changes once
-  it exists, so there's no correctness reason to re-check it every minute.
+  already cached) and `GET /main` (`preview:main`) use the 60s default,
+  matching how often a moving pointer can realistically change.
+  `GET /commit/{sha}` (`preview:commit:{sha}`, likewise shared with
+  `/commit/{sha}/download`) uses 3600s instead - a commit's build never
+  changes once it exists, so there's no correctness reason to re-check it
+  every minute.
 - `GET /pr/{number}/download` and `GET /commit/{sha}/download` always
   resolve GitHub's signed redirect URL live, never cached - it expires in
   about a minute, and Cloudflare KV's 60s minimum TTL leaves no safe margin

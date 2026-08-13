@@ -6,7 +6,7 @@ Everything is built on [Hono](https://hono.dev), making it lightweight and fast.
 
 ## What it does
 
-The worker exposes three main services:
+The worker exposes four main services:
 
 - **Versions Service** (`/versions/v1`)
   The source of truth for FOSSBilling updates. It fetches release data from GitHub, caches it for performance, and helps instances decide if they need to update.

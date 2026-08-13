@@ -1,5 +1,6 @@
 import { createRoute } from "@hono/zod-openapi";
 import {
+  ArtifactPreview,
   ArtifactPreviewResponseSchema,
   CommitShaParamSchema,
   errorResponse
@@ -16,6 +17,20 @@ import { PreviewsV1App } from "./app";
 const COMMIT_CACHE_TTL_SECONDS = 3600;
 
 const cacheKeyForSha = (sha: string) => `preview:commit:${sha.toLowerCase()}`;
+
+// Caps the cache lifetime at the artifact's own remaining GitHub retention
+// - a lookup resolved shortly before an artifact expires must not be
+// cached for the full 3600s, or /commit/{sha} would keep serving a 200
+// with stale metadata for up to an hour after GitHub itself starts
+// 404ing (which respondWithDownloadRedirect's live resolution already
+// would - see cache.ts for what happens when this comes out under KV's
+// 60s minimum TTL).
+function ttlForArtifact(artifact: ArtifactPreview): number {
+  const remainingSeconds = Math.floor(
+    (new Date(artifact.expires_at).getTime() - Date.now()) / 1000
+  );
+  return Math.min(COMMIT_CACHE_TTL_SECONDS, remainingSeconds);
+}
 
 export function registerCommitRoutes(app: PreviewsV1App): void {
   const commitRoute = createRoute({
@@ -47,7 +62,7 @@ export function registerCommitRoutes(app: PreviewsV1App): void {
       c.env.CACHE_KV,
       cacheKeyForSha(sha),
       () => resolveArtifactPreview(githubToken, sha, null),
-      COMMIT_CACHE_TTL_SECONDS
+      ttlForArtifact
     );
 
     return respondWithLookup(
@@ -85,7 +100,7 @@ export function registerCommitRoutes(app: PreviewsV1App): void {
       c.env.CACHE_KV,
       cacheKeyForSha(sha),
       () => resolveArtifactPreview(githubToken, sha, null),
-      COMMIT_CACHE_TTL_SECONDS
+      ttlForArtifact
     );
     return respondWithDownloadRedirect(
       c,

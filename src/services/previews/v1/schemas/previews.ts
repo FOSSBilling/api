@@ -4,7 +4,16 @@ export const ErrorResponseSchema = z
   .object({
     error: z.object({
       message: z.string(),
-      code: z.string()
+      code: z.string(),
+      // Only present on 422s - index.ts's defaultHook attaches the zod
+      // validation issues here for VALIDATION_ERROR responses.
+      details: z
+        .array(
+          z.unknown().openapi({
+            type: ["string", "number", "boolean", "object", "array", "null"]
+          })
+        )
+        .optional()
     })
   })
   .openapi("Error");
