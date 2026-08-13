@@ -126,6 +126,7 @@ interface ReleaseAsset {
   name: string;
   browser_download_url: string;
   size: number;
+  digest: string | null;
 }
 
 function getReleaseZipAsset(
@@ -483,7 +484,8 @@ export async function getReleases(
           size_bytes: zipAsset.size,
           is_prerelease: Boolean(release.prerelease),
           github_release_id: release.id ?? 0,
-          changelog: release.body || ""
+          changelog: release.body || "",
+          digest: zipAsset.digest ?? null
         };
         return [tag, releaseDetails];
       }
@@ -583,6 +585,13 @@ function parseCachedReleases(
   try {
     const parsedCache = JSON.parse(cachedReleases);
     if (parsedCache && typeof parsedCache === "object") {
+      // Cache entries written before the `digest` field existed lack the
+      // key entirely; normalize them to the documented `null` fallback.
+      for (const release of Object.values(parsedCache as Releases)) {
+        if (release.digest === undefined) {
+          release.digest = null;
+        }
+      }
       return parsedCache as Releases;
     }
   } catch (parseError) {

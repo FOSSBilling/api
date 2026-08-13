@@ -33,7 +33,8 @@ GET /versions/v1
       "size_bytes": 15485760,
       "is_prerelease": false,
       "github_release_id": 987654321,
-      "changelog": "## 0.5.0\n- Major feature updates..."
+      "changelog": "## 0.5.0\n- Major feature updates...",
+      "digest": "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
     }
   },
   "error_code": 0,
@@ -140,3 +141,4 @@ When GitHub is unavailable and no cached data exists:
 - `details` includes the GitHub HTTP status and error code when available.
 - `GITHUB_TOKEN` is required for GitHub API access.
 - Releases before 0.5.0 read `src/composer.json`; newer releases use `composer.json`.
+- `digest` is the SHA-256 digest of the release zip asset (`sha256:<hex>`), computed by GitHub; `null` if GitHub has not computed one for that asset.

@@ -83,6 +83,7 @@ export interface VersionInfo {
   is_prerelease: boolean;
   github_release_id: number;
   changelog: string;
+  digest: string | null;
 }
 
 // GitHub Types

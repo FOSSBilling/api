@@ -263,6 +263,8 @@ describe("Versions API v1 - Error Handling", () => {
       expect(data.error_code).toBe(0);
       expect(data.result["1.0.0"]).toBeDefined();
       expect(data.stale).toBe(false);
+      // Cached before the `digest` field existed; should be normalized to null.
+      expect(data.result["1.0.0"]).toHaveProperty("digest", null);
     });
 
     it("should handle GitHub API returning invalid JSON", async () => {
