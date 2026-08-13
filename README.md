@@ -19,6 +19,10 @@ The worker exposes three main services:
   generated HTTPS API client; it must not bind or migrate `DB_EXTENSIONS`.
   See [`src/services/extensions/v2/README.md`](src/services/extensions/v2/README.md).
 
+- **Previews** (`/previews/v1`)
+  Resolves FOSSBilling preview builds — the current main preview and per-PR/per-commit builds produced by FOSSBilling/FOSSBilling's GitHub Actions workflows. Read-only; GitHub Actions and R2 are the sources of truth, not this service.
+  See [`src/services/previews/v1/README.md`](src/services/previews/v1/README.md).
+
 ## Architecture
 
 We've structured the app to separate the core logic from the specific runtime environment (Cloudflare, Node, etc.).
@@ -41,8 +45,9 @@ Each service documents its own endpoints and behaviour:
 | Central Alerts | `/central-alerts/v1`               | [`src/services/central-alerts/v1/README.md`](src/services/central-alerts/v1/README.md) |
 | Stats          | `/stats/v1`                        | [`src/services/stats/v1/README.md`](src/services/stats/v1/README.md)                   |
 | Extensions     | `/extensions/v1`, `/extensions/v2` | [`src/services/extensions/v2/README.md`](src/services/extensions/v2/README.md)         |
+| Previews       | `/previews/v1`                     | [`src/services/previews/v1/README.md`](src/services/previews/v1/README.md)             |
 
-Extensions v2 also publishes a live OpenAPI document at `/extensions/v2/openapi.json` and a reference UI at `/extensions/v2/docs`.
+Extensions v2 and Previews v1 also publish a live OpenAPI document (`/extensions/v2/openapi.json`, `/previews/v1/openapi.json`) and a reference UI (`/extensions/v2/docs`, `/previews/v1/docs`).
 
 ## Configuration
 
@@ -57,6 +62,7 @@ We use [Cloudflare D1](https://developers.cloudflare.com/d1/) and [KV](https://d
   Migrations are owned by extensions v2 and applied only from this repository — see [its README](src/services/extensions/v2/README.md#database) for the migration and adoption procedure.
 - **KV Namespace** (`CACHE_KV`): Caches GitHub API responses so we don't hit rate limits.
 - **KV Namespace** (`AUTH_KV`): Stores the `UPDATE_TOKEN` value for `/versions/v1/update`.
+- **R2 Bucket** (`PREVIEW_BUCKET`): Backs `/previews/v1/main` — see [`src/services/previews/v1/README.md`](src/services/previews/v1/README.md) and the comment in `wrangler.jsonc` for which bucket this points at and why.
 
 ### Environment Variables
 

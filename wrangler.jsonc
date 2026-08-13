@@ -47,6 +47,18 @@
       "id": "0771957093ae481b9cd974ffa83f8263"
     }
   ],
+  // Backs previews/v1's `main` route. Pre-existing bucket (created
+  // 2024-09-27) that FOSSBilling/FOSSBilling's ci.yml already syncs the
+  // main-branch preview zip to, served publicly at
+  // download.fossbilling.org - not previously bound to any Worker.
+  // Double-check in the Cloudflare dashboard that this is in fact the
+  // bucket behind that custom domain before relying on it in production.
+  "r2_buckets": [
+    {
+      "binding": "PREVIEW_BUCKET",
+      "bucket_name": "fossbilling"
+    }
+  ],
   "ratelimits": [
     {
       "name": "PROFILE_CREATION_RATE_LIMITER",
