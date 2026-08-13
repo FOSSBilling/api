@@ -6,12 +6,19 @@ import {
 } from "../../../../lib/github-errors";
 import { logWarn } from "../../../../lib/logger";
 
-// FOSSBilling/FOSSBilling's ci.yml uploads one unified artifact under this
-// name for every PR build, non-main branch push, and main push - see
-// upload-preview in that repo's .github/workflows/ci.yml.
 const REPO_OWNER = "FOSSBilling";
 const REPO_NAME = "FOSSBilling";
-const PREVIEW_ARTIFACT_NAME = "FOSSBilling Preview";
+
+// FOSSBilling/FOSSBilling's ci.yml uploads one artifact per commit for
+// every PR build, non-main branch push, and main push - named after that
+// commit's short SHA (archive: false, so the file's own basename becomes
+// the artifact name - see upload-preview in that repo's
+// .github/workflows/ci.yml). Querying by the exact name this produces
+// returns at most the handful of runs that ever targeted this one commit,
+// rather than every preview artifact in the retention window.
+function artifactNameForSha(sha: string): string {
+  return `FOSSBilling-preview-${sha.slice(0, 7)}.zip`;
+}
 
 export interface PreviewArtifact {
   runId: number;
@@ -54,10 +61,10 @@ function unavailable<T>(
   return { status: "unavailable", error: githubError };
 }
 
-// Lists artifacts named `FOSSBilling Preview` (server-side filtered, so the
-// result set is bounded to one live artifact per recent successful run
-// rather than the repo's entire artifact history) and returns the newest
-// non-expired one whose triggering run built the given commit.
+// Queries the exact artifact name this commit's build would have produced
+// (see artifactNameForSha) and returns the newest non-expired match. The
+// head_sha check below is defense against a short-SHA collision, not the
+// primary matching mechanism - the name filter already does that.
 export async function findPreviewArtifactByCommitSha(
   githubToken: string,
   sha: string
@@ -69,7 +76,7 @@ export async function findPreviewArtifactByCommitSha(
       {
         owner: REPO_OWNER,
         repo: REPO_NAME,
-        name: PREVIEW_ARTIFACT_NAME,
+        name: artifactNameForSha(sha),
         per_page: 100,
         headers: { Authorization: `Bearer ${githubToken}` }
       }

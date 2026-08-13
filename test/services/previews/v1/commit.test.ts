@@ -86,6 +86,16 @@ describe("Previews API v1 - GET /previews/v1/commit/:sha", () => {
       `/previews/v1/commit/${SHA}/download`
     );
     expect(body.result.source).toBe("actions_artifact");
+
+    // Regression check: FOSSBilling/FOSSBilling's ci.yml names each
+    // artifact after the commit's short SHA rather than sharing one name
+    // across every run - querying the wrong name silently returns nothing.
+    expect(ghRequest).toHaveBeenCalledWith(
+      "GET /repos/{owner}/{repo}/actions/artifacts",
+      expect.objectContaining({
+        name: `FOSSBilling-preview-${SHA.slice(0, 7)}.zip`
+      })
+    );
   });
 
   it("matches on a short SHA prefix", async () => {

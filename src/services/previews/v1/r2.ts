@@ -13,22 +13,18 @@ export interface MainPreviewObject {
   downloadUrl: string;
 }
 
-// R2's zip and GitHub's own `FOSSBilling Preview` artifact zip for the same
-// commit are two independently-built byte streams (see previews/v1's
-// README), so the digest reported here has to come from this object's own
-// metadata, not GitHub's. `sha256`/`commit-sha` are custom metadata the CI
-// upload step sets explicitly - both are absent (null) until that step is
-// added to FOSSBilling/FOSSBilling's ci.yml.
+// `digest`/`commit-sha` are custom metadata FOSSBilling/FOSSBilling's
+// ci.yml sets explicitly on the R2 upload (`digest` already carries the
+// "sha256:" prefix - see that repo's ci.yml `upload-preview` job).
 export async function getMainPreviewObject(
   bucket: R2Bucket
 ): Promise<MainPreviewObject | null> {
   const object = await bucket.head(MAIN_PREVIEW_KEY);
   if (!object) return null;
 
-  const digest = object.customMetadata?.sha256;
   return {
     commitSha: object.customMetadata?.["commit-sha"] ?? null,
-    digest: digest ? `sha256:${digest}` : null,
+    digest: object.customMetadata?.digest ?? null,
     sizeBytes: object.size,
     lastModified: object.uploaded.toISOString(),
     downloadUrl: MAIN_PREVIEW_DOWNLOAD_URL

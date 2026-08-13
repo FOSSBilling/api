@@ -31,8 +31,8 @@ describe("Previews API v1 - GET /previews/v1/main", () => {
   it("returns the R2 object's metadata, including the sha256 digest", async () => {
     await env.PREVIEW_BUCKET.put(MAIN_PREVIEW_KEY, "test archive contents", {
       customMetadata: {
-        sha256:
-          "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+        digest:
+          "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
         "commit-sha": "abc1234567890abc1234567890abc1234567890"
       }
     });

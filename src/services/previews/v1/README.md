@@ -4,13 +4,17 @@
 
 Read-only lookup of FOSSBilling preview builds. GitHub Actions is the source
 of truth for PR/commit previews - `FOSSBilling/FOSSBilling`'s `ci.yml`
-already uploads a single unified artifact (`FOSSBilling Preview`) for every
-PR build, non-main branch push, and main push, and this service resolves
-against that artifact list rather than maintaining its own registry. The
-`main` preview is answered from R2 instead, because the R2-hosted zip and
-the GitHub artifact zip for the same commit are two independently-built byte
-streams with different digests - whichever one is reported has to match the
-bytes actually served.
+uploads one artifact per commit, named `FOSSBilling-preview-{short_sha}.zip`
+(`archive: false`, so the zip itself is the artifact - no extra wrapping),
+for every PR build, non-main branch push, and main push. This service
+resolves by querying that exact name rather than listing every preview
+artifact and filtering. The `main` preview is answered from R2 instead,
+sourced from `digest`/`commit-sha` custom object metadata the same CI job
+sets on the R2 upload - kept separate from the GitHub-artifact path because
+the R2 zip and the GitHub artifact zip for a given commit are two
+independently-built files (a `cp` of the same bytes, in the current CI job,
+but not guaranteed to stay that way), so whichever one is reported as the
+digest has to match the bytes `main` actually serves.
 
 There is no publish/write endpoint: nothing pushes data into this service,
 it only resolves and redirects.
@@ -47,9 +51,10 @@ Current main preview, sourced from an R2 object HEAD (no GitHub API call).
 }
 ```
 
-`commit_sha` and `digest` are `null` until FOSSBilling/FOSSBilling's
-`upload-preview` CI job is updated to set `sha256`/`commit-sha` as R2 custom
-object metadata on the upload - see that repo's `ci.yml`.
+`commit_sha` and `digest` come straight from the R2 object's `commit-sha`/
+`digest` custom metadata (`digest` already carries the `sha256:` prefix) -
+both are `null` if that object has no custom metadata (e.g. it predates the
+CI job setting it).
 
 ### GET `/pr/{number}` and GET `/commit/{sha}`
 
@@ -94,7 +99,12 @@ expires in about a minute.
 ## Error Responses
 
 ```json
-{ "error": { "message": "No pull request #999 was found, or it has no preview build yet.", "code": "NOT_FOUND" } }
+{
+  "error": {
+    "message": "No pull request #999 was found, or it has no preview build yet.",
+    "code": "NOT_FOUND"
+  }
+}
 ```
 
 `code` is one of `NOT_FOUND`, `VALIDATION_ERROR` (422, malformed path
