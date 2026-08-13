@@ -7,6 +7,9 @@ export type ReleaseDetails = {
   is_prerelease: boolean;
   github_release_id: number;
   changelog: string;
+  // SHA-256 digest of the release zip (`sha256:<hex>`), as computed by
+  // GitHub; null for older assets predating GitHub's digest support.
+  digest: string | null;
 };
 
 export type Releases = {

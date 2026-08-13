@@ -126,6 +126,7 @@ interface ReleaseAsset {
   name: string;
   browser_download_url: string;
   size: number;
+  digest: string | null;
 }
 
 function getReleaseZipAsset(
@@ -483,7 +484,8 @@ export async function getReleases(
           size_bytes: zipAsset.size,
           is_prerelease: Boolean(release.prerelease),
           github_release_id: release.id ?? 0,
-          changelog: release.body || ""
+          changelog: release.body || "",
+          digest: zipAsset.digest ?? null
         };
         return [tag, releaseDetails];
       }

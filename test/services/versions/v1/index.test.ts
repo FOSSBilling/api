@@ -210,6 +210,10 @@ describe("Versions API v1", () => {
       expect(data.result).toHaveProperty("is_prerelease", false);
       expect(data.result).toHaveProperty("github_release_id");
       expect(data.result).toHaveProperty("changelog");
+      expect(data.result).toHaveProperty(
+        "digest",
+        "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+      );
     });
   });
 
@@ -227,6 +231,8 @@ describe("Versions API v1", () => {
         throw new Error("Expected version info for 0.5.0");
       }
       expect(data.result).toHaveProperty("version", "0.5.0");
+      // 0.5.0's mock asset predates GitHub's asset-digest feature.
+      expect(data.result).toHaveProperty("digest", null);
     });
 
     it("should return 404 for non-existent version", async () => {
