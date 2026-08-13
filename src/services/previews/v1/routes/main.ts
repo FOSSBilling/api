@@ -1,6 +1,7 @@
 import { createRoute } from "@hono/zod-openapi";
 import { MainPreviewResponseSchema, errorResponse } from "../schemas/previews";
 import { getMainPreviewObject } from "../r2";
+import { notFoundBody } from "./errors";
 import { PreviewsV1App } from "./app";
 
 const MAIN_CACHE_KEY = "preview:main";
@@ -33,12 +34,7 @@ export function registerMainRoutes(app: PreviewsV1App): void {
     const object = await getMainPreviewObject(c.env.PREVIEW_BUCKET);
     if (!object) {
       return c.json(
-        {
-          error: {
-            message: "No main preview has been published yet",
-            code: "NOT_FOUND"
-          }
-        },
+        notFoundBody("No main preview has been published yet"),
         404
       );
     }

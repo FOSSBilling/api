@@ -4,10 +4,9 @@ import {
   CommitShaParamSchema,
   errorResponse
 } from "../schemas/previews";
-import { getArtifactDownloadUrl } from "../github/artifacts";
 import { resolveArtifactPreview } from "../resolve";
 import { cachedLookup } from "../cache";
-import { githubErrorBody, notFoundBody, statusFromGithubError } from "./errors";
+import { respondWithDownloadRedirect, respondWithLookup } from "./respond";
 import { PreviewsV1App } from "./app";
 
 export function registerCommitRoutes(app: PreviewsV1App): void {
@@ -42,18 +41,10 @@ export function registerCommitRoutes(app: PreviewsV1App): void {
       () => resolveArtifactPreview(githubToken, sha, null)
     );
 
-    if (result.status === "found") {
-      return c.json({ result: result.data }, 200);
-    }
-    if (result.status === "not_found") {
-      return c.json(
-        notFoundBody(`No preview artifact exists for commit ${sha}.`),
-        404
-      );
-    }
-    return c.json(
-      githubErrorBody(result.error, "Failed to look up the preview artifact"),
-      statusFromGithubError(result.error)
+    return respondWithLookup(
+      c,
+      result,
+      `No preview artifact exists for commit ${sha}.`
     );
   });
 
@@ -81,39 +72,11 @@ export function registerCommitRoutes(app: PreviewsV1App): void {
     // link that expires in about a minute, so it can never be served from
     // CACHE_KV alongside the longer-lived metadata response.
     const artifact = await resolveArtifactPreview(githubToken, sha, null);
-    if (artifact.status === "not_found") {
-      return c.json(
-        notFoundBody(`No preview artifact exists for commit ${sha}.`),
-        404
-      );
-    }
-    if (artifact.status === "unavailable") {
-      return c.json(
-        githubErrorBody(
-          artifact.error,
-          "Failed to look up the preview artifact"
-        ),
-        statusFromGithubError(artifact.error)
-      );
-    }
-
-    const redirect = await getArtifactDownloadUrl(
+    return respondWithDownloadRedirect(
+      c,
       githubToken,
-      artifact.data.artifact_id
+      artifact,
+      `No preview artifact exists for commit ${sha}.`
     );
-    if (redirect.status === "not_found") {
-      return c.json(notFoundBody("The preview artifact has expired."), 404);
-    }
-    if (redirect.status === "unavailable") {
-      return c.json(
-        githubErrorBody(
-          redirect.error,
-          "Failed to resolve the artifact download URL"
-        ),
-        statusFromGithubError(redirect.error)
-      );
-    }
-
-    return c.redirect(redirect.data, 302);
   });
 }

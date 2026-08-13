@@ -4,13 +4,10 @@ import {
   errorResponse,
   PrNumberParamSchema
 } from "../schemas/previews";
-import {
-  getArtifactDownloadUrl,
-  resolvePullRequestHeadSha
-} from "../github/artifacts";
+import { resolvePullRequestHeadSha } from "../github/artifacts";
 import { PreviewLookupResult, resolveArtifactPreview } from "../resolve";
 import { cachedLookup } from "../cache";
-import { githubErrorBody, notFoundBody, statusFromGithubError } from "./errors";
+import { respondWithDownloadRedirect, respondWithLookup } from "./respond";
 import { PreviewsV1App } from "./app";
 
 // Resolves a PR number to its artifact preview by first finding the head
@@ -24,6 +21,9 @@ async function resolvePrPreview(
   if (head.status !== "found") return head;
   return resolveArtifactPreview(githubToken, head.data, prNumber);
 }
+
+const notFoundMessage = (prNumber: number) =>
+  `No pull request #${prNumber} was found, or it has no preview build yet.`;
 
 export function registerPrRoutes(app: PreviewsV1App): void {
   const prRoute = createRoute({
@@ -57,21 +57,7 @@ export function registerPrRoutes(app: PreviewsV1App): void {
       () => resolvePrPreview(githubToken, number)
     );
 
-    if (result.status === "found") {
-      return c.json({ result: result.data }, 200);
-    }
-    if (result.status === "not_found") {
-      return c.json(
-        notFoundBody(
-          `No pull request #${number} was found, or it has no preview build yet.`
-        ),
-        404
-      );
-    }
-    return c.json(
-      githubErrorBody(result.error, "Failed to look up the preview artifact"),
-      statusFromGithubError(result.error)
-    );
+    return respondWithLookup(c, result, notFoundMessage(number));
   });
 
   const prDownloadRoute = createRoute({
@@ -96,41 +82,11 @@ export function registerPrRoutes(app: PreviewsV1App): void {
 
     // Always resolved live, same reasoning as /commit/{sha}/download.
     const artifact = await resolvePrPreview(githubToken, number);
-    if (artifact.status === "not_found") {
-      return c.json(
-        notFoundBody(
-          `No pull request #${number} was found, or it has no preview build yet.`
-        ),
-        404
-      );
-    }
-    if (artifact.status === "unavailable") {
-      return c.json(
-        githubErrorBody(
-          artifact.error,
-          "Failed to look up the preview artifact"
-        ),
-        statusFromGithubError(artifact.error)
-      );
-    }
-
-    const redirect = await getArtifactDownloadUrl(
+    return respondWithDownloadRedirect(
+      c,
       githubToken,
-      artifact.data.artifact_id
+      artifact,
+      notFoundMessage(number)
     );
-    if (redirect.status === "not_found") {
-      return c.json(notFoundBody("The preview artifact has expired."), 404);
-    }
-    if (redirect.status === "unavailable") {
-      return c.json(
-        githubErrorBody(
-          redirect.error,
-          "Failed to resolve the artifact download URL"
-        ),
-        statusFromGithubError(redirect.error)
-      );
-    }
-
-    return c.redirect(redirect.data, 302);
   });
 }

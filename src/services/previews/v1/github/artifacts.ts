@@ -84,32 +84,42 @@ export async function findPreviewArtifactByCommitSha(
 
     const artifacts = result.data.artifacts as RawArtifact[];
     const shaLower = sha.toLowerCase();
-    let match: RawArtifact | null = null;
+    let match: {
+      artifact: RawArtifact;
+      runId: number;
+      headSha: string;
+    } | null = null;
 
     for (const artifact of artifacts) {
-      if (artifact.expired || !artifact.workflow_run) continue;
-      if (!artifact.workflow_run.head_sha.toLowerCase().startsWith(shaLower)) {
-        continue;
-      }
-      if (!match || (artifact.created_at ?? "") > (match.created_at ?? "")) {
-        match = artifact;
+      const workflowRun = artifact.workflow_run;
+      if (artifact.expired || !workflowRun) continue;
+      if (!workflowRun.head_sha.toLowerCase().startsWith(shaLower)) continue;
+      if (
+        !match ||
+        (artifact.created_at ?? "") > (match.artifact.created_at ?? "")
+      ) {
+        match = {
+          artifact,
+          runId: workflowRun.id,
+          headSha: workflowRun.head_sha
+        };
       }
     }
 
-    if (!match || !match.workflow_run) {
+    if (!match) {
       return { status: "not_found" };
     }
 
     return {
       status: "found",
       data: {
-        runId: match.workflow_run.id,
-        artifactId: match.id,
-        commitSha: match.workflow_run.head_sha,
-        digest: match.digest ?? null,
-        sizeBytes: match.size_in_bytes,
-        createdAt: match.created_at ?? "",
-        expiresAt: match.expires_at ?? ""
+        runId: match.runId,
+        artifactId: match.artifact.id,
+        commitSha: match.headSha,
+        digest: match.artifact.digest ?? null,
+        sizeBytes: match.artifact.size_in_bytes,
+        createdAt: match.artifact.created_at ?? "",
+        expiresAt: match.artifact.expires_at ?? ""
       }
     };
   } catch (error) {
@@ -117,7 +127,6 @@ export async function findPreviewArtifactByCommitSha(
   }
 }
 
-// Resolves a PR number to its current head commit SHA.
 export async function resolvePullRequestHeadSha(
   githubToken: string,
   prNumber: number
