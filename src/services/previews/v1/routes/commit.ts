@@ -68,10 +68,17 @@ export function registerCommitRoutes(app: PreviewsV1App): void {
     const { sha } = c.req.valid("param");
     const githubToken = c.env.GITHUB_TOKEN;
 
-    // Always resolved live - GitHub's artifact download URL is a signed
-    // link that expires in about a minute, so it can never be served from
-    // CACHE_KV alongside the longer-lived metadata response.
-    const artifact = await resolveArtifactPreview(githubToken, sha, null);
+    // Shares the metadata route's cache entry for which artifact to
+    // download - only the redirect URL itself (resolved inside
+    // respondWithDownloadRedirect) has to be live on every hit, since
+    // that's the part that expires in about a minute. Reusing the cache
+    // here is what keeps a burst of downloads for the same commit to ~1
+    // GitHub API call per cache window instead of 1 per request.
+    const artifact = await cachedLookup(
+      c.env.CACHE_KV,
+      `preview:commit:${sha.toLowerCase()}`,
+      () => resolveArtifactPreview(githubToken, sha, null)
+    );
     return respondWithDownloadRedirect(
       c,
       githubToken,

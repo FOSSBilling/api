@@ -175,4 +175,35 @@ describe("Previews API v1 - GET /previews/v1/commit/:sha", () => {
       "https://example.com/signed-download"
     );
   });
+
+  it("shares the metadata route's cache instead of re-listing artifacts on every download", async () => {
+    let artifactsListCalls = 0;
+    (vi.mocked(ghRequest) as MockGitHubRequest).mockImplementation(
+      async (route: string) => {
+        if (route === "GET /repos/{owner}/{repo}/actions/artifacts") {
+          artifactsListCalls++;
+          return { data: SAMPLE_ARTIFACTS };
+        }
+        if (
+          route ===
+          "GET /repos/{owner}/{repo}/actions/artifacts/{artifact_id}/{archive_format}"
+        ) {
+          return {
+            status: 302,
+            headers: { location: "https://example.com/signed-download" }
+          };
+        }
+        throw new Error(`Unexpected route: ${route}`);
+      }
+    );
+
+    await get(`/previews/v1/commit/${SHA}`);
+    const res = await get(`/previews/v1/commit/${SHA}/download`);
+
+    expect(res.status).toBe(302);
+    // The artifact lookup ran once (warming the cache on the first
+    // request) - the download request reused it rather than listing
+    // artifacts again just to find the same artifact_id.
+    expect(artifactsListCalls).toBe(1);
+  });
 });

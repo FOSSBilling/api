@@ -80,8 +80,15 @@ export function registerPrRoutes(app: PreviewsV1App): void {
     const { number } = c.req.valid("param");
     const githubToken = c.env.GITHUB_TOKEN;
 
-    // Always resolved live, same reasoning as /commit/{sha}/download.
-    const artifact = await resolvePrPreview(githubToken, number);
+    // Shares the metadata route's cache entry - see the equivalent comment
+    // in routes/commit.ts. Without this, every download hit would cost 3
+    // GitHub API calls (PR->SHA, SHA->artifact, then the redirect) instead
+    // of the 1 that's actually unavoidable.
+    const artifact = await cachedLookup(
+      c.env.CACHE_KV,
+      `preview:pr:${number}`,
+      () => resolvePrPreview(githubToken, number)
+    );
     return respondWithDownloadRedirect(
       c,
       githubToken,
