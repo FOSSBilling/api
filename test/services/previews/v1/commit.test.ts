@@ -379,6 +379,64 @@ describe("Previews API v1 - GET /previews/v1/commit/:sha", () => {
     expect(ghRequest).toHaveBeenCalledTimes(3);
   });
 
+  it("keeps paging past the old 5-page cap when the match is further back", async () => {
+    // Regression check: an earlier version of the fallback stopped after
+    // 5 pages (500 artifacts) as a hard cutoff, which would have reported
+    // this commit not_found even though its artifact genuinely exists -
+    // just on page 6. A repo with more than 500 live preview artifacts
+    // isn't hypothetical for an active project; the fallback is the
+    // source of truth for fork PRs and can't trade correctness for a
+    // fixed cutoff the way the fast exact-name path can.
+    const fullPage = (offset: number) =>
+      Array.from({ length: 100 }, (_, i) => ({
+        id: offset + i,
+        name: `FOSSBilling-preview-other${offset + i}.zip`,
+        size_in_bytes: 1,
+        created_at: "2026-08-01T00:00:00Z",
+        expires_at: "2026-08-15T00:00:00Z",
+        expired: false,
+        digest: null,
+        workflow_run: {
+          id: 1,
+          head_sha: "0000000000000000000000000000000000000"
+        }
+      }));
+    const page6Match = {
+      id: 9000,
+      name: "FOSSBilling-preview-deadbee.zip",
+      size_in_bytes: 99,
+      created_at: "2026-08-13T11:00:00Z",
+      expires_at: "2026-08-27T11:00:00Z",
+      expired: false,
+      digest: "sha256:page6",
+      workflow_run: { id: 888, head_sha: SHA }
+    };
+    (vi.mocked(ghRequest) as MockGitHubRequest).mockImplementation(
+      async (route: string, params?: { name?: string; page?: number }) => {
+        if (route !== "GET /repos/{owner}/{repo}/actions/artifacts") {
+          throw new Error(`Unexpected route: ${route}`);
+        }
+        if (params?.name) {
+          return { data: { total_count: 0, artifacts: [] } };
+        }
+        const page = params?.page ?? 1;
+        if (page <= 5) {
+          return { data: { artifacts: fullPage(page * 1000) } };
+        }
+        if (page === 6) {
+          return { data: { artifacts: [page6Match] } };
+        }
+        throw new Error(`Unexpected page: ${page}`);
+      }
+    );
+
+    const res = await get(`/previews/v1/commit/${SHA}`);
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { result: { artifact_id: number } };
+    expect(body.result.artifact_id).toBe(9000);
+  });
+
   it("falls back to the default TTL ceiling when expires_at can't be parsed", async () => {
     (vi.mocked(ghRequest) as MockGitHubRequest).mockImplementation(
       async () => ({

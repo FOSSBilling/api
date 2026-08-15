@@ -80,17 +80,23 @@ async function listArtifacts(
   return result.data.artifacts as RawArtifact[];
 }
 
-// Bounds the fallback scan's worst case to 500 artifacts (5 pages x 100)
-// rather than paginating through a repo's entire artifact history. Preview
-// artifacts alone rarely approach that within GitHub's 14-day retention,
-// even for an active repo.
-const MAX_FALLBACK_PAGES = 5;
+// A circuit breaker, not a correctness bound. This is the fallback's
+// only source of truth for fork PRs - imposing a real cutoff here would
+// just trade the original false-not-found bug for a smaller version of
+// itself, missing a genuine match that happens to sit past page N. Every
+// GitHub Actions artifact expires after 14 days regardless of type, so a
+// repo's total artifact count is inherently finite even for very active
+// repos; this exists only to guarantee termination if the API ever
+// doesn't behave as expected (e.g. never returns a short page), not
+// because 5,000 artifacts is a realistic amount to actually page through.
+const MAX_FALLBACK_PAGES = 50;
 
 // The fallback path (see findPreviewArtifactByCommitSha) can't filter
 // server-side by name, so a repo with more than one page of live preview
 // artifacts would silently miss a genuine match sitting on page 2+ with a
-// single unpaginated call. Pages through until a match is found or the
-// list runs out.
+// single unpaginated call. Pages through until GitHub returns a page
+// short of per_page - the real "no more results" signal - or a match is
+// found, whichever happens first.
 async function findInFallbackPages(
   githubToken: string,
   shaLower: string
