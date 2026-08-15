@@ -16,13 +16,20 @@ given commit are two independently-built files (a `cp` of the same bytes,
 in the current CI job, but not guaranteed to stay that way), so whichever
 one is reported as the digest has to match the bytes `main` actually
 serves. `GET /main` does still cross-reference that commit's GitHub Actions
-artifact for `run_id`/`artifact_id`/`created_at`/`expires_at` - see its
-section below - but only as best-effort enrichment, never as a dependency.
+artifact for enrichment - see Resource Model below - but only as
+best-effort, never as a dependency.
 
 There is no publish/write endpoint: nothing pushes data into this service,
 it only resolves and redirects.
 
-## Resource model
+## Endpoints
+
+Endpoints are not listed here. The service publishes its own contract:
+
+- **OpenAPI document:** `GET /previews/v1/openapi.json`
+- **Reference UI:** `GET /previews/v1/docs`
+
+## Resource Model
 
 - `GET /main` and `GET /pr/{number}` are **pointers** - they always resolve
   to whatever is current.
@@ -31,115 +38,25 @@ it only resolves and redirects.
 - `pr/{number}`'s handler resolves the PR to its head SHA
   (`GET /pulls/{number}`) and delegates to the same resolver `commit/{sha}`
   uses - one GitHub-facing code path, not two.
-
-## Endpoints
-
-### GET `/main`
-
-Current main preview. `download_url`, `digest`, `commit_sha`,
-`size_bytes`, and `last_modified` are sourced from an R2 object HEAD (no
-GitHub API call). `run_id`, `artifact_id`, `created_at`, and `expires_at`
-are enrichment: resolved from that commit's GitHub Actions artifact (same
-lookup `GET /commit/{sha}` uses) purely for shape parity with
-`ArtifactPreview`, so a client reading either response doesn't have to
-special-case field availability. That enrichment is best-effort and never
-load-bearing - if the commit has no known artifact (e.g. it's aged out of
-GitHub's 14-day retention) or GitHub is unavailable, those four fields are
-just `null`; the response still succeeds with everything R2-sourced intact.
-
-**Response:**
-
-```json
-{
-  "result": {
-    "commit_sha": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
-    "short_sha": "a1b2c3d",
-    "pr_number": null,
-    "run_id": 999999,
-    "artifact_id": 555555,
-    "created_at": "2026-08-13T10:00:00Z",
-    "expires_at": "2026-08-27T10:00:00Z",
-    "digest": "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
-    "size_bytes": 31229553,
-    "last_modified": "2026-08-13T13:11:41.000Z",
-    "download_url": "https://download.fossbilling.org/FOSSBilling-preview.zip",
-    "source": "r2"
-  }
-}
-```
-
-`commit_sha` and `digest` come straight from the R2 object's `commit-sha`/
-`digest` custom metadata (`digest` already carries the `sha256:` prefix) -
-both are `null` if that object has no custom metadata (e.g. it predates the
-CI job setting it), which also means the GitHub Actions enrichment above is
-skipped entirely (nothing to look up by). `source` stays `"r2"` regardless
-of whether the enrichment resolved - it describes where `download_url`/
-`digest` come from, which never changes.
-
-### GET `/main/download`
-
-302 redirect to `download_url` - the same permanent URL `GET /main` already
-reports. Exists purely for uniform addressing (every resource under
-`/previews/v1` has a `/download` sub-route, so callers never need to
-special-case main to reach a download link instead of reading one out of a
-JSON body). Unlike `/pr/{number}/download` and `/commit/{sha}/download`,
-this target URL is fixed rather than short-lived, so it's answered from the
-same cache as `GET /main` instead of re-resolving anything live.
-
-### GET `/pr/{number}` and GET `/commit/{sha}`
-
-Preview build for a pull request's current head, or for one exact commit.
-`sha` accepts a full or abbreviated (7+ char) hex SHA.
-
-**Response:**
-
-```json
-{
-  "result": {
-    "commit_sha": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
-    "short_sha": "a1b2c3d",
-    "pr_number": 123,
-    "run_id": 999999,
-    "artifact_id": 555555,
-    "digest": "sha256:...",
-    "size_bytes": 12345,
-    "created_at": "2026-08-13T10:00:00Z",
-    "expires_at": "2026-08-27T10:00:00Z",
-    "download_url": "/previews/v1/commit/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2/download",
-    "source": "actions_artifact"
-  }
-}
-```
-
-`digest` is GitHub's own artifact digest - the exact bytes served by the
-`/download` route. `pr_number` is only set when resolved via `/pr/{number}`;
-a direct `/commit/{sha}` lookup has no way to know which PR (if any) built
-that commit, and reports `null`.
-
-`download_url` always points at the canonical `/commit/{sha}/download`
-route using the fully-resolved SHA, not `/pr/{number}/download` - a PR's
-head SHA moves as new commits land, a specific commit's build does not.
-
-### GET `/pr/{number}/download` and GET `/commit/{sha}/download`
-
-302 redirect to GitHub's live, short-lived artifact download URL. Resolved
-fresh on every request - never served from cache, since GitHub's signed URL
-expires in about a minute.
-
-## Error Responses
-
-```json
-{
-  "error": {
-    "message": "No pull request #999 was found, or it has no preview build yet.",
-    "code": "NOT_FOUND"
-  }
-}
-```
-
-`code` is one of `NOT_FOUND`, `VALIDATION_ERROR` (422, malformed path
-param), or GitHub's own `errorCode` (`rate_limit_error`, `auth_error`,
-etc., surfaced as 429/503/500 depending on severity).
+- `download_url` differs in kind depending on the resource. `main`'s is the
+  permanent public `download.fossbilling.org` URL, embedded directly, since
+  it never expires. `pr`/`commit`'s is self-referential - it points back at
+  their own `/download` sub-route rather than GitHub's actual signed URL,
+  because that URL expires in ~60s and can't be baked into a response with
+  any longer cache lifetime; `/download` resolves the real one live on
+  each hit.
+- `source` on `/main` stays `"r2"` regardless of whether the GitHub Actions
+  enrichment below resolves - it describes where `download_url`/`digest`
+  come from, which never changes.
+- `main`'s `run_id`/`artifact_id`/`created_at`/`expires_at` are enrichment,
+  resolved from that commit's GitHub Actions artifact (the same lookup
+  `commit/{sha}` uses) purely for shape parity with the PR/commit response,
+  so a client reading either doesn't have to special-case field
+  availability. It's best-effort and never load-bearing: a miss (no known
+  artifact yet, the artifact aged out of GitHub's 14-day retention, GitHub
+  unavailable) just leaves those four fields `null` - it's never the reason
+  a request to `/main` fails, since `download_url`/`digest` are R2-sourced
+  and don't depend on it.
 
 ## Notes
 
