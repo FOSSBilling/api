@@ -63,7 +63,8 @@ function unavailable<T>(
 
 async function listArtifacts(
   githubToken: string,
-  name: string | undefined
+  name: string | undefined,
+  page: number = 1
 ): Promise<RawArtifact[]> {
   const result = await ghRequest(
     "GET /repos/{owner}/{repo}/actions/artifacts",
@@ -72,10 +73,40 @@ async function listArtifacts(
       repo: REPO_NAME,
       ...(name ? { name } : {}),
       per_page: 100,
+      page,
       headers: { Authorization: `Bearer ${githubToken}` }
     }
   );
   return result.data.artifacts as RawArtifact[];
+}
+
+// Bounds the fallback scan's worst case to 500 artifacts (5 pages x 100)
+// rather than paginating through a repo's entire artifact history. Preview
+// artifacts alone rarely approach that within GitHub's 14-day retention,
+// even for an active repo.
+const MAX_FALLBACK_PAGES = 5;
+
+// The fallback path (see findPreviewArtifactByCommitSha) can't filter
+// server-side by name, so a repo with more than one page of live preview
+// artifacts would silently miss a genuine match sitting on page 2+ with a
+// single unpaginated call. Pages through until a match is found or the
+// list runs out.
+async function findInFallbackPages(
+  githubToken: string,
+  shaLower: string
+): Promise<{ artifact: RawArtifact; runId: number; headSha: string } | null> {
+  for (let page = 1; page <= MAX_FALLBACK_PAGES; page++) {
+    const artifacts = await listArtifacts(githubToken, undefined, page);
+    const match = matchArtifact(
+      artifacts.filter((artifact) =>
+        artifact.name?.startsWith(ARTIFACT_NAME_PREFIX)
+      ),
+      shaLower
+    );
+    if (match) return match;
+    if (artifacts.length < 100) break; // last page
+  }
+  return null;
 }
 
 // Newest non-expired artifact whose triggering run's real head commit
@@ -129,15 +160,18 @@ function toPreviewArtifact(match: {
 // path since preview-build-pr is fork-only), where $GITHUB_SHA in CI is
 // the actual pushed commit.
 //
-// Falls back to listing every preview artifact and matching by the
-// triggering run's real head_sha if that misses. This is what makes fork
-// PRs resolve correctly: GitHub's pull_request event makes $GITHUB_SHA the
-// ephemeral merge commit rather than the PR's real head commit (see
+// Falls back to paging through every preview artifact (findInFallbackPages)
+// and matching by the triggering run's real head_sha if that misses. This
+// is what makes fork PRs resolve correctly: GitHub's pull_request event
+// makes $GITHUB_SHA the ephemeral merge commit rather than the PR's real
+// head commit (see
 // https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request),
 // so preview-build-pr names its artifact after a SHA this service never
 // asks about - only the run's own head_sha metadata (populated by GitHub
 // independently of what the job saw as $GITHUB_SHA) still says which
-// commit it actually is.
+// commit it actually is. Can't filter this scan server-side by name (no
+// exact name to filter by), so it has to page through results instead of
+// trusting a single page holds the match.
 export async function findPreviewArtifactByCommitSha(
   githubToken: string,
   sha: string
@@ -152,13 +186,7 @@ export async function findPreviewArtifactByCommitSha(
     let match = matchArtifact(exact, shaLower);
 
     if (!match) {
-      const all = await listArtifacts(githubToken, undefined);
-      match = matchArtifact(
-        all.filter((artifact) =>
-          artifact.name?.startsWith(ARTIFACT_NAME_PREFIX)
-        ),
-        shaLower
-      );
+      match = await findInFallbackPages(githubToken, shaLower);
     }
 
     if (!match) {

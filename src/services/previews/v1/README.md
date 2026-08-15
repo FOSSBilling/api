@@ -152,7 +152,14 @@ etc., surfaced as 429/503/500 depending on severity).
   `GET /commit/{sha}` (`preview:commit:{sha}`, likewise shared with
   `/commit/{sha}/download`) uses 3600s instead - a commit's build never
   changes once it exists, so there's no correctness reason to re-check it
-  every minute.
+  every minute. That 3600s is capped at the artifact's own remaining
+  GitHub retention (minus a small safety margin for the cache write
+  itself), so a lookup resolved near the end of an artifact's 14-day life
+  is never cached longer than the artifact actually exists. Within roughly
+  the final minute of that life the capped value falls under KV's 60s
+  minimum TTL, so those requests (and any more before the artifact expires
+  or a request refreshes it) are just served live instead of cached - a
+  short burst of extra GitHub calls right at the end, never stale data.
 - `GET /pr/{number}/download` and `GET /commit/{sha}/download` always
   resolve GitHub's signed redirect URL live, never cached - it expires in
   about a minute, and Cloudflare KV's 60s minimum TTL leaves no safe margin
