@@ -327,59 +327,7 @@ describe("Previews API v1 - GET /previews/v1/commit/:sha", () => {
     expect(ghRequest).toHaveBeenCalledTimes(2);
   });
 
-  it("pages through the fallback scan when the match is past the first page", async () => {
-    const pageOne = Array.from({ length: 100 }, (_, i) => ({
-      id: 1000 + i,
-      name: `FOSSBilling-preview-other${i}.zip`,
-      size_in_bytes: 1,
-      created_at: "2026-08-01T00:00:00Z",
-      expires_at: "2026-08-15T00:00:00Z",
-      expired: false,
-      digest: null,
-      workflow_run: { id: 1, head_sha: "0000000000000000000000000000000000000" }
-    }));
-    const pageTwoMatch = {
-      id: 2000,
-      name: "FOSSBilling-preview-deadbee.zip",
-      size_in_bytes: 99,
-      created_at: "2026-08-13T11:00:00Z",
-      expires_at: "2026-08-27T11:00:00Z",
-      expired: false,
-      digest: "sha256:page2",
-      workflow_run: { id: 888, head_sha: SHA }
-    };
-    let fallbackCalls = 0;
-    (vi.mocked(ghRequest) as MockGitHubRequest).mockImplementation(
-      async (route: string, params?: { name?: string; page?: number }) => {
-        if (route !== "GET /repos/{owner}/{repo}/actions/artifacts") {
-          throw new Error(`Unexpected route: ${route}`);
-        }
-        if (params?.name) {
-          return { data: { total_count: 0, artifacts: [] } };
-        }
-        fallbackCalls++;
-        if (params?.page === 1) {
-          return { data: { total_count: 101, artifacts: pageOne } };
-        }
-        if (params?.page === 2) {
-          return { data: { total_count: 101, artifacts: [pageTwoMatch] } };
-        }
-        throw new Error(`Unexpected page: ${params?.page}`);
-      }
-    );
-
-    const res = await get(`/previews/v1/commit/${SHA}`);
-
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { result: { artifact_id: number } };
-    expect(body.result.artifact_id).toBe(2000);
-    // Exact-name miss (1) + fallback page 1 (2) + fallback page 2 (3) -
-    // stops as soon as a match is found, no page 3.
-    expect(fallbackCalls).toBe(2);
-    expect(ghRequest).toHaveBeenCalledTimes(3);
-  });
-
-  it("keeps paging past the old 5-page cap when the match is further back", async () => {
+  it("pages through the fallback scan past the old 5-page cap, then stops as soon as it finds a match", async () => {
     // Regression check: an earlier version of the fallback stopped after
     // 5 pages (500 artifacts) as a hard cutoff, which would have reported
     // this commit not_found even though its artifact genuinely exists -
@@ -411,6 +359,7 @@ describe("Previews API v1 - GET /previews/v1/commit/:sha", () => {
       digest: "sha256:page6",
       workflow_run: { id: 888, head_sha: SHA }
     };
+    let fallbackCalls = 0;
     (vi.mocked(ghRequest) as MockGitHubRequest).mockImplementation(
       async (route: string, params?: { name?: string; page?: number }) => {
         if (route !== "GET /repos/{owner}/{repo}/actions/artifacts") {
@@ -419,6 +368,7 @@ describe("Previews API v1 - GET /previews/v1/commit/:sha", () => {
         if (params?.name) {
           return { data: { total_count: 0, artifacts: [] } };
         }
+        fallbackCalls++;
         const page = params?.page ?? 1;
         if (page <= 5) {
           return { data: { artifacts: fullPage(page * 1000) } };
@@ -435,6 +385,10 @@ describe("Previews API v1 - GET /previews/v1/commit/:sha", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { result: { artifact_id: number } };
     expect(body.result.artifact_id).toBe(9000);
+    // Exact-name miss + 6 fallback pages - stops on page 6 rather than
+    // continuing to page 7.
+    expect(fallbackCalls).toBe(6);
+    expect(ghRequest).toHaveBeenCalledTimes(7);
   });
 
   it("falls back to the default TTL ceiling when expires_at can't be parsed", async () => {

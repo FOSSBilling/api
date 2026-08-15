@@ -48,6 +48,12 @@ interface RawArtifact {
   } | null;
 }
 
+interface ArtifactMatch {
+  artifact: RawArtifact;
+  runId: number;
+  headSha: string;
+}
+
 function unavailable<T>(
   context: string,
   error: unknown,
@@ -100,7 +106,7 @@ const MAX_FALLBACK_PAGES = 50;
 async function findInFallbackPages(
   githubToken: string,
   shaLower: string
-): Promise<{ artifact: RawArtifact; runId: number; headSha: string } | null> {
+): Promise<ArtifactMatch | null> {
   for (let page = 1; page <= MAX_FALLBACK_PAGES; page++) {
     const artifacts = await listArtifacts(githubToken, undefined, page);
     const match = matchArtifact(
@@ -121,9 +127,8 @@ async function findInFallbackPages(
 function matchArtifact(
   artifacts: RawArtifact[],
   shaLower: string
-): { artifact: RawArtifact; runId: number; headSha: string } | null {
-  let match: { artifact: RawArtifact; runId: number; headSha: string } | null =
-    null;
+): ArtifactMatch | null {
+  let match: ArtifactMatch | null = null;
 
   for (const artifact of artifacts) {
     const workflowRun = artifact.workflow_run;
@@ -144,11 +149,7 @@ function matchArtifact(
   return match;
 }
 
-function toPreviewArtifact(match: {
-  artifact: RawArtifact;
-  runId: number;
-  headSha: string;
-}): PreviewArtifact {
+function toPreviewArtifact(match: ArtifactMatch): PreviewArtifact {
   return {
     runId: match.runId,
     artifactId: match.artifact.id,
