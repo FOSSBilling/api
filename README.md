@@ -62,7 +62,7 @@ We use [Cloudflare D1](https://developers.cloudflare.com/d1/) and [KV](https://d
   Migrations are owned by extensions v2 and applied only from this repository — see [its README](src/services/extensions/v2/README.md#database) for the migration and adoption procedure.
 - **KV Namespace** (`CACHE_KV`): Caches GitHub API responses so we don't hit rate limits.
 - **KV Namespace** (`AUTH_KV`): Stores the `UPDATE_TOKEN` value for `/versions/v1/update`.
-- **R2 Bucket** (`PREVIEW_BUCKET`): Backs `/previews/v1/main` — see [`src/services/previews/v1/README.md`](src/services/previews/v1/README.md) and the comment in `wrangler.jsonc` for which bucket this points at and why.
+- **R2 Bucket** (`DOWNLOAD_BUCKET`): Backs `/previews/v1/main` — see [`src/services/previews/v1/README.md`](src/services/previews/v1/README.md) and the comment in `wrangler.jsonc` for which bucket this points at and why.
 
 ### Environment Variables
 

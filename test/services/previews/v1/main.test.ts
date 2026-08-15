@@ -45,7 +45,7 @@ describe("Previews API v1 - GET /previews/v1/main", () => {
   beforeEach(async () => {
     restoreConsole = suppressConsole();
     await env.CACHE_KV.delete("preview:main");
-    await env.PREVIEW_BUCKET.delete(MAIN_PREVIEW_KEY);
+    await env.DOWNLOAD_BUCKET.delete(MAIN_PREVIEW_KEY);
     vi.clearAllMocks();
   });
 
@@ -62,7 +62,7 @@ describe("Previews API v1 - GET /previews/v1/main", () => {
   });
 
   it("returns the R2 object's metadata, including the sha256 digest", async () => {
-    await env.PREVIEW_BUCKET.put(MAIN_PREVIEW_KEY, "test archive contents", {
+    await env.DOWNLOAD_BUCKET.put(MAIN_PREVIEW_KEY, "test archive contents", {
       customMetadata: {
         digest:
           "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
@@ -96,7 +96,7 @@ describe("Previews API v1 - GET /previews/v1/main", () => {
   });
 
   it("reports a null digest and commit_sha when the object has no custom metadata", async () => {
-    await env.PREVIEW_BUCKET.put(MAIN_PREVIEW_KEY, "test archive contents");
+    await env.DOWNLOAD_BUCKET.put(MAIN_PREVIEW_KEY, "test archive contents");
 
     const res = await get("/previews/v1/main");
     expect(res.status).toBe(200);
@@ -115,7 +115,7 @@ describe("Previews API v1 - GET /previews/v1/main", () => {
   });
 
   it("enriches with that commit's GitHub Actions artifact when resolvable", async () => {
-    await env.PREVIEW_BUCKET.put(MAIN_PREVIEW_KEY, "test archive contents", {
+    await env.DOWNLOAD_BUCKET.put(MAIN_PREVIEW_KEY, "test archive contents", {
       customMetadata: { "commit-sha": COMMIT_SHA }
     });
     (vi.mocked(ghRequest) as MockGitHubRequest).mockImplementation(
@@ -144,7 +144,7 @@ describe("Previews API v1 - GET /previews/v1/main", () => {
   });
 
   it("still succeeds with null enrichment fields when GitHub is unavailable", async () => {
-    await env.PREVIEW_BUCKET.put(MAIN_PREVIEW_KEY, "test archive contents", {
+    await env.DOWNLOAD_BUCKET.put(MAIN_PREVIEW_KEY, "test archive contents", {
       customMetadata: { "commit-sha": COMMIT_SHA }
     });
     (vi.mocked(ghRequest) as MockGitHubRequest).mockImplementation(async () => {
@@ -162,7 +162,7 @@ describe("Previews API v1 - GET /previews/v1/main", () => {
   });
 
   it("still succeeds with null enrichment fields when the commit has no known artifact", async () => {
-    await env.PREVIEW_BUCKET.put(MAIN_PREVIEW_KEY, "test archive contents", {
+    await env.DOWNLOAD_BUCKET.put(MAIN_PREVIEW_KEY, "test archive contents", {
       customMetadata: { "commit-sha": COMMIT_SHA }
     });
     (vi.mocked(ghRequest) as MockGitHubRequest).mockImplementation(
@@ -176,7 +176,7 @@ describe("Previews API v1 - GET /previews/v1/main", () => {
   });
 
   it("serves the second request from CACHE_KV without re-reading R2 or GitHub", async () => {
-    await env.PREVIEW_BUCKET.put(MAIN_PREVIEW_KEY, "v1", {
+    await env.DOWNLOAD_BUCKET.put(MAIN_PREVIEW_KEY, "v1", {
       customMetadata: { "commit-sha": "111" }
     });
     (vi.mocked(ghRequest) as MockGitHubRequest).mockImplementation(
@@ -191,7 +191,7 @@ describe("Previews API v1 - GET /previews/v1/main", () => {
 
     // Overwrite the R2 object directly - a cache hit should still serve the
     // first response's data rather than reflecting this change.
-    await env.PREVIEW_BUCKET.put(MAIN_PREVIEW_KEY, "v2", {
+    await env.DOWNLOAD_BUCKET.put(MAIN_PREVIEW_KEY, "v2", {
       customMetadata: { "commit-sha": "222" }
     });
     const second = await get("/previews/v1/main");
@@ -207,7 +207,7 @@ describe("Previews API v1 - GET /previews/v1/main", () => {
   });
 
   it("falls back to R2 instead of erroring on a corrupt cache entry", async () => {
-    await env.PREVIEW_BUCKET.put(MAIN_PREVIEW_KEY, "test archive contents", {
+    await env.DOWNLOAD_BUCKET.put(MAIN_PREVIEW_KEY, "test archive contents", {
       customMetadata: { "commit-sha": COMMIT_SHA }
     });
     await env.CACHE_KV.put("preview:main", "not valid json{");
@@ -223,7 +223,7 @@ describe("Previews API v1 - GET /previews/v1/main/download", () => {
   beforeEach(async () => {
     restoreConsole = suppressConsole();
     await env.CACHE_KV.delete("preview:main");
-    await env.PREVIEW_BUCKET.delete(MAIN_PREVIEW_KEY);
+    await env.DOWNLOAD_BUCKET.delete(MAIN_PREVIEW_KEY);
     vi.clearAllMocks();
     (vi.mocked(ghRequest) as MockGitHubRequest).mockImplementation(
       async () => ({ data: { total_count: 0, artifacts: [] } })
@@ -243,7 +243,7 @@ describe("Previews API v1 - GET /previews/v1/main/download", () => {
   });
 
   it("redirects to the permanent main preview download URL", async () => {
-    await env.PREVIEW_BUCKET.put(MAIN_PREVIEW_KEY, "test archive contents");
+    await env.DOWNLOAD_BUCKET.put(MAIN_PREVIEW_KEY, "test archive contents");
 
     const res = await get("/previews/v1/main/download");
     expect(res.status).toBe(302);
@@ -253,8 +253,8 @@ describe("Previews API v1 - GET /previews/v1/main/download", () => {
   });
 
   it("shares the metadata route's cache instead of re-reading R2", async () => {
-    await env.PREVIEW_BUCKET.put(MAIN_PREVIEW_KEY, "test archive contents");
-    const headSpy = vi.spyOn(env.PREVIEW_BUCKET, "head");
+    await env.DOWNLOAD_BUCKET.put(MAIN_PREVIEW_KEY, "test archive contents");
+    const headSpy = vi.spyOn(env.DOWNLOAD_BUCKET, "head");
 
     await get("/previews/v1/main");
     const res = await get("/previews/v1/main/download");

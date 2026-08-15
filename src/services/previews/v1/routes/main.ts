@@ -58,7 +58,7 @@ async function resolveMainPreview(
     }
   }
 
-  const object = await getMainPreviewObject(c.env.PREVIEW_BUCKET);
+  const object = await getMainPreviewObject(c.env.DOWNLOAD_BUCKET);
   if (!object) return null;
 
   const artifactFields = await resolveArtifactFields(

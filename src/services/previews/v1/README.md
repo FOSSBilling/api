@@ -166,5 +166,5 @@ etc., surfaced as 429/503/500 depending on severity).
   to cache it without risking handing out an already-expired URL.
 - `GITHUB_TOKEN` is required for GitHub API access (shared with
   `versions/v1`).
-- `PREVIEW_BUCKET` (R2 binding) backs `/main` - see `wrangler.jsonc` for the
+- `DOWNLOAD_BUCKET` (R2 binding) backs `/main` - see `wrangler.jsonc` for the
   bucket this points at and why.
