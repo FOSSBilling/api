@@ -47,6 +47,12 @@
       "id": "0771957093ae481b9cd974ffa83f8263"
     }
   ],
+  "r2_buckets": [
+    {
+      "binding": "DOWNLOAD_BUCKET",
+      "bucket_name": "fossbilling-download"
+    }
+  ],
   "ratelimits": [
     {
       "name": "PROFILE_CREATION_RATE_LIMITER",
