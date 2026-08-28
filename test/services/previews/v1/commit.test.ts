@@ -16,6 +16,15 @@ import { request as ghRequest } from "@octokit/request";
 
 const SHA = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
 
+// A fixed calendar date here would eventually land in the past and make
+// ttlForArtifact() compute a negative TTL, silently disabling the caching
+// these tests exist to verify - GitHub's own artifact retention is 14
+// days, so anything comfortably longer reads as "not expiring any time
+// soon" for as long as this suite keeps running.
+const FAR_FUTURE_EXPIRES_AT = new Date(
+  Date.now() + 365 * 24 * 60 * 60 * 1000
+).toISOString();
+
 const SAMPLE_ARTIFACTS = {
   total_count: 1,
   artifacts: [
@@ -23,7 +32,7 @@ const SAMPLE_ARTIFACTS = {
       id: 555,
       size_in_bytes: 12345,
       created_at: "2026-08-13T10:00:00Z",
-      expires_at: "2026-08-27T10:00:00Z",
+      expires_at: FAR_FUTURE_EXPIRES_AT,
       expired: false,
       digest: "sha256:deadbeef",
       workflow_run: { id: 999, head_sha: SHA }
@@ -297,7 +306,7 @@ describe("Previews API v1 - GET /previews/v1/commit/:sha", () => {
       name: "FOSSBilling-preview-deadbee.zip",
       size_in_bytes: 99,
       created_at: "2026-08-13T11:00:00Z",
-      expires_at: "2026-08-27T11:00:00Z",
+      expires_at: FAR_FUTURE_EXPIRES_AT,
       expired: false,
       digest: "sha256:fromfork",
       workflow_run: { id: 888, head_sha: SHA }
@@ -354,7 +363,7 @@ describe("Previews API v1 - GET /previews/v1/commit/:sha", () => {
       name: "FOSSBilling-preview-deadbee.zip",
       size_in_bytes: 99,
       created_at: "2026-08-13T11:00:00Z",
-      expires_at: "2026-08-27T11:00:00Z",
+      expires_at: FAR_FUTURE_EXPIRES_AT,
       expired: false,
       digest: "sha256:page6",
       workflow_run: { id: 888, head_sha: SHA }
