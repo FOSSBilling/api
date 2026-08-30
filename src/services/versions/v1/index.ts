@@ -346,7 +346,7 @@ export function resetUpdateTokenCache() {
 export async function getReleases(
   cache: ICache,
   githubToken: string,
-  downloadBucket?: R2Bucket,
+  downloadBucket: R2Bucket,
   updateCache: boolean = false
 ): Promise<GetReleasesResult> {
   const cachedReleases = await cache.get(RELEASE_CACHE_KEY);
@@ -485,16 +485,14 @@ export async function getReleases(
               : (batchPhpVersions.get(tag) ?? "");
 
           let r2Object = null;
-          if (downloadBucket) {
-            try {
-              r2Object = await getReleaseR2Object(downloadBucket, tag);
-            } catch (r2Error) {
-              logWarn("versions", "Failed to look up release in R2", {
-                tag,
-                error:
-                  r2Error instanceof Error ? r2Error.message : String(r2Error)
-              });
-            }
+          try {
+            r2Object = await getReleaseR2Object(downloadBucket, tag);
+          } catch (r2Error) {
+            logWarn("versions", "Failed to look up release in R2", {
+              tag,
+              error:
+                r2Error instanceof Error ? r2Error.message : String(r2Error)
+            });
           }
 
           const releaseDetails: ReleaseDetails = {

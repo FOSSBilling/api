@@ -248,7 +248,7 @@ describe("Versions API v1", () => {
         "https://download.fossbilling.org/releases/0.6.0/FOSSBilling-0.6.0.zip"
       );
       expect(data.result.digest).toBe(
-        "sha256:deadbeefcafe0000000000000000000000000000000000000000000000000"
+        "sha256:deadbeefcafe0000000000000000000000000000000000000000000000000000"
       );
     });
 

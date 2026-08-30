@@ -29,7 +29,7 @@ GET /versions/v1
       "version": "0.5.0",
       "released_on": "2023-01-15T12:00:00Z",
       "minimum_php_version": "8.1",
-      "download_url": "https://github.com/FOSSBilling/FOSSBilling/releases/download/0.5.0/FOSSBilling.zip",
+      "download_url": "https://download.fossbilling.org/releases/0.5.0/FOSSBilling-0.5.0.zip",
       "size_bytes": 15485760,
       "is_prerelease": false,
       "github_release_id": 987654321,
@@ -140,5 +140,7 @@ When GitHub is unavailable and no cached data exists:
 - All responses include a `stale` field that is `true` when cached data is served after a failed fetch.
 - `details` includes the GitHub HTTP status and error code when available.
 - `GITHUB_TOKEN` is required for GitHub API access.
+- `DOWNLOAD_BUCKET` (R2 binding, shared with `previews/v1`) backs `download_url`/`digest` below.
 - Releases before 0.5.0 read `src/composer.json`; newer releases use `composer.json`.
-- `digest` is the SHA-256 digest of the release zip asset (`sha256:<hex>`), computed by GitHub; `null` if GitHub has not computed one for that asset.
+- `download_url` is `download.fossbilling.org` when the release has been mirrored to R2 - github.com has no AAAA record, so IPv6-only hosts can't reach a GitHub asset URL (see FOSSBilling/FOSSBilling#2479). It falls back to the GitHub asset URL for releases that predate mirroring.
+- `digest` is the SHA-256 digest of the release zip (`sha256:<hex>`). It's read from the R2 object's metadata when mirrored (set by CI from the exact uploaded file); otherwise it's GitHub's asset digest, or `null` if GitHub hasn't computed one.
