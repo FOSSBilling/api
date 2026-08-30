@@ -54,6 +54,7 @@ describe("Stats API v1", () => {
     restoreConsole = suppressConsole();
     await env.CACHE_KV.delete("gh-fossbilling-releases");
     await env.CACHE_KV.delete("fossbilling-stats-data");
+    await env.DOWNLOAD_BUCKET.delete("releases/0.6.0/FOSSBilling-0.6.0.zip");
 
     const testUpdateToken = "test-update-token-12345";
     await env.AUTH_KV.put("UPDATE_TOKEN", testUpdateToken);
@@ -255,6 +256,47 @@ describe("Stats API v1", () => {
       );
 
       expect(versionLines).toEqual(["0.5.x", "0.6.x", "0.9.x", "0.10.x"]);
+    });
+  });
+
+  describe("Shared release cache", () => {
+    // getReleases writes gh-fossbilling-releases - the same cache key the
+    // versions service reads - so a stats-triggered fresh fetch must still
+    // resolve R2 download_url/digest. Otherwise stats would overwrite that
+    // cache with GitHub-only URLs for up to 24h, silently undoing the R2
+    // preference for IPv6-only hosts. See FOSSBilling/FOSSBilling#2479.
+    it("resolves R2 download_url/digest when it triggers the shared release fetch", async () => {
+      await env.DOWNLOAD_BUCKET.put(
+        "releases/0.6.0/FOSSBilling-0.6.0.zip",
+        "mirrored archive contents",
+        {
+          customMetadata: {
+            digest:
+              "sha256:deadbeefcafe0000000000000000000000000000000000000000000000000000",
+            version: "0.6.0"
+          }
+        }
+      );
+
+      const ctx = createExecutionContext();
+      const response = await app.fetch(
+        new Request("http://localhost/stats/v1/data"),
+        env,
+        ctx
+      );
+      await waitOnExecutionContext(ctx);
+      expect(response.status).toBe(200);
+
+      const cached = await env.CACHE_KV.get("gh-fossbilling-releases");
+      expect(cached).toBeTruthy();
+      const releases = JSON.parse(cached!);
+
+      expect(releases["0.6.0"].download_url).toBe(
+        "https://download.fossbilling.org/releases/0.6.0/FOSSBilling-0.6.0.zip"
+      );
+      expect(releases["0.6.0"].digest).toBe(
+        "sha256:deadbeefcafe0000000000000000000000000000000000000000000000000000"
+      );
     });
   });
 

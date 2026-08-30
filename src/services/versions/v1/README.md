@@ -25,15 +25,15 @@ GET /versions/v1
 ```json
 {
   "result": {
-    "0.5.0": {
-      "version": "0.5.0",
-      "released_on": "2023-01-15T12:00:00Z",
+    "0.6.0": {
+      "version": "0.6.0",
+      "released_on": "2023-04-01T00:00:00Z",
       "minimum_php_version": "8.1",
-      "download_url": "https://download.fossbilling.org/releases/0.5.0/FOSSBilling-0.5.0.zip",
+      "download_url": "https://download.fossbilling.org/releases/0.6.0/FOSSBilling-0.6.0.zip",
       "size_bytes": 15485760,
       "is_prerelease": false,
       "github_release_id": 987654321,
-      "changelog": "## 0.5.0\n- Major feature updates...",
+      "changelog": "## 0.6.0\n- New features...",
       "digest": "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
     }
   },
