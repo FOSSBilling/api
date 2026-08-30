@@ -229,7 +229,7 @@ describe("Versions API v1", () => {
         {
           customMetadata: {
             digest:
-              "sha256:deadbeefcafe0000000000000000000000000000000000000000000000000",
+              "sha256:deadbeefcafe0000000000000000000000000000000000000000000000000000",
             version: "0.6.0"
           }
         }
