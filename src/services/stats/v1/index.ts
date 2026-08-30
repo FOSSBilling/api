@@ -171,7 +171,9 @@ async function getStats(
     }
   }
 
-  const result = await getReleases(cache, githubToken, updateCache);
+  // Stats only aggregates sizes/PHP versions/dates, not download_url or
+  // digest, so there's no need to pay for an R2 lookup per release here.
+  const result = await getReleases(cache, githubToken, undefined, updateCache);
 
   if (hasNoReleases(result.releases) && result.error) {
     return {
