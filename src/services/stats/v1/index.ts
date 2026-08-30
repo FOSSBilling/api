@@ -142,6 +142,7 @@ function aggregateStats(releases: Releases): StatsData {
 async function getStats(
   cache: ICache,
   githubToken: string,
+  downloadBucket: R2Bucket,
   updateCache: boolean = false
 ): Promise<{
   stats: StatsData;
@@ -171,7 +172,16 @@ async function getStats(
     }
   }
 
-  const result = await getReleases(cache, githubToken, updateCache);
+  // getReleases shares its cache with the versions service (same
+  // RELEASE_CACHE_KEY), so a fresh fetch here must still resolve R2
+  // download_url/digest - otherwise a stats-triggered refresh would
+  // overwrite that cache with GitHub-only URLs for up to a day.
+  const result = await getReleases(
+    cache,
+    githubToken,
+    downloadBucket,
+    updateCache
+  );
 
   if (hasNoReleases(result.releases) && result.error) {
     return {
@@ -208,7 +218,8 @@ registerCachedRoute("/data", async (c) => {
   const platform = getPlatform(c);
   const result = await getStats(
     platform.getCache("CACHE_KV"),
-    platform.getEnv("GITHUB_TOKEN") || ""
+    platform.getEnv("GITHUB_TOKEN") || "",
+    c.env.DOWNLOAD_BUCKET
   );
 
   if (result.error && result.stats.releaseSizes.length === 0) {

@@ -51,6 +51,8 @@ describe("Versions API v1", () => {
   beforeEach(async () => {
     restoreConsole = suppressConsole();
     await env.CACHE_KV.delete("gh-fossbilling-releases");
+    await env.DOWNLOAD_BUCKET.delete("releases/0.5.0/FOSSBilling-0.5.0.zip");
+    await env.DOWNLOAD_BUCKET.delete("releases/0.6.0/FOSSBilling-0.6.0.zip");
     resetUpdateTokenCache();
 
     const testUpdateToken = "test-update-token-12345";
@@ -212,6 +214,58 @@ describe("Versions API v1", () => {
       expect(data.result).toHaveProperty("changelog");
       expect(data.result).toHaveProperty(
         "digest",
+        "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+      );
+    });
+  });
+
+  describe("R2 release mirror", () => {
+    // github.com has no AAAA record, so IPv6-only hosts must download
+    // from the R2 mirror instead - see FOSSBilling/FOSSBilling#2479.
+    it("prefers the R2 mirror's download_url and digest when mirrored", async () => {
+      await env.DOWNLOAD_BUCKET.put(
+        "releases/0.6.0/FOSSBilling-0.6.0.zip",
+        "mirrored archive contents",
+        {
+          customMetadata: {
+            digest:
+              "sha256:deadbeefcafe0000000000000000000000000000000000000000000000000000",
+            version: "0.6.0"
+          }
+        }
+      );
+
+      const ctx = createExecutionContext();
+      const response = await app.request("/versions/v1/latest", {}, env, ctx);
+      await waitOnExecutionContext(ctx);
+
+      expect(response.status).toBe(200);
+      const data: ApiResponse<VersionInfo | null> = await response.json();
+      if (!data.result) {
+        throw new Error("Expected latest release data");
+      }
+      expect(data.result.download_url).toBe(
+        "https://download.fossbilling.org/releases/0.6.0/FOSSBilling-0.6.0.zip"
+      );
+      expect(data.result.digest).toBe(
+        "sha256:deadbeefcafe0000000000000000000000000000000000000000000000000000"
+      );
+    });
+
+    it("falls back to the GitHub asset when a release hasn't been mirrored to R2", async () => {
+      const ctx = createExecutionContext();
+      const response = await app.request("/versions/v1/latest", {}, env, ctx);
+      await waitOnExecutionContext(ctx);
+
+      expect(response.status).toBe(200);
+      const data: ApiResponse<VersionInfo | null> = await response.json();
+      if (!data.result) {
+        throw new Error("Expected latest release data");
+      }
+      expect(data.result.download_url).toBe(
+        "https://github.com/FOSSBilling/FOSSBilling/releases/download/0.6.0/FOSSBilling.zip"
+      );
+      expect(data.result.digest).toBe(
         "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
       );
     });

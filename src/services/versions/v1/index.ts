@@ -13,6 +13,7 @@ import {
   valid as semverValid
 } from "semver";
 import { Releases, ReleaseDetails } from "./interfaces";
+import { getReleaseR2Object } from "./r2";
 import { getPlatform } from "../../../lib/middleware";
 import { ICache } from "../../../lib/interfaces";
 import { logError, logWarn, logInfo } from "../../../lib/logger";
@@ -90,6 +91,7 @@ async function loadReleases(
   return getReleases(
     platform.getCache("CACHE_KV"),
     platform.getEnv("GITHUB_TOKEN") || "",
+    c.env.DOWNLOAD_BUCKET,
     updateCache
   );
 }
@@ -172,6 +174,7 @@ versionsV1.get(
     const result = await getReleases(
       platform.getCache("CACHE_KV"),
       platform.getEnv("GITHUB_TOKEN") || "",
+      c.env.DOWNLOAD_BUCKET,
       true
     );
     const releaseCount = Object.keys(result.releases).length;
@@ -343,6 +346,7 @@ export function resetUpdateTokenCache() {
 export async function getReleases(
   cache: ICache,
   githubToken: string,
+  downloadBucket: R2Bucket,
   updateCache: boolean = false
 ): Promise<GetReleasesResult> {
   const cachedReleases = await cache.get(RELEASE_CACHE_KEY);
@@ -469,26 +473,43 @@ export async function getReleases(
       }
     }
 
-    const releaseEntries: [string, ReleaseDetails][] = releasesToProcess.map(
-      ({ tag, release, zipAsset, cachedPhpVersion }) => {
-        const phpVersion =
-          cachedPhpVersion !== undefined
-            ? cachedPhpVersion
-            : (batchPhpVersions.get(tag) ?? "");
+    // Prefer the R2 mirror over the GitHub asset - github.com has no AAAA
+    // record, so IPv6-only hosts can't reach it. Fall back to GitHub for
+    // releases that predate mirroring or if the R2 lookup fails.
+    const releaseEntries: [string, ReleaseDetails][] = await Promise.all(
+      releasesToProcess.map(
+        async ({ tag, release, zipAsset, cachedPhpVersion }) => {
+          const phpVersion =
+            cachedPhpVersion !== undefined
+              ? cachedPhpVersion
+              : (batchPhpVersions.get(tag) ?? "");
 
-        const releaseDetails: ReleaseDetails = {
-          version: release.name || tag,
-          released_on: release.published_at ?? "",
-          minimum_php_version: phpVersion,
-          download_url: zipAsset.browser_download_url,
-          size_bytes: zipAsset.size,
-          is_prerelease: Boolean(release.prerelease),
-          github_release_id: release.id ?? 0,
-          changelog: release.body || "",
-          digest: zipAsset.digest ?? null
-        };
-        return [tag, releaseDetails];
-      }
+          let r2Object = null;
+          try {
+            r2Object = await getReleaseR2Object(downloadBucket, tag);
+          } catch (r2Error) {
+            logWarn("versions", "Failed to look up release in R2", {
+              tag,
+              error:
+                r2Error instanceof Error ? r2Error.message : String(r2Error)
+            });
+          }
+
+          const releaseDetails: ReleaseDetails = {
+            version: release.name || tag,
+            released_on: release.published_at ?? "",
+            minimum_php_version: phpVersion,
+            download_url:
+              r2Object?.downloadUrl ?? zipAsset.browser_download_url,
+            size_bytes: zipAsset.size,
+            is_prerelease: Boolean(release.prerelease),
+            github_release_id: release.id ?? 0,
+            changelog: release.body || "",
+            digest: r2Object?.digest ?? zipAsset.digest ?? null
+          };
+          return [tag, releaseDetails];
+        }
+      )
     );
 
     const sortedReleases = Object.fromEntries(
