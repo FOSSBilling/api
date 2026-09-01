@@ -142,5 +142,5 @@ When GitHub is unavailable and no cached data exists:
 - `GITHUB_TOKEN` is required for GitHub API access.
 - `DOWNLOAD_BUCKET` (R2 binding, shared with `previews/v1`) backs `download_url`/`digest` below.
 - Releases before 0.5.0 read `src/composer.json`; newer releases use `composer.json`.
-- `download_url` is `download.fossbilling.org` when the release has been mirrored to R2 - github.com has no AAAA record, so IPv6-only hosts can't reach a GitHub asset URL (see FOSSBilling/FOSSBilling#2479). It falls back to the GitHub asset URL for releases that predate mirroring.
+- `download_url` is `download.fossbilling.org` when the release has been mirrored to R2 and the requesting client's own version trusts that host (see `Update::$allowedDownloadPrefixes` in FOSSBilling/FOSSBilling) - github.com has no AAAA record, so IPv6-only hosts can't reach a GitHub asset URL (see FOSSBilling/FOSSBilling#2479). It falls back to the GitHub asset URL otherwise. Mirroring began at 0.8.0, so releases before that are never looked up in R2 at all.
 - `digest` is the SHA-256 digest of the release zip (`sha256:<hex>`). It's read from the R2 object's metadata when mirrored (set by CI from the exact uploaded file); otherwise it's GitHub's asset digest, or `null` if GitHub hasn't computed one.

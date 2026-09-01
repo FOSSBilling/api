@@ -54,7 +54,7 @@ describe("Stats API v1", () => {
     restoreConsole = suppressConsole();
     await env.CACHE_KV.delete("gh-fossbilling-releases");
     await env.CACHE_KV.delete("fossbilling-stats-data");
-    await env.DOWNLOAD_BUCKET.delete("releases/0.6.0/FOSSBilling-0.6.0.zip");
+    await env.DOWNLOAD_BUCKET.delete("releases/0.8.0/FOSSBilling-0.8.0.zip");
 
     const testUpdateToken = "test-update-token-12345";
     await env.AUTH_KV.put("UPDATE_TOKEN", testUpdateToken);
@@ -272,14 +272,43 @@ describe("Stats API v1", () => {
     // service based on that client's own reported version, not baked into
     // this shared cache - see resolveReleaseForClient() there.
     it("resolves both the GitHub and R2 mirror URLs when it triggers the shared release fetch", async () => {
+      // Mirroring began at 0.8.0 (R2_MIRROR_MIN_VERSION in versions/v1) -
+      // nothing in the shared mockGitHubReleases fixture (which tops out at
+      // 0.6.0) is eligible, so inject a release that is.
+      setupGitHubApiMock(
+        vi.mocked(ghRequest) as MockGitHubRequest,
+        vi.mocked(graphql) as unknown as MockGitHubGraphQL,
+        [
+          ...mockGitHubReleases,
+          {
+            id: 1010,
+            tag_name: "0.8.0",
+            name: "0.8.0",
+            published_at: "2023-05-01T00:00:00Z",
+            prerelease: false,
+            body: "## 0.8.0\n- First mirrored release",
+            assets: [
+              {
+                name: "FOSSBilling.zip",
+                browser_download_url:
+                  "https://github.com/FOSSBilling/FOSSBilling/releases/download/0.8.0/FOSSBilling.zip",
+                size: 1040000,
+                digest:
+                  "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+              }
+            ]
+          }
+        ],
+        mockComposerJson
+      );
       await env.DOWNLOAD_BUCKET.put(
-        "releases/0.6.0/FOSSBilling-0.6.0.zip",
+        "releases/0.8.0/FOSSBilling-0.8.0.zip",
         "mirrored archive contents",
         {
           customMetadata: {
             digest:
               "sha256:deadbeefcafe0000000000000000000000000000000000000000000000000000",
-            version: "0.6.0"
+            version: "0.8.0"
           }
         }
       );
@@ -297,13 +326,13 @@ describe("Stats API v1", () => {
       expect(cached).toBeTruthy();
       const releases = JSON.parse(cached!);
 
-      expect(releases["0.6.0"].download_url).toBe(
-        "https://github.com/FOSSBilling/FOSSBilling/releases/download/0.6.0/FOSSBilling.zip"
+      expect(releases["0.8.0"].download_url).toBe(
+        "https://github.com/FOSSBilling/FOSSBilling/releases/download/0.8.0/FOSSBilling.zip"
       );
-      expect(releases["0.6.0"].mirror_download_url).toBe(
-        "https://download.fossbilling.org/releases/0.6.0/FOSSBilling-0.6.0.zip"
+      expect(releases["0.8.0"].mirror_download_url).toBe(
+        "https://download.fossbilling.org/releases/0.8.0/FOSSBilling-0.8.0.zip"
       );
-      expect(releases["0.6.0"].mirror_digest).toBe(
+      expect(releases["0.8.0"].mirror_digest).toBe(
         "sha256:deadbeefcafe0000000000000000000000000000000000000000000000000000"
       );
     });
