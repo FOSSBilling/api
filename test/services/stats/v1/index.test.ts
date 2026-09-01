@@ -262,10 +262,16 @@ describe("Stats API v1", () => {
   describe("Shared release cache", () => {
     // getReleases writes gh-fossbilling-releases - the same cache key the
     // versions service reads - so a stats-triggered fresh fetch must still
-    // resolve R2 download_url/digest. Otherwise stats would overwrite that
-    // cache with GitHub-only URLs for up to 24h, silently undoing the R2
-    // preference for IPv6-only hosts. See FOSSBilling/FOSSBilling#2479.
-    it("resolves R2 download_url/digest when it triggers the shared release fetch", async () => {
+    // resolve the R2 mirror. Otherwise stats would overwrite that cache with
+    // GitHub-only entries for up to 24h, silently undoing the R2 mirror for
+    // clients that trust it. See FOSSBilling/FOSSBilling#2479.
+    //
+    // The cache stores both download_url (GitHub - always trusted) and
+    // mirror_download_url (R2, when mirrored); which one a given FOSSBilling
+    // install is actually sent is resolved per-request in the versions
+    // service based on that client's own reported version, not baked into
+    // this shared cache - see resolveReleaseForClient() there.
+    it("resolves both the GitHub and R2 mirror URLs when it triggers the shared release fetch", async () => {
       await env.DOWNLOAD_BUCKET.put(
         "releases/0.6.0/FOSSBilling-0.6.0.zip",
         "mirrored archive contents",
@@ -292,9 +298,12 @@ describe("Stats API v1", () => {
       const releases = JSON.parse(cached!);
 
       expect(releases["0.6.0"].download_url).toBe(
+        "https://github.com/FOSSBilling/FOSSBilling/releases/download/0.6.0/FOSSBilling.zip"
+      );
+      expect(releases["0.6.0"].mirror_download_url).toBe(
         "https://download.fossbilling.org/releases/0.6.0/FOSSBilling-0.6.0.zip"
       );
-      expect(releases["0.6.0"].digest).toBe(
+      expect(releases["0.6.0"].mirror_digest).toBe(
         "sha256:deadbeefcafe0000000000000000000000000000000000000000000000000000"
       );
     });
