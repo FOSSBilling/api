@@ -26,7 +26,7 @@
     "@hono/zod-openapi": "^1.5.1",
     "@octokit/graphql": "^9.0.4",
     "@octokit/request": "^10.0.13",
-    "@scalar/hono-api-reference": "^0.11.12",
+    "@scalar/hono-api-reference": "^0.12.0",
     "badge-maker": "^6.0.0",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.13.0",
