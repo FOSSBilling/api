@@ -682,19 +682,25 @@ function parseCachedReleases(
           release.digest = null;
         }
 
-        // A release missing *both* mirror fields predates them entirely -
+        // A release missing *either* mirror field predates them (both are
+        // always written together - see getReleases() below - so a partial
+        // pair means this entry is malformed or from before they existed),
         // which includes the window when download_url itself was written
         // as the (unconditionally preferred) R2 mirror URL, with no
         // separate field preserving the GitHub URL every older client
         // trusts. There's no `null` to backfill that repairs it: the
         // GitHub URL isn't recoverable from this cache entry at all, and
         // serving download_url as-is risks handing every client - not
-        // just old ones - the untrusted mirror URL. Invalidate the whole
-        // cache so getReleases() falls through to a fresh fetch, which
-        // rebuilds every entry with its GitHub and mirror URLs kept
+        // just old ones - the untrusted mirror URL. A one-sided pair is
+        // just as unsafe: resolveReleaseForClient() would pair a real
+        // mirror_download_url with an undefined mirror_digest (or vice
+        // versa) for a trusting client, and JSON drops that undefined key
+        // from the response entirely - incomplete update metadata. Invalidate
+        // the whole cache so getReleases() falls through to a fresh fetch,
+        // which rebuilds every entry with its GitHub and mirror URLs kept
         // separate again.
         if (
-          release.mirror_download_url === undefined &&
+          release.mirror_download_url === undefined ||
           release.mirror_digest === undefined
         ) {
           logWarn(

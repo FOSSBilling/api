@@ -590,6 +590,62 @@ describe("Versions API v1", () => {
         "sha256:deadbeefcafe0000000000000000000000000000000000000000000000000000"
       );
     });
+
+    // A one-sided pair (one mirror field present, the other missing) is just
+    // as unsafe as both being missing: resolveReleaseForClient() would pair
+    // a real mirror_download_url with an undefined mirror_digest for a
+    // trusting client, and JSON drops that undefined key from the response
+    // entirely - incomplete update metadata (missing digest here; a present
+    // mirror_digest with a missing mirror_download_url loses download_url
+    // instead, the same failure mode as the fully-legacy case above).
+    it("invalidates a cache entry with only one of the two mirror fields present", async () => {
+      await mirrorRelease060();
+      const partialCachedReleases = {
+        "0.6.0": {
+          version: "0.6.0",
+          released_on: "2023-04-01T00:00:00Z",
+          minimum_php_version: "8.1",
+          download_url:
+            "https://github.com/FOSSBilling/FOSSBilling/releases/download/0.6.0/FOSSBilling.zip",
+          size_bytes: 15485760,
+          is_prerelease: false,
+          github_release_id: 987654321,
+          changelog: "## 0.6.0",
+          digest:
+            "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+          mirror_download_url:
+            "https://download.fossbilling.org/releases/0.6.0/FOSSBilling-0.6.0.zip"
+          // mirror_digest is missing entirely
+        }
+      };
+      await env.CACHE_KV.put(
+        "gh-fossbilling-releases",
+        JSON.stringify(partialCachedReleases)
+      );
+
+      const ctx = createExecutionContext();
+      const response = await app.request(
+        "/versions/v1/latest",
+        { headers: { "User-Agent": "FOSSBilling/0.8.7" } },
+        env,
+        ctx
+      );
+      await waitOnExecutionContext(ctx);
+
+      // A live fetch happened rather than the malformed entry being served
+      // straight from cache.
+      expect(vi.mocked(ghRequest)).toHaveBeenCalledTimes(1);
+      const data: ApiResponse<VersionInfo | null> = await response.json();
+      if (!data.result) {
+        throw new Error("Expected latest release data");
+      }
+      expect(data.result.download_url).toBe(
+        "https://download.fossbilling.org/releases/0.6.0/FOSSBilling-0.6.0.zip"
+      );
+      expect(data.result.digest).toBe(
+        "sha256:deadbeefcafe0000000000000000000000000000000000000000000000000000"
+      );
+    });
   });
 
   describe("GET /:version", () => {
