@@ -57,21 +57,20 @@ registerModerationRoutes(extensionsV2);
 // are covered by the same migration 0020 check.
 registerDeveloperProfileRoutes(extensionsV2);
 
-extensionsV2.doc31("/openapi.json", {
-  openapi: "3.1.0",
-  info: {
-    title: "FOSSBilling Extensions API (v2)",
-    version: "2.0.0",
-    description:
-      "Self-service extension publishing, ownership, moderation, and public browsing. v1 (/extensions/v1) remains available for existing integrations."
-  },
-  servers: [{ url: "/extensions/v2" }]
-});
-
-extensionsV2.get(
+extensionsV2.route(
   "/docs",
-  Scalar({
-    url: "/extensions/v2/openapi.json",
+  Scalar.serve({
+    document: () => 
+      extensionsV2.getOpenAPI31Document({
+        openapi: "3.1.0",
+        info: {
+          title: "FOSSBilling Extensions API (v2)",
+          version: "2.0.0",
+          description:
+            "Self-service extension publishing, ownership, moderation, and public browsing. v1 (/extensions/v1) remains available for existing integrations."
+        },
+        servers: [{ url: "/extensions/v2" }],
+      }),
     pageTitle: "FOSSBilling Extensions API (v2)",
     agent: { disabled: true },
     documentDownloadType: "none",
@@ -86,6 +85,7 @@ extensionsV2.get(
       go: true,
       java: true,
       js: ["axios", "jquery", "ofetch"],
+      julia: true,
       kotlin: true,
       node: ["axios", "ofetch", "undici"],
       objc: true,

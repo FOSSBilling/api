@@ -30,26 +30,48 @@ registerMainRoutes(previewsV1);
 registerPrRoutes(previewsV1);
 registerCommitRoutes(previewsV1);
 
-previewsV1.doc31("/openapi.json", {
-  openapi: "3.1.0",
-  info: {
-    title: "FOSSBilling Previews API (v1)",
-    version: "1.0.0",
-    description:
-      "Read-only lookup of FOSSBilling preview builds - the current main preview and per-PR/per-commit builds produced by FOSSBilling/FOSSBilling's GitHub Actions workflows."
-  },
-  servers: [{ url: "/previews/v1" }]
-});
-
-previewsV1.get(
+previewsV1.route(
   "/docs",
-  Scalar({
-    url: "/previews/v1/openapi.json",
+  Scalar.serve({
+    document: () => 
+      previewsV1.getOpenAPI31Document({
+        openapi: "3.1.0",
+        info: {
+          title: "FOSSBilling Previews API (v1)",
+          version: "1.0.0",
+          description:
+            "Read-only lookup of FOSSBilling preview builds - the current main preview and per-PR/per-commit builds produced by FOSSBilling/FOSSBilling's GitHub Actions workflows."
+        },
+        servers: [{ url: "/previews/v1" }]
+      }),
     pageTitle: "FOSSBilling Previews API (v1)",
     agent: { disabled: true },
     documentDownloadType: "none",
     hideClientButton: true,
     hideModels: true,
+      hiddenClients: {
+      c: true,
+      clojure: true,
+      csharp: true,
+      dart: true,
+      fsharp: true,
+      go: true,
+      java: true,
+      js: ["axios", "jquery", "ofetch"],
+      julia: true,
+      kotlin: true,
+      node: ["axios", "ofetch", "undici"],
+      objc: true,
+      ocaml: true,
+      php: ["guzzle", "laravel"],
+      powershell: true,
+      python: true,
+      r: true,
+      ruby: true,
+      rust: true,
+      shell: ["httpie"],
+      swift: true
+    },
     telemetry: false
   })
 );
