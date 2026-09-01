@@ -370,6 +370,101 @@ describe("Versions API v1", () => {
       expect(data.result).not.toHaveProperty("mirror_digest");
     });
 
+    // These are the actual point of the fix: the release cache is shared
+    // across every requester, and each response must still be resolved
+    // against *that request's own* User-Agent - not whichever client
+    // happened to trigger the fetch that populated the cache. Every test
+    // above only ever makes one request, so a version that wrongly baked
+    // the URL choice into the stored cache (using the first requester's
+    // trust) would still pass them all.
+    it("serves the R2 mirror to a trusting client even when an older client warmed the shared cache", async () => {
+      await mirrorRelease060();
+
+      const ctx1 = createExecutionContext();
+      const warmingResponse = await app.request(
+        "/versions/v1/latest",
+        { headers: { "User-Agent": "FOSSBilling/0.8.6" } },
+        env,
+        ctx1
+      );
+      await waitOnExecutionContext(ctx1);
+      const warmingData: ApiResponse<VersionInfo | null> =
+        await warmingResponse.json();
+      if (!warmingData.result) {
+        throw new Error("Expected latest release data");
+      }
+      expect(warmingData.result.download_url).toBe(
+        "https://github.com/FOSSBilling/FOSSBilling/releases/download/0.6.0/FOSSBilling.zip"
+      );
+      expect(vi.mocked(ghRequest)).toHaveBeenCalledTimes(1);
+
+      const ctx2 = createExecutionContext();
+      const response = await app.request(
+        "/versions/v1/latest",
+        { headers: { "User-Agent": "FOSSBilling/0.8.7" } },
+        env,
+        ctx2
+      );
+      await waitOnExecutionContext(ctx2);
+
+      // Still just the one GitHub fetch from warming the cache above -
+      // this request was served from that shared cache, not a fresh fetch.
+      expect(vi.mocked(ghRequest)).toHaveBeenCalledTimes(1);
+      const data: ApiResponse<VersionInfo | null> = await response.json();
+      if (!data.result) {
+        throw new Error("Expected latest release data");
+      }
+      expect(data.result.download_url).toBe(
+        "https://download.fossbilling.org/releases/0.6.0/FOSSBilling-0.6.0.zip"
+      );
+      expect(data.result.digest).toBe(
+        "sha256:deadbeefcafe0000000000000000000000000000000000000000000000000000"
+      );
+    });
+
+    it("falls back to the GitHub asset for an older client even when a trusting client warmed the shared cache", async () => {
+      await mirrorRelease060();
+
+      const ctx1 = createExecutionContext();
+      const warmingResponse = await app.request(
+        "/versions/v1/latest",
+        { headers: { "User-Agent": "FOSSBilling/0.8.7" } },
+        env,
+        ctx1
+      );
+      await waitOnExecutionContext(ctx1);
+      const warmingData: ApiResponse<VersionInfo | null> =
+        await warmingResponse.json();
+      if (!warmingData.result) {
+        throw new Error("Expected latest release data");
+      }
+      expect(warmingData.result.download_url).toBe(
+        "https://download.fossbilling.org/releases/0.6.0/FOSSBilling-0.6.0.zip"
+      );
+      expect(vi.mocked(ghRequest)).toHaveBeenCalledTimes(1);
+
+      const ctx2 = createExecutionContext();
+      const response = await app.request(
+        "/versions/v1/latest",
+        { headers: { "User-Agent": "FOSSBilling/0.8.6" } },
+        env,
+        ctx2
+      );
+      await waitOnExecutionContext(ctx2);
+
+      expect(vi.mocked(ghRequest)).toHaveBeenCalledTimes(1);
+      const data: ApiResponse<VersionInfo | null> = await response.json();
+      if (!data.result) {
+        throw new Error("Expected latest release data");
+      }
+      expect(data.result.download_url).toBe(
+        "https://github.com/FOSSBilling/FOSSBilling/releases/download/0.6.0/FOSSBilling.zip"
+      );
+      expect(data.result.digest).toBe(
+        "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+      );
+    });
+
     // Regression test: a cache entry in this shape - only `download_url`/
     // `digest`, no `mirror_download_url`/`mirror_digest` keys at all - is
     // exactly what the pre-fix code (and therefore the current production
