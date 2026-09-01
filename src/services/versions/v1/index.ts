@@ -675,11 +675,22 @@ function parseCachedReleases(
   try {
     const parsedCache = JSON.parse(cachedReleases);
     if (parsedCache && typeof parsedCache === "object") {
-      // Cache entries written before the `digest` field existed lack the
-      // key entirely; normalize them to the documented `null` fallback.
+      // Cache entries written before the `digest`/`mirror_download_url`/
+      // `mirror_digest` fields existed lack those keys entirely; normalize
+      // them to the documented `null` fallback. Otherwise a legacy entry's
+      // `mirror_download_url` reads back as `undefined`, which
+      // resolveReleaseForClient()'s `!== null` check treats as "has a
+      // mirror" - swapping in an `undefined` download_url that JSON then
+      // drops from the response entirely.
       for (const release of Object.values(parsedCache as Releases)) {
         if (release.digest === undefined) {
           release.digest = null;
+        }
+        if (release.mirror_download_url === undefined) {
+          release.mirror_download_url = null;
+        }
+        if (release.mirror_digest === undefined) {
+          release.mirror_digest = null;
         }
       }
       return parsedCache as Releases;

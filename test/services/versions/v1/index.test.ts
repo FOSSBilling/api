@@ -369,6 +369,54 @@ describe("Versions API v1", () => {
       expect(data.result).not.toHaveProperty("mirror_download_url");
       expect(data.result).not.toHaveProperty("mirror_digest");
     });
+
+    // Regression test: a cache entry in this shape - only `download_url`/
+    // `digest`, no `mirror_download_url`/`mirror_digest` keys at all - is
+    // exactly what the pre-fix code (and therefore the current production
+    // cache) writes. parseCachedReleases() must backfill the missing keys
+    // to `null`, or a trusting client's resolveReleaseForClient() treats the
+    // `undefined` mirror_download_url as present and returns a response
+    // with download_url missing entirely (JSON drops `undefined` values).
+    it("backfills missing mirror_download_url/mirror_digest on a legacy-shaped cache entry", async () => {
+      const legacyCachedReleases = {
+        "0.6.0": {
+          version: "0.6.0",
+          released_on: "2023-04-01T00:00:00Z",
+          minimum_php_version: "8.1",
+          download_url:
+            "https://github.com/FOSSBilling/FOSSBilling/releases/download/0.6.0/FOSSBilling.zip",
+          size_bytes: 15485760,
+          is_prerelease: false,
+          github_release_id: 987654321,
+          changelog: "## 0.6.0",
+          digest:
+            "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+        }
+      };
+      await env.CACHE_KV.put(
+        "gh-fossbilling-releases",
+        JSON.stringify(legacyCachedReleases)
+      );
+
+      const ctx = createExecutionContext();
+      const response = await app.request(
+        "/versions/v1/latest",
+        { headers: { "User-Agent": "FOSSBilling/0.8.7" } },
+        env,
+        ctx
+      );
+      await waitOnExecutionContext(ctx);
+
+      const data: ApiResponse<VersionInfo | null> = await response.json();
+      if (!data.result) {
+        throw new Error("Expected latest release data");
+      }
+      expect(data.result.download_url).toBe(
+        "https://github.com/FOSSBilling/FOSSBilling/releases/download/0.6.0/FOSSBilling.zip"
+      );
+      expect(data.result).not.toHaveProperty("mirror_download_url");
+      expect(data.result).not.toHaveProperty("mirror_digest");
+    });
   });
 
   describe("GET /:version", () => {
