@@ -157,17 +157,14 @@ function resolveReleaseForClient(
   release: ReleaseDetails,
   userAgent: string | undefined | null
 ): ResolvedReleaseDetails {
-  const useMirror =
-    release.mirror_download_url !== null && clientTrustsMirror(userAgent);
-
   const {
     mirror_download_url: mirrorDownloadUrl,
     mirror_digest: mirrorDigest,
     ...resolved
   } = release;
 
-  if (useMirror) {
-    resolved.download_url = mirrorDownloadUrl!;
+  if (mirrorDownloadUrl !== null && clientTrustsMirror(userAgent)) {
+    resolved.download_url = mirrorDownloadUrl;
     resolved.digest = mirrorDigest;
   }
 
