@@ -10,7 +10,7 @@ This service owns the complete Extensions domain and its `DB_EXTENSIONS` schema:
 
 Endpoints are not listed here. The service publishes its own contract:
 
-- **OpenAPI document:** `GET /extensions/v2/openapi.json`
+- **OpenAPI document:** `GET /extensions/v2/docs/openapi.json`
 - **Reference UI:** `GET /extensions/v2/docs`
 
 ## The Extension Lifecycle

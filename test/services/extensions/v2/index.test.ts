@@ -12,7 +12,7 @@ setupExtensionsV2Tests();
 describe("Extensions API v2", () => {
   describe("OpenAPI docs", () => {
     it("serves a generated OpenAPI document", async () => {
-      const res = await get("/extensions/v2/openapi.json", {});
+      const res = await get("/extensions/v2/docs/openapi.json", {});
       expect(res.status).toBe(200);
       const spec = (await res.json()) as {
         openapi: string;
