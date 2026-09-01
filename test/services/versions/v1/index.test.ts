@@ -9,7 +9,8 @@ import app from "../../../../src/app";
 
 import {
   mockGitHubReleases,
-  mockComposerJson
+  mockComposerJson,
+  mockMirroredRelease
 } from "../../../mocks/github-releases";
 import {
   suppressConsole,
@@ -233,32 +234,13 @@ describe("Versions API v1", () => {
     // began there, so nothing older is ever eligible. The shared
     // mockGitHubReleases fixture tops out at 0.6.0 (below that cutoff, and
     // relied on as "latest" by describe blocks outside this one), so these
-    // tests inject an additional 0.8.0 release on top of it rather than
-    // changing the shared fixture.
-    const MOCK_MIRRORED_RELEASE = {
-      id: 1010,
-      tag_name: "0.8.0",
-      name: "0.8.0",
-      published_at: "2023-05-01T00:00:00Z",
-      prerelease: false,
-      body: "## 0.8.0\n- First mirrored release",
-      assets: [
-        {
-          name: "FOSSBilling.zip",
-          browser_download_url:
-            "https://github.com/FOSSBilling/FOSSBilling/releases/download/0.8.0/FOSSBilling.zip",
-          size: 1040000,
-          digest:
-            "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
-        }
-      ]
-    };
-
+    // tests inject mockMirroredRelease on top of it rather than changing
+    // the shared fixture.
     beforeEach(() => {
       setupGitHubApiMock(
         vi.mocked(ghRequest) as MockGitHubRequest,
         vi.mocked(graphql) as unknown as MockGitHubGraphQL,
-        [...mockGitHubReleases, MOCK_MIRRORED_RELEASE],
+        [...mockGitHubReleases, mockMirroredRelease],
         mockComposerJson
       );
     });

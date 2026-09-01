@@ -7,7 +7,8 @@ import {
 import app from "../../../../src/app";
 import {
   mockGitHubReleases,
-  mockComposerJson
+  mockComposerJson,
+  mockMirroredRelease
 } from "../../../mocks/github-releases";
 import {
   suppressConsole,
@@ -274,31 +275,11 @@ describe("Stats API v1", () => {
     it("resolves both the GitHub and R2 mirror URLs when it triggers the shared release fetch", async () => {
       // Mirroring began at 0.8.0 (R2_MIRROR_MIN_VERSION in versions/v1) -
       // nothing in the shared mockGitHubReleases fixture (which tops out at
-      // 0.6.0) is eligible, so inject a release that is.
+      // 0.6.0) is eligible, so inject mockMirroredRelease on top of it.
       setupGitHubApiMock(
         vi.mocked(ghRequest) as MockGitHubRequest,
         vi.mocked(graphql) as unknown as MockGitHubGraphQL,
-        [
-          ...mockGitHubReleases,
-          {
-            id: 1010,
-            tag_name: "0.8.0",
-            name: "0.8.0",
-            published_at: "2023-05-01T00:00:00Z",
-            prerelease: false,
-            body: "## 0.8.0\n- First mirrored release",
-            assets: [
-              {
-                name: "FOSSBilling.zip",
-                browser_download_url:
-                  "https://github.com/FOSSBilling/FOSSBilling/releases/download/0.8.0/FOSSBilling.zip",
-                size: 1040000,
-                digest:
-                  "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
-              }
-            ]
-          }
-        ],
+        [...mockGitHubReleases, mockMirroredRelease],
         mockComposerJson
       );
       await env.DOWNLOAD_BUCKET.put(

@@ -67,6 +67,29 @@ export const mockGitHubReleases = [
   }
 ];
 
+// A release at/after R2_MIRROR_MIN_VERSION (0.8.0, where mirroring began) -
+// mockGitHubReleases above tops out at 0.6.0, below that cutoff, so R2
+// mirror tests in versions/v1 and stats/v1 spread this on top of it rather
+// than duplicating the literal in each file.
+export const mockMirroredRelease = {
+  id: 1010,
+  tag_name: "0.8.0",
+  name: "0.8.0",
+  published_at: "2023-05-01T00:00:00Z",
+  prerelease: false,
+  body: "## 0.8.0\n- First mirrored release",
+  assets: [
+    {
+      name: "FOSSBilling.zip",
+      browser_download_url:
+        "https://github.com/FOSSBilling/FOSSBilling/releases/download/0.8.0/FOSSBilling.zip",
+      size: 1040000,
+      digest:
+        "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+    }
+  ]
+};
+
 export const mockComposerJson = {
   require: {
     php: "^8.1"
