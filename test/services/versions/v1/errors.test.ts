@@ -249,7 +249,12 @@ describe("Versions API v1 - Error Handling", () => {
             size_bytes: 1000,
             is_prerelease: false,
             github_release_id: 1,
-            changelog: "Release notes"
+            changelog: "Release notes",
+            // Present (as null) so this entry isn't treated as predating the
+            // mirror fields entirely - see the "R2 release mirror" describe
+            // block in index.test.ts for that invalidation behavior.
+            mirror_download_url: null,
+            mirror_digest: null
           }
         })
       );

@@ -465,14 +465,13 @@ describe("Versions API v1", () => {
       );
     });
 
-    // Regression test: a cache entry in this shape - only `download_url`/
-    // `digest`, no `mirror_download_url`/`mirror_digest` keys at all - is
-    // exactly what the pre-fix code (and therefore the current production
-    // cache) writes. parseCachedReleases() must backfill the missing keys
-    // to `null`, or a trusting client's resolveReleaseForClient() treats the
-    // `undefined` mirror_download_url as present and returns a response
-    // with download_url missing entirely (JSON drops `undefined` values).
-    it("backfills missing mirror_download_url/mirror_digest on a legacy-shaped cache entry", async () => {
+    // Regression test: a cache entry missing both mirror_* keys entirely -
+    // whether its download_url happens to be the GitHub URL (this case) or
+    // the R2 mirror URL (next case) - predates those fields and can't be
+    // trusted as-is. parseCachedReleases() must invalidate it and force a
+    // fresh fetch, not serve it (backfilling the missing keys to `null`
+    // isn't enough - see the next test for why).
+    it("invalidates a legacy-shaped cache entry and rebuilds it via a fresh fetch", async () => {
       const legacyCachedReleases = {
         "0.6.0": {
           version: "0.6.0",
@@ -502,6 +501,9 @@ describe("Versions API v1", () => {
       );
       await waitOnExecutionContext(ctx);
 
+      // A live fetch happened rather than the legacy entry being served
+      // (backfilled or otherwise) straight from cache.
+      expect(vi.mocked(ghRequest)).toHaveBeenCalledTimes(1);
       const data: ApiResponse<VersionInfo | null> = await response.json();
       if (!data.result) {
         throw new Error("Expected latest release data");
@@ -511,6 +513,82 @@ describe("Versions API v1", () => {
       );
       expect(data.result).not.toHaveProperty("mirror_download_url");
       expect(data.result).not.toHaveProperty("mirror_digest");
+    });
+
+    // The dangerous case: between #207 (R2 preferred unconditionally, no
+    // mirror_* fields yet) and this gating fix shipping, a mirrored
+    // release's cached download_url was the R2 mirror URL itself, with no
+    // separate field preserving the GitHub URL. Backfilling the missing
+    // mirror_* keys to `null` can't repair that - there's nothing to fall
+    // back to in the entry itself - and would leave every client, old and
+    // new, reading download_url straight off this poisoned entry. Given the
+    // 24h cache TTL and that #207 shipped over 24h before this fix, this is
+    // what's actually sitting in the production cache right now.
+    it("invalidates a legacy cache entry poisoned with the R2 URL as download_url, for clients of any trust", async () => {
+      await mirrorRelease060();
+      const poisonedCachedReleases = {
+        "0.6.0": {
+          version: "0.6.0",
+          released_on: "2023-04-01T00:00:00Z",
+          minimum_php_version: "8.1",
+          download_url:
+            "https://download.fossbilling.org/releases/0.6.0/FOSSBilling-0.6.0.zip",
+          size_bytes: 15485760,
+          is_prerelease: false,
+          github_release_id: 987654321,
+          changelog: "## 0.6.0",
+          digest:
+            "sha256:deadbeefcafe0000000000000000000000000000000000000000000000000000"
+        }
+      };
+      await env.CACHE_KV.put(
+        "gh-fossbilling-releases",
+        JSON.stringify(poisonedCachedReleases)
+      );
+
+      const oldClientCtx = createExecutionContext();
+      const oldClientResponse = await app.request(
+        "/versions/v1/latest",
+        { headers: { "User-Agent": "FOSSBilling/0.8.6" } },
+        env,
+        oldClientCtx
+      );
+      await waitOnExecutionContext(oldClientCtx);
+
+      expect(vi.mocked(ghRequest)).toHaveBeenCalledTimes(1);
+      const oldClientData: ApiResponse<VersionInfo | null> =
+        await oldClientResponse.json();
+      if (!oldClientData.result) {
+        throw new Error("Expected latest release data");
+      }
+      expect(oldClientData.result.download_url).toBe(
+        "https://github.com/FOSSBilling/FOSSBilling/releases/download/0.6.0/FOSSBilling.zip"
+      );
+
+      // The rebuilt cache is now correctly shaped, so a trusting client
+      // right after gets the mirror - from that same (now healthy) cache,
+      // with no second live fetch.
+      const newClientCtx = createExecutionContext();
+      const newClientResponse = await app.request(
+        "/versions/v1/latest",
+        { headers: { "User-Agent": "FOSSBilling/0.8.7" } },
+        env,
+        newClientCtx
+      );
+      await waitOnExecutionContext(newClientCtx);
+
+      expect(vi.mocked(ghRequest)).toHaveBeenCalledTimes(1);
+      const newClientData: ApiResponse<VersionInfo | null> =
+        await newClientResponse.json();
+      if (!newClientData.result) {
+        throw new Error("Expected latest release data");
+      }
+      expect(newClientData.result.download_url).toBe(
+        "https://download.fossbilling.org/releases/0.6.0/FOSSBilling-0.6.0.zip"
+      );
+      expect(newClientData.result.digest).toBe(
+        "sha256:deadbeefcafe0000000000000000000000000000000000000000000000000000"
+      );
     });
   });
 

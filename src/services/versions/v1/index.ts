@@ -675,22 +675,34 @@ function parseCachedReleases(
   try {
     const parsedCache = JSON.parse(cachedReleases);
     if (parsedCache && typeof parsedCache === "object") {
-      // Cache entries written before the `digest`/`mirror_download_url`/
-      // `mirror_digest` fields existed lack those keys entirely; normalize
-      // them to the documented `null` fallback. Otherwise a legacy entry's
-      // `mirror_download_url` reads back as `undefined`, which
-      // resolveReleaseForClient()'s `!== null` check treats as "has a
-      // mirror" - swapping in an `undefined` download_url that JSON then
-      // drops from the response entirely.
+      // Cache entries written before the `digest` field existed lack the
+      // key entirely; normalize them to the documented `null` fallback.
       for (const release of Object.values(parsedCache as Releases)) {
         if (release.digest === undefined) {
           release.digest = null;
         }
-        if (release.mirror_download_url === undefined) {
-          release.mirror_download_url = null;
-        }
-        if (release.mirror_digest === undefined) {
-          release.mirror_digest = null;
+
+        // A release missing *both* mirror fields predates them entirely -
+        // which includes the window when download_url itself was written
+        // as the (unconditionally preferred) R2 mirror URL, with no
+        // separate field preserving the GitHub URL every older client
+        // trusts. There's no `null` to backfill that repairs it: the
+        // GitHub URL isn't recoverable from this cache entry at all, and
+        // serving download_url as-is risks handing every client - not
+        // just old ones - the untrusted mirror URL. Invalidate the whole
+        // cache so getReleases() falls through to a fresh fetch, which
+        // rebuilds every entry with its GitHub and mirror URLs kept
+        // separate again.
+        if (
+          release.mirror_download_url === undefined &&
+          release.mirror_digest === undefined
+        ) {
+          logWarn(
+            "versions",
+            "Cache entry predates mirror fields; invalidating cache to rebuild with separated URLs",
+            { cacheKey: RELEASE_CACHE_KEY, version: release.version }
+          );
+          return null;
         }
       }
       return parsedCache as Releases;
