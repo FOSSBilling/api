@@ -26,7 +26,7 @@ it only resolves and redirects.
 
 Endpoints are not listed here. The service publishes its own contract:
 
-- **OpenAPI document:** `GET /previews/v1/openapi.json`
+- **OpenAPI document:** `GET /previews/v1/docs/openapi.json`
 - **Reference UI:** `GET /previews/v1/docs`
 
 ## Resource Model

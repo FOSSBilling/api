@@ -47,7 +47,7 @@ Each service documents its own endpoints and behaviour:
 | Extensions     | `/extensions/v1`, `/extensions/v2` | [`src/services/extensions/v2/README.md`](src/services/extensions/v2/README.md)         |
 | Previews       | `/previews/v1`                     | [`src/services/previews/v1/README.md`](src/services/previews/v1/README.md)             |
 
-Extensions v2 and Previews v1 also publish a live OpenAPI document (`/extensions/v2/openapi.json`, `/previews/v1/openapi.json`) and a reference UI (`/extensions/v2/docs`, `/previews/v1/docs`).
+Extensions v2 and Previews v1 also publish a live OpenAPI document (`/extensions/v2/docs/openapi.json`, `/previews/v1/docs/openapi.json`) and a reference UI (`/extensions/v2/docs`, `/previews/v1/docs`).
 
 ## Configuration
 
