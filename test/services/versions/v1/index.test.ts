@@ -221,8 +221,13 @@ describe("Versions API v1", () => {
 
   describe("R2 release mirror", () => {
     // github.com has no AAAA record, so IPv6-only hosts must download
-    // from the R2 mirror instead - see FOSSBilling/FOSSBilling#2479.
-    it("prefers the R2 mirror's download_url and digest when mirrored", async () => {
+    // from the R2 mirror instead - see FOSSBilling/FOSSBilling#2479. But
+    // only clients whose own version trusts download.fossbilling.org
+    // (Update::$allowedDownloadPrefixes, added alongside the mirror itself)
+    // should ever be sent that URL - anything older rejects it outright
+    // with "Update canceled for security reasons" (the incident this
+    // describe block guards against).
+    async function mirrorRelease060() {
       await env.DOWNLOAD_BUCKET.put(
         "releases/0.6.0/FOSSBilling-0.6.0.zip",
         "mirrored archive contents",
@@ -234,12 +239,22 @@ describe("Versions API v1", () => {
           }
         }
       );
+    }
+
+    it("prefers the R2 mirror's download_url and digest for a client that trusts it", async () => {
+      await mirrorRelease060();
 
       const ctx = createExecutionContext();
-      const response = await app.request("/versions/v1/latest", {}, env, ctx);
+      const response = await app.request(
+        "/versions/v1/latest",
+        { headers: { "User-Agent": "FOSSBilling/0.8.7" } },
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);
+      expect(response.headers.get("Vary")).toContain("User-Agent");
       const data: ApiResponse<VersionInfo | null> = await response.json();
       if (!data.result) {
         throw new Error("Expected latest release data");
@@ -254,7 +269,12 @@ describe("Versions API v1", () => {
 
     it("falls back to the GitHub asset when a release hasn't been mirrored to R2", async () => {
       const ctx = createExecutionContext();
-      const response = await app.request("/versions/v1/latest", {}, env, ctx);
+      const response = await app.request(
+        "/versions/v1/latest",
+        { headers: { "User-Agent": "FOSSBilling/0.8.7" } },
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);
@@ -268,6 +288,86 @@ describe("Versions API v1", () => {
       expect(data.result.digest).toBe(
         "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
       );
+    });
+
+    it("falls back to the GitHub asset for a client older than the mirror-trust cutoff, even when mirrored", async () => {
+      await mirrorRelease060();
+
+      const ctx = createExecutionContext();
+      const response = await app.request(
+        "/versions/v1/latest",
+        { headers: { "User-Agent": "FOSSBilling/0.8.6" } },
+        env,
+        ctx
+      );
+      await waitOnExecutionContext(ctx);
+
+      const data: ApiResponse<VersionInfo | null> = await response.json();
+      if (!data.result) {
+        throw new Error("Expected latest release data");
+      }
+      expect(data.result.download_url).toBe(
+        "https://github.com/FOSSBilling/FOSSBilling/releases/download/0.6.0/FOSSBilling.zip"
+      );
+      expect(data.result.digest).toBe(
+        "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+      );
+    });
+
+    it("falls back to the GitHub asset for a client sending no User-Agent, even when mirrored", async () => {
+      // Versions <=0.8.3 predate FOSSBilling's own User-Agent header entirely
+      // (added in 0.8.4) and send none of their own.
+      await mirrorRelease060();
+
+      const ctx = createExecutionContext();
+      const response = await app.request("/versions/v1/latest", {}, env, ctx);
+      await waitOnExecutionContext(ctx);
+
+      const data: ApiResponse<VersionInfo | null> = await response.json();
+      if (!data.result) {
+        throw new Error("Expected latest release data");
+      }
+      expect(data.result.download_url).toBe(
+        "https://github.com/FOSSBilling/FOSSBilling/releases/download/0.6.0/FOSSBilling.zip"
+      );
+    });
+
+    it("falls back to the GitHub asset for an unparseable User-Agent, even when mirrored", async () => {
+      await mirrorRelease060();
+
+      const ctx = createExecutionContext();
+      const response = await app.request(
+        "/versions/v1/latest",
+        { headers: { "User-Agent": "curl/8.0.0" } },
+        env,
+        ctx
+      );
+      await waitOnExecutionContext(ctx);
+
+      const data: ApiResponse<VersionInfo | null> = await response.json();
+      if (!data.result) {
+        throw new Error("Expected latest release data");
+      }
+      expect(data.result.download_url).toBe(
+        "https://github.com/FOSSBilling/FOSSBilling/releases/download/0.6.0/FOSSBilling.zip"
+      );
+    });
+
+    it("never exposes the internal mirror_download_url/mirror_digest fields in the response", async () => {
+      await mirrorRelease060();
+
+      const ctx = createExecutionContext();
+      const response = await app.request(
+        "/versions/v1/latest",
+        { headers: { "User-Agent": "FOSSBilling/0.8.7" } },
+        env,
+        ctx
+      );
+      await waitOnExecutionContext(ctx);
+
+      const data: ApiResponse<VersionInfo | null> = await response.json();
+      expect(data.result).not.toHaveProperty("mirror_download_url");
+      expect(data.result).not.toHaveProperty("mirror_digest");
     });
   });
 

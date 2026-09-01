@@ -12,7 +12,7 @@ import {
   gte as semverGte,
   valid as semverValid
 } from "semver";
-import { Releases, ReleaseDetails } from "./interfaces";
+import { Releases, ReleaseDetails, ResolvedReleaseDetails } from "./interfaces";
 import { getReleaseR2Object } from "./r2";
 import { getPlatform } from "../../../lib/middleware";
 import { ICache } from "../../../lib/interfaces";
@@ -124,6 +124,56 @@ function buildSuccessResponse<T>(
   };
 }
 
+// FOSSBilling's own Update.php sends this on every request already (src/di.php,
+// added in 0.8.4), so no client change is needed to gate the R2 mirror by version.
+// Anything we can't confidently read a trusted version out of - no header at all
+// (<=0.8.3, which predates this header), or a version we don't recognize - falls
+// through to `false`, matching the fully-backward-compatible default in
+// resolveReleaseForClient() below.
+const USER_AGENT_VERSION_PATTERN = /^FOSSBilling\/(.+)$/;
+
+// First version whose Update::$allowedDownloadPrefixes trusts
+// download.fossbilling.org. Older clients reject that URL outright with
+// "Update canceled for security reasons" - see FOSSBilling/FOSSBilling
+// incident following #4255/#2479.
+const MIRROR_TRUST_MIN_VERSION = "0.8.7";
+
+function clientTrustsMirror(userAgent: string | undefined | null): boolean {
+  if (!userAgent) return false;
+
+  const match = userAgent.match(USER_AGENT_VERSION_PATTERN);
+  if (!match) return false;
+
+  const version = match[1];
+  if (!semverValid(version)) return false;
+
+  return semverGte(version, MIRROR_TRUST_MIN_VERSION);
+}
+
+// Resolves a release's dual (GitHub + optional R2 mirror) download info down to
+// the single URL/digest pair this specific requester should be sent, and drops
+// the internal-only mirror_* fields from the public response shape.
+function resolveReleaseForClient(
+  release: ReleaseDetails,
+  userAgent: string | undefined | null
+): ResolvedReleaseDetails {
+  const useMirror =
+    release.mirror_download_url !== null && clientTrustsMirror(userAgent);
+
+  const {
+    mirror_download_url: mirrorDownloadUrl,
+    mirror_digest: mirrorDigest,
+    ...resolved
+  } = release;
+
+  if (useMirror) {
+    resolved.download_url = mirrorDownloadUrl!;
+    resolved.digest = mirrorDigest;
+  }
+
+  return resolved;
+}
+
 interface ReleaseAsset {
   name: string;
   browser_download_url: string;
@@ -152,9 +202,19 @@ registerCachedRoute("/", async (c) => {
 
   if (hasNoReleases(releases)) {
     c.header("Vary", "*");
+  } else {
+    c.header("Vary", "User-Agent");
   }
 
-  return c.json(buildSuccessResponse(releases, result.source));
+  const userAgent = c.req.header("User-Agent");
+  const resolvedReleases = Object.fromEntries(
+    Object.entries(releases).map(([tag, release]) => [
+      tag,
+      resolveReleaseForClient(release, userAgent)
+    ])
+  );
+
+  return c.json(buildSuccessResponse(resolvedReleases, result.source));
 });
 
 versionsV1.get(
@@ -310,17 +370,26 @@ registerCachedRoute("/:version", async (c) => {
     });
   }
 
+  c.header("Vary", "User-Agent");
+  const userAgent = c.req.header("User-Agent");
+
   if (version === "latest") {
     const sortedKeys = Object.keys(releases).sort(semverCompare);
     const lastKey = sortedKeys.at(-1);
+    const resolved = lastKey
+      ? resolveReleaseForClient(releases[lastKey], userAgent)
+      : null;
 
-    return c.json(
-      buildSuccessResponse(lastKey ? releases[lastKey] : null, result.source)
-    );
+    return c.json(buildSuccessResponse(resolved, result.source));
   }
 
   if (version in releases) {
-    return c.json(buildSuccessResponse(releases[version], result.source));
+    return c.json(
+      buildSuccessResponse(
+        resolveReleaseForClient(releases[version], userAgent),
+        result.source
+      )
+    );
   }
 
   c.status(404);
@@ -473,9 +542,11 @@ export async function getReleases(
       }
     }
 
-    // Prefer the R2 mirror over the GitHub asset - github.com has no AAAA
-    // record, so IPv6-only hosts can't reach it. Fall back to GitHub for
-    // releases that predate mirroring or if the R2 lookup fails.
+    // Record both the GitHub asset and the R2 mirror (if this release has
+    // one) rather than resolving to a single download_url here - which of
+    // the two a given client should actually be sent depends on whether
+    // *that client's own version* trusts download.fossbilling.org, and is
+    // decided per-request in resolveReleaseForClient().
     const releaseEntries: [string, ReleaseDetails][] = await Promise.all(
       releasesToProcess.map(
         async ({ tag, release, zipAsset, cachedPhpVersion }) => {
@@ -499,13 +570,14 @@ export async function getReleases(
             version: release.name || tag,
             released_on: release.published_at ?? "",
             minimum_php_version: phpVersion,
-            download_url:
-              r2Object?.downloadUrl ?? zipAsset.browser_download_url,
+            download_url: zipAsset.browser_download_url,
+            mirror_download_url: r2Object?.downloadUrl ?? null,
             size_bytes: zipAsset.size,
             is_prerelease: Boolean(release.prerelease),
             github_release_id: release.id ?? 0,
             changelog: release.body || "",
-            digest: r2Object?.digest ?? zipAsset.digest ?? null
+            digest: zipAsset.digest ?? null,
+            mirror_digest: r2Object?.digest ?? null
           };
           return [tag, releaseDetails];
         }
