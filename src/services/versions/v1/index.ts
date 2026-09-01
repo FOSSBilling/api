@@ -138,6 +138,14 @@ const USER_AGENT_VERSION_PATTERN = /^FOSSBilling\/(.+)$/;
 // incident following #4255/#2479.
 const MIRROR_TRUST_MIN_VERSION = "0.8.7";
 
+// First release actually mirrored to R2 - create-release.yml only started
+// uploading archives there from 0.8.0 onward, and that's a one-time step
+// run at release-publish time, so nothing before it will ever appear in
+// the bucket. Not to be confused with MIRROR_TRUST_MIN_VERSION above: this
+// is "does a mirror exist to look up", that's "does the requesting client
+// trust it".
+const R2_MIRROR_MIN_VERSION = "0.8.0";
+
 function clientTrustsMirror(userAgent: string | undefined | null): boolean {
   if (!userAgent) return false;
 
@@ -552,15 +560,22 @@ export async function getReleases(
               ? cachedPhpVersion
               : (batchPhpVersions.get(tag) ?? "");
 
+          // Releases before R2_MIRROR_MIN_VERSION were never uploaded to R2
+          // and never will be, so skip the lookup rather than issuing a
+          // HeadObject that's guaranteed to miss - Cloudflare's own R2
+          // binding instrumentation logs every miss as an error-level span,
+          // regardless of how we handle the resulting null here.
           let r2Object = null;
-          try {
-            r2Object = await getReleaseR2Object(downloadBucket, tag);
-          } catch (r2Error) {
-            logWarn("versions", "Failed to look up release in R2", {
-              tag,
-              error:
-                r2Error instanceof Error ? r2Error.message : String(r2Error)
-            });
+          if (semverGte(tag, R2_MIRROR_MIN_VERSION)) {
+            try {
+              r2Object = await getReleaseR2Object(downloadBucket, tag);
+            } catch (r2Error) {
+              logWarn("versions", "Failed to look up release in R2", {
+                tag,
+                error:
+                  r2Error instanceof Error ? r2Error.message : String(r2Error)
+              });
+            }
           }
 
           const releaseDetails: ReleaseDetails = {
