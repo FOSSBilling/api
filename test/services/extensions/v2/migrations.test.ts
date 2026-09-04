@@ -80,14 +80,17 @@ function seedSubmissionFixture(db: DatabaseSync): void {
 // it: foreign keys enforced, and 0021 inside the transaction wrangler wraps
 // each migration file in. That combination is what a local apply cannot see,
 // and it is what let a broken 0021 reach production.
+//
+// Held back by `candidate < "0021"` rather than `!== "0021"`: this file seeds
+// pre-restructure rows and watches them cross 0021 specifically, so anything
+// numbered after it (e.g. 0022, which assumes 0021's published_at/developer_id
+// already exist) must stay held back too, not just 0021 itself.
 function applyAllAsD1(
   db: DatabaseSync,
   seed?: (db: DatabaseSync) => void
 ): void {
   db.exec("PRAGMA foreign_keys = ON;");
-  for (const name of migrationNames.filter(
-    (candidate) => !candidate.startsWith("0021")
-  )) {
+  for (const name of migrationNames.filter((candidate) => candidate < "0021")) {
     db.exec(migration(name));
   }
   seed?.(db);
@@ -134,13 +137,12 @@ describe("Extensions D1 migrations", () => {
       // assertions prove that the adoption migration is the only schema
       // change needed for the old split-owned database. 0021 is held back
       // with it so this test can seed pre-0021 rows and then watch them
-      // migrate; the assertions after it cover the restructure.
-      const heldBack = new Set([
-        "0019_add_user_deleted_at.sql",
-        "0021_restructure_extensions_revisions.sql"
-      ]);
+      // migrate; the assertions after it cover the restructure. Anything
+      // numbered 0021 or later (not just 0021 by name) stays out of this
+      // first pass too, since it may assume 0021 already ran.
+      const heldBack = new Set(["0019_add_user_deleted_at.sql"]);
       for (const name of migrationNames.filter(
-        (candidate) => !heldBack.has(candidate)
+        (candidate) => !heldBack.has(candidate) && candidate < "0021"
       )) {
         db.exec(migration(name));
       }
@@ -264,7 +266,7 @@ describe("Extensions D1 migrations", () => {
 
     try {
       for (const name of migrationNames.filter(
-        (candidate) => !candidate.startsWith("0021")
+        (candidate) => candidate < "0021"
       )) {
         db.exec(migration(name));
       }
@@ -368,7 +370,7 @@ describe("Extensions D1 migrations", () => {
 
     try {
       for (const name of migrationNames.filter(
-        (candidate) => !candidate.startsWith("0021")
+        (candidate) => candidate < "0021"
       )) {
         db.exec(migration(name));
       }
@@ -405,7 +407,7 @@ describe("Extensions D1 migrations", () => {
 
     try {
       for (const name of migrationNames.filter(
-        (candidate) => !candidate.startsWith("0021")
+        (candidate) => candidate < "0021"
       )) {
         db.exec(migration(name));
       }
@@ -450,7 +452,7 @@ describe("Extensions D1 migrations", () => {
 
     try {
       for (const name of migrationNames.filter(
-        (candidate) => !candidate.startsWith("0021")
+        (candidate) => candidate < "0021"
       )) {
         db.exec(migration(name));
       }
@@ -487,7 +489,7 @@ describe("Extensions D1 migrations", () => {
 
     try {
       for (const name of migrationNames.filter(
-        (candidate) => !candidate.startsWith("0021")
+        (candidate) => candidate < "0021"
       )) {
         db.exec(migration(name));
       }
@@ -614,7 +616,7 @@ describe("Extensions D1 migrations", () => {
     try {
       db.exec("PRAGMA foreign_keys = ON;");
       for (const name of migrationNames.filter(
-        (candidate) => !candidate.startsWith("0021")
+        (candidate) => candidate < "0021"
       )) {
         db.exec(migration(name));
       }

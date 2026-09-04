@@ -217,5 +217,28 @@ describe("Extensions API v2", () => {
       const res = await get("/extensions/v2/extensions/no-such-extension", {});
       expect(res.status).toBe(404);
     });
+
+    it("404s for a delisted extension, even though it is still published", async () => {
+      await insertDeveloper(db, {
+        id: "catalogue-developer",
+        type: "user",
+        name: "Catalogue Developer",
+        url: null,
+        owner_user_id: null
+      });
+      await insertExtension(db, {
+        id: "delisted-ext",
+        developer_id: "catalogue-developer",
+        delisted_at: "2026-01-01T00:00:00.000Z",
+        delist_reason: "Upstream source removed"
+      });
+
+      expect(
+        (await get("/extensions/v2/extensions/delisted-ext", {})).status
+      ).toBe(404);
+
+      const list = await get("/extensions/v2/extensions", {});
+      await expect(list.json()).resolves.toMatchObject({ result: [] });
+    });
   });
 });

@@ -9,6 +9,7 @@ import {
 } from "./errors";
 import {
   ActiveAccountRequiredResponse,
+  DelistReasonSchema,
   IdParamSchema,
   PaginationSchema,
   ReviewNoteOptionalSchema,
@@ -26,6 +27,7 @@ import {
   RevisionQueueQuerySchema
 } from "../schemas/revisions";
 import { DeveloperProfilesDatabase } from "../db/developer-profiles";
+import { ExtensionsDatabase } from "../db/extensions";
 import { ExtensionRevisionsDatabase } from "../db/revisions";
 import { ExtensionsV2App } from "./app";
 
@@ -213,6 +215,69 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
       return c.json(errorBody(error, "Unable to reject revision"), status);
     }
     return c.json({ result: data }, 200);
+  });
+
+  // Distinct from reject: reject leaves a pending edit unpublished, delist
+  // pulls an already-published extension out of the catalogue entirely. See
+  // ExtensionsDatabase.delist() for why content and history are kept rather
+  // than cleared.
+  const delistRoute = createRoute({
+    method: "post",
+    path: "/extensions/{id}/delist",
+    tags: ["Moderation"],
+    summary: "Remove a published extension from the public catalogue",
+    security: [{ Bearer: [] }],
+    middleware: [requireModerator()] as const,
+    request: {
+      params: IdParamSchema,
+      body: {
+        content: { "application/json": { schema: DelistReasonSchema } }
+      }
+    },
+    responses: {
+      200: {
+        content: {
+          "application/json": {
+            schema: z.object({
+              result: z.object({
+                id: z.string(),
+                status: z.literal("delisted")
+              })
+            })
+          }
+        },
+        description:
+          "Extension removed from the public catalogue. Its content and " +
+          "history are kept, and its owner can still see and edit it."
+      },
+      401: errorResponse("Missing or invalid bearer token"),
+      403: {
+        ...ActiveAccountRequiredResponse,
+        description: "The account is inactive or the caller is not a moderator"
+      },
+      404: errorResponse("No such extension"),
+      409: errorResponse("Extension is not published, or is already delisted"),
+      422: errorResponse("Path params or reason body failed validation"),
+      500: errorResponse("Database error")
+    }
+  });
+
+  app.openapi(delistRoute, async (c) => {
+    const auth = getAuth(c);
+    const { id } = c.req.valid("param");
+    const { reason } = c.req.valid("json");
+    const db = new ExtensionsDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
+    const { data, error } = await db.delist(id, auth.userId, reason);
+    if (error || !data) {
+      return c.json(
+        errorBody(error, "Unable to delist extension"),
+        statusFromWriteErrorCode(error?.code)
+      );
+    }
+    return c.json(
+      { result: { id: data.id, status: "delisted" as const } },
+      200
+    );
   });
 
   const allDevelopersRoute = createRoute({

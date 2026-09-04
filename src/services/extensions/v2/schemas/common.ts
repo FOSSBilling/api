@@ -73,6 +73,13 @@ export const ReviewNoteRequiredSchema = z
   .strict()
   .openapi("ReviewNoteRequired");
 
+export const DelistReasonSchema = z
+  .object({
+    reason: z.string().min(1).max(2000)
+  })
+  .strict()
+  .openapi("DelistReason");
+
 export const PaginationSchema = z
   .object({
     next_cursor: z.string().nullable(),

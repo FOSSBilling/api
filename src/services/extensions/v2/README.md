@@ -30,6 +30,12 @@ against it.
 - `POST /extensions/{id}/revisions/{revisionId}/approve` publishes the
   revision's content. `reject` leaves the published content untouched and the
   extension available to edit and resubmit.
+- `POST /extensions/{id}/delist` pulls an already-published extension out of
+  the public catalogue for cause (its upstream source disappearing, for
+  example). Moderator-only, and the inverse of neither `approve` nor
+  `reject`: content and history are kept, so the owner can still see and edit
+  the extension, and a moderator can re-list it by hand later. There is no
+  `relist` endpoint yet - see `ExtensionsDatabase.delist()`.
 
 The id and the developer are properties of the extension, not of a revision: an
 edit cannot rename an extension or move it to another developer, and approving
@@ -54,7 +60,10 @@ state and a derived enum could only disagree with them:
 The adopted row is the one worth reading twice: migration 0021 published every
 extension that already existed, and those have no revisions at all, so a live
 extension with no review history is normal rather than a gap. `published`
-being set is the only thing that means "in the catalogue".
+being set is the only thing that means "in the catalogue" - except a fourth,
+independent field, `delisted`: set once a moderator removes a published
+extension for cause, it hides the row from both public catalogue reads
+without touching `published`, `pending_revision` or `last_review`.
 
 These are separate routes from the public `GET /extensions` and
 `GET /extensions/{id}`, which only ever return published content. A single path

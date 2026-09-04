@@ -602,6 +602,131 @@ describe("Extensions API v2", () => {
     });
   });
 
+  describe("POST /extensions/{id}/delist", () => {
+    it("requires moderator access", async () => {
+      await seedDeveloper("new-developer", "user-1");
+      await insertExtension(db, {
+        id: "live-ext",
+        developer_id: "new-developer"
+      });
+
+      const res = await post(
+        "/extensions/v2/extensions/live-ext/delist",
+        await authHeaders("user-1"),
+        { reason: "Upstream source removed" }
+      );
+      expect(res.status).toBe(403);
+    });
+
+    it("404s for an unknown extension", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+
+      const res = await post(
+        "/extensions/v2/extensions/no-such-extension/delist",
+        await authHeaders("mod-1"),
+        { reason: "Upstream source removed" }
+      );
+      expect(res.status).toBe(404);
+    });
+
+    it("409s for an extension that was never published", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await seedDeveloper("new-developer", "user-1");
+      await insertUnpublishedExtension(db, {
+        id: "draft-ext",
+        developer_id: "new-developer"
+      });
+
+      const res = await post(
+        "/extensions/v2/extensions/draft-ext/delist",
+        await authHeaders("mod-1"),
+        { reason: "Upstream source removed" }
+      );
+      expect(res.status).toBe(409);
+    });
+
+    it("422s on an empty reason", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await seedDeveloper("new-developer", "user-1");
+      await insertExtension(db, {
+        id: "live-ext",
+        developer_id: "new-developer"
+      });
+
+      const res = await post(
+        "/extensions/v2/extensions/live-ext/delist",
+        await authHeaders("mod-1"),
+        { reason: "" }
+      );
+      expect(res.status).toBe(422);
+    });
+
+    it("removes a published extension from the public catalogue and records why", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await seedDeveloper("new-developer", "user-1");
+      await insertExtension(db, {
+        id: "LIVE-ext",
+        developer_id: "new-developer"
+      });
+
+      const res = await post(
+        "/extensions/v2/extensions/live-ext/delist",
+        await authHeaders("mod-1"),
+        { reason: "Upstream source removed" }
+      );
+      expect(res.status).toBe(200);
+      await expect(res.json()).resolves.toEqual({
+        result: { id: "live-ext", status: "delisted" }
+      });
+
+      // Case-insensitively addressed, like every other extension route.
+      expect(await getExtension(db, "LIVE-ext")).toMatchObject({
+        delist_reason: "Upstream source removed"
+      });
+
+      expect((await get("/extensions/v2/extensions", {})).status).toBe(200);
+      await expect(
+        (await get("/extensions/v2/extensions", {})).json()
+      ).resolves.toMatchObject({ result: [] });
+      expect((await get("/extensions/v2/extensions/live-ext", {})).status).toBe(
+        404
+      );
+
+      // The owner can still see it, plus why it was pulled.
+      const mine = await get(
+        "/extensions/v2/extensions/mine/live-ext",
+        await authHeaders("user-1")
+      );
+      await expect(mine.json()).resolves.toMatchObject({
+        result: {
+          delisted: { reason: "Upstream source removed" },
+          published: { name: "Extension" }
+        }
+      });
+    });
+
+    it("409s on a second delist of the same extension", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await seedDeveloper("new-developer", "user-1");
+      await insertExtension(db, {
+        id: "live-ext",
+        developer_id: "new-developer"
+      });
+      const mod = await authHeaders("mod-1");
+      await post("/extensions/v2/extensions/live-ext/delist", mod, {
+        reason: "First reason"
+      });
+
+      const res = await post("/extensions/v2/extensions/live-ext/delist", mod, {
+        reason: "Second reason"
+      });
+      expect(res.status).toBe(409);
+      expect(await getExtension(db, "live-ext")).toMatchObject({
+        delist_reason: "First reason"
+      });
+    });
+  });
+
   describe("developer moderation", () => {
     it("binds approval to the exact profile revision reviewed", async () => {
       await put(
