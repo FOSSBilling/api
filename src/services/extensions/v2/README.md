@@ -41,6 +41,12 @@ against it.
   `GET /extensions/mine/{id}`, including `delisted`. Without it, a moderator
   could delist an extension but never see why (their own or another
   moderator's) again short of digging through `GET /extensions/{id}/revisions`.
+- `GET /moderation/all-extensions` lists every extension across every
+  developer, filterable by `status` (`published`, `delisted`, `unpublished`;
+  omitted means all) and `q` (case-insensitive substring match on the id).
+  Distinct from `GET /moderation/extensions` above, which lists _revisions_
+  awaiting review - an extension's own status and its having a pending edit
+  are independent.
 
 The id and the developer are properties of the extension, not of a revision: an
 edit cannot rename an extension or move it to another developer, and approving

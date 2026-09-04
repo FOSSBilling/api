@@ -336,6 +336,80 @@ export class ExtensionsDatabase {
     };
   }
 
+  // The moderator equivalent of listOwned(): every extension regardless of
+  // who owns it, filterable by the same published/delisted/unpublished states
+  // rather than scoped to one developerId. Shares ownedListQuery and its
+  // parser so a moderator's list can never disagree with an owner's about
+  // what one row means.
+  async listForModeration(
+    filters: {
+      status?: "published" | "delisted" | "unpublished";
+      type?: string;
+      q?: string;
+      limit?: number;
+      cursor?: string;
+    } = {}
+  ): Promise<DatabaseResult<OwnedExtensionListPage>> {
+    const limit = filters.limit ?? 50;
+    const conditions = [];
+    if (filters.status === "published") {
+      conditions.push(
+        isNotNull(extensions.publishedAt),
+        isNull(extensions.delistedAt)
+      );
+    } else if (filters.status === "delisted") {
+      conditions.push(isNotNull(extensions.delistedAt));
+    } else if (filters.status === "unpublished") {
+      conditions.push(isNull(extensions.publishedAt));
+    }
+    if (filters.q) {
+      // LOWER() on both sides rather than lowercasing the term in JS first:
+      // JS's toLowerCase() is Unicode-aware, but SQLite's LOWER() only folds
+      // ASCII, so pre-folding just the term could desync from what LOWER(id)
+      // produces for a non-ASCII id.
+      const pattern = `%${escapeLikePattern(filters.q)}%`;
+      conditions.push(
+        sql`LOWER(${extensions.id}) LIKE LOWER(${pattern}) ESCAPE '\\'`
+      );
+    }
+    if (filters.type) {
+      conditions.push(
+        sql`COALESCE(
+          ${extensions.type},
+          json_extract(${PENDING.content}, '$.type'),
+          json_extract(${REVIEWED.content}, '$.type')
+        ) = ${filters.type}`
+      );
+    }
+    if (filters.cursor) {
+      const cursor = decodeCursor(filters.cursor);
+      if (!cursor) return invalidCursor();
+      conditions.push(keysetAfter(cursor));
+    }
+
+    let rows: OwnedListRow[];
+    try {
+      const query = ownedListQuery(this.db);
+      rows = await (conditions.length ? query.where(and(...conditions)) : query)
+        .orderBy(asc(sql`LOWER(${extensions.id})`), asc(extensions.id))
+        .limit(limit + 1);
+    } catch (error) {
+      return databaseError("listForModeration", error);
+    }
+
+    const hasMore = rows.length > limit;
+    const pageRows = rows.slice(0, limit);
+    const last = pageRows.at(-1);
+    return {
+      data: {
+        items: pageRows.map(parseOwnedListRow),
+        hasMore,
+        nextCursor: hasMore && last ? encodeCursor(last.id) : null
+      },
+      error: null
+    };
+  }
+
   // Returns the owner view plus the two ids a route needs to authorise the
   // caller, so a detail read is one query rather than a fetch-then-check.
   async getOwned(
@@ -623,6 +697,12 @@ export class ExtensionsDatabase {
       error: { message: "Extension could not be delisted", code: "CONFLICT" }
     };
   }
+}
+
+// Escapes SQLite LIKE metacharacters in a caller-supplied search term so a
+// literal "%" or "_" in it is matched literally rather than as a wildcard.
+function escapeLikePattern(value: string): string {
+  return value.replace(/[\\%_]/g, (char) => `\\${char}`);
 }
 
 function invalidCursor(): DatabaseResult<never> {
