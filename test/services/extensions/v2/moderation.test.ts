@@ -758,6 +758,55 @@ describe("Extensions API v2", () => {
         delist_reason: "First reason"
       });
     });
+
+    // Public reads are covered in public-extensions.test.ts. This is about
+    // who can still reach a delisted extension's full record once it is out
+    // of the catalogue: the owner via GET /extensions/mine/{id} (ownership
+    // check, unaffected by delisted state - see getOwned()), a moderator via
+    // GET /extensions/{id}/revisions (the only route a moderator has that
+    // isn't scoped to their own developer profile), and no one else.
+    it("only the owner or a moderator can still reach a delisted extension", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await seedDeveloper("new-developer", "user-1");
+      await insertExtension(db, {
+        id: "live-ext",
+        developer_id: "new-developer"
+      });
+      await post(
+        "/extensions/v2/extensions/live-ext/delist",
+        await authHeaders("mod-1"),
+        {
+          reason: "Upstream source removed"
+        }
+      );
+
+      const owner = await get(
+        "/extensions/v2/extensions/mine/live-ext",
+        await authHeaders("user-1")
+      );
+      expect(owner.status).toBe(200);
+      await expect(owner.json()).resolves.toMatchObject({
+        result: { delisted: { reason: "Upstream source removed" } }
+      });
+
+      const moderator = await get(
+        "/extensions/v2/extensions/live-ext/revisions",
+        await authHeaders("mod-1")
+      );
+      expect(moderator.status).toBe(200);
+
+      const stranger = await get(
+        "/extensions/v2/extensions/mine/live-ext",
+        await authHeaders("user-2")
+      );
+      expect(stranger.status).toBe(403);
+
+      const strangerRevisions = await get(
+        "/extensions/v2/extensions/live-ext/revisions",
+        await authHeaders("user-2")
+      );
+      expect(strangerRevisions.status).toBe(403);
+    });
   });
 
   describe("developer moderation", () => {
