@@ -207,9 +207,22 @@ const PendingRevisionRefSchema = z
   })
   .openapi("PendingRevisionRef");
 
-// published, pending_revision and last_review are independent — a live
-// extension with an unreviewed edit has all three. There is deliberately no
-// derived `status` field on top; see the README for how they map to a UI.
+// Set once a moderator pulls an already-published extension from the
+// catalogue for cause (its upstream source disappearing, for example).
+// Content and history are kept, so the owner can still see and edit the
+// extension - they just cannot get it back into the catalogue without a
+// moderator re-listing it.
+export const DelistedInfoSchema = z
+  .object({
+    reason: z.string(),
+    at: z.string()
+  })
+  .openapi("DelistedInfo");
+
+// published, pending_revision, last_review and delisted are independent — a
+// live extension with an unreviewed edit has all three of the first, and a
+// delisted one keeps whichever of them it already had. There is deliberately
+// no derived `status` field on top; see the README for how they map to a UI.
 export const OwnedExtensionListItemSchema = z
   .object({
     id: z.string(),
@@ -217,6 +230,7 @@ export const OwnedExtensionListItemSchema = z
     published: ExtensionCardContentSchema.nullable(),
     pending_revision: PendingRevisionRefSchema.nullable(),
     last_review: RevisionReviewSchema.nullable(),
+    delisted: DelistedInfoSchema.nullable(),
     created_at: z.string(),
     updated_at: z.string()
   })

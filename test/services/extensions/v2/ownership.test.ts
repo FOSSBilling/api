@@ -1023,6 +1023,26 @@ describe("Extensions API v2", () => {
       ).toBeNull();
     });
 
+    it("rejects a whitespace-only review_note when rejecting a claim", async () => {
+      await seedUnownedDeveloper("legacy-developer");
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+
+      const claim = await post(
+        "/extensions/v2/developers/legacy-developer/claim",
+        await authHeaders("user-1"),
+        {}
+      );
+      const claimId = ((await claim.json()) as { result: { id: string } })
+        .result.id;
+
+      const reject = await post(
+        `/extensions/v2/developers/claims/${claimId}/reject`,
+        await authHeaders("mod-1"),
+        { review_note: "   " }
+      );
+      expect(reject.status).toBe(422);
+    });
+
     it("verifies a claim when the claimant's linked GitHub org matches the developer id", async () => {
       await insertDeveloper(db, {
         id: "legacy-developer",

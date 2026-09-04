@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
+import { eq } from "drizzle-orm";
 import {
   createExecutionContext,
   waitOnExecutionContext
@@ -138,6 +139,24 @@ describe("Extensions API v1", () => {
       expect(res.status).toBe(301);
     });
 
+    // v1 and v2 share the extensions table and must agree on what counts as
+    // published - a moderator delisting an extension in v2 must also pull it
+    // from here, or FOSSBilling installs would keep seeing it.
+    it("should exclude a delisted extension", async () => {
+      const db = getExtensionsDb(env.DB_EXTENSIONS);
+      await db
+        .update(extensions)
+        .set({ delistedAt: "2026-01-01T00:00:00.000Z" })
+        .where(eq(extensions.id, "Example"));
+
+      const ctx = createExecutionContext();
+      const res = await app.request("/extensions/v1/list", {}, env, ctx);
+      await waitOnExecutionContext(ctx);
+
+      const data = (await res.json()) as { result: Array<{ id: string }> };
+      expect(data.result.map((e) => e.id)).toEqual(["TestTheme"]);
+    });
+
     it("should parse releases in descending order", async () => {
       const ctx = createExecutionContext();
       const res = await app.request("/extensions/v1/list", {}, env, ctx);
@@ -184,6 +203,20 @@ describe("Extensions API v1", () => {
       expect(res.status).toBe(404);
       const data = (await res.json()) as { error: { message: string } };
       expect(data.error.message).toContain("nonexistent");
+    });
+
+    it("should return 404 for a delisted extension", async () => {
+      const db = getExtensionsDb(env.DB_EXTENSIONS);
+      await db
+        .update(extensions)
+        .set({ delistedAt: "2026-01-01T00:00:00.000Z" })
+        .where(eq(extensions.id, "Example"));
+
+      const ctx = createExecutionContext();
+      const res = await app.request("/extensions/v1/Example", {}, env, ctx);
+      await waitOnExecutionContext(ctx);
+
+      expect(res.status).toBe(404);
     });
 
     it("should include parsed author object", async () => {

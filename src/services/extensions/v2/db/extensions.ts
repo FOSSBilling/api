@@ -1,4 +1,4 @@
-import { and, asc, eq, isNotNull, or, sql } from "drizzle-orm";
+import { and, asc, eq, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import { DatabaseError, DatabaseResult } from "../../../../lib/interfaces";
 import { ExtensionsDb } from "../../../../lib/db";
@@ -113,6 +113,8 @@ const {
 const OWNED_LIST_COLUMNS = {
   id: extensions.id,
   publishedAt: extensions.publishedAt,
+  delistedAt: extensions.delistedAt,
+  delistReason: extensions.delistReason,
   createdAt: extensions.createdAt,
   updatedAt: extensions.updatedAt,
   ...CARD_CONTENT_COLUMNS,
@@ -221,7 +223,10 @@ export class ExtensionsDatabase {
     filters: ExtensionListFilters = {}
   ): Promise<DatabaseResult<ExtensionListPage>> {
     const limit = filters.limit ?? 50;
-    const conditions = [isNotNull(extensions.publishedAt)];
+    const conditions = [
+      isNotNull(extensions.publishedAt),
+      isNull(extensions.delistedAt)
+    ];
     if (filters.type) conditions.push(eq(extensions.type, filters.type));
     if (filters.developerId)
       conditions.push(eq(extensions.developerId, filters.developerId));
@@ -268,7 +273,8 @@ export class ExtensionsDatabase {
         .where(
           and(
             sql`LOWER(${extensions.id}) = LOWER(${id})`,
-            isNotNull(extensions.publishedAt)
+            isNotNull(extensions.publishedAt),
+            isNull(extensions.delistedAt)
           )
         )) as PublishedRow[];
     } catch (error) {
@@ -526,6 +532,97 @@ export class ExtensionsDatabase {
       }
     };
   }
+
+  // A moderator's decision to pull an already-published extension from the
+  // catalogue for cause - its upstream source disappearing, for example.
+  // Content and history are kept (unlike withdraw(), which deletes a
+  // never-published row outright), so an owner can still see why and a
+  // moderator can re-list it later without the developer resubmitting from
+  // scratch. `AND delisted_at IS NULL` makes this a single atomic
+  // check-and-set, the same way ExtensionRevisionsDatabase.reject() guards
+  // on `status = 'pending'`.
+  async delist(
+    id: string,
+    moderatorId: string,
+    reason: string
+  ): Promise<DatabaseResult<{ id: string }>> {
+    let result;
+    try {
+      result = await this.db
+        .update(extensions)
+        .set({
+          delistedAt: sql`CURRENT_TIMESTAMP`,
+          delistReason: reason,
+          updatedAt: sql`CURRENT_TIMESTAMP`
+        })
+        .where(
+          and(
+            sql`LOWER(${extensions.id}) = LOWER(${id})`,
+            isNotNull(extensions.publishedAt),
+            isNull(extensions.delistedAt),
+            sql`EXISTS (
+              SELECT 1 FROM ${users}
+              WHERE ${users.id} = ${moderatorId} AND ${users.deletedAt} IS NULL
+            )`
+          )
+        );
+    } catch (error) {
+      return databaseError("delist", error);
+    }
+
+    if (!result.meta?.changes) {
+      return this.delistBlockedError(id, moderatorId);
+    }
+
+    return { data: { id }, error: null };
+  }
+
+  // Separates the three ways delist()'s guard can affect no rows, so the
+  // route can answer 404/409 rather than one opaque failure.
+  private async delistBlockedError(
+    id: string,
+    moderatorId: string
+  ): Promise<DatabaseResult<never>> {
+    const inactive = await inactiveActorError(this.db, moderatorId);
+    if (inactive) return { data: null, error: inactive };
+
+    let existing:
+      { publishedAt: string | null; delistedAt: string | null } | undefined;
+    try {
+      [existing] = await this.db
+        .select({
+          publishedAt: extensions.publishedAt,
+          delistedAt: extensions.delistedAt
+        })
+        .from(extensions)
+        .where(sql`LOWER(${extensions.id}) = LOWER(${id})`);
+    } catch (error) {
+      return databaseError("delist", error);
+    }
+    if (!existing) return notFound(id);
+    if (!existing.publishedAt) {
+      return {
+        data: null,
+        error: {
+          message: "Only a published extension can be delisted",
+          code: "CONFLICT"
+        }
+      };
+    }
+    if (existing.delistedAt) {
+      return {
+        data: null,
+        error: {
+          message: "This extension is already delisted",
+          code: "CONFLICT"
+        }
+      };
+    }
+    return {
+      data: null,
+      error: { message: "Extension could not be delisted", code: "CONFLICT" }
+    };
+  }
 }
 
 function invalidCursor(): DatabaseResult<never> {
@@ -654,6 +751,11 @@ function parseOwnedListRow(row: OwnedListRow): OwnedExtensionListItem {
           review_note: row.reviewedNote,
           reviewed_at: row.reviewedAt
         }
+      : null,
+    // delistReason is only ever null alongside delistedAt - delist() sets
+    // both in the same statement - so the cast below just states that.
+    delisted: row.delistedAt
+      ? { reason: row.delistReason as string, at: row.delistedAt }
       : null,
     created_at: row.createdAt,
     updated_at: row.updatedAt

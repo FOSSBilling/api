@@ -43,6 +43,8 @@ export interface ExtensionRow {
   download_url: string | null;
   created_at: string;
   updated_at: string;
+  delisted_at: string | null;
+  delist_reason: string | null;
 }
 
 export interface RevisionRow {
@@ -249,8 +251,9 @@ export async function insertExtension(
       `INSERT INTO extensions
          (id, developer_id, published_at, published_revision_id, type, name,
           description, releases, website, license, icon_url, readme, source,
-          version, download_url, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          version, download_url, created_at, updated_at, delisted_at,
+          delist_reason)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .bind(
       row.id,
@@ -269,7 +272,9 @@ export async function insertExtension(
       row.version ?? "1.0.0",
       row.download_url ?? "https://e.com/d.zip",
       row.created_at ?? now,
-      row.updated_at ?? now
+      row.updated_at ?? now,
+      row.delisted_at ?? null,
+      row.delist_reason ?? null
     )
     .run();
 }

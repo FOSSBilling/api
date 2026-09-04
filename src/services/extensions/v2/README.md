@@ -30,6 +30,17 @@ against it.
 - `POST /extensions/{id}/revisions/{revisionId}/approve` publishes the
   revision's content. `reject` leaves the published content untouched and the
   extension available to edit and resubmit.
+- `POST /extensions/{id}/delist` pulls an already-published extension out of
+  the public catalogue for cause (its upstream source disappearing, for
+  example). Moderator-only, and the inverse of neither `approve` nor
+  `reject`: content and history are kept, so the owner can still see and edit
+  the extension, and a moderator can re-list it by hand later. There is no
+  `relist` endpoint yet - see `ExtensionsDatabase.delist()`.
+- `GET /moderation/extensions/{id}` is a moderator's only full-record read of
+  an extension they don't own - the same `OwnedExtension` shape as
+  `GET /extensions/mine/{id}`, including `delisted`. Without it, a moderator
+  could delist an extension but never see why (their own or another
+  moderator's) again short of digging through `GET /extensions/{id}/revisions`.
 
 The id and the developer are properties of the extension, not of a revision: an
 edit cannot rename an extension or move it to another developer, and approving
@@ -38,9 +49,12 @@ most one developer profile, so no request body names one.
 
 ### Reading Owner State
 
-`GET /extensions/mine` and `GET /extensions/mine/{id}` return three independent
+`GET /extensions/mine` and `GET /extensions/mine/{id}` return four independent
 fields rather than a single derived status, because together they are the
-state and a derived enum could only disagree with them:
+state and a derived enum could only disagree with them. The table below
+covers three of them - `published`, `pending_revision` and `last_review` - the
+fourth, `delisted`, is documented separately just below since it is orthogonal
+to all three:
 
 | `published` | `pending_revision` | `last_review` | Meaning                                 |
 | ----------- | ------------------ | ------------- | --------------------------------------- |
@@ -54,7 +68,10 @@ state and a derived enum could only disagree with them:
 The adopted row is the one worth reading twice: migration 0021 published every
 extension that already existed, and those have no revisions at all, so a live
 extension with no review history is normal rather than a gap. `published`
-being set is the only thing that means "in the catalogue".
+being set is the only thing that means "in the catalogue" - except a fourth,
+independent field, `delisted`: set once a moderator removes a published
+extension for cause, it hides the row from both public catalogue reads
+without touching `published`, `pending_revision` or `last_review`.
 
 These are separate routes from the public `GET /extensions` and
 `GET /extensions/{id}`, which only ever return published content. A single path

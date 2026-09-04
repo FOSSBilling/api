@@ -69,7 +69,15 @@ export const extensions = sqliteTable(
       .default(sql`CURRENT_TIMESTAMP`),
     updatedAt: text("updated_at")
       .notNull()
-      .default(sql`CURRENT_TIMESTAMP`)
+      .default(sql`CURRENT_TIMESTAMP`),
+    // A moderator's decision to pull an already-published extension from the
+    // catalogue for cause (its upstream source disappearing, for example).
+    // Distinct from never having been published and from an owner's
+    // pre-publish withdraw(): published_at and delisted_at can both be set at
+    // once, so the fact that this was live and then pulled is never lost, and
+    // an owner can still see and edit the row afterwards.
+    delistedAt: text("delisted_at"),
+    delistReason: text("delist_reason")
   },
   (table) => [
     // Case-insensitive id uniqueness. The id is a lowercase slug by schema,
@@ -89,14 +97,18 @@ export const extensions = sqliteTable(
       table.id
     ),
     // These two are partial: every read that uses them filters on
-    // published_at IS NOT NULL, so unpublished rows would only bloat the
-    // index the catalogue scans.
+    // published_at IS NOT NULL AND delisted_at IS NULL, so an unpublished or
+    // delisted row would only bloat the index the catalogue scans.
     index("idx_extensions_catalogue_order")
       .on(sql`lower(${table.id})`, table.id)
-      .where(sql`${table.publishedAt} IS NOT NULL`),
+      .where(
+        sql`${table.publishedAt} IS NOT NULL AND ${table.delistedAt} IS NULL`
+      ),
     index("idx_extensions_type_catalogue_order")
       .on(table.type, sql`lower(${table.id})`, table.id)
-      .where(sql`${table.publishedAt} IS NOT NULL`),
+      .where(
+        sql`${table.publishedAt} IS NOT NULL AND ${table.delistedAt} IS NULL`
+      ),
     // "Published" must mean every column the public contract declares
     // non-optional is present. icon_url is genuinely optional and is left out.
     check(
@@ -109,6 +121,12 @@ export const extensions = sqliteTable(
         ${table.version} IS NOT NULL AND ${table.downloadUrl} IS NOT NULL
       )`
     )
+    // No CHECK tying delisted_at to published_at: SQLite cannot add a CHECK
+    // without a full table rebuild, and this table has a child
+    // (extension_revisions) that a rebuild's DROP TABLE cannot carry through
+    // a real transaction (see migration 0021's header). delist() is the only
+    // writer and already guards on published_at IS NOT NULL, so the invariant
+    // holds without spending a rebuild on it.
   ]
 );
 
