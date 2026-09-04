@@ -363,8 +363,14 @@ export class ExtensionsDatabase {
       conditions.push(isNull(extensions.publishedAt));
     }
     if (filters.q) {
-      const pattern = `%${escapeLikePattern(filters.q.toLowerCase())}%`;
-      conditions.push(sql`LOWER(${extensions.id}) LIKE ${pattern} ESCAPE '\\'`);
+      // LOWER() on both sides rather than lowercasing the term in JS first:
+      // JS's toLowerCase() is Unicode-aware, but SQLite's LOWER() only folds
+      // ASCII, so pre-folding just the term could desync from what LOWER(id)
+      // produces for a non-ASCII id.
+      const pattern = `%${escapeLikePattern(filters.q)}%`;
+      conditions.push(
+        sql`LOWER(${extensions.id}) LIKE LOWER(${pattern}) ESCAPE '\\'`
+      );
     }
     if (filters.type) {
       conditions.push(

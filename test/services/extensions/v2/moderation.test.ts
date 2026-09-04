@@ -299,12 +299,23 @@ describe("Extensions API v2", () => {
         developer_id: "new-developer"
       });
 
-      const res = await get(
+      const percentRes = await get(
         `/extensions/v2/moderation/all-extensions?${new URLSearchParams({ q: "pay%gate" })}`,
         await authHeaders("mod-1")
       );
-      expect(res.status).toBe(200);
-      await expect(res.json()).resolves.toMatchObject({ result: [] });
+      expect(percentRes.status).toBe(200);
+      await expect(percentRes.json()).resolves.toMatchObject({ result: [] });
+
+      // Unescaped, "_" is a single-character wildcard that would match the
+      // "-" in "pay-gate" - this must not happen either.
+      const underscoreRes = await get(
+        `/extensions/v2/moderation/all-extensions?${new URLSearchParams({ q: "pay_gate" })}`,
+        await authHeaders("mod-1")
+      );
+      expect(underscoreRes.status).toBe(200);
+      await expect(underscoreRes.json()).resolves.toMatchObject({
+        result: []
+      });
     });
   });
 
