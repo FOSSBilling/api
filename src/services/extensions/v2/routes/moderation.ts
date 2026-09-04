@@ -269,10 +269,8 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
     const db = new ExtensionsDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
     const { data, error } = await db.delist(id, auth.userId, reason);
     if (error || !data) {
-      return c.json(
-        errorBody(error, "Unable to delist extension"),
-        statusFromWriteErrorCode(error?.code)
-      );
+      const status = statusFromWriteErrorCode(error?.code);
+      return c.json(errorBody(error, "Unable to delist extension"), status);
     }
     return c.json(
       { result: { id: data.id, status: "delisted" as const } },
