@@ -44,9 +44,12 @@ most one developer profile, so no request body names one.
 
 ### Reading Owner State
 
-`GET /extensions/mine` and `GET /extensions/mine/{id}` return three independent
+`GET /extensions/mine` and `GET /extensions/mine/{id}` return four independent
 fields rather than a single derived status, because together they are the
-state and a derived enum could only disagree with them:
+state and a derived enum could only disagree with them. The table below
+covers three of them - `published`, `pending_revision` and `last_review` - the
+fourth, `delisted`, is documented separately just below since it is orthogonal
+to all three:
 
 | `published` | `pending_revision` | `last_review` | Meaning                                 |
 | ----------- | ------------------ | ------------- | --------------------------------------- |

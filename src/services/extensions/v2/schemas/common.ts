@@ -75,7 +75,9 @@ export const ReviewNoteRequiredSchema = z
 
 export const DelistReasonSchema = z
   .object({
-    reason: z.string().min(1).max(2000)
+    // Shown to the owner as-is, so a whitespace-only value must not satisfy
+    // min(1) the way an untrimmed string would.
+    reason: z.string().trim().min(1).max(2000)
   })
   .strict()
   .openapi("DelistReason");

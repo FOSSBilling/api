@@ -661,12 +661,29 @@ describe("Extensions API v2", () => {
       expect(res.status).toBe(422);
     });
 
+    it("422s on a whitespace-only reason", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await seedDeveloper("new-developer", "user-1");
+      await insertExtension(db, {
+        id: "live-ext",
+        developer_id: "new-developer"
+      });
+
+      const res = await post(
+        "/extensions/v2/extensions/live-ext/delist",
+        await authHeaders("mod-1"),
+        { reason: "   " }
+      );
+      expect(res.status).toBe(422);
+    });
+
     it("removes a published extension from the public catalogue and records why", async () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await seedDeveloper("new-developer", "user-1");
       await insertExtension(db, {
         id: "LIVE-ext",
-        developer_id: "new-developer"
+        developer_id: "new-developer",
+        updated_at: "2020-01-01T00:00:00.000Z"
       });
 
       const res = await post(
@@ -683,6 +700,9 @@ describe("Extensions API v2", () => {
       expect(await getExtension(db, "LIVE-ext")).toMatchObject({
         delist_reason: "Upstream source removed"
       });
+      expect((await getExtension(db, "LIVE-ext"))?.updated_at).not.toBe(
+        "2020-01-01T00:00:00.000Z"
+      );
 
       expect((await get("/extensions/v2/extensions", {})).status).toBe(200);
       await expect(

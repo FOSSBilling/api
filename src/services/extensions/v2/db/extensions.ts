@@ -552,7 +552,8 @@ export class ExtensionsDatabase {
         .update(extensions)
         .set({
           delistedAt: sql`CURRENT_TIMESTAMP`,
-          delistReason: reason
+          delistReason: reason,
+          updatedAt: sql`CURRENT_TIMESTAMP`
         })
         .where(
           and(
@@ -585,13 +586,19 @@ export class ExtensionsDatabase {
     const inactive = await inactiveActorError(this.db, moderatorId);
     if (inactive) return { data: null, error: inactive };
 
-    const [existing] = await this.db
-      .select({
-        publishedAt: extensions.publishedAt,
-        delistedAt: extensions.delistedAt
-      })
-      .from(extensions)
-      .where(sql`LOWER(${extensions.id}) = LOWER(${id})`);
+    let existing:
+      { publishedAt: string | null; delistedAt: string | null } | undefined;
+    try {
+      [existing] = await this.db
+        .select({
+          publishedAt: extensions.publishedAt,
+          delistedAt: extensions.delistedAt
+        })
+        .from(extensions)
+        .where(sql`LOWER(${extensions.id}) = LOWER(${id})`);
+    } catch (error) {
+      return databaseError("delist", error);
+    }
     if (!existing) return notFound(id);
     if (!existing.publishedAt) {
       return {

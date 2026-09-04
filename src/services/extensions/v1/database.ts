@@ -1,4 +1,4 @@
-import { and, eq, isNotNull, sql } from "drizzle-orm";
+import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import { ExtensionsDb } from "../../../lib/db";
 import { extensions, developers } from "../v2/db/schema";
 import { DatabaseResult } from "../../../lib/interfaces";
@@ -39,7 +39,10 @@ const EXTENSION_COLUMNS = {
 // non-null here because both queries below filter on published_at IS NOT NULL
 // and extensions_published_content_check makes that filter sufficient - a
 // published row cannot be missing any of them. That filter is also what keeps
-// unreviewed extensions out of the v1 catalogue.
+// unreviewed extensions out of the v1 catalogue. delisted_at IS NULL is the
+// other half: v1 shares this table with v2's public catalogue and must stay
+// in sync with what v2 hides, or a moderator delisting an extension would
+// pull it from the v2 catalogue while it stayed visible here.
 interface ExtensionRow {
   id: string;
   type: string;
@@ -65,7 +68,10 @@ export class ExtensionsDatabase {
   async getAllExtensions(type?: string): Promise<DatabaseResult<Extension[]>> {
     let rows: ExtensionRow[];
     try {
-      const published = isNotNull(extensions.publishedAt);
+      const published = and(
+        isNotNull(extensions.publishedAt),
+        isNull(extensions.delistedAt)
+      );
       rows = (await this.db
         .select(EXTENSION_COLUMNS)
         .from(extensions)
@@ -96,7 +102,8 @@ export class ExtensionsDatabase {
         .where(
           and(
             sql`LOWER(${extensions.id}) = LOWER(${id})`,
-            isNotNull(extensions.publishedAt)
+            isNotNull(extensions.publishedAt),
+            isNull(extensions.delistedAt)
           )
         )) as ExtensionRow[];
     } catch (error) {
