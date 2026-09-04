@@ -290,6 +290,28 @@ export const ExtensionMineListQuerySchema = ExtensionListQuerySchema.omit({
   developer_id: true
 });
 
+// A moderator's view of the whole catalogue, not just the public one: every
+// status a developer can be in, filterable by the same states OwnedExtension
+// itself distinguishes (see its comment) rather than a derived label.
+export const ModerationExtensionListQuerySchema = ExtensionListQuerySchema.omit(
+  { developer_id: true }
+).extend({
+  status: z
+    .enum(["published", "delisted", "unpublished"])
+    .optional()
+    .openapi({ param: { name: "status", in: "query" } }),
+  q: z
+    .string()
+    .trim()
+    .min(1)
+    .max(200)
+    .optional()
+    .openapi({
+      param: { name: "q", in: "query" },
+      description: "Case-insensitive substring match on the extension id"
+    })
+});
+
 export const ExtensionListResponseSchema = z
   .object({
     result: z.array(ExtensionListItemSchema),

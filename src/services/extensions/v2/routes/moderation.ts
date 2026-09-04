@@ -26,7 +26,11 @@ import {
   RevisionIdParamSchema,
   RevisionQueueQuerySchema
 } from "../schemas/revisions";
-import { OwnedExtensionSchema } from "../schemas/extensions";
+import {
+  ModerationExtensionListQuerySchema,
+  OwnedExtensionListResponseSchema,
+  OwnedExtensionSchema
+} from "../schemas/extensions";
 import { DeveloperProfilesDatabase } from "../db/developer-profiles";
 import { ExtensionsDatabase } from "../db/extensions";
 import { ExtensionRevisionsDatabase } from "../db/revisions";
@@ -87,6 +91,64 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
           next_cursor: data.nextCursor,
           has_more: data.hasMore
         }
+      },
+      200
+    );
+  });
+
+  // Distinct from queueRoute above: that lists *revisions* awaiting review,
+  // this lists *extensions* by their own published/delisted/unpublished
+  // state - the two are independent (an extension can be published with a
+  // pending edit, or delisted with none). Named /all-extensions rather than
+  // nested under /moderation/extensions to avoid colliding with the {id}
+  // route below - see isReservedExtensionId for why a static sibling segment
+  // there would need its own reservation.
+  const allExtensionsRoute = createRoute({
+    method: "get",
+    path: "/moderation/all-extensions",
+    tags: ["Moderation"],
+    summary: "List every extension regardless of status",
+    security: [{ Bearer: [] }],
+    middleware: [requireModerator()] as const,
+    request: { query: ModerationExtensionListQuerySchema },
+    responses: {
+      200: {
+        content: {
+          "application/json": { schema: OwnedExtensionListResponseSchema }
+        },
+        description:
+          "Extensions matching the requested status (default: all), alphabetical by id"
+      },
+      401: errorResponse("Missing or invalid bearer token"),
+      403: {
+        ...ActiveAccountRequiredResponse,
+        description: "The account is inactive or the caller is not a moderator"
+      },
+      422: errorResponse("Query params failed validation"),
+      500: errorResponse("Database error")
+    }
+  });
+
+  app.openapi(allExtensionsRoute, async (c) => {
+    const db = new ExtensionsDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
+    const { status, type, q, limit, cursor } = c.req.valid("query");
+    const { data, error } = await db.listForModeration({
+      status,
+      type,
+      q,
+      limit,
+      cursor
+    });
+    if (error || !data) {
+      return c.json(
+        errorBody(error, "Unable to load extensions"),
+        error?.code === "INVALID_CURSOR" ? 422 : 500
+      );
+    }
+    return c.json(
+      {
+        result: data.items,
+        pagination: { next_cursor: data.nextCursor, has_more: data.hasMore }
       },
       200
     );

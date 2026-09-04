@@ -172,6 +172,142 @@ describe("Extensions API v2", () => {
     });
   });
 
+  describe("GET /moderation/all-extensions", () => {
+    it("requires moderator access", async () => {
+      await seedDeveloper("new-developer", "user-1");
+      const res = await get(
+        "/extensions/v2/moderation/all-extensions",
+        await authHeaders("user-1")
+      );
+      expect(res.status).toBe(403);
+    });
+
+    it("lists extensions across every status, unlike the public catalogue", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await seedDeveloper("new-developer", "user-1");
+      await insertExtension(db, {
+        id: "live-ext",
+        developer_id: "new-developer"
+      });
+      await insertUnpublishedExtension(db, {
+        id: "draft-ext",
+        developer_id: "new-developer"
+      });
+      await post(
+        "/extensions/v2/extensions/live-ext/delist",
+        await authHeaders("mod-1"),
+        { reason: "Upstream source removed" }
+      );
+      await seedDeveloper("other-developer", "user-2");
+      await insertExtension(db, {
+        id: "other-ext",
+        developer_id: "other-developer"
+      });
+
+      const res = await get(
+        "/extensions/v2/moderation/all-extensions",
+        await authHeaders("mod-1")
+      );
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { result: Array<{ id: string }> };
+      expect(body.result.map((r) => r.id)).toEqual([
+        "draft-ext",
+        "live-ext",
+        "other-ext"
+      ]);
+    });
+
+    it("filters by status", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await seedDeveloper("new-developer", "user-1");
+      await insertExtension(db, {
+        id: "live-ext",
+        developer_id: "new-developer"
+      });
+      await insertExtension(db, {
+        id: "delisted-ext",
+        developer_id: "new-developer"
+      });
+      await insertUnpublishedExtension(db, {
+        id: "draft-ext",
+        developer_id: "new-developer"
+      });
+      await post(
+        "/extensions/v2/extensions/delisted-ext/delist",
+        await authHeaders("mod-1"),
+        { reason: "Upstream source removed" }
+      );
+
+      const published = await get(
+        "/extensions/v2/moderation/all-extensions?status=published",
+        await authHeaders("mod-1")
+      );
+      expect(await published.json()).toMatchObject({
+        result: [{ id: "live-ext" }]
+      });
+
+      const delisted = await get(
+        "/extensions/v2/moderation/all-extensions?status=delisted",
+        await authHeaders("mod-1")
+      );
+      expect(await delisted.json()).toMatchObject({
+        result: [{ id: "delisted-ext" }]
+      });
+
+      const unpublished = await get(
+        "/extensions/v2/moderation/all-extensions?status=unpublished",
+        await authHeaders("mod-1")
+      );
+      expect(await unpublished.json()).toMatchObject({
+        result: [{ id: "draft-ext" }]
+      });
+    });
+
+    it("searches by a case-insensitive id substring", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await seedDeveloper("new-developer", "user-1");
+      await insertExtension(db, {
+        id: "paygate",
+        developer_id: "new-developer"
+      });
+      await insertExtension(db, {
+        id: "other-gateway",
+        developer_id: "new-developer"
+      });
+      await insertExtension(db, {
+        id: "unrelated",
+        developer_id: "new-developer"
+      });
+
+      const res = await get(
+        "/extensions/v2/moderation/all-extensions?q=GATE",
+        await authHeaders("mod-1")
+      );
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { result: Array<{ id: string }> };
+      expect(body.result.map((r) => r.id).sort()).toEqual([
+        "other-gateway",
+        "paygate"
+      ]);
+    });
+
+    it("treats % and _ in a search term literally rather than as wildcards", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await seedDeveloper("new-developer", "user-1");
+      await insertExtension(db, {
+        id: "pay-gate",
+        developer_id: "new-developer"
+      });
+
+      const res = await get(
+        `/extensions/v2/moderation/all-extensions?${new URLSearchParams({ q: "pay%gate" })}`,
+        await authHeaders("mod-1")
+      );
+      expect(res.status).toBe(200);
+      await expect(res.json()).resolves.toMatchObject({ result: [] });
+    });
+  });
+
   describe("approve / reject", () => {
     it("does not approve a former owner's content when ownership changes at approval", async () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
