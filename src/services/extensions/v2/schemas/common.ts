@@ -68,7 +68,9 @@ export const ReviewNoteOptionalSchema = z
 
 export const ReviewNoteRequiredSchema = z
   .object({
-    review_note: z.string().min(1).max(2000)
+    // Shown to the submitter as-is, so a whitespace-only value must not
+    // satisfy min(1) the way an untrimmed string would - see DelistReasonSchema.
+    review_note: z.string().trim().min(1).max(2000)
   })
   .strict()
   .openapi("ReviewNoteRequired");

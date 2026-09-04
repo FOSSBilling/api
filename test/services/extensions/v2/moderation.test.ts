@@ -517,6 +517,19 @@ describe("Extensions API v2", () => {
       expect(res.status).toBe(422);
     });
 
+    it("rejects a whitespace-only review_note", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await seedDeveloper("new-developer", "user-1");
+      const { id, revisionId } = await createPending("user-1");
+
+      const res = await post(
+        reviewPath(id, revisionId, "reject"),
+        await authHeaders("mod-1"),
+        { review_note: "   " }
+      );
+      expect(res.status).toBe(422);
+    });
+
     it("rejects a revision with a note and leaves the extension unpublished", async () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await seedDeveloper("new-developer", "user-1");
