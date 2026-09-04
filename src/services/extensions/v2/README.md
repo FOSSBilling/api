@@ -36,6 +36,11 @@ against it.
   `reject`: content and history are kept, so the owner can still see and edit
   the extension, and a moderator can re-list it by hand later. There is no
   `relist` endpoint yet - see `ExtensionsDatabase.delist()`.
+- `GET /moderation/extensions/{id}` is a moderator's only full-record read of
+  an extension they don't own - the same `OwnedExtension` shape as
+  `GET /extensions/mine/{id}`, including `delisted`. Without it, a moderator
+  could delist an extension but never see why (their own or another
+  moderator's) again short of digging through `GET /extensions/{id}/revisions`.
 
 The id and the developer are properties of the extension, not of a revision: an
 edit cannot rename an extension or move it to another developer, and approving

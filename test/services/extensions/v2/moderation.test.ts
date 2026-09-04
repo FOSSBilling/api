@@ -103,6 +103,75 @@ describe("Extensions API v2", () => {
     });
   });
 
+  describe("GET /moderation/extensions/{id}", () => {
+    it("requires moderator access", async () => {
+      await seedDeveloper("new-developer", "user-1");
+      await insertExtension(db, {
+        id: "live-ext",
+        developer_id: "new-developer"
+      });
+
+      const res = await get(
+        "/extensions/v2/moderation/extensions/live-ext",
+        await authHeaders("user-1")
+      );
+      expect(res.status).toBe(403);
+    });
+
+    it("404s for an unknown extension", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+
+      const res = await get(
+        "/extensions/v2/moderation/extensions/no-such-extension",
+        await authHeaders("mod-1")
+      );
+      expect(res.status).toBe(404);
+    });
+
+    it("gets a published extension's full record, case-insensitively", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await seedDeveloper("new-developer", "user-1");
+      await insertExtension(db, {
+        id: "LIVE-ext",
+        developer_id: "new-developer"
+      });
+
+      const res = await get(
+        "/extensions/v2/moderation/extensions/live-ext",
+        await authHeaders("mod-1")
+      );
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as {
+        result: { id: string; published: { name: string } | null };
+      };
+      expect(data.result.id).toBe("LIVE-ext");
+      expect(data.result.published?.name).toBe("Extension");
+    });
+
+    it("gets a delisted extension's record, including why it was delisted", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await seedDeveloper("new-developer", "user-1");
+      await insertExtension(db, {
+        id: "live-ext",
+        developer_id: "new-developer"
+      });
+      await post(
+        "/extensions/v2/extensions/live-ext/delist",
+        await authHeaders("mod-1"),
+        { reason: "Upstream source removed" }
+      );
+
+      const res = await get(
+        "/extensions/v2/moderation/extensions/live-ext",
+        await authHeaders("mod-1")
+      );
+      expect(res.status).toBe(200);
+      await expect(res.json()).resolves.toMatchObject({
+        result: { delisted: { reason: "Upstream source removed" } }
+      });
+    });
+  });
+
   describe("approve / reject", () => {
     it("does not approve a former owner's content when ownership changes at approval", async () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
@@ -763,8 +832,7 @@ describe("Extensions API v2", () => {
     // who can still reach a delisted extension's full record once it is out
     // of the catalogue: the owner via GET /extensions/mine/{id} (ownership
     // check, unaffected by delisted state - see getOwned()), a moderator via
-    // GET /extensions/{id}/revisions (the only route a moderator has that
-    // isn't scoped to their own developer profile), and no one else.
+    // GET /moderation/extensions/{id}, and no one else.
     it("only the owner or a moderator can still reach a delisted extension", async () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await seedDeveloper("new-developer", "user-1");
@@ -790,16 +858,25 @@ describe("Extensions API v2", () => {
       });
 
       const moderator = await get(
-        "/extensions/v2/extensions/live-ext/revisions",
+        "/extensions/v2/moderation/extensions/live-ext",
         await authHeaders("mod-1")
       );
       expect(moderator.status).toBe(200);
+      await expect(moderator.json()).resolves.toMatchObject({
+        result: { delisted: { reason: "Upstream source removed" } }
+      });
 
       const stranger = await get(
         "/extensions/v2/extensions/mine/live-ext",
         await authHeaders("user-2")
       );
       expect(stranger.status).toBe(403);
+
+      const strangerModerationRead = await get(
+        "/extensions/v2/moderation/extensions/live-ext",
+        await authHeaders("user-2")
+      );
+      expect(strangerModerationRead.status).toBe(403);
 
       const strangerRevisions = await get(
         "/extensions/v2/extensions/live-ext/revisions",
