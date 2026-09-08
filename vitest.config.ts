@@ -1,8 +1,5 @@
 import path from "node:path";
-import {
-  cloudflareTest,
-  readD1Migrations
-} from "@cloudflare/vitest-pool-workers";
+import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-plugin";
 import { defineConfig } from "vitest/config";
 
 // Read migrations at config time (Node) so they can be applied inside the
@@ -38,7 +35,7 @@ export default defineConfig({
     // Deliberately NOT using `setupFiles` for migrations: importing
     // anything from "cloudflare:test" inside a setupFiles script breaks
     // vi.mock() for unrelated test files in this version of
-    // @cloudflare/vitest-pool-workers (confirmed empirically - even an
+    // @cloudflare/vitest-plugin (confirmed empirically - even an
     // unused import of createExecutionContext there made GitHub API mocks
     // in unrelated versions/v1 tests fall through to real network calls).
     // Instead, test/utils/apply-migrations.ts exports a function each test
@@ -58,7 +55,7 @@ export default defineConfig({
     hookTimeout: 30000, // 30 seconds max for hooks (beforeEach, afterEach)
 
     // Code coverage configuration
-    // Note: Native V8 coverage is not supported with @cloudflare/vitest-pool-workers
+    // Note: Native V8 coverage is not supported with @cloudflare/vitest-plugin
     // Must use instrumented Istanbul coverage instead per Cloudflare documentation
     coverage: {
       provider: "istanbul",
