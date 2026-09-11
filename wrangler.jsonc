@@ -18,6 +18,11 @@
   },
   "preview_urls": true,
   "keep_vars": true,
+  "vars": {
+    "EXTENSIONS_V2_EMAIL_PROVIDER": "mxroute",
+    "EXTENSIONS_V2_MXROUTE_SERVER": "wednesday.mxrouting.net",
+    "EXTENSIONS_V2_MXROUTE_USERNAME": "extensions@fossbilling.org"
+  },
   "routes": [
     {
       "pattern": "api.fossbilling.net",
