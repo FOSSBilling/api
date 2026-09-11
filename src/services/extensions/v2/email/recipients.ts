@@ -5,7 +5,14 @@ import { DeveloperProfilesDatabase } from "../db/developer-profiles";
 import { ExtensionsDatabase } from "../db/extensions";
 
 function isEmail(value: unknown): value is string {
-  return typeof value === "string" && value.includes("@");
+  if (typeof value !== "string" || value.length > 254) return false;
+  const at = value.indexOf("@");
+  return (
+    at > 0 &&
+    at === value.lastIndexOf("@") &&
+    at < value.length - 1 &&
+    !/[\s,;<>()[\]\\]/.test(value)
+  );
 }
 
 async function getUserEmail(
