@@ -922,7 +922,7 @@ describe("Extensions API v2", () => {
       );
       expect(res.status).toBe(200);
       await expect(res.json()).resolves.toEqual({
-        result: { id: "live-ext", status: "delisted" }
+        result: { id: "live-ext", status: "delisted", notified: false }
       });
 
       // Case-insensitively addressed, like every other extension route.
@@ -1146,7 +1146,8 @@ describe("Extensions API v2", () => {
       };
       expect(approveBody.result).toEqual({
         id: "dev-developer",
-        approved: true
+        approved: true,
+        notified: false
       });
 
       const unapproved = await get(

@@ -11,6 +11,7 @@ import {
   ActiveAccountRequiredResponse,
   DelistReasonSchema,
   IdParamSchema,
+  NotifyQuerySchema,
   PaginationSchema,
   ReviewNoteOptionalSchema,
   ReviewNoteRequiredSchema,
@@ -34,6 +35,7 @@ import {
 import { DeveloperProfilesDatabase } from "../db/developer-profiles";
 import { ExtensionsDatabase } from "../db/extensions";
 import { ExtensionRevisionsDatabase } from "../db/revisions";
+import { notifyRequested, sendModerationNotification } from "../email/notify";
 import { ExtensionsV2App } from "./app";
 
 export function registerModerationRoutes(app: ExtensionsV2App): void {
@@ -69,9 +71,8 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
   });
 
   app.openapi(queueRoute, async (c) => {
-    const db = new ExtensionRevisionsDatabase(
-      getExtensionsDb(c.env.DB_EXTENSIONS)
-    );
+    const extDb = getExtensionsDb(c.env.DB_EXTENSIONS);
+    const db = new ExtensionRevisionsDatabase(extDb);
     const { status, limit, cursor } = c.req.valid("query");
     const { data, error } = await db.listQueue(
       status ?? "pending",
@@ -215,6 +216,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
     middleware: [requireModerator()] as const,
     request: {
       params: RevisionIdParamSchema,
+      query: NotifyQuerySchema,
       body: {
         content: { "application/json": { schema: ReviewNoteOptionalSchema } }
       }
@@ -226,7 +228,8 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
             schema: z.object({
               result: z.object({
                 id: z.string(),
-                status: z.literal("approved")
+                status: z.literal("approved"),
+                notified: z.boolean()
               })
             })
           }
@@ -252,9 +255,9 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
     const auth = getAuth(c);
     const { id, revisionId } = c.req.valid("param");
     const { review_note } = c.req.valid("json");
-    const db = new ExtensionRevisionsDatabase(
-      getExtensionsDb(c.env.DB_EXTENSIONS)
-    );
+    const query = c.req.valid("query");
+    const extDb = getExtensionsDb(c.env.DB_EXTENSIONS);
+    const db = new ExtensionRevisionsDatabase(extDb);
     const { data, error } = await db.approve(
       id,
       revisionId,
@@ -265,7 +268,15 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
       const status = statusFromWriteErrorCode(error?.code);
       return c.json(errorBody(error, "Unable to approve revision"), status);
     }
-    return c.json({ result: data }, 200);
+    let notified = false;
+    if (notifyRequested(query)) {
+      notified = await sendModerationNotification(c.env, extDb, {
+        kind: "revision-approved",
+        extensionId: id,
+        reason: review_note ?? undefined
+      });
+    }
+    return c.json({ result: { ...data, notified } }, 200);
   });
 
   const rejectRoute = createRoute({
@@ -277,6 +288,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
     middleware: [requireModerator()] as const,
     request: {
       params: RevisionIdParamSchema,
+      query: NotifyQuerySchema,
       body: {
         content: { "application/json": { schema: ReviewNoteRequiredSchema } }
       }
@@ -288,7 +300,8 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
             schema: z.object({
               result: z.object({
                 id: z.string(),
-                status: z.literal("rejected")
+                status: z.literal("rejected"),
+                notified: z.boolean()
               })
             })
           }
@@ -312,9 +325,9 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
     const auth = getAuth(c);
     const { id, revisionId } = c.req.valid("param");
     const { review_note } = c.req.valid("json");
-    const db = new ExtensionRevisionsDatabase(
-      getExtensionsDb(c.env.DB_EXTENSIONS)
-    );
+    const query = c.req.valid("query");
+    const extDb = getExtensionsDb(c.env.DB_EXTENSIONS);
+    const db = new ExtensionRevisionsDatabase(extDb);
     const { data, error } = await db.reject(
       id,
       revisionId,
@@ -325,7 +338,15 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
       const status = statusFromWriteErrorCode(error?.code);
       return c.json(errorBody(error, "Unable to reject revision"), status);
     }
-    return c.json({ result: data }, 200);
+    let notified = false;
+    if (notifyRequested(query)) {
+      notified = await sendModerationNotification(c.env, extDb, {
+        kind: "revision-rejected",
+        extensionId: id,
+        reason: review_note
+      });
+    }
+    return c.json({ result: { ...data, notified } }, 200);
   });
 
   // Distinct from reject: reject leaves a pending edit unpublished, delist
@@ -341,6 +362,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
     middleware: [requireModerator()] as const,
     request: {
       params: IdParamSchema,
+      query: NotifyQuerySchema,
       body: {
         content: { "application/json": { schema: DelistReasonSchema } }
       }
@@ -352,7 +374,8 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
             schema: z.object({
               result: z.object({
                 id: z.string(),
-                status: z.literal("delisted")
+                status: z.literal("delisted"),
+                notified: z.boolean()
               })
             })
           }
@@ -377,14 +400,24 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
     const auth = getAuth(c);
     const { id } = c.req.valid("param");
     const { reason } = c.req.valid("json");
-    const db = new ExtensionsDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
+    const query = c.req.valid("query");
+    const extDb = getExtensionsDb(c.env.DB_EXTENSIONS);
+    const db = new ExtensionsDatabase(extDb);
     const { data, error } = await db.delist(id, auth.userId, reason);
     if (error || !data) {
       const status = statusFromWriteErrorCode(error?.code);
       return c.json(errorBody(error, "Unable to delist extension"), status);
     }
+    let notified = false;
+    if (notifyRequested(query)) {
+      notified = await sendModerationNotification(c.env, extDb, {
+        kind: "extension-delisted",
+        extensionId: id,
+        reason
+      });
+    }
     return c.json(
-      { result: { id: data.id, status: "delisted" as const } },
+      { result: { id: data.id, status: "delisted" as const, notified } },
       200
     );
   });
@@ -485,6 +518,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
     middleware: [requireModerator()] as const,
     request: {
       params: IdParamSchema,
+      query: NotifyQuerySchema,
       body: {
         content: { "application/json": { schema: DeveloperApprovalSchema } }
       }
@@ -494,7 +528,11 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
         content: {
           "application/json": {
             schema: z.object({
-              result: z.object({ id: z.string(), approved: z.literal(true) })
+              result: z.object({
+                id: z.string(),
+                approved: z.literal(true),
+                notified: z.boolean()
+              })
             })
           }
         },
@@ -516,9 +554,9 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
     const auth = getAuth(c);
     const { id } = c.req.valid("param");
     const { expected_revision } = c.req.valid("json");
-    const db = new DeveloperProfilesDatabase(
-      getExtensionsDb(c.env.DB_EXTENSIONS)
-    );
+    const query = c.req.valid("query");
+    const extDb = getExtensionsDb(c.env.DB_EXTENSIONS);
+    const db = new DeveloperProfilesDatabase(extDb);
     const { data, error } = await db.approve(
       id,
       expected_revision,
@@ -531,7 +569,14 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
           : statusFromErrorCode(error?.code);
       return c.json(errorBody(error, "Unable to approve developer"), status);
     }
-    return c.json({ result: data }, 200);
+    let notified = false;
+    if (notifyRequested(query)) {
+      notified = await sendModerationNotification(c.env, extDb, {
+        kind: "developer-approved",
+        developerId: id
+      });
+    }
+    return c.json({ result: { ...data, notified } }, 200);
   });
 
   const developerHistoryRoute = createRoute({

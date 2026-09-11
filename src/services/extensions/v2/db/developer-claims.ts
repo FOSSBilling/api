@@ -34,9 +34,10 @@ function parseClaimRow(row: ClaimRow): DeveloperClaim {
 
 export class DeveloperClaimsDatabase {
   constructor(private db: ExtensionsDb) {}
-  private async getClaimById(
-    id: string
-  ): Promise<DatabaseResult<DeveloperClaim>> {
+
+  // Public for the claim-approve route, which reads the claimant before
+  // approveClaim() transfers ownership and the row stops naming them.
+  async getClaimById(id: string): Promise<DatabaseResult<DeveloperClaim>> {
     try {
       const [row] = await this.db
         .select()

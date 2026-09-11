@@ -48,6 +48,18 @@ against it.
   awaiting review - an extension's own status and its having a pending edit
   are independent.
 
+### Moderation Notification Emails
+
+Revision approve/reject, delist, developer approve, and claim approve/reject
+email the affected author unless the moderator opts out with `?notify=false`.
+The recipient is the developer's `contact_email`, falling back to the owning
+account's `email`; claim decisions go to the claimant's account email.
+Sending is best-effort and never fails the write: the result carries
+`notified: boolean`, and a missing address, missing mail credentials, or
+provider failure only logs an error. See `email/` for the provider
+abstraction (`mxroute` via `https://smtpapi.mxroute.com/`, `resend`, or
+`disabled`) and the root README for the `EMAIL_*` configuration.
+
 The id and the developer are properties of the extension, not of a revision: an
 edit cannot rename an extension or move it to another developer, and approving
 one no longer rewrites the developer profile as a side effect. A user owns at

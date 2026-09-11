@@ -84,6 +84,19 @@ export const DelistReasonSchema = z
   .strict()
   .openapi("DelistReason");
 
+// Manual moderator opt-out for author notification emails (?notify=false).
+// Absent — the checkbox-checked default in the directory UI — sends.
+export const NotifyQuerySchema = z.object({
+  notify: z
+    .enum(["true", "false"])
+    .optional()
+    .openapi({
+      param: { name: "notify", in: "query" },
+      description:
+        "Set to false to skip the author notification email for this action"
+    })
+});
+
 export const PaginationSchema = z
   .object({
     next_cursor: z.string().nullable(),

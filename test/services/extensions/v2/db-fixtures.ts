@@ -149,6 +149,7 @@ export async function insertUser(
   row: {
     id: string;
     is_moderator?: number;
+    email?: string | null;
     github_login?: string;
     github_orgs?: string;
     github_orgs_expires_at?: string | null;
@@ -168,10 +169,11 @@ export async function insertUser(
   // created a bare stub row for this id before this richer call runs.
   await db
     .prepare(
-      `INSERT INTO users (id, created_at, updated_at, is_moderator, github_login, github_orgs, github_orgs_expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO users (id, created_at, updated_at, is_moderator, email, github_login, github_orgs, github_orgs_expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          updated_at = excluded.updated_at,
          is_moderator = excluded.is_moderator,
+         email = excluded.email,
          github_login = excluded.github_login,
          github_orgs = excluded.github_orgs,
          github_orgs_expires_at = excluded.github_orgs_expires_at`
@@ -181,6 +183,7 @@ export async function insertUser(
       new Date().toISOString(),
       new Date().toISOString(),
       row.is_moderator ?? 0,
+      row.email ?? null,
       row.github_login ?? null,
       row.github_orgs ?? null,
       githubOrgsExpiresAt
