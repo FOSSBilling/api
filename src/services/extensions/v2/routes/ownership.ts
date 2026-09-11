@@ -12,6 +12,7 @@ import {
 import {
   ActiveAccountRequiredResponse,
   IdParamSchema,
+  NotifyQuerySchema,
   ReviewNoteRequiredSchema,
   errorResponse
 } from "../schemas/common";
@@ -25,6 +26,7 @@ import {
 } from "../schemas/ownership";
 import { DeveloperClaimsDatabase } from "../db/developer-claims";
 import { DeveloperTransfersDatabase } from "../db/developer-transfers";
+import { notifyRequested, sendModerationNotification } from "../email/notify";
 import { ExtensionsV2App } from "./app";
 
 export function registerOwnershipRoutes(app: ExtensionsV2App): void {
@@ -231,12 +233,16 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
     summary: "Approve a pending profile claim",
     security: [{ Bearer: [] }],
     middleware: [requireModerator()] as const,
-    request: { params: IdParamSchema },
+    request: { params: IdParamSchema, query: NotifyQuerySchema },
     responses: {
       200: {
         content: {
           "application/json": {
-            schema: z.object({ result: DeveloperProfileSchema })
+            schema: z.object({
+              result: DeveloperProfileSchema.and(
+                z.object({ notified: z.boolean() })
+              )
+            })
           }
         },
         description:
@@ -251,7 +257,7 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
       409: errorResponse(
         "Claim is no longer pending, profile is no longer unowned, or the claimant now owns a different profile"
       ),
-      422: errorResponse("id param failed validation"),
+      422: errorResponse("id param or notify query failed validation"),
       500: errorResponse("Database error")
     }
   });
@@ -259,9 +265,14 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
   app.openapi(approveClaimRoute, async (c) => {
     const auth = getAuth(c);
     const { id } = c.req.valid("param");
-    const db = new DeveloperClaimsDatabase(
-      getExtensionsDb(c.env.DB_EXTENSIONS)
-    );
+    const query = c.req.valid("query");
+    const extDb = getExtensionsDb(c.env.DB_EXTENSIONS);
+    const db = new DeveloperClaimsDatabase(extDb);
+    // Read before approveClaim() transfers ownership: afterwards the profile
+    // row no longer records who the claimant was.
+    const claimResult = notifyRequested(query)
+      ? await db.getClaimById(id)
+      : null;
     const { data, error } = await db.approveClaim(id, auth.userId);
     if (error || !data) {
       return c.json(
@@ -269,7 +280,15 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
         statusFromErrorCode(error?.code)
       );
     }
-    return c.json({ result: data }, 200);
+    let notified = false;
+    if (claimResult?.data) {
+      notified = await sendModerationNotification(getPlatform(c), extDb, {
+        kind: "claim-approved",
+        developerId: claimResult.data.developer_id,
+        claimantId: claimResult.data.claimant_id
+      });
+    }
+    return c.json({ result: { ...data, notified } }, 200);
   });
 
   const rejectClaimRoute = createRoute({
@@ -281,6 +300,7 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
     middleware: [requireModerator()] as const,
     request: {
       params: IdParamSchema,
+      query: NotifyQuerySchema,
       body: {
         content: { "application/json": { schema: ReviewNoteRequiredSchema } }
       }
@@ -289,7 +309,11 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
       200: {
         content: {
           "application/json": {
-            schema: z.object({ result: DeveloperClaimSchema })
+            schema: z.object({
+              result: DeveloperClaimSchema.and(
+                z.object({ notified: z.boolean() })
+              )
+            })
           }
         },
         description: "Claim rejected"
@@ -300,7 +324,9 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
         description: "The account is inactive or the caller is not a moderator"
       },
       404: errorResponse("No pending claim with that id"),
-      422: errorResponse("id param or review_note body failed validation"),
+      422: errorResponse(
+        "id param, review_note body, or notify query failed validation"
+      ),
       500: errorResponse("Database error")
     }
   });
@@ -309,15 +335,24 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
     const auth = getAuth(c);
     const { id } = c.req.valid("param");
     const { review_note } = c.req.valid("json");
-    const db = new DeveloperClaimsDatabase(
-      getExtensionsDb(c.env.DB_EXTENSIONS)
-    );
+    const query = c.req.valid("query");
+    const extDb = getExtensionsDb(c.env.DB_EXTENSIONS);
+    const db = new DeveloperClaimsDatabase(extDb);
     const { data, error } = await db.rejectClaim(id, auth.userId, review_note);
     if (error || !data) {
       const status = statusFromErrorCode(error?.code, false);
       return c.json(errorBody(error, "Unable to reject claim"), status);
     }
-    return c.json({ result: data }, 200);
+    let notified = false;
+    if (notifyRequested(query)) {
+      notified = await sendModerationNotification(getPlatform(c), extDb, {
+        kind: "claim-rejected",
+        developerId: data.developer_id,
+        claimantId: data.claimant_id,
+        reason: review_note
+      });
+    }
+    return c.json({ result: { ...data, notified } }, 200);
   });
 
   const initiateTransferRoute = createRoute({
