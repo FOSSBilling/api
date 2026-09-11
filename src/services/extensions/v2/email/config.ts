@@ -18,7 +18,7 @@ export function resolveEmailProvider(env: EnvReader): EmailProviderName | null {
 
 export function loadEmailIdentity(env: EnvReader): EmailIdentity {
   return {
-    from: env.getEnv("EMAIL_FROM") ?? "extensions@fossbilling.org",
+    from: env.getEnv("EMAIL_FROM") || "extensions@fossbilling.org",
     replyTo: env.getEnv("EMAIL_REPLY_TO")
   };
 }
