@@ -18,13 +18,14 @@ export function loadResendConfig(
   env: EnvReader,
   identity: EmailIdentity
 ): ResendConfig | null {
-  const apiKey = env.getEnv("RESEND_API_KEY");
+  const apiKey = env.getEnv("EXTENSIONS_V2_RESEND_API_KEY");
   if (!apiKey) return null;
   return { ...identity, apiKey };
 }
 
-// Kept beside the MXroute sender so EMAIL_PROVIDER can switch without route
-// changes. Activated by EMAIL_PROVIDER=resend with RESEND_API_KEY set.
+// Kept beside the MXroute sender so EXTENSIONS_V2_EMAIL_PROVIDER can switch
+// without route changes. Activated by EXTENSIONS_V2_EMAIL_PROVIDER=resend
+// with EXTENSIONS_V2_RESEND_API_KEY set.
 export class ResendSender implements EmailSender {
   constructor(
     private config: ResendConfig,

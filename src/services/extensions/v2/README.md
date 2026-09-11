@@ -58,7 +58,8 @@ Sending is best-effort and never fails the write: the result carries
 `notified: boolean`, and a missing address, missing mail credentials, or
 provider failure only logs an error. See `email/` for the provider
 abstraction (`mxroute` via `https://smtpapi.mxroute.com/`, `resend`, or
-`disabled`) and the root README for the `EMAIL_*` configuration.
+`disabled`) and the root README for the `EXTENSIONS_V2_EMAIL_*`
+configuration.
 
 The id and the developer are properties of the extension, not of a revision: an
 edit cannot rename an extension or move it to another developer, and approving

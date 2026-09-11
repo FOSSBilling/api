@@ -25,12 +25,12 @@ vi.mock("@octokit/request", async () =>
 setupExtensionsV2Tests();
 
 const MXROUTE_ENV = {
-  EMAIL_PROVIDER: "mxroute",
-  EMAIL_FROM: "extensions@fossbilling.org",
-  EMAIL_REPLY_TO: "noreply@fossbilling.org",
-  MXROUTE_SERVER: "tuesday.mxrouting.net",
-  MXROUTE_USERNAME: "extensions@fossbilling.org",
-  MXROUTE_PASSWORD: "secret"
+  EXTENSIONS_V2_EMAIL_PROVIDER: "mxroute",
+  EXTENSIONS_V2_EMAIL_FROM: "extensions@fossbilling.org",
+  EXTENSIONS_V2_EMAIL_REPLY_TO: "noreply@fossbilling.org",
+  EXTENSIONS_V2_MXROUTE_SERVER: "tuesday.mxrouting.net",
+  EXTENSIONS_V2_MXROUTE_USERNAME: "extensions@fossbilling.org",
+  EXTENSIONS_V2_MXROUTE_PASSWORD: "secret"
 };
 
 type EmailEnvKey = keyof typeof MXROUTE_ENV;
