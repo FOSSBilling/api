@@ -1,27 +1,43 @@
-import type { EmailConfig } from "./config";
 import type {
+  EmailIdentity,
   EmailMessage,
   EmailSender,
   EmailSendResult,
+  EnvReader,
   FetchFn
 } from "./types";
 
 const SMTP_API_URL = "https://smtpapi.mxroute.com/";
 
+// Complete by construction: loadMxrouteConfig returns null unless every
+// credential is present, so the sender never re-validates at send time.
+export interface MxrouteConfig extends EmailIdentity {
+  server: string;
+  username: string;
+  password: string;
+}
+
+export function loadMxrouteConfig(
+  env: EnvReader,
+  identity: EmailIdentity
+): MxrouteConfig | null {
+  const server = env.getEnv("MXROUTE_SERVER");
+  const username = env.getEnv("MXROUTE_USERNAME");
+  const password = env.getEnv("MXROUTE_PASSWORD");
+  if (!server || !username || !password) return null;
+  return { ...identity, server, username, password };
+}
+
 // HTTP wrapper around MXroute's SMTP API: one JSON POST per recipient.
 // Field names follow https://docs.mxroute.com/docs/api/smtp-api.html.
 export class MxrouteSender implements EmailSender {
   constructor(
-    private config: EmailConfig,
+    private config: MxrouteConfig,
     private fetchFn: FetchFn = globalThis.fetch
   ) {}
 
   async send(message: EmailMessage): Promise<EmailSendResult> {
-    const { mxrouteServer, mxrouteUsername, mxroutePassword, from, replyTo } =
-      this.config;
-    if (!mxrouteServer || !mxrouteUsername || !mxroutePassword) {
-      return { ok: false, error: "mxroute credentials are not configured" };
-    }
+    const { server, username, password, from, replyTo } = this.config;
 
     let response: Response;
     try {
@@ -29,9 +45,9 @@ export class MxrouteSender implements EmailSender {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          server: mxrouteServer,
-          username: mxrouteUsername,
-          password: mxroutePassword,
+          server,
+          username,
+          password,
           from,
           to: message.to,
           subject: message.subject,

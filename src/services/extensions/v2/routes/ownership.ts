@@ -282,7 +282,7 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
     }
     let notified = false;
     if (claimResult?.data) {
-      notified = await sendModerationNotification(c.env, extDb, {
+      notified = await sendModerationNotification(getPlatform(c), extDb, {
         kind: "claim-approved",
         developerId: claimResult.data.developer_id,
         claimantId: claimResult.data.claimant_id
@@ -343,7 +343,7 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
     }
     let notified = false;
     if (notifyRequested(query)) {
-      notified = await sendModerationNotification(c.env, extDb, {
+      notified = await sendModerationNotification(getPlatform(c), extDb, {
         kind: "claim-rejected",
         developerId: data.developer_id,
         claimantId: data.claimant_id,

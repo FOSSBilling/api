@@ -68,6 +68,23 @@ async function seedLiveExtension(): Promise<void> {
   await insertExtension(db, { id: "live-ext", developer_id: "new-developer" });
 }
 
+async function seedPendingClaim(): Promise<void> {
+  await insertUser(db, { id: "mod-1", is_moderator: 1 });
+  await insertUser(db, { id: "claimant-1", email: "claimant@example.com" });
+  await insertDeveloper(db, {
+    id: "legacy-dev",
+    type: "user",
+    name: "Legacy",
+    url: null,
+    owner_user_id: null
+  });
+  await insertDeveloperClaim(db, {
+    id: "claim-1",
+    developer_id: "legacy-dev",
+    claimant_id: "claimant-1"
+  });
+}
+
 describe("moderation notification emails", () => {
   it("emails the developer contact address on delist", async () => {
     await insertUser(db, { id: "mod-1", is_moderator: 1 });
@@ -93,8 +110,8 @@ describe("moderation notification emails", () => {
       from: "extensions@fossbilling.org",
       reply_to: "noreply@fossbilling.org"
     });
-    expect(String(body.subject)).toContain("live-ext");
-    expect(String(body.body)).toContain("Upstream source removed");
+    expect(body.subject).toContain("live-ext");
+    expect(body.body).toContain("Upstream source removed");
   });
 
   it("skips the email on ?notify=false without calling the provider", async () => {
@@ -198,24 +215,11 @@ describe("moderation notification emails", () => {
     });
     const body = JSON.parse(String(calls[0].init.body));
     expect(body.to).toBe("owner@example.com");
-    expect(String(body.body)).toContain("Needs a valid license URL");
+    expect(body.body).toContain("Needs a valid license URL");
   });
 
   it("notifies the claimant on claim approval", async () => {
-    await insertUser(db, { id: "mod-1", is_moderator: 1 });
-    await insertUser(db, { id: "claimant-1", email: "claimant@example.com" });
-    await insertDeveloper(db, {
-      id: "legacy-dev",
-      type: "user",
-      name: "Legacy",
-      url: null,
-      owner_user_id: null
-    });
-    await insertDeveloperClaim(db, {
-      id: "claim-1",
-      developer_id: "legacy-dev",
-      claimant_id: "claimant-1"
-    });
+    await seedPendingClaim();
     setEmailEnv();
     const calls = stubSmtpApi();
 
@@ -232,20 +236,7 @@ describe("moderation notification emails", () => {
   });
 
   it("notifies the claimant with the reason on claim rejection", async () => {
-    await insertUser(db, { id: "mod-1", is_moderator: 1 });
-    await insertUser(db, { id: "claimant-1", email: "claimant@example.com" });
-    await insertDeveloper(db, {
-      id: "legacy-dev",
-      type: "user",
-      name: "Legacy",
-      url: null,
-      owner_user_id: null
-    });
-    await insertDeveloperClaim(db, {
-      id: "claim-1",
-      developer_id: "legacy-dev",
-      claimant_id: "claimant-1"
-    });
+    await seedPendingClaim();
     setEmailEnv();
     const calls = stubSmtpApi();
 
@@ -260,7 +251,7 @@ describe("moderation notification emails", () => {
     });
     const body = JSON.parse(String(calls[0].init.body));
     expect(body.to).toBe("claimant@example.com");
-    expect(String(body.body)).toContain("Could not verify ownership");
+    expect(body.body).toContain("Could not verify ownership");
   });
 
   it("reports notified:false when no address exists anywhere", async () => {

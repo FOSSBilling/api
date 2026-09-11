@@ -1,5 +1,6 @@
 import { requireModerator } from "../middleware";
 import { getExtensionsDb } from "../../../../lib/db";
+import { getPlatform } from "../../../../lib/middleware";
 import { getAuth } from "../../../../lib/auth";
 import { createRoute, z } from "@hono/zod-openapi";
 import {
@@ -71,8 +72,9 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
   });
 
   app.openapi(queueRoute, async (c) => {
-    const extDb = getExtensionsDb(c.env.DB_EXTENSIONS);
-    const db = new ExtensionRevisionsDatabase(extDb);
+    const db = new ExtensionRevisionsDatabase(
+      getExtensionsDb(c.env.DB_EXTENSIONS)
+    );
     const { status, limit, cursor } = c.req.valid("query");
     const { data, error } = await db.listQueue(
       status ?? "pending",
@@ -270,10 +272,10 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
     }
     let notified = false;
     if (notifyRequested(query)) {
-      notified = await sendModerationNotification(c.env, extDb, {
+      notified = await sendModerationNotification(getPlatform(c), extDb, {
         kind: "revision-approved",
         extensionId: id,
-        reason: review_note ?? undefined
+        reason: review_note
       });
     }
     return c.json({ result: { ...data, notified } }, 200);
@@ -340,7 +342,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
     }
     let notified = false;
     if (notifyRequested(query)) {
-      notified = await sendModerationNotification(c.env, extDb, {
+      notified = await sendModerationNotification(getPlatform(c), extDb, {
         kind: "revision-rejected",
         extensionId: id,
         reason: review_note
@@ -410,7 +412,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
     }
     let notified = false;
     if (notifyRequested(query)) {
-      notified = await sendModerationNotification(c.env, extDb, {
+      notified = await sendModerationNotification(getPlatform(c), extDb, {
         kind: "extension-delisted",
         extensionId: id,
         reason
@@ -571,7 +573,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
     }
     let notified = false;
     if (notifyRequested(query)) {
-      notified = await sendModerationNotification(c.env, extDb, {
+      notified = await sendModerationNotification(getPlatform(c), extDb, {
         kind: "developer-approved",
         developerId: id
       });

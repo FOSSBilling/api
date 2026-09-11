@@ -7,6 +7,7 @@ import {
   resolveExtensionEmail
 } from "./recipients";
 import { buildModerationEmail, type ModerationEmailKind } from "./templates";
+import type { EnvReader } from "./types";
 
 export interface ModerationNotifyInput {
   kind: ModerationEmailKind;
@@ -20,7 +21,7 @@ export interface ModerationNotifyInput {
 // moderation writes must succeed even when mail is unconfigured, the address
 // is missing, or the provider is down. Every skip/failure is logged.
 export async function sendModerationNotification(
-  env: CloudflareBindings,
+  env: EnvReader,
   db: ExtensionsDb,
   input: ModerationNotifyInput
 ): Promise<boolean> {
@@ -85,9 +86,7 @@ export async function sendModerationNotification(
       reason: input.reason
     });
 
-    // CloudflareBindings carries no index signature, so the config reader
-    // takes the one cast here rather than at every call site.
-    const sender = createEmailSender(env as unknown as Record<string, unknown>);
+    const sender = createEmailSender(env);
     const result = await sender.send(message);
     if (!result.ok) {
       logError("email", "Moderation notification failed", {

@@ -1,44 +1,93 @@
 import { describe, it, expect } from "vitest";
-import { getEmailConfig } from "../../../../src/services/extensions/v2/email/config";
-import { MxrouteSender } from "../../../../src/services/extensions/v2/email/mxroute";
-import { ResendSender } from "../../../../src/services/extensions/v2/email/resend";
+import {
+  loadEmailIdentity,
+  resolveEmailProvider
+} from "../../../../src/services/extensions/v2/email/config";
+import {
+  loadMxrouteConfig,
+  MxrouteSender
+} from "../../../../src/services/extensions/v2/email/mxroute";
+import {
+  loadResendConfig,
+  ResendSender
+} from "../../../../src/services/extensions/v2/email/resend";
 import {
   DisabledSender,
   createEmailSender
 } from "../../../../src/services/extensions/v2/email/factory";
 import { buildModerationEmail } from "../../../../src/services/extensions/v2/email/templates";
 import { notifyRequested } from "../../../../src/services/extensions/v2/email/notify";
+import type { EnvReader } from "../../../../src/services/extensions/v2/email/types";
+
+function reader(vars: Record<string, string>): EnvReader {
+  return { getEnv: (key) => vars[key] };
+}
+
+const IDENTITY = { from: "extensions@fossbilling.org" };
+
+const MXROUTE_VARS = {
+  EMAIL_PROVIDER: "mxroute",
+  MXROUTE_SERVER: "tuesday.mxrouting.net",
+  MXROUTE_USERNAME: "extensions@fossbilling.org",
+  MXROUTE_PASSWORD: "secret"
+};
 
 function jsonResponse(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), { status });
 }
 
 describe("email config", () => {
-  it("defaults to disabled with the directory from address", () => {
-    expect(getEmailConfig({})).toMatchObject({
-      provider: "disabled",
-      from: "extensions@fossbilling.org"
-    });
+  it("resolves no provider by default", () => {
+    expect(resolveEmailProvider(reader({}))).toBeNull();
+    expect(
+      resolveEmailProvider(reader({ EMAIL_PROVIDER: "pigeon" }))
+    ).toBeNull();
   });
 
-  it("accepts mxroute and reads its credentials", () => {
-    const config = getEmailConfig({
-      EMAIL_PROVIDER: "mxroute",
-      EMAIL_FROM: "extensions@fossbilling.org",
-      EMAIL_REPLY_TO: "noreply@fossbilling.org",
-      MXROUTE_SERVER: "tuesday.mxrouting.net",
-      MXROUTE_USERNAME: "extensions@fossbilling.org",
-      MXROUTE_PASSWORD: "secret"
-    });
-    expect(config.provider).toBe("mxroute");
-    expect(config.replyTo).toBe("noreply@fossbilling.org");
-    expect(config.mxrouteServer).toBe("tuesday.mxrouting.net");
-  });
-
-  it("treats unknown providers as disabled", () => {
-    expect(getEmailConfig({ EMAIL_PROVIDER: "pigeon" }).provider).toBe(
-      "disabled"
+  it("resolves the selected provider case-insensitively", () => {
+    expect(resolveEmailProvider(reader({ EMAIL_PROVIDER: "MXRoute" }))).toBe(
+      "mxroute"
     );
+    expect(resolveEmailProvider(reader({ EMAIL_PROVIDER: "resend" }))).toBe(
+      "resend"
+    );
+  });
+
+  it("loads the sender identity with the directory from address", () => {
+    expect(loadEmailIdentity(reader({}))).toEqual({
+      from: "extensions@fossbilling.org",
+      replyTo: undefined
+    });
+    expect(
+      loadEmailIdentity(
+        reader({
+          EMAIL_FROM: "extensions@fossbilling.org",
+          EMAIL_REPLY_TO: "noreply@fossbilling.org"
+        })
+      )
+    ).toEqual({
+      from: "extensions@fossbilling.org",
+      replyTo: "noreply@fossbilling.org"
+    });
+  });
+
+  it("loads a complete mxroute config and rejects an incomplete one", () => {
+    expect(loadMxrouteConfig(reader(MXROUTE_VARS), IDENTITY)).toEqual({
+      ...IDENTITY,
+      server: "tuesday.mxrouting.net",
+      username: "extensions@fossbilling.org",
+      password: "secret"
+    });
+    expect(
+      loadMxrouteConfig(reader({ EMAIL_PROVIDER: "mxroute" }), IDENTITY)
+    ).toBeNull();
+  });
+
+  it("loads a complete resend config and rejects a missing key", () => {
+    expect(
+      loadResendConfig(reader({ RESEND_API_KEY: "re_key" }), IDENTITY)
+    ).toEqual({ ...IDENTITY, apiKey: "re_key" });
+    expect(loadResendConfig(reader({}), IDENTITY)).toBeNull();
   });
 });
 
@@ -51,12 +100,7 @@ describe("notifyRequested", () => {
 });
 
 describe("MxrouteSender", () => {
-  const config = getEmailConfig({
-    EMAIL_PROVIDER: "mxroute",
-    MXROUTE_SERVER: "tuesday.mxrouting.net",
-    MXROUTE_USERNAME: "extensions@fossbilling.org",
-    MXROUTE_PASSWORD: "secret"
-  });
+  const config = loadMxrouteConfig(reader(MXROUTE_VARS), IDENTITY)!;
   const message = {
     to: "author@example.com",
     subject: "s",
@@ -96,17 +140,6 @@ describe("MxrouteSender", () => {
     });
   });
 
-  it("reports missing credentials without a network call", async () => {
-    const sender = new MxrouteSender(
-      getEmailConfig({ EMAIL_PROVIDER: "mxroute" }),
-      (async () => {
-        throw new Error("must not be called");
-      }) as typeof fetch
-    );
-    const result = await sender.send(message);
-    expect(result.ok).toBe(false);
-  });
-
   it("reports network errors without throwing", async () => {
     const sender = new MxrouteSender(config, (async () => {
       throw new Error("boom");
@@ -119,34 +152,17 @@ describe("MxrouteSender", () => {
 });
 
 describe("ResendSender", () => {
-  it("reports a missing api key without a network call", async () => {
-    const sender = new ResendSender(
-      getEmailConfig({ EMAIL_PROVIDER: "resend" }),
-      (async () => {
-        throw new Error("must not be called");
-      }) as typeof fetch
-    );
-    const result = await sender.send({
-      to: "a@example.com",
-      subject: "s",
-      html: "<p>hi</p>",
-      text: "hi"
-    });
-    expect(result.ok).toBe(false);
-  });
+  const config = loadResendConfig(
+    reader({ RESEND_API_KEY: "re_key" }),
+    IDENTITY
+  )!;
 
   it("sends with a bearer key", async () => {
     const calls: Array<RequestInit> = [];
-    const sender = new ResendSender(
-      getEmailConfig({
-        EMAIL_PROVIDER: "resend",
-        RESEND_API_KEY: "re_key"
-      }),
-      (async (_url, init) => {
-        calls.push(init as RequestInit);
-        return new Response("{}", { status: 200 });
-      }) as typeof fetch
-    );
+    const sender = new ResendSender(config, (async (_url, init) => {
+      calls.push(init as RequestInit);
+      return new Response("{}", { status: 200 });
+    }) as typeof fetch);
     await expect(
       sender.send({ to: "a@example.com", subject: "s", html: "h", text: "t" })
     ).resolves.toEqual({ ok: true });
@@ -158,11 +174,32 @@ describe("ResendSender", () => {
 
 describe("factory", () => {
   it("returns a disabled sender by default", async () => {
-    const sender = createEmailSender({});
+    const sender = createEmailSender(reader({}));
     expect(sender).toBeInstanceOf(DisabledSender);
     await expect(
       sender.send({ to: "a", subject: "s", html: "h", text: "t" })
-    ).resolves.toEqual({ ok: false, error: "email provider is disabled" });
+    ).resolves.toEqual({
+      ok: false,
+      error: "email notifications are disabled"
+    });
+  });
+
+  it("selects the configured provider and explains an incomplete one", async () => {
+    expect(createEmailSender(reader(MXROUTE_VARS))).toBeInstanceOf(
+      MxrouteSender
+    );
+    expect(
+      createEmailSender(reader({ RESEND_API_KEY: "re_key" }))
+    ).toBeInstanceOf(DisabledSender);
+
+    const incomplete = createEmailSender(reader({ EMAIL_PROVIDER: "mxroute" }));
+    expect(incomplete).toBeInstanceOf(DisabledSender);
+    await expect(
+      incomplete.send({ to: "a", subject: "s", html: "h", text: "t" })
+    ).resolves.toEqual({
+      ok: false,
+      error: "mxroute credentials are not configured"
+    });
   });
 });
 
@@ -181,7 +218,7 @@ describe("moderation templates", () => {
     expect(message.text).toContain("gone");
   });
 
-  it("renders every kind with a subject and, where there is something to view, a dashboard link", () => {
+  it("renders every kind with a subject and, where applicable, a dashboard link", () => {
     const kinds = [
       "extension-delisted",
       "revision-approved",
