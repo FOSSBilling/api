@@ -53,9 +53,9 @@ describe("email config", () => {
     );
   });
 
-  it("loads the sender identity with the directory from address", () => {
+  it("loads the sender identity with the noreply default", () => {
     expect(loadEmailIdentity(reader({}))).toEqual({
-      from: "extensions@fossbilling.org",
+      from: "noreply@fossbilling.org",
       replyTo: undefined
     });
     expect(
@@ -69,6 +69,9 @@ describe("email config", () => {
       from: "extensions@fossbilling.org",
       replyTo: "noreply@fossbilling.org"
     });
+    expect(loadEmailIdentity(reader({ EMAIL_FROM: "  " })).from).toBe(
+      "noreply@fossbilling.org"
+    );
   });
 
   it("loads a complete mxroute config and rejects an incomplete one", () => {
@@ -140,6 +143,15 @@ describe("MxrouteSender", () => {
     });
   });
 
+  it("reports a null JSON payload as a failure without throwing", async () => {
+    const sender = new MxrouteSender(config, (async () =>
+      jsonResponse(null)) as typeof fetch);
+    await expect(sender.send(message)).resolves.toEqual({
+      ok: false,
+      error: "unexpected status 200"
+    });
+  });
+
   it("reports network errors without throwing", async () => {
     const sender = new MxrouteSender(config, (async () => {
       throw new Error("boom");
@@ -170,6 +182,14 @@ describe("ResendSender", () => {
       "Bearer re_key"
     );
   });
+
+  it("reports a null JSON payload as a failure without throwing", async () => {
+    const sender = new ResendSender(config, (async () =>
+      jsonResponse(null, 500)) as typeof fetch);
+    await expect(
+      sender.send({ to: "a@example.com", subject: "s", html: "h", text: "t" })
+    ).resolves.toEqual({ ok: false, error: "unexpected status 500" });
+  });
 });
 
 describe("factory", () => {
@@ -188,9 +208,17 @@ describe("factory", () => {
     expect(createEmailSender(reader(MXROUTE_VARS))).toBeInstanceOf(
       MxrouteSender
     );
-    expect(
-      createEmailSender(reader({ RESEND_API_KEY: "re_key" }))
-    ).toBeInstanceOf(DisabledSender);
+
+    const incompleteResend = createEmailSender(
+      reader({ EMAIL_PROVIDER: "resend" })
+    );
+    expect(incompleteResend).toBeInstanceOf(DisabledSender);
+    await expect(
+      incompleteResend.send({ to: "a", subject: "s", html: "h", text: "t" })
+    ).resolves.toEqual({
+      ok: false,
+      error: "resend api key is not configured"
+    });
 
     const incomplete = createEmailSender(reader({ EMAIL_PROVIDER: "mxroute" }));
     expect(incomplete).toBeInstanceOf(DisabledSender);
@@ -216,6 +244,18 @@ describe("moderation templates", () => {
     expect(message.html).toContain("&lt;script&gt;");
     expect(message.html).not.toContain("<script>");
     expect(message.text).toContain("gone");
+  });
+
+  it("strips CR/LF from names before interpolating the subject", () => {
+    const message = buildModerationEmail({
+      kind: "extension-delisted",
+      to: "author@example.com",
+      extensionId: "paygate",
+      extensionName: "Bad\r\nHeader: injected",
+      reason: "gone"
+    });
+    expect(message.subject).not.toMatch(/[\r\n]/);
+    expect(message.subject).toContain("Bad Header: injected");
   });
 
   it("renders every kind with a subject and, where applicable, a dashboard link", () => {

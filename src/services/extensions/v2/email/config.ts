@@ -17,8 +17,12 @@ export function resolveEmailProvider(env: EnvReader): EmailProviderName | null {
 }
 
 export function loadEmailIdentity(env: EnvReader): EmailIdentity {
+  // Blank counts as unset: an empty EMAIL_FROM would otherwise become an
+  // invalid sender address instead of falling back to the default.
+  const from = env.getEnv("EMAIL_FROM")?.trim();
+  const replyTo = env.getEnv("EMAIL_REPLY_TO")?.trim();
   return {
-    from: env.getEnv("EMAIL_FROM") || "noreply@fossbilling.org",
-    replyTo: env.getEnv("EMAIL_REPLY_TO")
+    from: from ? from : "noreply@fossbilling.org",
+    replyTo: replyTo ? replyTo : undefined
   };
 }

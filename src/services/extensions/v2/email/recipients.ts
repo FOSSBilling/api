@@ -1,18 +1,17 @@
+import { z } from "@hono/zod-openapi";
 import { eq } from "drizzle-orm";
 import type { ExtensionsDb } from "../../../../lib/db";
 import { developers, users } from "../db/schema";
 import { DeveloperProfilesDatabase } from "../db/developer-profiles";
 import { ExtensionsDatabase } from "../db/extensions";
 
+// Same constraints as the input schemas (DeveloperInputSchema's
+// contact_email, UserIdentityInputSchema's email): a legacy stored value that
+// merely contains "@" must not suppress the account-email fallback.
+const emailSchema = z.string().email().max(254);
+
 function isEmail(value: unknown): value is string {
-  if (typeof value !== "string" || value.length > 254) return false;
-  const at = value.indexOf("@");
-  return (
-    at > 0 &&
-    at === value.lastIndexOf("@") &&
-    at < value.length - 1 &&
-    !/[\s,;<>()[\]\\]/.test(value)
-  );
+  return emailSchema.safeParse(value).success;
 }
 
 async function getUserEmail(

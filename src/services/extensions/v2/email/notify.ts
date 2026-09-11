@@ -32,7 +32,13 @@ export async function sendModerationNotification(
     let developerId = input.developerId;
 
     if (input.kind === "claim-approved" || input.kind === "claim-rejected") {
-      if (!input.claimantId) return false;
+      if (!input.claimantId) {
+        logError("email", "Claim notification missing claimant", {
+          kind: input.kind,
+          developerId: input.developerId
+        });
+        return false;
+      }
       to = await resolveClaimantEmail(db, input.claimantId);
       if (!to) {
         logError("email", "No address for claim notification", {
@@ -73,6 +79,9 @@ export async function sendModerationNotification(
       to = recipient.to;
       developerName = recipient.developerName;
     } else {
+      logError("email", "Notification missing extension and developer", {
+        kind: input.kind
+      });
       return false;
     }
 

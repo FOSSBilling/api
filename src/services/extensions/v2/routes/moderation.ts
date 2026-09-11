@@ -248,7 +248,9 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
       409: errorResponse(
         "Revision is not pending, or ownership has changed since it was proposed"
       ),
-      422: errorResponse("Path params or review_note body failed validation"),
+      422: errorResponse(
+        "Path params, review_note body, or notify query failed validation"
+      ),
       500: errorResponse("Database error")
     }
   });
@@ -275,7 +277,9 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
       notified = await sendModerationNotification(getPlatform(c), extDb, {
         kind: "revision-approved",
         extensionId: id,
-        reason: review_note
+        // Optional and untrimmed by its schema: a whitespace-only note would
+        // otherwise reach the author as a meaningless "Moderator note:".
+        reason: review_note?.trim() || undefined
       });
     }
     return c.json({ result: { ...data, notified } }, 200);
@@ -318,7 +322,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
       },
       404: errorResponse("No such revision on that extension"),
       409: errorResponse("Revision is not pending"),
-      422: errorResponse("review_note is required"),
+      422: errorResponse("review_note body or notify query failed validation"),
       500: errorResponse("Database error")
     }
   });
@@ -393,7 +397,9 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
       },
       404: errorResponse("No such extension"),
       409: errorResponse("Extension is not published, or is already delisted"),
-      422: errorResponse("Path params or reason body failed validation"),
+      422: errorResponse(
+        "Path params, reason body, or notify query failed validation"
+      ),
       500: errorResponse("Database error")
     }
   });
@@ -547,7 +553,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
       },
       404: errorResponse("No developer with that id"),
       409: errorResponse("Profile changed after the reviewed revision"),
-      422: errorResponse("id param failed validation"),
+      422: errorResponse("id param or notify query failed validation"),
       500: errorResponse("Database error")
     }
   });

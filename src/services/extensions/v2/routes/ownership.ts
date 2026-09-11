@@ -257,7 +257,7 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
       409: errorResponse(
         "Claim is no longer pending, profile is no longer unowned, or the claimant now owns a different profile"
       ),
-      422: errorResponse("id param failed validation"),
+      422: errorResponse("id param or notify query failed validation"),
       500: errorResponse("Database error")
     }
   });
@@ -324,7 +324,9 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
         description: "The account is inactive or the caller is not a moderator"
       },
       404: errorResponse("No pending claim with that id"),
-      422: errorResponse("id param or review_note body failed validation"),
+      422: errorResponse(
+        "id param, review_note body, or notify query failed validation"
+      ),
       500: errorResponse("Database error")
     }
   });

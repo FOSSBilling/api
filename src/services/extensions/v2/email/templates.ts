@@ -28,6 +28,12 @@ function escapeHtml(value: string): string {
     .replace(/"/g, "&quot;");
 }
 
+// Names come from user input with no newline restriction, and labels feed
+// the email subject — strip CR/LF so a name can never split an SMTP header.
+function subjectLabel(value: string): string {
+  return value.replace(/[\r\n]+/g, " ");
+}
+
 function layout(
   title: string,
   paragraphs: string[]
@@ -42,14 +48,16 @@ function layout(
 export function buildModerationEmail(
   input: ModerationEmailInput
 ): EmailMessage {
-  const extLabel =
+  const extLabel = subjectLabel(
     input.extensionName && input.extensionId
       ? `“${input.extensionName}” (${input.extensionId})`
-      : (input.extensionId ?? input.extensionName ?? "your extension");
-  const devLabel =
+      : (input.extensionId ?? input.extensionName ?? "your extension")
+  );
+  const devLabel = subjectLabel(
     input.developerName && input.developerId
       ? `“${input.developerName}” (${input.developerId})`
-      : (input.developerId ?? input.developerName ?? "your developer profile");
+      : (input.developerId ?? input.developerName ?? "your developer profile")
+  );
 
   let subject: string;
   let title: string;

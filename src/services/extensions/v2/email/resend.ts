@@ -61,9 +61,11 @@ export class ResendSender implements EmailSender {
 
     let detail = `unexpected status ${response.status}`;
     try {
-      const payload = (await response.json()) as { message?: unknown };
-      if (typeof payload.message === "string" && payload.message.length > 0) {
-        detail = payload.message;
+      const payload: unknown = await response.json();
+      const body: { message?: unknown } =
+        payload !== null && typeof payload === "object" ? payload : {};
+      if (typeof body.message === "string" && body.message.length > 0) {
+        detail = body.message;
       }
     } catch {
       // Keep the status-based detail.

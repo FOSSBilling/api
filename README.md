@@ -70,7 +70,7 @@ We use [Cloudflare D1](https://developers.cloudflare.com/d1/) and [KV](https://d
 - `ASSERTION_SIGNING_SECRET`: Shared HMAC secret used to verify the short-lived bearer assertions minted by the Extensions site. Configure the same value in both Workers; it is never sent to clients.
 - `ASSERTION_SIGNING_SECRET_PREVIOUS`: Optional previous HMAC secret accepted during a signing-key rotation.
 - `EMAIL_PROVIDER`: `mxroute` or `resend` to send moderator notification emails, or unset/`disabled` to skip sending.
-- `EMAIL_FROM`: Sender address for notification emails (default `extensions@fossbilling.org`).
+- `EMAIL_FROM`: Sender address for notification emails (default `noreply@fossbilling.org`).
 - `EMAIL_REPLY_TO`: Optional Reply-To address (e.g. `noreply@fossbilling.org`).
 - `MXROUTE_SERVER`, `MXROUTE_USERNAME`, `MXROUTE_PASSWORD`: Mailbox credentials for the MXroute SMTP API (`https://smtpapi.mxroute.com/`). Required when `EMAIL_PROVIDER=mxroute`.
 - `RESEND_API_KEY`: API key for Resend. Required when `EMAIL_PROVIDER=resend`.

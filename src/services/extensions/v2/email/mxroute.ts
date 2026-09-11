@@ -70,10 +70,8 @@ export class MxrouteSender implements EmailSender {
       return { ok: false, error: `unexpected status ${response.status}` };
     }
 
-    const body =
-      payload !== null && typeof payload === "object"
-        ? (payload as { success?: unknown; message?: unknown })
-        : {};
+    const body: { success?: unknown; message?: unknown } =
+      payload !== null && typeof payload === "object" ? payload : {};
     if (response.ok && body.success === true) {
       return { ok: true };
     }

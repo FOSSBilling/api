@@ -12,7 +12,8 @@ import {
   insertDeveloper,
   insertExtension,
   insertDeveloperClaim,
-  getExtension
+  getExtension,
+  bumpDeveloperOwnership
 } from "./db-fixtures";
 
 // Hoisted so no v2 suite can make a real GitHub call. harness.ts applies the
@@ -182,9 +183,12 @@ describe("moderation notification emails", () => {
     );
   });
 
-  it("notifies the revision submitter on reject", async () => {
+  // The revision submitter and the owner start as the same account, so the
+  // ownership is transferred before review: the email must follow the
+  // current owner, not the original submitter.
+  it("notifies the current owner on reject, not the original submitter", async () => {
     await insertUser(db, { id: "mod-1", is_moderator: 1 });
-    await insertUser(db, { id: "user-1", email: "owner@example.com" });
+    await insertUser(db, { id: "user-1", email: "original@example.com" });
     await insertDeveloper(db, {
       id: "new-developer",
       type: "user",
@@ -201,6 +205,8 @@ describe("moderation notification emails", () => {
     const { result } = (await created.json()) as {
       result: { id: string; revision_id: string };
     };
+    await bumpDeveloperOwnership(db, "new-developer", "user-2");
+    await insertUser(db, { id: "user-2", email: "current@example.com" });
     setEmailEnv();
     const calls = stubSmtpApi();
 
@@ -214,7 +220,7 @@ describe("moderation notification emails", () => {
       result: { status: "rejected", notified: true }
     });
     const body = JSON.parse(String(calls[0].init.body));
-    expect(body.to).toBe("owner@example.com");
+    expect(body.to).toBe("current@example.com");
     expect(body.body).toContain("Needs a valid license URL");
   });
 
@@ -280,5 +286,74 @@ describe("moderation notification emails", () => {
       result: { notified: false }
     });
     expect(calls).toHaveLength(0);
+  });
+
+  // Raw fixture insert bypasses DeveloperInputSchema's email check the way a
+  // legacy row predating it would: the value contains "@" but is not an
+  // address, so resolution must fall through to the account email.
+  it("ignores a malformed contact email and falls back to the account email", async () => {
+    await insertUser(db, { id: "mod-1", is_moderator: 1 });
+    await insertUser(db, { id: "user-1", email: "owner@example.com" });
+    await insertDeveloper(db, {
+      id: "new-developer",
+      type: "user",
+      name: "New Developer",
+      url: null,
+      owner_user_id: "user-1",
+      contact_email: "The Owner <owner@example.com>"
+    });
+    await insertExtension(db, {
+      id: "live-ext",
+      developer_id: "new-developer"
+    });
+    setEmailEnv();
+    const calls = stubSmtpApi();
+
+    const res = await post(
+      "/extensions/v2/extensions/live-ext/delist",
+      await authHeaders("mod-1"),
+      { reason: "Upstream source removed" }
+    );
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      result: { notified: true }
+    });
+    const body = JSON.parse(String(calls[0].init.body));
+    expect(body.to).toBe("owner@example.com");
+  });
+
+  it("drops a whitespace-only moderator note from the approval email", async () => {
+    await insertUser(db, { id: "mod-1", is_moderator: 1 });
+    await insertUser(db, { id: "user-1", email: "owner@example.com" });
+    await insertDeveloper(db, {
+      id: "new-developer",
+      type: "user",
+      name: "New Developer",
+      url: null,
+      owner_user_id: "user-1"
+    });
+    const created = await post(
+      "/extensions/v2/extensions",
+      await authHeaders("user-1"),
+      sampleCreate({ extensionId: "approve-me" })
+    );
+    expect(created.status).toBe(201);
+    const { result } = (await created.json()) as {
+      result: { id: string; revision_id: string };
+    };
+    setEmailEnv();
+    const calls = stubSmtpApi();
+
+    const res = await post(
+      `/extensions/v2/extensions/${result.id}/revisions/${result.revision_id}/approve`,
+      await authHeaders("mod-1"),
+      { review_note: "   " }
+    );
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      result: { status: "approved", notified: true }
+    });
+    const body = JSON.parse(String(calls[0].init.body));
+    expect(body.body).not.toContain("Moderator note");
   });
 });
