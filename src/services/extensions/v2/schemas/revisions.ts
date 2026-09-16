@@ -66,10 +66,11 @@ export const RevisionQueueQuerySchema = z.object({
 // extension_id unset: global moderation queue (moderator only), oldest first.
 // status filters in both modes; sort overrides the mode default.
 export const UnifiedRevisionsQuerySchema = RevisionQueueQuerySchema.extend({
+  // No max: extension ids are unbounded slugs (lowercaseId), so capping
+  // this query param could reject a valid id before lookup.
   extension_id: z
     .string()
     .min(1)
-    .max(200)
     .optional()
     .openapi({
       param: { name: "extension_id", in: "query" },

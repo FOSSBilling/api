@@ -92,6 +92,7 @@ describe("Extensions API v2", () => {
         await authHeaders("mod-1")
       );
       expect(res.status).toBe(200);
+      expect(res.headers.get("Vary")).toBe("Authorization");
       const data = (await res.json()) as {
         result: Array<{ status: string; extension_id: string }>;
       };
@@ -1005,6 +1006,7 @@ describe("Extensions API v2", () => {
         await authHeaders("user-1")
       );
       expect(owner.status).toBe(200);
+      expect(owner.headers.get("Vary")).toBe("Authorization");
       await expect(owner.json()).resolves.toMatchObject({
         result: { delisted: { reason: "Upstream source removed" } }
       });
@@ -1014,6 +1016,7 @@ describe("Extensions API v2", () => {
         await authHeaders("mod-1")
       );
       expect(moderator.status).toBe(200);
+      expect(moderator.headers.get("Vary")).toBe("Authorization");
       await expect(moderator.json()).resolves.toMatchObject({
         result: { delisted: { reason: "Upstream source removed" } }
       });

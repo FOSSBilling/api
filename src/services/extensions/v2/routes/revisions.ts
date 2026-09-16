@@ -138,13 +138,15 @@ export function registerRevisionRoutes(app: ExtensionsV2App): void {
           error?.code === "INVALID_CURSOR" ? 422 : 500
         );
       }
-      return c.json(
+      const historyRes = c.json(
         {
           result: data.items,
           pagination: { next_cursor: data.nextCursor, has_more: data.hasMore }
         },
         200
       );
+      historyRes.headers.set("Vary", "Authorization");
+      return historyRes;
     }
 
     const access = await users.moderatorAccess(auth.userId);
@@ -181,12 +183,14 @@ export function registerRevisionRoutes(app: ExtensionsV2App): void {
         error?.code === "INVALID_CURSOR" ? 422 : 500
       );
     }
-    return c.json(
+    const queueRes = c.json(
       {
         result: data.items,
         pagination: { next_cursor: data.nextCursor, has_more: data.hasMore }
       },
       200
     );
+    queueRes.headers.set("Vary", "Authorization");
+    return queueRes;
   });
 }

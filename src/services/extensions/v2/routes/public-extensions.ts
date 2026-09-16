@@ -20,6 +20,9 @@ export function registerPublicExtensionsRoutes(app: ExtensionsV2App): void {
     tags: ["Extensions"],
     summary:
       "List extensions: published catalogue (scope=public), caller's own (scope=mine), or every extension (scope=all, moderator)",
+    // Optional auth: scope=public serves anonymous catalogue reads, so the
+    // contract advertises Bearer alongside an empty requirement rather than
+    // demanding a token every generated client must send.
     security: [{ Bearer: [] }],
     middleware: [optionalAuth()] as const,
     request: { query: UnifiedExtensionListQuerySchema },
@@ -87,7 +90,7 @@ export function registerPublicExtensionsRoutes(app: ExtensionsV2App): void {
           error?.code === "INVALID_CURSOR" ? 422 : 500
         );
       }
-      return c.json(
+      const res = c.json(
         {
           result: data.items,
           pagination: {
@@ -97,6 +100,15 @@ export function registerPublicExtensionsRoutes(app: ExtensionsV2App): void {
         },
         200
       );
+      if (!auth) {
+        res.headers.set(
+          "Cache-Control",
+          "public, max-age=60, s-maxage=300, stale-while-revalidate=600"
+        );
+      } else {
+        res.headers.set("Vary", "Authorization");
+      }
+      return res;
     }
 
     if (!auth) {
@@ -147,10 +159,12 @@ export function registerPublicExtensionsRoutes(app: ExtensionsV2App): void {
         return c.json(errorBody(owner.error, "Unable to load developer"), 500);
       }
       if (!owner.data) {
-        return c.json(
+        const res = c.json(
           { result: [], pagination: { next_cursor: null, has_more: false } },
           200
         );
+        res.headers.set("Vary", "Authorization");
+        return res;
       }
       const db = new ExtensionsDatabase(extDb);
       const { data, error } = await db.listOwned({
@@ -165,13 +179,15 @@ export function registerPublicExtensionsRoutes(app: ExtensionsV2App): void {
           error?.code === "INVALID_CURSOR" ? 422 : 500
         );
       }
-      return c.json(
+      const res = c.json(
         {
           result: data.items,
           pagination: { next_cursor: data.nextCursor, has_more: data.hasMore }
         },
         200
       );
+      res.headers.set("Vary", "Authorization");
+      return res;
     }
 
     const access = await users.moderatorAccess(auth.userId);
@@ -209,13 +225,15 @@ export function registerPublicExtensionsRoutes(app: ExtensionsV2App): void {
         error?.code === "INVALID_CURSOR" ? 422 : 500
       );
     }
-    return c.json(
+    const res = c.json(
       {
         result: data.items,
         pagination: { next_cursor: data.nextCursor, has_more: data.hasMore }
       },
       200
     );
+    res.headers.set("Vary", "Authorization");
+    return res;
   });
 
   const getExtensionRoute = createRoute({
@@ -224,6 +242,7 @@ export function registerPublicExtensionsRoutes(app: ExtensionsV2App): void {
     tags: ["Extensions"],
     summary:
       "Get an extension: published content anonymously, full owned record for its owner or a moderator",
+    // Optional auth, same contract convention as the list route above.
     security: [{ Bearer: [] }],
     middleware: [optionalAuth()] as const,
     request: { params: IdParamSchema },
@@ -260,7 +279,11 @@ export function registerPublicExtensionsRoutes(app: ExtensionsV2App): void {
               500
             );
           }
-          if (active.data) return c.json({ result: owned.data.extension }, 200);
+          if (active.data) {
+            const res = c.json({ result: owned.data.extension }, 200);
+            res.headers.set("Vary", "Authorization");
+            return res;
+          }
         } else {
           const access = await users.moderatorAccess(auth.userId);
           if (access.error) {
@@ -270,7 +293,9 @@ export function registerPublicExtensionsRoutes(app: ExtensionsV2App): void {
             );
           }
           if (access.data?.moderator) {
-            return c.json({ result: owned.data.extension }, 200);
+            const res = c.json({ result: owned.data.extension }, 200);
+            res.headers.set("Vary", "Authorization");
+            return res;
           }
         }
       } else if (owned.error && owned.error.code !== "NOT_FOUND") {

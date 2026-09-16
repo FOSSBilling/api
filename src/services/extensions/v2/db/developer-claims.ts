@@ -272,17 +272,27 @@ export class DeveloperClaimsDatabase {
   // Unified reader for the merged GET /developers/claims?scope=. Always
   // returns the enriched Pending shape so mine and pending share one
   // contract; scope=mine is caller-filtered (any status unless narrowed),
-  // scope=pending is moderator-wide (pending by default).
-  async listScoped(filters: {
-    scope: "mine" | "pending";
-    claimantId?: string;
-    status?: "pending" | "approved" | "rejected" | "all";
-  }): Promise<DatabaseResult<PendingDeveloperClaim[]>> {
+  // scope=pending is moderator-wide (pending by default). The filter is a
+  // discriminated union so scope=mine cannot be called without the caller's
+  // id, which would otherwise drop the ownership predicate and return every
+  // claim in the table.
+  async listScoped(
+    filters:
+      | {
+          scope: "mine";
+          claimantId: string;
+          status?: "pending" | "approved" | "rejected" | "all";
+        }
+      | {
+          scope: "pending";
+          status?: "pending" | "approved" | "rejected" | "all";
+        }
+  ): Promise<DatabaseResult<PendingDeveloperClaim[]>> {
     const status = filters.status ?? "all";
     let rows;
     try {
       const conditions = [];
-      if (filters.scope === "mine" && filters.claimantId) {
+      if (filters.scope === "mine") {
         conditions.push(eq(developerClaims.claimantId, filters.claimantId));
       }
       if (filters.scope === "pending" && status === "all") {

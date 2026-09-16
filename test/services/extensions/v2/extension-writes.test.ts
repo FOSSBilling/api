@@ -137,12 +137,14 @@ describe("Extensions API v2 writes", () => {
       expect(res.status).toBe(201);
     });
 
-    it("rejects the reserved extension id mine", async () => {
+    // "mine" is an ordinary extension id since the static
+    // GET /extensions/mine route merged into GET /extensions?scope=mine.
+    it("accepts the formerly-reserved extension id mine", async () => {
       await seedDeveloper("new-developer", "user-1");
       const res = await createExtension("user-1", { extensionId: "mine" });
 
-      expect(res.status).toBe(422);
-      expect(await countRevisions(db)).toBe(0);
+      expect(res.status).toBe(201);
+      expect(await countRevisions(db)).toBe(1);
     });
 
     it("refuses a caller with no developer profile to publish under", async () => {
@@ -1026,10 +1028,9 @@ describe("Extensions API v2 writes", () => {
       expect(res.status).toBe(404);
     });
 
-    // "mine" stays a reserved extension id (migration 0020), so the removed
-    // /extensions/mine/revisions collision has no route at all now — the
-    // merged detail read is GET /extensions/{id} and history is
-    // GET /revisions?extension_id=.
+    // "mine" is an ordinary extension id now, but the two-segment path still
+    // has no route — the merged detail read is GET /extensions/{id} and
+    // history is GET /revisions?extension_id=.
     it("404s the removed /extensions/mine/revisions collision path", async () => {
       const res = await get(
         "/extensions/v2/extensions/mine/revisions",

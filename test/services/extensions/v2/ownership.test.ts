@@ -634,6 +634,25 @@ describe("Extensions API v2", () => {
       expect(pendingData.result[0].developer_name).toBe("Legacy Developer");
     });
 
+    it("keeps the pending queue to pending claims even with a status filter", async () => {
+      await seedUnownedDeveloper("legacy-developer");
+      await post(
+        "/extensions/v2/developers/legacy-developer/claim",
+        await authHeaders("user-1"),
+        {}
+      );
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+
+      const res = await get(
+        "/extensions/v2/developers/claims?scope=pending&status=approved",
+        await authHeaders("mod-1")
+      );
+      expect(res.status).toBe(200);
+      await expect(res.json()).resolves.toMatchObject({
+        result: [{ status: "pending" }]
+      });
+    });
+
     it("rejects claiming a developer that already has an owner", async () => {
       await put(
         "/extensions/v2/developers/me",

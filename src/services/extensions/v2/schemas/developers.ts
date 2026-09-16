@@ -7,8 +7,8 @@ import { httpUrl, lowercaseId } from "./common";
 // "claims" and "me" are still live static routes under /developers/*.
 const RESERVED_DEVELOPER_IDS = new Set(["claims", "me", "unapproved"]);
 
-// Lowercases like isReservedExtensionId, since route matching is
-// case-sensitive but these literals are not.
+// Route matching is case-sensitive but these literals are not, so the check
+// below lowercases before the lookup.
 export function isReservedDeveloperId(id: string): boolean {
   return RESERVED_DEVELOPER_IDS.has(id.toLowerCase());
 }

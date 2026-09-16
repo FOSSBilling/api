@@ -13,18 +13,6 @@ export const EXTENSION_TYPES = [
   "translation"
 ] as const;
 
-// GET /extensions/mine has been merged into GET /extensions?scope=mine, and
-// GET /moderation/all-extensions into GET /extensions?scope=all. The "mine"
-// segment is still reserved so an adopted row can never shadow a static route,
-// and migration 0020 still fails the deploy if one exists.
-// Private: isReservedExtensionId() lowercases before the lookup, and these
-// literals are lowercase — reading the Set directly would miss "Mine".
-const RESERVED_EXTENSION_IDS = new Set(["mine"]);
-
-export function isReservedExtensionId(id: string): boolean {
-  return RESERVED_EXTENSION_IDS.has(id.toLowerCase());
-}
-
 export const ReleaseSchema = z
   .object({
     tag: z.string().min(1).max(100),
@@ -140,9 +128,7 @@ function refineContentSize(content: unknown, ctx: z.RefinementCtx): void {
 // POST /extensions. The id is chosen once here and is immutable afterwards.
 // No developer field: a user owns at most one profile, so the server knows it.
 export const ExtensionCreateSchema = ExtensionContentSchema.extend({
-  id: lowercaseId("extension").refine((id) => !isReservedExtensionId(id), {
-    message: "This extension id is reserved"
-  })
+  id: lowercaseId("extension")
 })
   .strict()
   .superRefine(refineContentSize)

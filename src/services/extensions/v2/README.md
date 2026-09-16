@@ -97,7 +97,8 @@ without touching `published`, `pending_revision` or `last_review`.
 Merged reads return a union narrowed by the request: `?scope=` selects the
 list projection explicitly, while `GET /extensions/{id}` and
 `GET /developers/{id}` return the published/public shape anonymously and the
-owned/full shape for the owner or a moderator (404 hides existence otherwise).
+owned/full shape for the owner or a moderator (for extensions, 404 otherwise
+hides draft and delisted rows).
 Anonymous reads stay cacheable (`Cache-Control: public`); authenticated reads
 send `Vary: Authorization`.
 
@@ -176,7 +177,7 @@ regress.
 
 Apply migrations **only from this repository**, from `db/migrations`, with `npm run db:migrate:extensions-v2:local` / `:remote`. The Extensions site has no D1 migration source.
 
-Migration `0020` is a check, not a schema change: it fails if an adopted row holds an id that a static route shadows (`extensions.id = 'mine'`, or `developers.id` of `me`/`claims`/`unapproved`), which would make that row's detail page unreachable. If it fails, rename the row deliberately — the id is public and consumers pin it.
+Migration `0020` is a check, not a schema change: it fails if an adopted developer row holds an id that a static route shadows (`developers.id` of `me`/`claims`/`unapproved`), which would make that row's detail page unreachable. If it fails, rename the row deliberately — the id is public and consumers pin it.
 
 Migration `0021` refuses to run against data it cannot migrate, rather than aborting halfway through the rebuild. Each check selects the offending rows into a scratch table whose named `CHECK` can never hold, so the constraint name is the error message — SQLite has no `RAISE()` outside a trigger:
 

@@ -323,6 +323,7 @@ export function registerDeveloperProfileRoutes(app: ExtensionsV2App): void {
     tags: ["Developers"],
     summary:
       "Get a developer profile: public view anonymously, full view for the owner or a moderator",
+    // Optional auth, same contract convention as the merged extension reads.
     security: [{ Bearer: [] }],
     middleware: [optionalAuth()] as const,
     request: { params: IdParamSchema },
@@ -349,20 +350,32 @@ export function registerDeveloperProfileRoutes(app: ExtensionsV2App): void {
     const extDb = getExtensionsDb(c.env.DB_EXTENSIONS);
     const db = new DeveloperProfilesDatabase(extDb);
     if (auth) {
+      const users = new UsersDatabase(extDb);
       const own = await db.getOwn(auth.userId);
       if (
         !own.error &&
         own.data &&
         own.data.id.toLowerCase() === id.toLowerCase()
       ) {
-        const res = c.json({ result: own.data }, 200);
-        res.headers.set("Vary", "Authorization");
-        return res;
-      }
-      if (own.error) {
+        // The full owned view carries contact_email, verification signals,
+        // and transfer state, so it stays behind the active-account check
+        // the former GET /developers/me enforced. A deactivated owner falls
+        // through to the public view below rather than keeping full access.
+        const active = await users.isActive(auth.userId);
+        if (active.error) {
+          return c.json(
+            errorBody(active.error, "Unable to check account"),
+            500
+          );
+        }
+        if (active.data) {
+          const res = c.json({ result: own.data }, 200);
+          res.headers.set("Vary", "Authorization");
+          return res;
+        }
+      } else if (own.error) {
         return c.json(errorBody(own.error, "Unable to load developer"), 500);
       }
-      const users = new UsersDatabase(extDb);
       const access = await users.moderatorAccess(auth.userId);
       if (access.error) {
         return c.json(errorBody(access.error, "Unable to check access"), 500);

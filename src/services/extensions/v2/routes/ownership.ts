@@ -198,9 +198,11 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
           403
         );
       }
+      // The pending scope is the moderator review queue: always pending,
+      // regardless of any status filter (which only narrows scope=mine).
       const { data, error } = await db.listScoped({
         scope: "pending",
-        status: status === "all" ? "pending" : status
+        status: "pending"
       });
       if (error || !data) {
         return c.json(
