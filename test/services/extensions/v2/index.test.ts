@@ -22,25 +22,21 @@ describe("Extensions API v2", () => {
       expect(Object.keys(spec.paths)).toEqual(
         expect.arrayContaining([
           "/extensions",
-          "/extensions/mine",
-          "/extensions/mine/{id}",
           "/extensions/{id}",
-          "/extensions/{id}/revisions",
+          "/revisions",
           "/extensions/{id}/revisions/{revisionId}/approve",
           "/extensions/{id}/revisions/{revisionId}/reject",
-          "/moderation/extensions",
           "/users/me/identity",
           "/users/me",
+          "/developers",
           "/developers/me",
           "/developers/{id}",
-          "/developers/unapproved",
           "/developers/{id}/approve",
           "/developers/{id}/transfer",
           "/developers/{id}/transfer/revoke",
           "/developers/transfers/accept",
           "/developers/{id}/claim",
           "/developers/claims/{id}/cancel",
-          "/developers/claims/mine",
           "/developers/claims",
           "/developers/claims/{id}/approve",
           "/developers/claims/{id}/reject"
@@ -57,10 +53,10 @@ describe("Extensions API v2", () => {
           patch?: { responses?: Record<string, unknown> };
         }
       >;
-      expect(paths["/extensions/mine"].get?.responses).toHaveProperty("403");
+      expect(paths["/extensions"].get?.responses).toHaveProperty("200");
       expect(
-        paths["/extensions/mine"].get?.parameters?.map(({ name }) => name)
-      ).not.toContain("developer_id");
+        paths["/extensions"].get?.parameters?.map(({ name }) => name)
+      ).toEqual(expect.arrayContaining(["scope", "status", "q"]));
       expect(paths["/users/me"].patch?.responses).toHaveProperty("403");
     });
 

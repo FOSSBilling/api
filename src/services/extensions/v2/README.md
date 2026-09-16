@@ -36,17 +36,19 @@ against it.
   `reject`: content and history are kept, so the owner can still see and edit
   the extension, and a moderator can re-list it by hand later. There is no
   `relist` endpoint yet - see `ExtensionsDatabase.delist()`.
-- `GET /moderation/extensions/{id}` is a moderator's only full-record read of
-  an extension they don't own - the same `OwnedExtension` shape as
-  `GET /extensions/mine/{id}`, including `delisted`. Without it, a moderator
-  could delist an extension but never see why (their own or another
-  moderator's) again short of digging through `GET /extensions/{id}/revisions`.
-- `GET /moderation/all-extensions` lists every extension across every
-  developer, filterable by `status` (`published`, `delisted`, `unpublished`;
-  omitted means all) and `q` (case-insensitive substring match on the id).
-  Distinct from `GET /moderation/extensions` above, which lists _revisions_
-  awaiting review - an extension's own status and its having a pending edit
-  are independent.
+- `GET /extensions/{id}` is role-aware: anonymous and unrelated callers get
+  the published projection (or 404, which hides existence for drafts and
+  delisted rows); the owner and moderators get the full `OwnedExtension`,
+  including `delisted`. This replaces the former `GET /extensions/mine/{id}`
+  and `GET /moderation/extensions/{id}` pair, which shared that shape.
+- `GET /extensions?scope=` lists catalogue cards or owned rows:
+  `scope=public` (default, anonymous allowed) is the published catalogue;
+  `scope=mine` is the caller's own extensions (empty page when they have no
+  developer profile); `scope=all` (moderator only) is every extension,
+  filterable by `status` (`published`, `delisted`, `unpublished`) and `q`
+  (case-insensitive id substring). Replaces `GET /extensions/mine` and
+  `GET /moderation/all-extensions`. An extension's own status and its having
+  a pending edit are independent.
 
 ### Moderation Notification Emails
 
@@ -68,9 +70,9 @@ most one developer profile, so no request body names one.
 
 ### Reading Owner State
 
-`GET /extensions/mine` and `GET /extensions/mine/{id}` return four independent
-fields rather than a single derived status, because together they are the
-state and a derived enum could only disagree with them. The table below
+`GET /extensions?scope=mine` and `GET /extensions/{id}` (as owner/moderator)
+return four independent fields rather than a single derived status, because
+together they are the state and a derived enum could only disagree with them. The table below
 covers three of them - `published`, `pending_revision` and `last_review` - the
 fourth, `delisted`, is documented separately just below since it is orthogonal
 to all three:
@@ -92,13 +94,26 @@ independent field, `delisted`: set once a moderator removes a published
 extension for cause, it hides the row from both public catalogue reads
 without touching `published`, `pending_revision` or `last_review`.
 
-These are separate routes from the public `GET /extensions` and
-`GET /extensions/{id}`, which only ever return published content. A single path
-whose 200 changes shape with the caller would force every generated client to
-narrow a union at each call site, and the public read is the hotter path.
+Merged reads return a union narrowed by the request: `?scope=` selects the
+list projection explicitly, while `GET /extensions/{id}` and
+`GET /developers/{id}` return the published/public shape anonymously and the
+owned/full shape for the owner or a moderator (404 hides existence otherwise).
+Anonymous reads stay cacheable (`Cache-Control: public`); authenticated reads
+send `Vary: Authorization`.
 
-`GET /extensions/{id}/revisions` lists the full history for the extension's
-owner or any moderator.
+`GET /revisions?extension_id=` lists the full history for the extension's
+owner or any moderator; omitting `extension_id` lists the global review queue
+(moderator only, `?status=` defaults to `pending`). Replaces
+`GET /extensions/{id}/revisions` and `GET /moderation/extensions`.
+
+`GET /developers?status=` (`all` default, `unapproved` for the review queue)
+replaces `GET /developers/unapproved`. `GET /developers/claims?scope=mine`
+(the caller's claims) and `?scope=pending` (moderator queue) replace
+`GET /developers/claims/mine` and `GET /developers/claims`; both return the
+enriched pending shape. `GET /developers/{id}` is role-aware like
+`GET /extensions/{id}`: public view anonymously, full view for the owner or a
+moderator. `PATCH /users/me` returns the full account projection, like
+`GET /users/me`.
 
 ## Authentication
 
@@ -125,7 +140,9 @@ For organization developer IDs, GitHub membership is used for automatic verifica
 
 ## List Pagination
 
-`GET /extensions/v2/extensions` returns bounded pages of lightweight catalogue items, filtered to published extensions. List items intentionally omit `readme` and `releases`; retrieve the full object from `GET /extensions/v2/extensions/{id}` for detail views. Follow `pagination.next_cursor` by passing it unchanged as `cursor`, and treat cursors as opaque. The default page size is 50 and `limit` may be set from 1 through 100.
+`GET /extensions/v2/extensions` returns bounded pages. `scope=public` (default)
+returns lightweight published catalogue items, `scope=mine`/`all` return owned
+rows. List items intentionally omit `readme` and `releases`; retrieve the full object from `GET /extensions/v2/extensions/{id}` for detail views. Follow `pagination.next_cursor` by passing it unchanged as `cursor`, and treat cursors as opaque. The default page size is 50 and `limit` may be set from 1 through 100.
 
 Cursors carry a version field and are validated on decode, so a cursor from an older format is rejected with `INVALID_CURSOR` (HTTP 422) rather than being misread. Clients should treat that as "restart pagination from the first page", not as an error to surface.
 

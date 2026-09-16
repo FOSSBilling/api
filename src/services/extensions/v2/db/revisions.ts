@@ -188,11 +188,11 @@ export class ExtensionRevisionsDatabase {
     };
   }
 
-  // listByExtension and listQueue are the same keyset page in opposite
-  // directions: newest-first for an owner reading an extension's history,
-  // oldest-first for moderators working a queue front to back. Only the base
-  // predicate and the direction differ, so the cursor handling, the tie-break
-  // on id, the limit + 1 probe and the next-cursor tail live here once.
+  // listScoped below pages through the same keyset in opposite directions:
+  // newest-first for an owner reading an extension's history, oldest-first
+  // for moderators working a queue front to back. Only the base predicate
+  // and the direction differ, so the cursor handling, the tie-break on id,
+  // the limit + 1 probe and the next-cursor tail live here once.
   private async page(
     context: string,
     baseCondition: SQL,
@@ -253,32 +253,39 @@ export class ExtensionRevisionsDatabase {
     };
   }
 
-  async listByExtension(
-    extensionId: string,
-    limit: number,
-    cursor?: string
-  ): Promise<DatabaseResult<RevisionPage>> {
-    return this.page(
-      "listByExtension",
-      eq(extensionRevisions.extensionId, extensionId),
-      "desc",
-      limit,
-      cursor
-    );
-  }
-
-  async listQueue(
-    status: RevisionStatus,
-    limit: number,
-    cursor?: string
-  ): Promise<DatabaseResult<RevisionPage>> {
-    return this.page(
-      "listQueue",
-      eq(extensionRevisions.status, status),
-      "asc",
-      limit,
-      cursor
-    );
+  // Unified reader for the merged GET /revisions. extensionId set:
+  // per-extension history (caller already authorised as owner-or-moderator),
+  // default newest first. Unset: global queue (moderator only), default oldest
+  // first. An explicit sort overrides either default; status optionally
+  // narrows both modes.
+  async listScoped(filters: {
+    extensionId?: string;
+    status?: RevisionStatus;
+    sort?: "newest" | "oldest";
+    limit?: number;
+    cursor?: string;
+  }): Promise<DatabaseResult<RevisionPage>> {
+    const limit = filters.limit ?? 50;
+    const direction =
+      filters.sort === "newest"
+        ? "desc"
+        : filters.sort === "oldest"
+          ? "asc"
+          : filters.extensionId
+            ? "desc"
+            : "asc";
+    const conditions: SQL[] = [];
+    if (filters.extensionId) {
+      conditions.push(eq(extensionRevisions.extensionId, filters.extensionId));
+    }
+    if (filters.status) {
+      conditions.push(eq(extensionRevisions.status, filters.status));
+    }
+    const base: SQL =
+      conditions.length > 1
+        ? and(...conditions)!
+        : (conditions[0] ?? sql`1 = 1`);
+    return this.page("listScoped", base, direction, limit, filters.cursor);
   }
 
   async getById(

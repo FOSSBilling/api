@@ -1,4 +1,9 @@
-import { requireActiveAuth } from "../middleware";
+import {
+  getOptionalAuth,
+  optionalAuth,
+  requireActiveAuth,
+  requireModerator
+} from "../middleware";
 import { getExtensionsDb } from "../../../../lib/db";
 import { getPlatform } from "../../../../lib/middleware";
 import { getAuth } from "../../../../lib/auth";
@@ -14,17 +19,67 @@ import {
   errorResponse
 } from "../schemas/common";
 import {
+  DeveloperDetailResponseSchema,
+  DeveloperListQuerySchema,
   DeveloperProfileSchema,
   DeveloperInputSchema,
   OwnedDeveloperProfileSchema,
-  PublicDeveloperSchema,
   ReverifyQuerySchema,
   toPublicDeveloper
 } from "../schemas/developers";
 import { DeveloperProfilesDatabase } from "../db/developer-profiles";
+import { UsersDatabase } from "../db/users";
 import { ExtensionsV2App } from "./app";
 
 export function registerDeveloperProfileRoutes(app: ExtensionsV2App): void {
+  const listDevelopersRoute = createRoute({
+    method: "get",
+    path: "/developers",
+    tags: ["Moderation"],
+    summary:
+      "List developer profiles: every profile (status=all) or awaiting review (status=unapproved)",
+    security: [{ Bearer: [] }],
+    middleware: [requireModerator()] as const,
+    request: { query: DeveloperListQuerySchema },
+    responses: {
+      200: {
+        content: {
+          "application/json": {
+            schema: z.object({ result: z.array(DeveloperProfileSchema) })
+          }
+        },
+        description: "Developer profiles matching the status filter"
+      },
+      401: errorResponse("Missing or invalid bearer token"),
+      403: {
+        ...ActiveAccountRequiredResponse,
+        description: "The account is inactive or the caller is not a moderator"
+      },
+      422: errorResponse("status query failed validation"),
+      500: errorResponse("Database error")
+    }
+  });
+
+  app.openapi(listDevelopersRoute, async (c) => {
+    const { status } = c.req.valid("query");
+    const db = new DeveloperProfilesDatabase(
+      getExtensionsDb(c.env.DB_EXTENSIONS)
+    );
+    const { data, error } = await db.listScoped({ status });
+    if (error || !data) {
+      return c.json(
+        {
+          error: {
+            message: error?.message ?? "Unable to load developers",
+            code: "DATABASE_ERROR"
+          }
+        },
+        500
+      );
+    }
+    return c.json({ result: data }, 200);
+  });
+
   const getOwnDeveloperRoute = createRoute({
     method: "get",
     path: "/developers/me",
@@ -259,23 +314,29 @@ export function registerDeveloperProfileRoutes(app: ExtensionsV2App): void {
     return c.json({ result: data }, 200);
   });
 
-  // This parameter route must be registered after static GET /developers/* routes.
-  // The composition root enforces that ordering by registering this module last.
+  // This parameter route must be registered after static GET /developers/*
+  // routes (claims, me). "unapproved" stays reserved but is no longer a live
+  // route, having merged into GET /developers?status=.
   const getDeveloperRoute = createRoute({
     method: "get",
     path: "/developers/{id}",
     tags: ["Developers"],
-    summary: "Get a developer's public profile",
+    summary:
+      "Get a developer profile: public view anonymously, full view for the owner or a moderator",
+    security: [{ Bearer: [] }],
+    middleware: [optionalAuth()] as const,
     request: { params: IdParamSchema },
     responses: {
       200: {
         content: {
           "application/json": {
-            schema: z.object({ result: PublicDeveloperSchema })
+            schema: DeveloperDetailResponseSchema
           }
         },
-        description: "The developer's public profile"
+        description:
+          "Public profile for anonymous callers, owned/full profile for the owner or a moderator"
       },
+      401: errorResponse("Invalid bearer token"),
       404: errorResponse("No developer with that id"),
       422: errorResponse("id param failed validation"),
       500: errorResponse("Database error")
@@ -284,14 +345,51 @@ export function registerDeveloperProfileRoutes(app: ExtensionsV2App): void {
 
   app.openapi(getDeveloperRoute, async (c) => {
     const { id } = c.req.valid("param");
-    const db = new DeveloperProfilesDatabase(
-      getExtensionsDb(c.env.DB_EXTENSIONS)
-    );
+    const auth = getOptionalAuth(c);
+    const extDb = getExtensionsDb(c.env.DB_EXTENSIONS);
+    const db = new DeveloperProfilesDatabase(extDb);
+    if (auth) {
+      const own = await db.getOwn(auth.userId);
+      if (
+        !own.error &&
+        own.data &&
+        own.data.id.toLowerCase() === id.toLowerCase()
+      ) {
+        const res = c.json({ result: own.data }, 200);
+        res.headers.set("Vary", "Authorization");
+        return res;
+      }
+      if (own.error) {
+        return c.json(errorBody(own.error, "Unable to load developer"), 500);
+      }
+      const users = new UsersDatabase(extDb);
+      const access = await users.moderatorAccess(auth.userId);
+      if (access.error) {
+        return c.json(errorBody(access.error, "Unable to check access"), 500);
+      }
+      if (access.data?.moderator) {
+        const { data, error } = await db.getById(id);
+        if (error || !data) {
+          const status = statusFromErrorCode(error?.code, false);
+          return c.json(errorBody(error, "Developer not found"), status);
+        }
+        const res = c.json({ result: data }, 200);
+        res.headers.set("Vary", "Authorization");
+        return res;
+      }
+    }
     const { data, error } = await db.getById(id);
     if (error || !data) {
       const status = statusFromErrorCode(error?.code, false);
       return c.json(errorBody(error, "Developer not found"), status);
     }
-    return c.json({ result: toPublicDeveloper(data) }, 200);
+    const res = c.json({ result: toPublicDeveloper(data) }, 200);
+    if (auth) res.headers.set("Vary", "Authorization");
+    else
+      res.headers.set(
+        "Cache-Control",
+        "public, max-age=60, s-maxage=300, stale-while-revalidate=600"
+      );
+    return res;
   });
 }

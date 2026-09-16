@@ -1,12 +1,10 @@
 import { z } from "@hono/zod-openapi";
 import { httpUrl, lowercaseId } from "./common";
 
-// GET /developers/{id} is registered after the static single-segment
-// GET /developers/* routes (claims, me, unapproved), so a developer whose id
-// literally matched one of those words would always hit the static route
-// instead. Rejecting these ids at creation time keeps new profiles
-// resolvable; adopted rows cannot be renamed by a schema, so migration 0020
-// fails the deploy if one exists.
+// GET /developers/unapproved has been merged into GET /developers?status=.
+// "unapproved" is therefore no longer a shadowed static route, but stays
+// reserved so an adopted row can never collide with a future static segment.
+// "claims" and "me" are still live static routes under /developers/*.
 const RESERVED_DEVELOPER_IDS = new Set(["claims", "me", "unapproved"]);
 
 // Lowercases like isReservedExtensionId, since route matching is
@@ -141,6 +139,33 @@ export const DeveloperApprovalSchema = z
   .object({ expected_revision: z.number().int().positive() })
   .strict()
   .openapi("DeveloperApproval");
+
+// Merged moderator GET /developers: status=all (default) lists every profile,
+// status=unapproved lists only profiles awaiting review. Replaces the former
+// GET /developers/unapproved sibling route.
+export const DeveloperListQuerySchema = z.object({
+  status: z
+    .enum(["all", "unapproved"])
+    .default("all")
+    .openapi({
+      param: { name: "status", in: "query" },
+      description:
+        "all: every profile. unapproved: only profiles awaiting review."
+    })
+});
+
+// Merged GET /developers/{id} (optional auth, role-aware): anonymous callers
+// get the sanitized PublicDeveloper, the owning caller gets their full Owned
+// profile, moderators get the full DeveloperProfile.
+export const DeveloperDetailResponseSchema = z
+  .object({
+    result: z.union([
+      PublicDeveloperSchema,
+      DeveloperProfileSchema,
+      OwnedDeveloperProfileSchema
+    ])
+  })
+  .openapi("DeveloperDetailResponse");
 
 // check_url — opt-in because it costs an extra GitHub API call (see
 // DeveloperProfilesDatabase.reverifyOwn()); only the owner's own manual "Re-verify"

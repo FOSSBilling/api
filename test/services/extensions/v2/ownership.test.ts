@@ -611,7 +611,7 @@ describe("Extensions API v2", () => {
       const created = (await res.json()) as { result: { id: string } };
 
       const mine = await get(
-        "/extensions/v2/developers/claims/mine",
+        "/extensions/v2/developers/claims?scope=mine",
         await authHeaders("user-1")
       );
       expect(mine.status).toBe(200);
@@ -623,7 +623,7 @@ describe("Extensions API v2", () => {
 
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       const pending = await get(
-        "/extensions/v2/developers/claims",
+        "/extensions/v2/developers/claims?scope=pending",
         await authHeaders("mod-1")
       );
       expect(pending.status).toBe(200);
@@ -1223,7 +1223,7 @@ describe("Extensions API v2", () => {
         .result.id;
 
       const queue = await get(
-        "/extensions/v2/developers/claims",
+        "/extensions/v2/developers/claims?scope=pending",
         await authHeaders("intruder")
       );
       expect(queue.status).toBe(403);

@@ -145,13 +145,9 @@ export function registerAccountRoutes(app: ExtensionsV2App): void {
     responses: {
       200: {
         content: {
-          "application/json": {
-            schema: z.object({
-              result: z.object({ display_name: z.string().nullable() })
-            })
-          }
+          "application/json": { schema: z.object({ result: UserSchema }) }
         },
-        description: "Profile updated"
+        description: "Profile updated (full account projection)"
       },
       401: errorResponse("Missing or invalid bearer token"),
       403: ActiveAccountRequiredResponse,
@@ -163,7 +159,8 @@ export function registerAccountRoutes(app: ExtensionsV2App): void {
   app.openapi(updateProfileRoute, async (c) => {
     const auth = getAuth(c);
     const body = c.req.valid("json");
-    const users = new UsersDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
+    const extDb = getExtensionsDb(c.env.DB_EXTENSIONS);
+    const users = new UsersDatabase(extDb);
     // No existence pre-check: updateDisplayName's WHERE already carries
     // `deleted_at IS NULL` and reports the same NOT_FOUND on zero changes,
     // so reading the row first only added a round trip to a request that
@@ -178,7 +175,14 @@ export function registerAccountRoutes(app: ExtensionsV2App): void {
         statusFromErrorCode(result.error?.code, false)
       );
     }
-    return c.json({ result: { display_name: result.data.displayName } }, 200);
+    const full = await users.get(auth.userId);
+    if (full.error || !full.data) {
+      return c.json(
+        errorBody(full.error, "Unable to load profile"),
+        statusFromErrorCode(full.error?.code, false)
+      );
+    }
+    return c.json({ result: toUserResponse(full.data) }, 200);
   });
 
   const deleteUserRoute = createRoute({

@@ -523,7 +523,7 @@ describe("Extensions API v2 writes", () => {
       );
 
       const res = await get(
-        "/extensions/v2/extensions/existing-ext/revisions",
+        "/extensions/v2/revisions?extension_id=existing-ext",
         await authHeaders("owner-1")
       );
       expect(res.status).toBe(200);
@@ -545,7 +545,7 @@ describe("Extensions API v2 writes", () => {
         (await get("/extensions/v2/extensions/existing-EXT", {})).status
       ).toBe(200);
       expect(
-        (await get("/extensions/v2/extensions/mine/EXISTING-ext", owner)).status
+        (await get("/extensions/v2/extensions/EXISTING-ext", owner)).status
       ).toBe(200);
 
       const edit = await put(
@@ -557,7 +557,7 @@ describe("Extensions API v2 writes", () => {
       const first = (await edit.json()) as { result: { revision_id: string } };
 
       expect(
-        (await get("/extensions/v2/extensions/EXISTING-EXT/revisions", owner))
+        (await get("/extensions/v2/revisions?extension_id=EXISTING-EXT", owner))
           .status
       ).toBe(200);
       expect(
@@ -708,7 +708,7 @@ describe("Extensions API v2 writes", () => {
     });
   });
 
-  describe("GET /extensions/mine", () => {
+  describe("GET /extensions?scope=mine", () => {
     it("returns published and unpublished extensions in one page", async () => {
       await seedOwnedExtension();
       const headers = await authHeaders("owner-1");
@@ -720,7 +720,7 @@ describe("Extensions API v2 writes", () => {
         ).status
       ).toBe(201);
 
-      const res = await get("/extensions/v2/extensions/mine", headers);
+      const res = await get("/extensions/v2/extensions?scope=mine", headers);
       expect(res.status).toBe(200);
       const data = (await res.json()) as {
         result: Array<{
@@ -752,7 +752,7 @@ describe("Extensions API v2 writes", () => {
         sampleContent({ name: "Renamed" })
       );
 
-      const res = await get("/extensions/v2/extensions/mine", headers);
+      const res = await get("/extensions/v2/extensions?scope=mine", headers);
       const data = (await res.json()) as {
         result: Array<{
           published: { name: string } | null;
@@ -769,7 +769,7 @@ describe("Extensions API v2 writes", () => {
       await seedOwnedExtension();
 
       const res = await get(
-        "/extensions/v2/extensions/mine",
+        "/extensions/v2/extensions?scope=mine",
         await authHeaders("owner-1")
       );
       const data = (await res.json()) as {
@@ -805,7 +805,7 @@ describe("Extensions API v2 writes", () => {
       );
 
       const res = await get(
-        "/extensions/v2/extensions/mine",
+        "/extensions/v2/extensions?scope=mine",
         await authHeaders("user-1")
       );
       await expect(res.json()).resolves.toMatchObject({
@@ -825,7 +825,7 @@ describe("Extensions API v2 writes", () => {
       await createExtension("user-2", { extensionId: "other-ext" });
 
       const res = await get(
-        "/extensions/v2/extensions/mine",
+        "/extensions/v2/extensions?scope=mine",
         await authHeaders("owner-1")
       );
       const data = (await res.json()) as { result: Array<{ id: string }> };
@@ -866,7 +866,10 @@ describe("Extensions API v2 writes", () => {
         { review_note: "no" }
       );
 
-      const res = await get("/extensions/v2/extensions/mine?type=mod", headers);
+      const res = await get(
+        "/extensions/v2/extensions?scope=mine&type=mod",
+        headers
+      );
       expect(res.status).toBe(200);
       const data = (await res.json()) as { result: Array<{ id: string }> };
       expect(data.result.map((item) => item.id)).toEqual([
@@ -876,20 +879,20 @@ describe("Extensions API v2 writes", () => {
       ]);
 
       const other = await get(
-        "/extensions/v2/extensions/mine?type=theme",
+        "/extensions/v2/extensions?scope=mine&type=theme",
         headers
       );
       await expect(other.json()).resolves.toMatchObject({ result: [] });
     });
 
     it("requires auth", async () => {
-      const res = await get("/extensions/v2/extensions/mine", {});
+      const res = await get("/extensions/v2/extensions?scope=mine", {});
       expect(res.status).toBe(401);
     });
 
     it("identifies invalid cursors", async () => {
       const res = await get(
-        "/extensions/v2/extensions/mine?cursor=not-a-cursor",
+        "/extensions/v2/extensions?scope=mine&cursor=not-a-cursor",
         await authHeaders("user-1")
       );
       expect(res.status).toBe(422);
@@ -908,7 +911,7 @@ describe("Extensions API v2 writes", () => {
       }
 
       const first = await get(
-        "/extensions/v2/extensions/mine?limit=2",
+        "/extensions/v2/extensions?scope=mine&limit=2",
         headers
       );
       const firstBody = (await first.json()) as {
@@ -922,7 +925,7 @@ describe("Extensions API v2 writes", () => {
       expect(firstBody.pagination.has_more).toBe(true);
 
       const second = await get(
-        `/extensions/v2/extensions/mine?limit=2&cursor=${encodeURIComponent(firstBody.pagination.next_cursor)}`,
+        `/extensions/v2/extensions?scope=mine&limit=2&cursor=${encodeURIComponent(firstBody.pagination.next_cursor)}`,
         headers
       );
       const secondBody = (await second.json()) as {
@@ -937,13 +940,13 @@ describe("Extensions API v2 writes", () => {
     });
   });
 
-  describe("GET /extensions/mine/{id}", () => {
+  describe("GET /extensions/{id} (owner view)", () => {
     it("returns an unpublished extension with its pending content", async () => {
       await seedDeveloper("new-developer", "user-1");
       await createExtension("user-1");
 
       const res = await get(
-        "/extensions/v2/extensions/mine/new-ext",
+        "/extensions/v2/extensions/new-ext",
         await authHeaders("user-1")
       );
 
@@ -978,7 +981,7 @@ describe("Extensions API v2 writes", () => {
       });
 
       const res = await get(
-        "/extensions/v2/extensions/mine/adopted-ext",
+        "/extensions/v2/extensions/adopted-ext",
         await authHeaders("owner-1")
       );
 
@@ -990,26 +993,44 @@ describe("Extensions API v2 writes", () => {
       expect(OwnedExtensionSchema.safeParse(body.result).success).toBe(true);
     });
 
-    it("refuses to show someone else's extension", async () => {
+    it("shows the public projection for someone else's published extension", async () => {
       await seedOwnedExtension();
       const res = await get(
-        "/extensions/v2/extensions/mine/existing-ext",
+        "/extensions/v2/extensions/existing-ext",
         await authHeaders("intruder")
       );
-      expect(res.status).toBe(403);
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as {
+        result: { id: string; readme: string; pending_revision?: unknown };
+      };
+      expect(data.result.id).toBe("existing-ext");
+      expect(data.result.readme).toBeDefined();
+      expect("pending_revision" in data.result).toBe(false);
+    });
+
+    it("hides an unpublished extension from non-owners", async () => {
+      await seedDeveloper("new-developer", "user-1");
+      await createExtension("user-1");
+      const res = await get(
+        "/extensions/v2/extensions/new-ext",
+        await authHeaders("intruder")
+      );
+      expect(res.status).toBe(404);
     });
 
     it("404s an unknown id", async () => {
       const res = await get(
-        "/extensions/v2/extensions/mine/no-such-ext",
+        "/extensions/v2/extensions/no-such-ext",
         await authHeaders("user-1")
       );
       expect(res.status).toBe(404);
     });
 
-    // "mine" is a reserved extension id, so /extensions/mine/revisions can
-    // only be the owner detail route - see the registration order in index.ts.
-    it("resolves /extensions/mine/revisions as an owner detail read", async () => {
+    // "mine" stays a reserved extension id (migration 0020), so the removed
+    // /extensions/mine/revisions collision has no route at all now — the
+    // merged detail read is GET /extensions/{id} and history is
+    // GET /revisions?extension_id=.
+    it("404s the removed /extensions/mine/revisions collision path", async () => {
       const res = await get(
         "/extensions/v2/extensions/mine/revisions",
         await authHeaders("user-1")
@@ -1018,14 +1039,14 @@ describe("Extensions API v2 writes", () => {
     });
   });
 
-  describe("GET /extensions/{id}/revisions", () => {
+  describe("GET /revisions?extension_id=", () => {
     it("lists an extension's revisions newest first", async () => {
       await seedDeveloper("new-developer", "user-1");
       await createExtension("user-1");
       const headers = await authHeaders("user-1");
 
       const res = await get(
-        "/extensions/v2/extensions/new-ext/revisions",
+        "/extensions/v2/revisions?extension_id=new-ext",
         headers
       );
       expect(res.status).toBe(200);
@@ -1042,7 +1063,7 @@ describe("Extensions API v2 writes", () => {
     it("refuses a caller who neither owns the extension nor moderates", async () => {
       await seedOwnedExtension();
       const res = await get(
-        "/extensions/v2/extensions/existing-ext/revisions",
+        "/extensions/v2/revisions?extension_id=existing-ext",
         await authHeaders("intruder")
       );
       expect(res.status).toBe(403);

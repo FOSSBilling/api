@@ -1,9 +1,33 @@
 import { type Context, type MiddlewareHandler } from "hono";
 import { getAuth, requireAuth } from "../../../lib/auth";
+import type { AuthPrincipal } from "../../../lib/auth";
 import { getExtensionsDb } from "../../../lib/db";
 import { UsersDatabase } from "./db/users";
 
 export const requireAuthAllowInactive = requireAuth;
+
+// Optional bearer auth for merged public+authenticated reads: no
+// Authorization header continues anonymously; a present header is verified
+// normally (invalid tokens still 401 rather than silently downgrading to
+// anonymous, so callers cannot mistake a broken token for a public read).
+export function optionalAuth(): MiddlewareHandler {
+  const authenticate = requireAuth();
+  return async (c, next) => {
+    const header = c.req.header("Authorization");
+    if (!header?.trim()) return next();
+    return authenticate(c, next);
+  };
+}
+
+// Returns the principal when optionalAuth() authenticated the caller, or null
+// for anonymous reads. Never throws, unlike getAuth().
+export function getOptionalAuth(c: Context): AuthPrincipal | null {
+  try {
+    return getAuth(c);
+  } catch {
+    return null;
+  }
+}
 
 type AuthenticatedCheck = (c: Context) => Promise<Response | undefined>;
 

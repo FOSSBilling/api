@@ -670,6 +670,14 @@ export class DeveloperProfilesDatabase {
     );
   }
 
+  // Unified reader for the merged moderator GET /developers?status=.
+  async listScoped(filters: {
+    status?: "all" | "unapproved";
+  }): Promise<DatabaseResult<DeveloperProfile[]>> {
+    if (filters.status === "unapproved") return this.listUnapproved();
+    return this.listAll();
+  }
+
   async approve(
     id: string,
     expectedRevision: number,

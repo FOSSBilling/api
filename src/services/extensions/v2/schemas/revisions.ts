@@ -61,7 +61,27 @@ export const RevisionQueueQuerySchema = z.object({
     })
 });
 
-export const RevisionPageQuerySchema = RevisionQueueQuerySchema.pick({
-  limit: true,
-  cursor: true
+// Unified query for the merged GET /revisions (optional auth, role-aware).
+// extension_id set: per-extension history (owner-or-moderator), newest first.
+// extension_id unset: global moderation queue (moderator only), oldest first.
+// status filters in both modes; sort overrides the mode default.
+export const UnifiedRevisionsQuerySchema = RevisionQueueQuerySchema.extend({
+  extension_id: z
+    .string()
+    .min(1)
+    .max(200)
+    .optional()
+    .openapi({
+      param: { name: "extension_id", in: "query" },
+      description:
+        "When set, list that extension's history; when omitted, list the global review queue (moderator only)"
+    }),
+  sort: z
+    .enum(["newest", "oldest"])
+    .optional()
+    .openapi({
+      param: { name: "sort", in: "query" },
+      description:
+        "Override the default order (per-extension: newest first, queue: oldest first)"
+    })
 });
