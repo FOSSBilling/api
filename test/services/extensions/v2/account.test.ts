@@ -64,8 +64,13 @@ describe("Extensions API v2", () => {
         display_name: "Account Display"
       });
       expect(profile.status).toBe(200);
-      expect(await profile.json()).toEqual({
-        result: { display_name: "Account Display" }
+      expect(await profile.json()).toMatchObject({
+        result: {
+          display_name: "Account Display",
+          github_linked: true,
+          is_moderator: false,
+          active: true
+        }
       });
 
       const developer = await get("/extensions/v2/developers/me", headers);
@@ -94,7 +99,7 @@ describe("Extensions API v2", () => {
         download_url: "https://example.com/download.zip"
       });
 
-      const owned = await get("/extensions/v2/extensions/mine", headers);
+      const owned = await get("/extensions/v2/extensions?scope=mine", headers);
       expect(owned.status).toBe(200);
       expect(await owned.json()).toMatchObject({
         result: [{ id: "account-extension" }],
@@ -102,18 +107,18 @@ describe("Extensions API v2", () => {
       });
 
       const filtered = await get(
-        "/extensions/v2/extensions/mine?developer_id=someone-else",
+        "/extensions/v2/extensions?scope=mine&developer_id=someone-else",
         headers
       );
-      expect(filtered.status).toBe(200);
-      expect(await filtered.json()).toMatchObject({
-        result: [{ id: "account-extension" }]
+      expect(filtered.status).toBe(422);
+      await expect(filtered.json()).resolves.toMatchObject({
+        error: { code: "VALIDATION_ERROR" }
       });
     });
 
     it("validates a mine cursor before returning an empty owner page", async () => {
       const res = await get(
-        "/extensions/v2/extensions/mine?cursor=not-a-cursor",
+        "/extensions/v2/extensions?scope=mine&cursor=not-a-cursor",
         await authHeaders("no-developer")
       );
       expect(res.status).toBe(422);

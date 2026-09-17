@@ -61,7 +61,10 @@ export const RevisionQueueQuerySchema = z.object({
     })
 });
 
-export const RevisionPageQuerySchema = RevisionQueueQuerySchema.pick({
+// History query for GET /extensions/{id}/revisions: newest-first pages of
+// one extension's revisions. A pick, not a restatement, so pagination bounds
+// cannot drift from the queue's.
+export const RevisionHistoryQuerySchema = RevisionQueueQuerySchema.pick({
   limit: true,
   cursor: true
 });

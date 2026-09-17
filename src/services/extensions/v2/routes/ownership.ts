@@ -22,10 +22,12 @@ import {
   DeveloperClaimSchema,
   DeveloperTransferSchema,
   PendingDeveloperClaimSchema,
-  TransferAcceptanceSchema
+  TransferAcceptanceSchema,
+  UnifiedClaimsQuerySchema
 } from "../schemas/ownership";
 import { DeveloperClaimsDatabase } from "../db/developer-claims";
 import { DeveloperTransfersDatabase } from "../db/developer-transfers";
+import { UsersDatabase } from "../db/users";
 import { notifyRequested, sendModerationNotification } from "../email/notify";
 import { ExtensionsV2App } from "./app";
 
@@ -140,55 +142,15 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
     return c.json({ result: { id: data.id, cancelled: true as const } }, 200);
   });
 
-  const myClaimsRoute = createRoute({
-    method: "get",
-    path: "/developers/claims/mine",
-    tags: ["Developers"],
-    summary: "List the caller's own profile claims, in any status",
-    security: [{ Bearer: [] }],
-    middleware: [requireActiveAuth()] as const,
-    responses: {
-      200: {
-        content: {
-          "application/json": {
-            schema: z.object({ result: z.array(DeveloperClaimSchema) })
-          }
-        },
-        description: "The caller's claims"
-      },
-      401: errorResponse("Missing or invalid bearer token"),
-      403: ActiveAccountRequiredResponse,
-      500: errorResponse("Database error")
-    }
-  });
-
-  app.openapi(myClaimsRoute, async (c) => {
-    const auth = getAuth(c);
-    const db = new DeveloperClaimsDatabase(
-      getExtensionsDb(c.env.DB_EXTENSIONS)
-    );
-    const { data, error } = await db.listMyClaims(auth.userId);
-    if (error || !data) {
-      return c.json(
-        {
-          error: {
-            message: error?.message ?? "Unable to load claims",
-            code: "DATABASE_ERROR"
-          }
-        },
-        500
-      );
-    }
-    return c.json({ result: data }, 200);
-  });
-
-  const pendingClaimsRoute = createRoute({
+  const listClaimsRoute = createRoute({
     method: "get",
     path: "/developers/claims",
-    tags: ["Moderation"],
-    summary: "List pending profile claims",
+    tags: ["Developers"],
+    summary:
+      "List claims: caller's own (?scope=mine) or pending review (?scope=pending, moderator)",
     security: [{ Bearer: [] }],
-    middleware: [requireModerator()] as const,
+    middleware: [requireActiveAuth()] as const,
+    request: { query: UnifiedClaimsQuerySchema },
     responses: {
       200: {
         content: {
@@ -196,27 +158,75 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
             schema: z.object({ result: z.array(PendingDeveloperClaimSchema) })
           }
         },
-        description: "Claims awaiting moderator review"
+        description:
+          "Enriched claims with developer and claimant names in both scopes"
       },
       401: errorResponse("Missing or invalid bearer token"),
-      403: {
-        ...ActiveAccountRequiredResponse,
-        description: "The account is inactive or the caller is not a moderator"
-      },
+      403: ActiveAccountRequiredResponse,
+      422: errorResponse("scope query failed validation"),
       500: errorResponse("Database error")
     }
   });
 
-  app.openapi(pendingClaimsRoute, async (c) => {
-    const db = new DeveloperClaimsDatabase(
-      getExtensionsDb(c.env.DB_EXTENSIONS)
-    );
-    const { data, error } = await db.listPendingClaims();
+  app.openapi(listClaimsRoute, async (c) => {
+    const auth = getAuth(c);
+    const { scope, status } = c.req.valid("query");
+    const extDb = getExtensionsDb(c.env.DB_EXTENSIONS);
+    const db = new DeveloperClaimsDatabase(extDb);
+    if (scope === "pending") {
+      const users = new UsersDatabase(extDb);
+      const access = await users.moderatorAccess(auth.userId);
+      if (access.error) {
+        return c.json(errorBody(access.error, "Unable to check access"), 500);
+      }
+      if (!access.data?.active) {
+        return c.json(
+          {
+            error: {
+              message: "Active account required",
+              code: "ACCOUNT_INACTIVE"
+            }
+          },
+          403
+        );
+      }
+      if (!access.data.moderator) {
+        return c.json(
+          {
+            error: { message: "Moderator access required", code: "FORBIDDEN" }
+          },
+          403
+        );
+      }
+      // The pending scope is the moderator review queue: always pending,
+      // regardless of any status filter (which only narrows scope=mine).
+      const { data, error } = await db.listScoped({
+        scope: "pending",
+        status: "pending"
+      });
+      if (error || !data) {
+        return c.json(
+          {
+            error: {
+              message: error?.message ?? "Unable to load pending claims",
+              code: "DATABASE_ERROR"
+            }
+          },
+          500
+        );
+      }
+      return c.json({ result: data }, 200);
+    }
+    const { data, error } = await db.listScoped({
+      scope: "mine",
+      claimantId: auth.userId,
+      status
+    });
     if (error || !data) {
       return c.json(
         {
           error: {
-            message: error?.message ?? "Unable to load pending claims",
+            message: error?.message ?? "Unable to load claims",
             code: "DATABASE_ERROR"
           }
         },

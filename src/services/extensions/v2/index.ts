@@ -8,6 +8,7 @@ import { registerDeveloperProfileRoutes } from "./routes/developer-profiles";
 import { registerOwnershipRoutes } from "./routes/ownership";
 import { registerModerationRoutes } from "./routes/moderation";
 import { registerAccountRoutes } from "./routes/account";
+import { registerRevisionRoutes } from "./routes/revisions";
 
 const extensionsV2 = new OpenAPIHono<{ Bindings: CloudflareBindings }>({
   defaultHook: (result, c) => {
@@ -37,30 +38,33 @@ extensionsV2.openAPIRegistry.registerComponent("securitySchemes", "Bearer", {
   scheme: "bearer"
 });
 
-// Register the owner routes before the public parameter route
-// (/extensions/{id}) so the reserved "mine" segment is handled as the owner
-// collection rather than an extension id. New extensions reject the reserved
-// id; adopted rows predate that, and migration 0020 fails if one is present.
+// Merged reads (GET /extensions, GET /extensions/{id}, GET /developers/{id})
+// use optional auth and are role-aware. Revision history stays nested as
+// GET /extensions/{id}/revisions (a true sub-collection next to the approve
+// and reject writes), while GET /revisions is the moderator-only global
+// queue — the two-segment history path cannot collide with the single-segment
+// detail read, so no id reservation is needed for either.
+// "mine" is an ordinary extension id now that no static segment shadows it;
+// the developers {id} reservation remains for the live me/claims routes (and
+// conservatively for unapproved, migration 0020) because a matching adopted
+// row would still be unreachable.
 //
-// GET /extensions/mine/{id} and GET /extensions/{id}/revisions are both three
-// segments and would collide on /extensions/mine/revisions — that request can
-// only mean the first, because "mine" is not a usable extension id, and
-// registering the owner routes first is what resolves it that way.
-registerOwnerExtensionsRoutes(extensionsV2);
+// Keep the developers parameter route last within its module: GET
+// /developers/{id} would otherwise shadow static GET /developers/* routes
+// (/developers/me, /developers/claims). Ownership registers before
+// developer-profiles so /developers/claims (static) wins over /developers/{id}.
 registerPublicExtensionsRoutes(extensionsV2);
+registerOwnerExtensionsRoutes(extensionsV2);
 registerAccountRoutes(extensionsV2);
 registerOwnershipRoutes(extensionsV2);
 registerModerationRoutes(extensionsV2);
-// Keep this last: its GET /developers/{id} parameter route would otherwise
-// shadow static GET /developers/* routes registered by the modules above.
-// The "me" namespace is reserved for the owner profile route; adopted rows
-// are covered by the same migration 0020 check.
+registerRevisionRoutes(extensionsV2);
 registerDeveloperProfileRoutes(extensionsV2);
 
 extensionsV2.route(
   "/docs",
   Scalar.serve({
-    document: () => 
+    document: () =>
       extensionsV2.getOpenAPI31Document({
         openapi: "3.1.0",
         info: {
@@ -69,7 +73,7 @@ extensionsV2.route(
           description:
             "Self-service extension publishing, ownership, moderation, and public browsing. v1 (/extensions/v1) remains available for existing integrations."
         },
-        servers: [{ url: "/extensions/v2" }],
+        servers: [{ url: "/extensions/v2" }]
       }),
     pageTitle: "FOSSBilling Extensions API (v2)",
     agent: { disabled: true },

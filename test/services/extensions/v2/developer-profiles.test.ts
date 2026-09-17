@@ -2131,5 +2131,30 @@ describe("Extensions API v2", () => {
         result: { id: "legacy-public", unclaimed: true }
       });
     });
+
+    it("falls back to the public view for a deactivated owner", async () => {
+      await insertDeveloper(db, {
+        id: "owned-dev",
+        type: "user",
+        name: "Owned Dev",
+        contact_email: "private@example.com",
+        owner_user_id: "user-1"
+      });
+
+      await db
+        .prepare("UPDATE users SET deleted_at = ? WHERE id = ?")
+        .bind(new Date().toISOString(), "user-1")
+        .run();
+
+      const res = await get(
+        "/extensions/v2/developers/owned-dev",
+        await authHeaders("user-1")
+      );
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { result: Record<string, unknown> };
+      expect(body.result.contact_email).toBeUndefined();
+      expect(body.result).toMatchObject({ id: "owned-dev", unclaimed: false });
+      expect(res.headers.get("Vary")).toBe("Authorization");
+    });
   });
 });

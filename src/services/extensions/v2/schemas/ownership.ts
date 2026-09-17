@@ -59,3 +59,24 @@ export const ClaimNoteSchema = z
   })
   .strict()
   .openapi("ClaimNote");
+
+// Merged GET /developers/claims?scope=: scope=mine lists the caller's own
+// claims in any status; scope=pending lists claims awaiting moderator review
+// (moderator only). Always returns the enriched Pending shape so both callers
+// share one contract; status optionally narrows the mine view.
+export const ClaimsScopeSchema = z.enum(["mine", "pending"]);
+
+export const UnifiedClaimsQuerySchema = z.object({
+  scope: ClaimsScopeSchema.openapi({
+    param: { name: "scope", in: "query" },
+    description:
+      "mine: the caller's own claims. pending: claims awaiting review (moderator only)."
+  }),
+  status: z
+    .enum(["pending", "approved", "rejected", "all"])
+    .default("all")
+    .openapi({
+      param: { name: "status", in: "query" },
+      description: "Filter claims by status (default: all)"
+    })
+});

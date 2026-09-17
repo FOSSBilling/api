@@ -168,9 +168,11 @@ export class UsersDatabase {
           picture: row.picture,
           displayName: row.displayName,
           isModerator: active && row.isModerator === 1,
+          // A whitespace-only login is not a linked identity: trim before
+          // the truthiness check so sync artifacts can never read as linked.
           githubLinked:
             active &&
-            Boolean(row.githubLogin) &&
+            Boolean(row.githubLogin?.trim()) &&
             hasUsableGithubOrgs(row.githubOrgs, row.githubOrgsExpiresAt),
           deletedAt: row.deletedAt
         },

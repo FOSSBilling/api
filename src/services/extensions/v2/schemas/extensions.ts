@@ -13,18 +13,6 @@ export const EXTENSION_TYPES = [
   "translation"
 ] as const;
 
-// GET /extensions/mine is a static owner-only route registered before
-// GET /extensions/{id}. Reserve its segment so a newly created extension
-// cannot become unreachable. This schema cannot rename an already-adopted
-// row, so migration 0020 fails the deploy if one exists.
-// Private: isReservedExtensionId() lowercases before the lookup, and these
-// literals are lowercase — reading the Set directly would miss "Mine".
-const RESERVED_EXTENSION_IDS = new Set(["mine"]);
-
-export function isReservedExtensionId(id: string): boolean {
-  return RESERVED_EXTENSION_IDS.has(id.toLowerCase());
-}
-
 export const ReleaseSchema = z
   .object({
     tag: z.string().min(1).max(100),
@@ -140,9 +128,7 @@ function refineContentSize(content: unknown, ctx: z.RefinementCtx): void {
 // POST /extensions. The id is chosen once here and is immutable afterwards.
 // No developer field: a user owns at most one profile, so the server knows it.
 export const ExtensionCreateSchema = ExtensionContentSchema.extend({
-  id: lowercaseId("extension").refine((id) => !isReservedExtensionId(id), {
-    message: "This extension id is reserved"
-  })
+  id: lowercaseId("extension")
 })
   .strict()
   .superRefine(refineContentSize)
@@ -282,24 +268,37 @@ export const ExtensionListQuerySchema = z.object({
     })
 });
 
-// The owner-scoped list has the same pagination and type filters as the
-// public catalogue, but its developer is always taken from the authenticated
-// user. Keeping a separate schema prevents OpenAPI from advertising a
-// developer_id filter that this endpoint deliberately ignores.
-export const ExtensionMineListQuerySchema = ExtensionListQuerySchema.omit({
-  developer_id: true
-});
+// Unified list query for the merged GET /extensions (optional auth,
+// role-aware). scope selects the projection: public (published catalogue
+// cards, anonymous allowed), mine (caller's own Owned rows), all (moderator's
+// whole-catalogue Owned rows). developer_id is public-only, status/q are
+// all-only; mismatched combinations are rejected with 422 so a caller cannot
+// silently get a different projection than requested.
+export const ExtensionListScopeSchema = z.enum(["public", "mine", "all"]);
 
-// A moderator's view of the whole catalogue, not just the public one: every
-// status a developer can be in, filterable by the same states OwnedExtension
-// itself distinguishes (see its comment) rather than a derived label.
-export const ModerationExtensionListQuerySchema = ExtensionListQuerySchema.omit(
-  { developer_id: true }
-).extend({
-  status: z
-    .enum(["published", "delisted", "unpublished"])
+export const ExtensionStatusSchema = z.enum([
+  "published",
+  "delisted",
+  "unpublished"
+]);
+
+export const UnifiedExtensionListQuerySchema = ExtensionListQuerySchema.extend({
+  scope: ExtensionListScopeSchema.default("public").openapi({
+    param: { name: "scope", in: "query" },
+    description:
+      "public: published catalogue (anonymous allowed). mine: caller's own extensions. all: every extension (moderator only)."
+  }),
+  developer_id: z
+    .string()
     .optional()
-    .openapi({ param: { name: "status", in: "query" } }),
+    .openapi({
+      param: { name: "developer_id", in: "query" },
+      description: "Public scope only"
+    }),
+  status: ExtensionStatusSchema.optional().openapi({
+    param: { name: "status", in: "query" },
+    description: "All scope only: published, delisted, or unpublished"
+  }),
   q: z
     .string()
     .trim()
@@ -308,7 +307,8 @@ export const ModerationExtensionListQuerySchema = ExtensionListQuerySchema.omit(
     .optional()
     .openapi({
       param: { name: "q", in: "query" },
-      description: "Case-insensitive substring match on the extension id"
+      description:
+        "All scope only: case-insensitive substring match on the extension id"
     })
 });
 
@@ -325,3 +325,23 @@ export const OwnedExtensionListResponseSchema = z
     pagination: PaginationSchema
   })
   .openapi("OwnedExtensionListResponse");
+
+// Merged GET /extensions returns one of the two list shapes depending on
+// ?scope=. A union (not two routes) because the only caller is controlled;
+// public readers narrow on scope=public, owner/moderator tooling on
+// scope=mine/all.
+export const UnifiedExtensionListResponseSchema = z
+  .object({
+    result: z.array(
+      z.union([ExtensionListItemSchema, OwnedExtensionListItemSchema])
+    ),
+    pagination: PaginationSchema
+  })
+  .openapi("UnifiedExtensionListResponse");
+
+// Merged GET /extensions/{id} (optional auth, role-aware): anonymous or
+// unrelated callers get the published projection, owners and moderators get
+// the full Owned view including delisted state.
+export const ExtensionDetailResponseSchema = z
+  .object({ result: z.union([ExtensionSchema, OwnedExtensionSchema]) })
+  .openapi("ExtensionDetailResponse");

@@ -56,6 +56,8 @@ describe("Extensions API v2", () => {
       expect(body.result[0].developer.unclaimed).toBe(false);
       expect(body.result[0]).not.toHaveProperty("readme");
       expect(body.result[0]).not.toHaveProperty("releases");
+      expect(res.headers.get("Cache-Control")).toContain("public");
+      expect(res.headers.get("Vary")).toBeNull();
     });
 
     it("marks unowned public developers as unclaimed", async () => {
@@ -211,6 +213,8 @@ describe("Extensions API v2", () => {
         version: "1.0.0",
         download_url: "https://e.com/d.zip"
       });
+      expect(res.headers.get("Cache-Control")).toContain("public");
+      expect(res.headers.get("Vary")).toBeNull();
     });
 
     it("404s for an unknown extension", async () => {

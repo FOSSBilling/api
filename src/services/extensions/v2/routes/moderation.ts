@@ -13,26 +13,15 @@ import {
   DelistReasonSchema,
   IdParamSchema,
   NotifyQuerySchema,
-  PaginationSchema,
   ReviewNoteOptionalSchema,
   ReviewNoteRequiredSchema,
   errorResponse
 } from "../schemas/common";
 import {
   DeveloperApprovalSchema,
-  DeveloperHistoryEntrySchema,
-  DeveloperProfileSchema
+  DeveloperHistoryEntrySchema
 } from "../schemas/developers";
-import {
-  ExtensionRevisionSchema,
-  RevisionIdParamSchema,
-  RevisionQueueQuerySchema
-} from "../schemas/revisions";
-import {
-  ModerationExtensionListQuerySchema,
-  OwnedExtensionListResponseSchema,
-  OwnedExtensionSchema
-} from "../schemas/extensions";
+import { RevisionIdParamSchema } from "../schemas/revisions";
 import { DeveloperProfilesDatabase } from "../db/developer-profiles";
 import { ExtensionsDatabase } from "../db/extensions";
 import { ExtensionRevisionsDatabase } from "../db/revisions";
@@ -40,171 +29,6 @@ import { notifyRequested, sendModerationNotification } from "../email/notify";
 import { ExtensionsV2App } from "./app";
 
 export function registerModerationRoutes(app: ExtensionsV2App): void {
-  const queueRoute = createRoute({
-    method: "get",
-    path: "/moderation/extensions",
-    tags: ["Moderation"],
-    summary: "List extension revisions awaiting review",
-    security: [{ Bearer: [] }],
-    middleware: [requireModerator()] as const,
-    request: { query: RevisionQueueQuerySchema },
-    responses: {
-      200: {
-        content: {
-          "application/json": {
-            schema: z.object({
-              result: z.array(ExtensionRevisionSchema),
-              pagination: PaginationSchema
-            })
-          }
-        },
-        description:
-          "Revisions matching the requested status (default: pending), oldest first"
-      },
-      401: errorResponse("Missing or invalid bearer token"),
-      403: {
-        ...ActiveAccountRequiredResponse,
-        description: "The account is inactive or the caller is not a moderator"
-      },
-      422: errorResponse("status query param failed validation"),
-      500: errorResponse("Database error")
-    }
-  });
-
-  app.openapi(queueRoute, async (c) => {
-    const db = new ExtensionRevisionsDatabase(
-      getExtensionsDb(c.env.DB_EXTENSIONS)
-    );
-    const { status, limit, cursor } = c.req.valid("query");
-    const { data, error } = await db.listQueue(
-      status ?? "pending",
-      limit,
-      cursor
-    );
-    if (error || !data) {
-      return c.json(
-        errorBody(error, "Unable to load queue"),
-        error?.code === "INVALID_CURSOR" ? 422 : 500
-      );
-    }
-    return c.json(
-      {
-        result: data.items,
-        pagination: {
-          next_cursor: data.nextCursor,
-          has_more: data.hasMore
-        }
-      },
-      200
-    );
-  });
-
-  // Distinct from queueRoute above: that lists *revisions* awaiting review,
-  // this lists *extensions* by their own published/delisted/unpublished
-  // state - the two are independent (an extension can be published with a
-  // pending edit, or delisted with none). Named /all-extensions rather than
-  // nested under /moderation/extensions to avoid colliding with the {id}
-  // route below - see isReservedExtensionId for why a static sibling segment
-  // there would need its own reservation.
-  const allExtensionsRoute = createRoute({
-    method: "get",
-    path: "/moderation/all-extensions",
-    tags: ["Moderation"],
-    summary: "List every extension regardless of status",
-    security: [{ Bearer: [] }],
-    middleware: [requireModerator()] as const,
-    request: { query: ModerationExtensionListQuerySchema },
-    responses: {
-      200: {
-        content: {
-          "application/json": { schema: OwnedExtensionListResponseSchema }
-        },
-        description:
-          "Extensions matching the requested status (default: all), alphabetical by id"
-      },
-      401: errorResponse("Missing or invalid bearer token"),
-      403: {
-        ...ActiveAccountRequiredResponse,
-        description: "The account is inactive or the caller is not a moderator"
-      },
-      422: errorResponse("Query params failed validation"),
-      500: errorResponse("Database error")
-    }
-  });
-
-  app.openapi(allExtensionsRoute, async (c) => {
-    const db = new ExtensionsDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
-    const { status, type, q, limit, cursor } = c.req.valid("query");
-    const { data, error } = await db.listForModeration({
-      status,
-      type,
-      q,
-      limit,
-      cursor
-    });
-    if (error || !data) {
-      return c.json(
-        errorBody(error, "Unable to load extensions"),
-        error?.code === "INVALID_CURSOR" ? 422 : 500
-      );
-    }
-    return c.json(
-      {
-        result: data.items,
-        pagination: { next_cursor: data.nextCursor, has_more: data.hasMore }
-      },
-      200
-    );
-  });
-
-  // The only full-record read a moderator has for an extension they don't
-  // own. Namespaced under /moderation rather than reusing GET /extensions/{id}
-  // (public, published-only) or GET /extensions/mine/{id} (owner-only, 403s
-  // anyone else) - a moderator needs the owner's full view, including
-  // `delisted`, for an extension that isn't theirs. Same shape as
-  // GET /extensions/mine/{id} for that reason.
-  const getExtensionRoute = createRoute({
-    method: "get",
-    path: "/moderation/extensions/{id}",
-    tags: ["Moderation"],
-    summary: "Get any extension's full record, including a delisted one",
-    security: [{ Bearer: [] }],
-    middleware: [requireModerator()] as const,
-    request: { params: IdParamSchema },
-    responses: {
-      200: {
-        content: {
-          "application/json": {
-            schema: z.object({ result: OwnedExtensionSchema })
-          }
-        },
-        description:
-          "The extension's live content, its unreviewed edit if any, the last moderator decision, and its delist state"
-      },
-      401: errorResponse("Missing or invalid bearer token"),
-      403: {
-        ...ActiveAccountRequiredResponse,
-        description: "The account is inactive or the caller is not a moderator"
-      },
-      404: errorResponse("No such extension"),
-      422: errorResponse("id param failed validation"),
-      500: errorResponse("Database error")
-    }
-  });
-
-  app.openapi(getExtensionRoute, async (c) => {
-    const { id } = c.req.valid("param");
-    const db = new ExtensionsDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
-    const { data, error } = await db.getOwned(id);
-    if (error || !data) {
-      return c.json(
-        errorBody(error, "Extension not found"),
-        statusFromErrorCode(error?.code, false)
-      );
-    }
-    return c.json({ result: data.extension }, 200);
-  });
-
   // Reviews are addressed through the extension they belong to. The revision
   // id alone would be enough to find the row, but scoping the path to the
   // extension means a moderator acting from a queue entry cannot approve a
@@ -430,93 +254,6 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
     );
   });
 
-  const allDevelopersRoute = createRoute({
-    method: "get",
-    path: "/developers",
-    tags: ["Moderation"],
-    summary: "List every developer profile, approved or not",
-    security: [{ Bearer: [] }],
-    middleware: [requireModerator()] as const,
-    responses: {
-      200: {
-        content: {
-          "application/json": {
-            schema: z.object({ result: z.array(DeveloperProfileSchema) })
-          }
-        },
-        description: "All developer profiles"
-      },
-      401: errorResponse("Missing or invalid bearer token"),
-      403: {
-        ...ActiveAccountRequiredResponse,
-        description: "The account is inactive or the caller is not a moderator"
-      },
-      500: errorResponse("Database error")
-    }
-  });
-
-  app.openapi(allDevelopersRoute, async (c) => {
-    const db = new DeveloperProfilesDatabase(
-      getExtensionsDb(c.env.DB_EXTENSIONS)
-    );
-    const { data, error } = await db.listAll();
-    if (error || !data) {
-      return c.json(
-        {
-          error: {
-            message: error?.message ?? "Unable to load developers",
-            code: "DATABASE_ERROR"
-          }
-        },
-        500
-      );
-    }
-    return c.json({ result: data }, 200);
-  });
-
-  const unapprovedDevelopersRoute = createRoute({
-    method: "get",
-    path: "/developers/unapproved",
-    tags: ["Moderation"],
-    summary: "List developer profiles awaiting moderator review",
-    security: [{ Bearer: [] }],
-    middleware: [requireModerator()] as const,
-    responses: {
-      200: {
-        content: {
-          "application/json": {
-            schema: z.object({ result: z.array(DeveloperProfileSchema) })
-          }
-        },
-        description: "Developer profiles not yet approved"
-      },
-      401: errorResponse("Missing or invalid bearer token"),
-      403: {
-        ...ActiveAccountRequiredResponse,
-        description: "The account is inactive or the caller is not a moderator"
-      },
-      500: errorResponse("Database error")
-    }
-  });
-
-  app.openapi(unapprovedDevelopersRoute, async (c) => {
-    const db = new DeveloperProfilesDatabase(
-      getExtensionsDb(c.env.DB_EXTENSIONS)
-    );
-    const { data, error } = await db.listUnapproved();
-    if (error || !data) {
-      return c.json(
-        {
-          error: {
-            message: error?.message ?? "Unable to load unapproved developers",
-            code: "DATABASE_ERROR"
-          }
-        },
-        500
-      );
-    }
-    return c.json({ result: data }, 200);
-  });
   const approveDeveloperRoute = createRoute({
     method: "post",
     path: "/developers/{id}/approve",

@@ -269,27 +269,38 @@ export class DeveloperClaimsDatabase {
     return { data: { id: claimId }, error: null };
   }
 
-  async listMyClaims(
-    claimantId: string
-  ): Promise<DatabaseResult<DeveloperClaim[]>> {
+  // Unified reader for the merged GET /developers/claims?scope=. Always
+  // returns the enriched Pending shape so mine and pending share one
+  // contract; scope=mine is caller-filtered (any status unless narrowed),
+  // scope=pending is moderator-wide (pending by default). The filter is a
+  // discriminated union so scope=mine cannot be called without the caller's
+  // id, which would otherwise drop the ownership predicate and return every
+  // claim in the table.
+  async listScoped(
+    filters:
+      | {
+          scope: "mine";
+          claimantId: string;
+          status?: "pending" | "approved" | "rejected" | "all";
+        }
+      | {
+          scope: "pending";
+          status?: "pending" | "approved" | "rejected" | "all";
+        }
+  ): Promise<DatabaseResult<PendingDeveloperClaim[]>> {
+    const status = filters.status ?? "all";
     let rows;
     try {
-      rows = await this.db
-        .select()
-        .from(developerClaims)
-        .where(eq(developerClaims.claimantId, claimantId))
-        .orderBy(desc(developerClaims.createdAt));
-    } catch (error) {
-      return databaseError("listMyClaims", error);
-    }
-
-    return { data: rows.map(parseClaimRow), error: null };
-  }
-
-  async listPendingClaims(): Promise<DatabaseResult<PendingDeveloperClaim[]>> {
-    let rows;
-    try {
-      rows = await this.db
+      const conditions = [];
+      if (filters.scope === "mine") {
+        conditions.push(eq(developerClaims.claimantId, filters.claimantId));
+      }
+      if (filters.scope === "pending" && status === "all") {
+        conditions.push(eq(developerClaims.status, "pending"));
+      } else if (status !== "all") {
+        conditions.push(eq(developerClaims.status, status));
+      }
+      const base = this.db
         .select({
           claim: developerClaims,
           developerName: developers.name,
@@ -299,11 +310,16 @@ export class DeveloperClaimsDatabase {
         })
         .from(developerClaims)
         .innerJoin(developers, eq(developers.id, developerClaims.developerId))
-        .leftJoin(users, eq(users.id, developerClaims.claimantId))
-        .where(eq(developerClaims.status, "pending"))
-        .orderBy(asc(developerClaims.createdAt));
+        .leftJoin(users, eq(users.id, developerClaims.claimantId));
+      rows = await (
+        conditions.length ? base.where(and(...conditions)) : base
+      ).orderBy(
+        filters.scope === "mine"
+          ? desc(developerClaims.createdAt)
+          : asc(developerClaims.createdAt)
+      );
     } catch (error) {
-      return databaseError("listPendingClaims", error);
+      return databaseError("listScoped", error);
     }
 
     return {

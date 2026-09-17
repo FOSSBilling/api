@@ -611,7 +611,7 @@ describe("Extensions API v2", () => {
       const created = (await res.json()) as { result: { id: string } };
 
       const mine = await get(
-        "/extensions/v2/developers/claims/mine",
+        "/extensions/v2/developers/claims?scope=mine",
         await authHeaders("user-1")
       );
       expect(mine.status).toBe(200);
@@ -623,7 +623,7 @@ describe("Extensions API v2", () => {
 
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       const pending = await get(
-        "/extensions/v2/developers/claims",
+        "/extensions/v2/developers/claims?scope=pending",
         await authHeaders("mod-1")
       );
       expect(pending.status).toBe(200);
@@ -632,6 +632,25 @@ describe("Extensions API v2", () => {
       };
       expect(pendingData.result.map((c) => c.id)).toEqual([created.result.id]);
       expect(pendingData.result[0].developer_name).toBe("Legacy Developer");
+    });
+
+    it("keeps the pending queue to pending claims even with a status filter", async () => {
+      await seedUnownedDeveloper("legacy-developer");
+      await post(
+        "/extensions/v2/developers/legacy-developer/claim",
+        await authHeaders("user-1"),
+        {}
+      );
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+
+      const res = await get(
+        "/extensions/v2/developers/claims?scope=pending&status=approved",
+        await authHeaders("mod-1")
+      );
+      expect(res.status).toBe(200);
+      await expect(res.json()).resolves.toMatchObject({
+        result: [{ status: "pending" }]
+      });
     });
 
     it("rejects claiming a developer that already has an owner", async () => {
@@ -1223,7 +1242,7 @@ describe("Extensions API v2", () => {
         .result.id;
 
       const queue = await get(
-        "/extensions/v2/developers/claims",
+        "/extensions/v2/developers/claims?scope=pending",
         await authHeaders("intruder")
       );
       expect(queue.status).toBe(403);
