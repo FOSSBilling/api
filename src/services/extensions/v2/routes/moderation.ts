@@ -362,4 +362,62 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
     }
     return c.json({ result: data }, 200);
   });
+
+  // Queue totals behind the admin tabs. Two small aggregate queries rather
+  // than per-status COUNTs, and deliberately separate from the list
+  // endpoints so pagination contracts stay untouched.
+  const countsRoute = createRoute({
+    method: "get",
+    path: "/moderation/counts",
+    tags: ["Moderation"],
+    summary: "Queue totals for the admin tabs",
+    security: [{ Bearer: [] }],
+    middleware: [requireModerator()] as const,
+    responses: {
+      200: {
+        content: {
+          "application/json": {
+            schema: z.object({
+              result: z.object({
+                revisions: z.object({
+                  pending: z.number(),
+                  approved: z.number(),
+                  rejected: z.number()
+                }),
+                extensions: z.object({
+                  all: z.number(),
+                  published: z.number(),
+                  delisted: z.number(),
+                  unpublished: z.number()
+                })
+              })
+            })
+          }
+        },
+        description: "Pending/decided totals per queue"
+      },
+      401: errorResponse("Missing or invalid bearer token"),
+      403: {
+        ...ActiveAccountRequiredResponse,
+        description: "The account is inactive or the caller is not a moderator"
+      },
+      500: errorResponse("Database error")
+    }
+  });
+
+  app.openapi(countsRoute, async (c) => {
+    const extDb = getExtensionsDb(c.env.DB_EXTENSIONS);
+    const [revisions, extensionCounts] = await Promise.all([
+      new ExtensionRevisionsDatabase(extDb).countByStatus(),
+      new ExtensionsDatabase(extDb).countForModeration()
+    ]);
+    const error = revisions.error ?? extensionCounts.error;
+    if (error || !revisions.data || !extensionCounts.data) {
+      return c.json(errorBody(error, "Unable to load moderation counts"), 500);
+    }
+    return c.json(
+      { result: { revisions: revisions.data, extensions: extensionCounts.data } },
+      200
+    );
+  });
 }

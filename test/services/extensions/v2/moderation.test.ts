@@ -1354,4 +1354,71 @@ describe("Extensions API v2", () => {
       expect(data.result).toHaveLength(1);
     });
   });
+
+  describe("GET /moderation/counts", () => {
+    it("requires moderator access", async () => {
+      const res = await get(
+        "/extensions/v2/moderation/counts",
+        await authHeaders("user-1")
+      );
+      expect(res.status).toBe(403);
+    });
+
+    it("totals each queue by status", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await seedDeveloper("new-developer", "user-1");
+      await insertExtension(db, {
+        id: "live-ext",
+        developer_id: "new-developer"
+      });
+      await insertExtension(db, {
+        id: "gone-ext",
+        developer_id: "new-developer",
+        delisted_at: new Date().toISOString(),
+        delist_reason: "Upstream source removed"
+      });
+      await insertUnpublishedExtension(db, {
+        id: "draft-ext",
+        developer_id: "new-developer"
+      });
+      const content = JSON.stringify(sampleContent());
+      await insertRevision(db, {
+        id: "pending-revision",
+        extension_id: "live-ext",
+        developer_id: "new-developer",
+        submitted_by: "user-1",
+        content
+      });
+      await insertRevision(db, {
+        id: "approved-revision",
+        extension_id: "live-ext",
+        developer_id: "new-developer",
+        submitted_by: "user-1",
+        status: "approved",
+        reviewer_id: "mod-1",
+        content
+      });
+      await insertRevision(db, {
+        id: "rejected-revision",
+        extension_id: "live-ext",
+        developer_id: "new-developer",
+        submitted_by: "user-1",
+        status: "rejected",
+        reviewer_id: "mod-1",
+        content
+      });
+
+      const res = await get(
+        "/extensions/v2/moderation/counts",
+        await authHeaders("mod-1")
+      );
+      expect(res.status).toBe(200);
+      await expect(res.json()).resolves.toEqual({
+        result: {
+          revisions: { pending: 1, approved: 1, rejected: 1 },
+          extensions: { all: 3, published: 1, delisted: 1, unpublished: 1 }
+        }
+      });
+    });
+  });
 });

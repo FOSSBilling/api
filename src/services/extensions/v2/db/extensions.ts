@@ -410,6 +410,42 @@ export class ExtensionsDatabase {
     };
   }
 
+  // Catalogue totals for the admin tabs, using the same published /
+  // delisted / unpublished predicates as listForModeration so the badges
+  // can never disagree with what each tab lists. One conditional-SUM
+  // query rather than four COUNTs.
+  async countForModeration(): Promise<
+    DatabaseResult<{
+      all: number;
+      published: number;
+      delisted: number;
+      unpublished: number;
+    }>
+  > {
+    let rows: Array<{
+      all: number;
+      published: number;
+      delisted: number;
+      unpublished: number;
+    }>;
+    try {
+      rows = await this.db
+        .select({
+          all: sql<number>`COUNT(*)`,
+          published: sql<number>`COALESCE(SUM(CASE WHEN ${extensions.publishedAt} IS NOT NULL AND ${extensions.delistedAt} IS NULL THEN 1 ELSE 0 END), 0)`,
+          delisted: sql<number>`COALESCE(SUM(CASE WHEN ${extensions.delistedAt} IS NOT NULL THEN 1 ELSE 0 END), 0)`,
+          unpublished: sql<number>`COALESCE(SUM(CASE WHEN ${extensions.publishedAt} IS NULL THEN 1 ELSE 0 END), 0)`
+        })
+        .from(extensions);
+    } catch (error) {
+      return databaseError("countForModeration", error);
+    }
+    return {
+      data: rows[0] ?? { all: 0, published: 0, delisted: 0, unpublished: 0 },
+      error: null
+    };
+  }
+
   // Returns the owner view plus the two ids a route needs to authorise the
   // caller, so a detail read is one query rather than a fetch-then-check.
   async getOwned(
