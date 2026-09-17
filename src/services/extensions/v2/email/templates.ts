@@ -57,7 +57,8 @@ function stripSurroundingQuotes(value: string): string {
 }
 
 // Names come from user input with no newline restriction, and labels feed
-// the email subject — strip CR/LF so a name can never split an SMTP header.
+// the email subject — strip line breaks and tabs so a name can never split
+// an SMTP header.
 function subjectLabel(value: string): string {
   return (
     value
