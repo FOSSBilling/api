@@ -27,7 +27,6 @@ setupExtensionsV2Tests();
 const MXROUTE_ENV = {
   EXTENSIONS_V2_EMAIL_PROVIDER: "mxroute",
   EXTENSIONS_V2_EMAIL_FROM: "extensions@fossbilling.org",
-  EXTENSIONS_V2_EMAIL_REPLY_TO: "noreply@fossbilling.org",
   EXTENSIONS_V2_MXROUTE_SERVER: "tuesday.mxrouting.net",
   EXTENSIONS_V2_MXROUTE_USERNAME: "extensions@fossbilling.org",
   EXTENSIONS_V2_MXROUTE_PASSWORD: "secret"
@@ -108,11 +107,34 @@ describe("moderation notification emails", () => {
     const body = JSON.parse(String(calls[0].init.body));
     expect(body).toMatchObject({
       to: "author@example.com",
-      from: "extensions@fossbilling.org",
-      reply_to: "noreply@fossbilling.org"
+      from: "extensions@fossbilling.org"
     });
+    expect(body.reply_to).toBeUndefined();
     expect(body.subject).toContain("live-ext");
     expect(body.body).toContain("Upstream source removed");
+  });
+
+  it("sends ASCII-safe payloads for unicode moderator notes", async () => {
+    await insertUser(db, { id: "mod-1", is_moderator: 1 });
+    await seedLiveExtension();
+    setEmailEnv();
+    const calls = stubSmtpApi();
+
+    const res = await post(
+      "/extensions/v2/extensions/live-ext/delist",
+      await authHeaders("mod-1"),
+      { reason: "Upstream “gone” — domain lapsed" }
+    );
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      result: { notified: true }
+    });
+    const body = JSON.parse(String(calls[0].init.body));
+    // MXroute declares payloads iso-8859-1: raw UTF-8 would render as
+    // mojibake, so subjects stay ASCII and bodies use HTML entities.
+    expect(body.subject).toMatch(/^[\u0020-\u007E]*$/);
+    expect(body.body).toMatch(/^[\u0020-\u007E]*$/);
+    expect(body.body).toContain("&#8220;gone&#8221; &#8212;");
   });
 
   it("skips the email on ?notify=false without calling the provider", async () => {
