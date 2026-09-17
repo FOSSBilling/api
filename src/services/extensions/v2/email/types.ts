@@ -13,6 +13,12 @@ export interface EmailSender {
 
 export type FetchFn = typeof globalThis.fetch;
 
+// Workers' fetch requires its `this` receiver: storing `globalThis.fetch`
+// as a bare reference and calling it later throws "Illegal invocation".
+// Keep the lookup behind an arrow so the default sender always calls it
+// bound.
+export const defaultFetch: FetchFn = (...args) => globalThis.fetch(...args);
+
 // Minimal env surface the email subsystem needs. Shaped to match
 // PlatformContext, so routes pass getPlatform(c) directly — the same way
 // GITHUB_TOKEN and the assertion secrets are read everywhere else.

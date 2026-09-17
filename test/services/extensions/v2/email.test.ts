@@ -258,6 +258,62 @@ describe("factory", () => {
   });
 });
 
+describe("default fetch binding", () => {
+  it("sends through globalThis.fetch without an Illegal invocation error", async () => {
+    // Workers throws "Illegal invocation" for a detached fetch while Node
+    // tolerates it: enforce the Workers behaviour so the default stays bound.
+    const originalFetch = globalThis.fetch;
+    const urls: string[] = [];
+    function workersLikeFetch(
+      this: unknown,
+      input: string | URL | Request,
+      _init?: RequestInit
+    ): Promise<Response> {
+      if (this !== globalThis) {
+        throw new TypeError(
+          "Illegal invocation: function called with incorrect `this` reference."
+        );
+      }
+      urls.push(String(input));
+      return Promise.resolve(jsonResponse({ success: true, message: "sent" }));
+    }
+
+    globalThis.fetch = workersLikeFetch as typeof fetch;
+    try {
+      const message = {
+        to: "author@example.com",
+        subject: "s",
+        html: "<p>hi</p>",
+        text: "hi"
+      };
+      const mxrouteConfig = loadMxrouteConfig(reader(MXROUTE_VARS), IDENTITY)!;
+      await expect(
+        new MxrouteSender(mxrouteConfig).send(message)
+      ).resolves.toEqual({ ok: true });
+
+      const resendConfig = loadResendConfig(
+        reader({ EXTENSIONS_V2_RESEND_API_KEY: "re_key" }),
+        IDENTITY
+      )!;
+      await expect(
+        new ResendSender(resendConfig).send(message)
+      ).resolves.toEqual({ ok: true });
+
+      // notify.ts calls createEmailSender(env) with no injected fetch.
+      const viaFactory = createEmailSender(reader(MXROUTE_VARS));
+      await expect(viaFactory.send(message)).resolves.toEqual({ ok: true });
+
+      expect(urls).toEqual([
+        "https://smtpapi.mxroute.com/",
+        "https://api.resend.com/emails",
+        "https://smtpapi.mxroute.com/"
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
 describe("moderation templates", () => {
   it("includes the reason and escapes markup", () => {
     const message = buildModerationEmail({
