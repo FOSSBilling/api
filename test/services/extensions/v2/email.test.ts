@@ -135,6 +135,8 @@ describe("MxrouteSender", () => {
       to: "author@example.com",
       subject: "s"
     });
+    // No monitored inbox is configured, so no Reply-To may be sent.
+    expect(body.reply_to).toBeUndefined();
   });
 
   it("forwards replyTo as reply_to when a monitored inbox is configured", async () => {
@@ -295,6 +297,25 @@ describe("moderation templates", () => {
     // non-ASCII byte would render as mojibake.
     expect(message.subject).toMatch(/^[\u0020-\u007E]*$/);
     expect(message.subject).toContain('"Smoke - Test"');
+    // The body keeps the original characters: entities in HTML, raw in text.
+    expect(message.text).toContain(
+      "\u201cSm\u00f6k\u00e9 \u2014 Test\u201d (paygate)"
+    );
+    expect(message.html).toContain("Sm&#246;k&#233; &#8212; Test");
+    expect(message.html).not.toContain("Sm\u00f6k\u00e9");
+  });
+
+  it("preserves original developer names in the body", () => {
+    const message = buildModerationEmail({
+      kind: "claim-rejected",
+      to: "author@example.com",
+      developerId: "tokyo-dev",
+      developerName: "\u6771\u4eac Dev",
+      reason: "Could not verify"
+    });
+    expect(message.subject).toContain("tokyo-dev");
+    expect(message.text).toContain("\u201c\u6771\u4eac Dev\u201d (tokyo-dev)");
+    expect(message.html).not.toContain("\u6771\u4eac");
   });
 
   it("encodes non-ASCII as HTML entities while keeping text raw", () => {

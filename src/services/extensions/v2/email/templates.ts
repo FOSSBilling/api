@@ -100,6 +100,23 @@ function layout(
   };
 }
 
+// Display form of the same label: original characters preserved for the
+// body (entity-encoded for HTML, raw for text), with only line breaks
+// flattened and pasted quotes stripped. The folded subjectLabel above must
+// never reach the body — "José" would read as "Jose" and "東京" as "??".
+function displayLabel(
+  name: string | undefined,
+  id: string | undefined,
+  fallback: string
+): string {
+  const clean = (v: string): string =>
+    stripSurroundingQuotes(v).replace(/[\r\n\t]+/g, " ");
+  if (name && id) return `“${clean(name)}” (${id})`;
+  if (id) return id;
+  if (name) return clean(name);
+  return fallback;
+}
+
 export function buildModerationEmail(
   input: ModerationEmailInput
 ): EmailMessage {
@@ -113,6 +130,16 @@ export function buildModerationEmail(
       ? `“${stripSurroundingQuotes(input.developerName)}” (${input.developerId})`
       : (input.developerId ?? input.developerName ?? "your developer profile")
   );
+  const extDisplay = displayLabel(
+    input.extensionName,
+    input.extensionId,
+    "your extension"
+  );
+  const devDisplay = displayLabel(
+    input.developerName,
+    input.developerId,
+    "your developer profile"
+  );
 
   let subject: string;
   let title: string;
@@ -123,7 +150,7 @@ export function buildModerationEmail(
       subject = `${extLabel} removed from the FOSSBilling directory`;
       title = "Your extension was removed from the directory";
       paragraphs = [
-        `${extLabel} has been removed from the public FOSSBilling extension directory by a moderator. Its content and history are kept, and you can still see it in your dashboard.`,
+        `${extDisplay} has been removed from the public FOSSBilling extension directory by a moderator. Its content and history are kept, and you can still see it in your dashboard.`,
         input.reason ? `Reason given: ${input.reason}` : "No reason was given.",
         `View it here: ${DASHBOARD_URL}`
       ];
@@ -132,7 +159,7 @@ export function buildModerationEmail(
       subject = `${extLabel} update approved`;
       title = "Your extension update was approved";
       paragraphs = [
-        `Your update to ${extLabel} has been approved by a moderator and is now live in the directory.`,
+        `Your update to ${extDisplay} has been approved by a moderator and is now live in the directory.`,
         ...(input.reason ? [`Moderator note: ${input.reason}`] : []),
         `View it here: ${DASHBOARD_URL}`
       ];
@@ -141,7 +168,7 @@ export function buildModerationEmail(
       subject = `${extLabel} update needs changes`;
       title = "Your extension update was not approved";
       paragraphs = [
-        `Your update to ${extLabel} was not approved. The published version is unchanged.`,
+        `Your update to ${extDisplay} was not approved. The published version is unchanged.`,
         input.reason ? `Reason given: ${input.reason}` : "No reason was given.",
         `Revise and resubmit here: ${DASHBOARD_URL}`
       ];
@@ -150,7 +177,7 @@ export function buildModerationEmail(
       subject = `${devLabel} approved`;
       title = "Your developer profile was approved";
       paragraphs = [
-        `${devLabel} has been reviewed and approved. It now shows an approval badge in the directory.`,
+        `${devDisplay} has been reviewed and approved. It now shows an approval badge in the directory.`,
         `View it here: ${DASHBOARD_URL}/developer`
       ];
       break;
@@ -158,7 +185,7 @@ export function buildModerationEmail(
       subject = `${devLabel} claim approved`;
       title = "Your profile claim was approved";
       paragraphs = [
-        `Your claim on ${devLabel} has been approved. You now own this developer profile.`,
+        `Your claim on ${devDisplay} has been approved. You now own this developer profile.`,
         `Manage it here: ${DASHBOARD_URL}/developer`
       ];
       break;
@@ -166,7 +193,7 @@ export function buildModerationEmail(
       subject = `${devLabel} claim not approved`;
       title = "Your profile claim was not approved";
       paragraphs = [
-        `Your claim on ${devLabel} was not approved.`,
+        `Your claim on ${devDisplay} was not approved.`,
         input.reason ? `Reason given: ${input.reason}` : "No reason was given.",
         `View your claims here: ${DASHBOARD_URL}`
       ];
