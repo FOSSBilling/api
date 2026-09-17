@@ -41,7 +41,7 @@ export function registerRevisionRoutes(app: ExtensionsV2App): void {
         ...ActiveAccountRequiredResponse,
         description: "The account is inactive or the caller is not a moderator"
       },
-      422: errorResponse("status query param failed validation"),
+      422: errorResponse("Status, limit, or cursor query param failed validation"),
       500: errorResponse("Database error")
     }
   });
