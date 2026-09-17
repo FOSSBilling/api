@@ -415,9 +415,13 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
     if (error || !revisions.data || !extensionCounts.data) {
       return c.json(errorBody(error, "Unable to load moderation counts"), 500);
     }
-    return c.json(
-      { result: { revisions: revisions.data, extensions: extensionCounts.data } },
+    const res = c.json(
+      {
+        result: { revisions: revisions.data, extensions: extensionCounts.data }
+      },
       200
     );
+    res.headers.set("Vary", "Authorization");
+    return res;
   });
 }
