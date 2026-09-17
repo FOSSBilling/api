@@ -315,6 +315,9 @@ describe("moderation templates", () => {
     });
     expect(message.subject).toContain("tokyo-dev");
     expect(message.text).toContain("\u201c\u6771\u4eac Dev\u201d (tokyo-dev)");
+    expect(message.html).toContain(
+      "&#8220;&#26481;&#20140; Dev&#8221; (tokyo-dev)"
+    );
     expect(message.html).not.toContain("\u6771\u4eac");
   });
 
