@@ -1,10 +1,11 @@
-import type {
-  EmailIdentity,
-  EmailMessage,
-  EmailSender,
-  EmailSendResult,
-  EnvReader,
-  FetchFn
+import {
+  defaultFetch,
+  type EmailIdentity,
+  type EmailMessage,
+  type EmailSender,
+  type EmailSendResult,
+  type EnvReader,
+  type FetchFn
 } from "./types";
 
 const RESEND_API_URL = "https://api.resend.com/emails";
@@ -29,7 +30,7 @@ export function loadResendConfig(
 export class ResendSender implements EmailSender {
   constructor(
     private config: ResendConfig,
-    private fetchFn: FetchFn = globalThis.fetch
+    private fetchFn: FetchFn = defaultFetch
   ) {}
 
   async send(message: EmailMessage): Promise<EmailSendResult> {

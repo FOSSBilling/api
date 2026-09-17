@@ -1,10 +1,11 @@
-import type {
-  EmailIdentity,
-  EmailMessage,
-  EmailSender,
-  EmailSendResult,
-  EnvReader,
-  FetchFn
+import {
+  defaultFetch,
+  type EmailIdentity,
+  type EmailMessage,
+  type EmailSender,
+  type EmailSendResult,
+  type EnvReader,
+  type FetchFn
 } from "./types";
 
 const SMTP_API_URL = "https://smtpapi.mxroute.com/";
@@ -33,7 +34,7 @@ export function loadMxrouteConfig(
 export class MxrouteSender implements EmailSender {
   constructor(
     private config: MxrouteConfig,
-    private fetchFn: FetchFn = globalThis.fetch
+    private fetchFn: FetchFn = defaultFetch
   ) {}
 
   async send(message: EmailMessage): Promise<EmailSendResult> {
