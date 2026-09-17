@@ -323,7 +323,6 @@ export function registerDeveloperProfileRoutes(app: ExtensionsV2App): void {
     tags: ["Developers"],
     summary:
       "Get a developer profile: public view anonymously, full view for the owner or a moderator",
-    // Optional auth, same contract convention as the merged extension reads.
     security: [{ Bearer: [] }],
     middleware: [optionalAuth()] as const,
     request: { params: IdParamSchema },

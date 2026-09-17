@@ -20,9 +20,6 @@ export function registerPublicExtensionsRoutes(app: ExtensionsV2App): void {
     tags: ["Extensions"],
     summary:
       "List extensions: published catalogue (scope=public), caller's own (scope=mine), or every extension (scope=all, moderator)",
-    // Optional auth: scope=public serves anonymous catalogue reads, so the
-    // contract advertises Bearer alongside an empty requirement rather than
-    // demanding a token every generated client must send.
     security: [{ Bearer: [] }],
     middleware: [optionalAuth()] as const,
     request: { query: UnifiedExtensionListQuerySchema },
@@ -242,7 +239,6 @@ export function registerPublicExtensionsRoutes(app: ExtensionsV2App): void {
     tags: ["Extensions"],
     summary:
       "Get an extension: published content anonymously, full owned record for its owner or a moderator",
-    // Optional auth, same contract convention as the list route above.
     security: [{ Bearer: [] }],
     middleware: [optionalAuth()] as const,
     request: { params: IdParamSchema },
