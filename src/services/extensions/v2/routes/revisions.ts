@@ -19,7 +19,7 @@ export function registerRevisionRoutes(app: ExtensionsV2App): void {
     method: "get",
     path: "/revisions",
     tags: ["Moderation"],
-    summary: "List extension revisions awaiting review, oldest first",
+    summary: "List extension revisions by status, oldest first",
     security: [{ Bearer: [] }],
     middleware: [requireModerator()] as const,
     request: { query: RevisionQueueQuerySchema },
