@@ -102,10 +102,10 @@ hides draft and delisted rows).
 Anonymous reads stay cacheable (`Cache-Control: public`); authenticated reads
 send `Vary: Authorization`.
 
-`GET /revisions?extension_id=` lists the full history for the extension's
-owner or any moderator; omitting `extension_id` lists the global review queue
-(moderator only, `?status=` defaults to `pending`). Replaces
-`GET /extensions/{id}/revisions` and `GET /moderation/extensions`.
+`GET /extensions/{id}/revisions` lists the full history of one extension,
+newest first, for its owner or any moderator. `GET /revisions` is the global
+review queue (moderator only, `?status=` defaulting to `pending`, oldest
+first).
 
 `GET /developers?status=` (`all` default, `unapproved` for the review queue)
 replaces `GET /developers/unapproved`. `GET /developers/claims?scope=mine`

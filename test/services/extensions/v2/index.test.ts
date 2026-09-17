@@ -23,6 +23,7 @@ describe("Extensions API v2", () => {
         expect.arrayContaining([
           "/extensions",
           "/extensions/{id}",
+          "/extensions/{id}/revisions",
           "/revisions",
           "/extensions/{id}/revisions/{revisionId}/approve",
           "/extensions/{id}/revisions/{revisionId}/reject",

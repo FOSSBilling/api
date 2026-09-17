@@ -38,9 +38,12 @@ extensionsV2.openAPIRegistry.registerComponent("securitySchemes", "Bearer", {
   scheme: "bearer"
 });
 
-// Merged reads (GET /extensions, GET /extensions/{id}, GET /developers/{id},
-// GET /revisions) use optional auth and are role-aware, so there are no
-// /extensions/mine or /moderation/* read siblings left to collide with.
+// Merged reads (GET /extensions, GET /extensions/{id}, GET /developers/{id})
+// use optional auth and are role-aware. Revision history stays nested as
+// GET /extensions/{id}/revisions (a true sub-collection next to the approve
+// and reject writes), while GET /revisions is the moderator-only global
+// queue — the two-segment history path cannot collide with the single-segment
+// detail read, so no id reservation is needed for either.
 // "mine" is an ordinary extension id now that no static segment shadows it;
 // the developers {id} reservation remains for the live me/claims routes (and
 // conservatively for unapproved, migration 0020) because a matching adopted

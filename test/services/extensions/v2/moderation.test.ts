@@ -564,7 +564,7 @@ describe("Extensions API v2", () => {
 
       // But it is still readable as history, with the empty releases intact.
       const history = await get(
-        "/extensions/v2/revisions?extension_id=legacy-ext",
+        "/extensions/v2/extensions/legacy-ext/revisions",
         await authHeaders("user-1")
       );
       expect(history.status).toBe(200);
@@ -1031,7 +1031,7 @@ describe("Extensions API v2", () => {
       expect(anonymous.status).toBe(404);
 
       const strangerRevisions = await get(
-        "/extensions/v2/revisions?extension_id=live-ext",
+        "/extensions/v2/extensions/live-ext/revisions",
         await authHeaders("user-2")
       );
       expect(strangerRevisions.status).toBe(403);

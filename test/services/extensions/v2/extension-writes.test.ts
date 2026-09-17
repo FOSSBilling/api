@@ -525,7 +525,7 @@ describe("Extensions API v2 writes", () => {
       );
 
       const res = await get(
-        "/extensions/v2/revisions?extension_id=existing-ext",
+        "/extensions/v2/extensions/existing-ext/revisions",
         await authHeaders("owner-1")
       );
       expect(res.status).toBe(200);
@@ -559,7 +559,7 @@ describe("Extensions API v2 writes", () => {
       const first = (await edit.json()) as { result: { revision_id: string } };
 
       expect(
-        (await get("/extensions/v2/revisions?extension_id=EXISTING-EXT", owner))
+        (await get("/extensions/v2/extensions/EXISTING-EXT/revisions", owner))
           .status
       ).toBe(200);
       expect(
@@ -1028,26 +1028,33 @@ describe("Extensions API v2 writes", () => {
       expect(res.status).toBe(404);
     });
 
-    // "mine" is an ordinary extension id now, but the two-segment path still
-    // has no route — the merged detail read is GET /extensions/{id} and
-    // history is GET /revisions?extension_id=.
-    it("404s the removed /extensions/mine/revisions collision path", async () => {
+    // "mine" is an ordinary extension id with its own history route — the
+    // old /extensions/mine/revisions collision died with the static route.
+    it("reads history for an extension literally id'd mine", async () => {
+      await seedDeveloper("new-developer", "user-1");
+      await createExtension("user-1", { extensionId: "mine" });
+
       const res = await get(
         "/extensions/v2/extensions/mine/revisions",
         await authHeaders("user-1")
       );
-      expect(res.status).toBe(404);
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as {
+        result: Array<{ extension_id: string }>;
+      };
+      expect(data.result).toHaveLength(1);
+      expect(data.result[0].extension_id).toBe("mine");
     });
   });
 
-  describe("GET /revisions?extension_id=", () => {
+  describe("GET /extensions/{id}/revisions", () => {
     it("lists an extension's revisions newest first", async () => {
       await seedDeveloper("new-developer", "user-1");
       await createExtension("user-1");
       const headers = await authHeaders("user-1");
 
       const res = await get(
-        "/extensions/v2/revisions?extension_id=new-ext",
+        "/extensions/v2/extensions/new-ext/revisions",
         headers
       );
       expect(res.status).toBe(200);
@@ -1064,7 +1071,7 @@ describe("Extensions API v2 writes", () => {
     it("refuses a caller who neither owns the extension nor moderates", async () => {
       await seedOwnedExtension();
       const res = await get(
-        "/extensions/v2/revisions?extension_id=existing-ext",
+        "/extensions/v2/extensions/existing-ext/revisions",
         await authHeaders("intruder")
       );
       expect(res.status).toBe(403);

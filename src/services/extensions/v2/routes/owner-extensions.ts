@@ -1,4 +1,8 @@
-import { errorBody, statusFromWriteErrorCode } from "./errors";
+import {
+  errorBody,
+  statusFromErrorCode,
+  statusFromWriteErrorCode
+} from "./errors";
 import { requireActiveAuth } from "../middleware";
 import { getExtensionsDb } from "../../../../lib/db";
 import { getAuth } from "../../../../lib/auth";
@@ -6,15 +10,21 @@ import { createRoute, z } from "@hono/zod-openapi";
 import {
   ActiveAccountRequiredResponse,
   IdParamSchema,
+  PaginationSchema,
   errorResponse
 } from "../schemas/common";
 import {
   ExtensionCreateSchema,
   ExtensionUpdateSchema
 } from "../schemas/extensions";
+import {
+  ExtensionRevisionSchema,
+  RevisionHistoryQuerySchema
+} from "../schemas/revisions";
 import { DeveloperProfilesDatabase } from "../db/developer-profiles";
 import { ExtensionsDatabase } from "../db/extensions";
 import { ExtensionRevisionsDatabase } from "../db/revisions";
+import { UsersDatabase } from "../db/users";
 import { ExtensionsV2App } from "./app";
 
 const AcceptedRevisionSchema = z.object({
@@ -208,5 +218,129 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
       );
     }
     return c.json({ result: { id: data.id, deleted: true as const } }, 200);
+  });
+
+  const revisionsRoute = createRoute({
+    method: "get",
+    path: "/extensions/{id}/revisions",
+    tags: ["Extensions"],
+    summary: "List an extension's revisions, newest first",
+    security: [{ Bearer: [] }],
+    middleware: [requireActiveAuth()] as const,
+    request: { params: IdParamSchema, query: RevisionHistoryQuerySchema },
+    responses: {
+      200: {
+        content: {
+          "application/json": {
+            schema: z.object({
+              result: z.array(ExtensionRevisionSchema),
+              pagination: PaginationSchema
+            })
+          }
+        },
+        description:
+          "Every version proposed for this extension, with its review outcome"
+      },
+      401: errorResponse("Missing or invalid bearer token"),
+      403: {
+        ...ActiveAccountRequiredResponse,
+        description:
+          "The account is inactive, or the caller neither owns this extension nor moderates"
+      },
+      404: errorResponse("No extension with that id"),
+      422: errorResponse("Pagination query failed validation"),
+      500: errorResponse("Database error")
+    }
+  });
+
+  app.openapi(revisionsRoute, async (c) => {
+    const auth = getAuth(c);
+    const { id } = c.req.valid("param");
+    const { limit, cursor } = c.req.valid("query");
+    const extensionsDb = new ExtensionsDatabase(
+      getExtensionsDb(c.env.DB_EXTENSIONS)
+    );
+    const owned = await extensionsDb.getOwned(id);
+    if (owned.error || !owned.data) {
+      return c.json(
+        errorBody(owned.error, "Extension not found"),
+        statusFromErrorCode(owned.error?.code, false)
+      );
+    }
+
+    if (owned.data.ownerUserId !== auth.userId) {
+      const users = new UsersDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
+      const moderator = await users.moderatorAccess(auth.userId);
+      if (moderator.error) {
+        return c.json(
+          errorBody(moderator.error, "Unable to check moderator access"),
+          500
+        );
+      }
+      if (!moderator.data?.active) {
+        return c.json(
+          {
+            error: {
+              message: "Active account required",
+              code: "ACCOUNT_INACTIVE"
+            }
+          },
+          403
+        );
+      }
+      if (!moderator.data.moderator) {
+        return c.json(
+          {
+            error: {
+              message: "You do not own this extension",
+              code: "FORBIDDEN"
+            }
+          },
+          403
+        );
+      }
+    } else {
+      const users = new UsersDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
+      const active = await users.isActive(auth.userId);
+      if (active.error) {
+        return c.json(errorBody(active.error, "Unable to check account"), 500);
+      }
+      if (!active.data) {
+        return c.json(
+          {
+            error: {
+              message: "Active account required",
+              code: "ACCOUNT_INACTIVE"
+            }
+          },
+          403
+        );
+      }
+    }
+
+    const db = new ExtensionRevisionsDatabase(
+      getExtensionsDb(c.env.DB_EXTENSIONS)
+    );
+    const { data, error } = await db.listScoped({
+      extensionId: owned.data.extension.id,
+      sort: "newest",
+      limit,
+      cursor
+    });
+    if (error || !data) {
+      return c.json(
+        errorBody(error, "Unable to load revisions"),
+        error?.code === "INVALID_CURSOR" ? 422 : 500
+      );
+    }
+    const res = c.json(
+      {
+        result: data.items,
+        pagination: { next_cursor: data.nextCursor, has_more: data.hasMore }
+      },
+      200
+    );
+    res.headers.set("Vary", "Authorization");
+    return res;
   });
 }

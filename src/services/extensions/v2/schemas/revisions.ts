@@ -61,28 +61,10 @@ export const RevisionQueueQuerySchema = z.object({
     })
 });
 
-// Unified query for the merged GET /revisions (optional auth, role-aware).
-// extension_id set: per-extension history (owner-or-moderator), newest first.
-// extension_id unset: global moderation queue (moderator only), oldest first.
-// status filters in both modes; sort overrides the mode default.
-export const UnifiedRevisionsQuerySchema = RevisionQueueQuerySchema.extend({
-  // No max: extension ids are unbounded slugs (lowercaseId), so capping
-  // this query param could reject a valid id before lookup.
-  extension_id: z
-    .string()
-    .min(1)
-    .optional()
-    .openapi({
-      param: { name: "extension_id", in: "query" },
-      description:
-        "When set, list that extension's history; when omitted, list the global review queue (moderator only)"
-    }),
-  sort: z
-    .enum(["newest", "oldest"])
-    .optional()
-    .openapi({
-      param: { name: "sort", in: "query" },
-      description:
-        "Override the default order (per-extension: newest first, queue: oldest first)"
-    })
+// History query for GET /extensions/{id}/revisions: newest-first pages of
+// one extension's revisions. A pick, not a restatement, so pagination bounds
+// cannot drift from the queue's.
+export const RevisionHistoryQuerySchema = RevisionQueueQuerySchema.pick({
+  limit: true,
+  cursor: true
 });
