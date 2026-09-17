@@ -288,6 +288,39 @@ export class ExtensionRevisionsDatabase {
     return this.page("listScoped", base, direction, limit, filters.cursor);
   }
 
+  // Queue totals for the admin tabs: one GROUP BY rather than a COUNT per
+  // status, so the revision queue's three badges cost a single query.
+  // Unknown statuses are ignored rather than surfaced — the status column
+  // is constrained at write time, so anything else would be corruption, not
+  // a fourth queue.
+  async countByStatus(): Promise<
+    DatabaseResult<{ pending: number; approved: number; rejected: number }>
+  > {
+    let rows: Array<{ status: string; total: number }>;
+    try {
+      rows = await this.db
+        .select({
+          status: extensionRevisions.status,
+          total: sql<number>`COUNT(*)`
+        })
+        .from(extensionRevisions)
+        .groupBy(extensionRevisions.status);
+    } catch (error) {
+      return databaseError("countByStatus", error);
+    }
+    const totals = { pending: 0, approved: 0, rejected: 0 };
+    for (const row of rows) {
+      if (
+        row.status === "pending" ||
+        row.status === "approved" ||
+        row.status === "rejected"
+      ) {
+        totals[row.status] = row.total;
+      }
+    }
+    return { data: totals, error: null };
+  }
+
   async getById(
     extensionId: string,
     id: string
