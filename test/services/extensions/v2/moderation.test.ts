@@ -1413,6 +1413,7 @@ describe("Extensions API v2", () => {
         await authHeaders("mod-1")
       );
       expect(res.status).toBe(200);
+      expect(res.headers.get("vary")).toBe("Authorization");
       await expect(res.json()).resolves.toEqual({
         result: {
           revisions: { pending: 1, approved: 1, rejected: 1 },
