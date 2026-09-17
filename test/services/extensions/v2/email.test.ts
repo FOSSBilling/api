@@ -62,12 +62,12 @@ describe("email config", () => {
       loadEmailIdentity(
         reader({
           EXTENSIONS_V2_EMAIL_FROM: "extensions@fossbilling.org",
-          EXTENSIONS_V2_EMAIL_REPLY_TO: "noreply@fossbilling.org"
+          EXTENSIONS_V2_EMAIL_REPLY_TO: "extensions@fossbilling.org"
         })
       )
     ).toEqual({
       from: "extensions@fossbilling.org",
-      replyTo: "noreply@fossbilling.org"
+      replyTo: "extensions@fossbilling.org"
     });
     expect(
       loadEmailIdentity(reader({ EXTENSIONS_V2_EMAIL_FROM: "  " })).from
@@ -135,6 +135,25 @@ describe("MxrouteSender", () => {
       to: "author@example.com",
       subject: "s"
     });
+    // No monitored inbox is configured, so no Reply-To may be sent.
+    expect(body.reply_to).toBeUndefined();
+  });
+
+  it("forwards replyTo as reply_to when a monitored inbox is configured", async () => {
+    const configWithReply = loadMxrouteConfig(reader(MXROUTE_VARS), {
+      from: "extensions@fossbilling.org",
+      replyTo: "extensions@fossbilling.org"
+    })!;
+    const calls: Array<{ url: unknown; init: RequestInit }> = [];
+    const sender = new MxrouteSender(configWithReply, (async (url, init) => {
+      calls.push({ url, init: init as RequestInit });
+      return jsonResponse({ success: true, message: "sent" });
+    }) as typeof fetch);
+
+    await expect(sender.send(message)).resolves.toEqual({ ok: true });
+    expect(JSON.parse(String(calls[0].init.body)).reply_to).toBe(
+      "extensions@fossbilling.org"
+    );
   });
 
   it("reports provider failures without throwing", async () => {
@@ -266,7 +285,74 @@ describe("moderation templates", () => {
     expect(message.subject).toContain("Bad Header: injected");
   });
 
-  it("renders every kind with a subject and, where applicable, a dashboard link", () => {
+  it("folds non-ASCII names to ASCII-safe subjects", () => {
+    const message = buildModerationEmail({
+      kind: "extension-delisted",
+      to: "author@example.com",
+      extensionId: "paygate",
+      extensionName: "“Smöké — Test”",
+      reason: "gone"
+    });
+    // MXroute declares subjects iso-8859-1 while receiving UTF-8, so any
+    // non-ASCII byte would render as mojibake.
+    expect(message.subject).toMatch(/^[\u0020-\u007E]*$/);
+    expect(message.subject).toContain('"Smoke - Test"');
+    // The body keeps the original characters: entities in HTML, raw in text.
+    expect(message.text).toContain(
+      "\u201cSm\u00f6k\u00e9 \u2014 Test\u201d (paygate)"
+    );
+    expect(message.html).toContain("Sm&#246;k&#233; &#8212; Test");
+    expect(message.html).not.toContain("Sm\u00f6k\u00e9");
+  });
+
+  it("preserves original developer names in the body", () => {
+    const message = buildModerationEmail({
+      kind: "claim-rejected",
+      to: "author@example.com",
+      developerId: "tokyo-dev",
+      developerName: "\u6771\u4eac Dev",
+      reason: "Could not verify"
+    });
+    expect(message.subject).toContain("tokyo-dev");
+    expect(message.text).toContain("\u201c\u6771\u4eac Dev\u201d (tokyo-dev)");
+    expect(message.html).toContain(
+      "&#8220;&#26481;&#20140; Dev&#8221; (tokyo-dev)"
+    );
+    expect(message.html).not.toContain("\u6771\u4eac");
+  });
+
+  it("encodes non-ASCII as HTML entities while keeping text raw", () => {
+    const message = buildModerationEmail({
+      kind: "claim-rejected",
+      to: "author@example.com",
+      developerId: "paygate-dev",
+      developerName: "Paygate Dev",
+      reason: "Ownership “unverified” — see notes"
+    });
+    expect(message.html).toMatch(/^[\u0020-\u007E]*$/);
+    expect(message.html).toContain("&#8220;unverified&#8221; &#8212;");
+    // The plain-text part (used by Resend, which is UTF-8 clean) keeps
+    // readable unicode.
+    expect(message.text).toContain("“unverified” — see notes");
+  });
+
+  it("links dashboard URLs as anchors in HTML but not in text", () => {
+    const message = buildModerationEmail({
+      kind: "revision-approved",
+      to: "author@example.com",
+      extensionId: "paygate",
+      extensionName: "Paygate"
+    });
+    expect(message.html).toContain(
+      '<a href="https://extensions.fossbilling.org/account">https://extensions.fossbilling.org/account</a>'
+    );
+    expect(message.text).toContain(
+      "https://extensions.fossbilling.org/account"
+    );
+    expect(message.text).not.toContain("<a href=");
+  });
+
+  it("renders every kind with a subject, a dashboard link, and a complete HTML document", () => {
     const kinds = [
       "extension-delisted",
       "revision-approved",
@@ -286,11 +372,9 @@ describe("moderation templates", () => {
         reason: "Needs work"
       });
       expect(message.subject).toContain("[FOSSBilling]");
-      // A rejected claim leaves the claimant with nothing to open, so its
-      // template replies-by-email instead of linking the dashboard.
-      if (kind !== "claim-rejected") {
-        expect(message.text).toContain("extensions.fossbilling.org/account");
-      }
+      expect(message.text).toContain("extensions.fossbilling.org/account");
+      expect(message.html).toContain("<html><body>");
+      expect(message.html).toContain("</body></html>");
     }
   });
 });
