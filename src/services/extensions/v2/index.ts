@@ -42,8 +42,9 @@ extensionsV2.openAPIRegistry.registerComponent("securitySchemes", "Bearer", {
 // GET /revisions) use optional auth and are role-aware, so there are no
 // /extensions/mine or /moderation/* read siblings left to collide with.
 // "mine" is an ordinary extension id now that no static segment shadows it;
-// the developers {id} reservation (me/claims/unapproved, migration 0020)
-// remains because those static routes still exist.
+// the developers {id} reservation remains for the live me/claims routes (and
+// conservatively for unapproved, migration 0020) because a matching adopted
+// row would still be unreachable.
 //
 // Keep the developers parameter route last within its module: GET
 // /developers/{id} would otherwise shadow static GET /developers/* routes
