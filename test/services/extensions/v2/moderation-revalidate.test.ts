@@ -207,6 +207,28 @@ describe("CDN cache revalidation on catalogue mutations", () => {
     expect(fetchCalls(fetcher)).toHaveLength(1);
   });
 
+  it("purges after a developer profile deletion", async () => {
+    // An approved profile with no attached extensions is deletable and
+    // still public content, so the delete path must purge too.
+    await insertUser(db, { id: "user-1", email: "owner@example.com" });
+    await insertDeveloper(db, {
+      id: "doomed-dev",
+      type: "user",
+      name: "Doomed",
+      url: null,
+      owner_user_id: "user-1",
+      approved_at: new Date().toISOString()
+    });
+    const fetcher = stubFrontend();
+
+    const res = await del(
+      "/extensions/v2/developers/me",
+      await authHeaders("user-1")
+    );
+    expect(res.status).toBe(200);
+    expect(fetchCalls(fetcher)).toHaveLength(1);
+  });
+
   it("skips the purge when no secret is configured", async () => {
     await seedModAndExtension();
     const fetcher = stubFrontend();

@@ -90,10 +90,11 @@ apply when modifying the code.
 
 Any endpoint that mutates catalogue-visible content (revision approve/reject,
 delist, developer approve, developer profile upsert via `PUT /developers/me`,
-claim approve/reject, extension withdraw) must call
-`revalidateCatalogue(c)` from `src/services/extensions/v2/revalidate.ts` after a
-successful write. Skipping it does not break correctness — the site's
-`maxAge`/`stale-while-revalidate` windows bound staleness — but changes then take
-minutes instead of seconds to appear. Profile deletion (`DELETE /developers/me`)
-needs no purge: it 409s while extensions are attached, so nothing
-catalogue-visible changes.
+profile deletion via `DELETE /developers/me`, claim approve/reject, extension
+withdraw) must call `revalidateCatalogue(c)` from
+`src/services/extensions/v2/revalidate.ts` after a successful write. Skipping it
+does not break correctness — the site's `maxAge`/`stale-while-revalidate` windows
+bound staleness — but changes then take minutes instead of seconds to appear.
+Profile deletion can remove an approved, extension-less profile, which is still
+public content; the purge is a no-op today while no cached route carries the
+`developers` tag, but keeps the endpoint correct if that ever changes.

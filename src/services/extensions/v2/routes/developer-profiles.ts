@@ -256,6 +256,11 @@ export function registerDeveloperProfileRoutes(app: ExtensionsV2App): void {
           : statusFromErrorCode(error?.code)
       );
     }
+    // Deleting is possible for approved profiles with no attached
+    // extensions, which are still public content — purge for consistency
+    // (it is a no-op today while no cached route carries 'developers', but
+    // keeps this endpoint correct if that ever changes).
+    revalidateCatalogue(c);
     return c.json({ result: data }, 200);
   });
 
