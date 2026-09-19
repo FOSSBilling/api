@@ -29,6 +29,7 @@ import { DeveloperClaimsDatabase } from "../db/developer-claims";
 import { DeveloperTransfersDatabase } from "../db/developer-transfers";
 import { UsersDatabase } from "../db/users";
 import { notifyRequested, sendModerationNotification } from "../email/notify";
+import { revalidateCatalogue } from "../revalidate";
 import { ExtensionsV2App } from "./app";
 
 export function registerOwnershipRoutes(app: ExtensionsV2App): void {
@@ -290,6 +291,7 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
         statusFromErrorCode(error?.code)
       );
     }
+    revalidateCatalogue(c);
     let notified = false;
     if (claimResult?.data) {
       notified = await sendModerationNotification(getPlatform(c), extDb, {
@@ -353,6 +355,7 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
       const status = statusFromErrorCode(error?.code, false);
       return c.json(errorBody(error, "Unable to reject claim"), status);
     }
+    revalidateCatalogue(c);
     let notified = false;
     if (notifyRequested(query)) {
       notified = await sendModerationNotification(getPlatform(c), extDb, {

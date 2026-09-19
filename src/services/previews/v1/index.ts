@@ -33,7 +33,7 @@ registerCommitRoutes(previewsV1);
 previewsV1.route(
   "/docs",
   Scalar.serve({
-    document: () => 
+    document: () =>
       previewsV1.getOpenAPI31Document({
         openapi: "3.1.0",
         info: {
@@ -49,7 +49,7 @@ previewsV1.route(
     documentDownloadType: "none",
     hideClientButton: true,
     hideModels: true,
-      hiddenClients: {
+    hiddenClients: {
       c: true,
       clojure: true,
       csharp: true,

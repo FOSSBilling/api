@@ -27,7 +27,27 @@ export default defineConfig({
           ASSERTION_SIGNING_SECRET: "test-assertion-signing-secret",
           TEST_MIGRATIONS_EXTENSIONS: extensionsMigrations,
           TEST_MIGRATIONS_CENTRAL_ALERTS: centralAlertsMigrations
-        }
+        },
+        workers: [
+          {
+            // Satisfies the EXTENSIONS_FRONTEND service binding declared in
+            // wrangler.jsonc (workerd resolves it to a worker named
+            // "extensions"). Tests that exercise revalidation stub
+            // env.EXTENSIONS_FRONTEND directly, so this stub only needs to
+            // fail loudly if anything ever calls it.
+            name: "extensions",
+            compatibilityDate: "2026-06-06",
+            modulesRoot: "/",
+            modules: [
+              {
+                type: "ESModule",
+                path: "/extensions-stub.js",
+                contents:
+                  "export default { fetch: () => new Response(null, { status: 502 }) };"
+              }
+            ]
+          }
+        ]
       }
     })
   ],

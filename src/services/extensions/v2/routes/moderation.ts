@@ -26,6 +26,7 @@ import { DeveloperProfilesDatabase } from "../db/developer-profiles";
 import { ExtensionsDatabase } from "../db/extensions";
 import { ExtensionRevisionsDatabase } from "../db/revisions";
 import { notifyRequested, sendModerationNotification } from "../email/notify";
+import { revalidateCatalogue } from "../revalidate";
 import { ExtensionsV2App } from "./app";
 
 export function registerModerationRoutes(app: ExtensionsV2App): void {
@@ -96,6 +97,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
       const status = statusFromWriteErrorCode(error?.code);
       return c.json(errorBody(error, "Unable to approve revision"), status);
     }
+    revalidateCatalogue(c);
     let notified = false;
     if (notifyRequested(query)) {
       notified = await sendModerationNotification(getPlatform(c), extDb, {
@@ -168,6 +170,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
       const status = statusFromWriteErrorCode(error?.code);
       return c.json(errorBody(error, "Unable to reject revision"), status);
     }
+    revalidateCatalogue(c);
     let notified = false;
     if (notifyRequested(query)) {
       notified = await sendModerationNotification(getPlatform(c), extDb, {
@@ -240,6 +243,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
       const status = statusFromWriteErrorCode(error?.code);
       return c.json(errorBody(error, "Unable to delist extension"), status);
     }
+    revalidateCatalogue(c);
     let notified = false;
     if (notifyRequested(query)) {
       notified = await sendModerationNotification(getPlatform(c), extDb, {
@@ -314,6 +318,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
           : statusFromErrorCode(error?.code);
       return c.json(errorBody(error, "Unable to approve developer"), status);
     }
+    revalidateCatalogue(c);
     let notified = false;
     if (notifyRequested(query)) {
       notified = await sendModerationNotification(getPlatform(c), extDb, {
