@@ -69,6 +69,7 @@ We use [Cloudflare D1](https://developers.cloudflare.com/d1/) and [KV](https://d
 - `GITHUB_TOKEN`: A GitHub Personal Access Token (classic) with public repo read access.
 - `ASSERTION_SIGNING_SECRET`: Shared HMAC secret used to verify the short-lived bearer assertions minted by the Extensions site. Configure the same value in both Workers; it is never sent to clients.
 - `ASSERTION_SIGNING_SECRET_PREVIOUS`: Optional previous HMAC secret accepted during a signing-key rotation.
+- `EXTENSIONS_REVALIDATE_SECRET`: Bearer token the API sends to the Extensions site's `POST /api/revalidate` (over the `EXTENSIONS_FRONTEND` service binding) to purge the site's CDN-cached catalogue pages after content mutations. Configure the same value in both Workers; it is never sent to clients.
 - `EXTENSIONS_V2_EMAIL_PROVIDER`: `mxroute` or `resend` to send moderator notification emails, or unset/`disabled` to skip sending.
 - `EXTENSIONS_V2_EMAIL_FROM`: Sender address for notification emails (default `noreply@fossbilling.org`).
 - `EXTENSIONS_V2_EMAIL_REPLY_TO`: Optional Reply-To address for a monitored inbox. Omit when unset (no Reply-To header is sent) — notification emails do not invite replies.
@@ -92,6 +93,7 @@ npm install
    ```env
    GITHUB_TOKEN="your-token"
    ASSERTION_SIGNING_SECRET="local-shared-secret"
+   EXTENSIONS_REVALIDATE_SECRET="local-revalidate-secret"
    # Optional while rotating the shared assertion secret.
    # ASSERTION_SIGNING_SECRET_PREVIOUS="previous-local-shared-secret"
    ```

@@ -58,6 +58,15 @@
       "bucket_name": "fossbilling-download"
     }
   ],
+  "services": [
+    {
+      // Private service binding to the extensions site worker. Used by
+      // revalidateCatalogue() to purge the site's CDN-cached catalogue pages
+      // after content mutations — see src/services/extensions/v2/revalidate.ts.
+      "binding": "EXTENSIONS_FRONTEND",
+      "service": "extensions"
+    }
+  ],
   "ratelimits": [
     {
       "name": "PROFILE_CREATION_RATE_LIMITER",

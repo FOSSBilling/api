@@ -25,6 +25,7 @@ import { DeveloperProfilesDatabase } from "../db/developer-profiles";
 import { ExtensionsDatabase } from "../db/extensions";
 import { ExtensionRevisionsDatabase } from "../db/revisions";
 import { UsersDatabase } from "../db/users";
+import { revalidateCatalogue } from "../revalidate";
 import { ExtensionsV2App } from "./app";
 
 const AcceptedRevisionSchema = z.object({
@@ -217,6 +218,7 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
         statusFromWriteErrorCode(error?.code)
       );
     }
+    revalidateCatalogue(c);
     return c.json({ result: { id: data.id, deleted: true as const } }, 200);
   });
 

@@ -80,3 +80,21 @@ apply when modifying the code.
   `ASSERTION_SIGNING_SECRET="..."` to `.dev.vars` for local dev; set via
   `wrangler secret put ASSERTION_SIGNING_SECRET` in production, matching the value
   configured in the extensions site's Worker.
+- `EXTENSIONS_REVALIDATE_SECRET`: bearer token the extensions v2 API sends to the
+  extensions site's `POST /api/revalidate` (over the `EXTENSIONS_FRONTEND` service
+  binding) to purge the site's CDN-cached catalogue pages after content mutations.
+  Must match the value configured in the extensions site's Worker. Same local/prod
+  setup as `ASSERTION_SIGNING_SECRET`.
+
+## Cache Revalidation
+
+Any endpoint that mutates catalogue-visible content (revision approve/reject,
+delist, developer approve, developer profile upsert via `PUT /developers/me`,
+profile deletion via `DELETE /developers/me`, claim approve/reject, extension
+withdraw) must call `revalidateCatalogue(c)` from
+`src/services/extensions/v2/revalidate.ts` after a successful write. Skipping it
+does not break correctness — the site's `maxAge`/`stale-while-revalidate` windows
+bound staleness — but changes then take minutes instead of seconds to appear.
+Profile deletion can remove an approved, extension-less profile, which is still
+public content; the purge is a no-op today while no cached route carries the
+`developers` tag, but keeps the endpoint correct if that ever changes.
