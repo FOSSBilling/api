@@ -89,8 +89,11 @@ apply when modifying the code.
 ## Cache Revalidation
 
 Any endpoint that mutates catalogue-visible content (revision approve/reject,
-delist, developer approve, claim approve/reject, extension withdraw) must call
+delist, developer approve, developer profile upsert via `PUT /developers/me`,
+claim approve/reject, extension withdraw) must call
 `revalidateCatalogue(c)` from `src/services/extensions/v2/revalidate.ts` after a
 successful write. Skipping it does not break correctness — the site's
 `maxAge`/`stale-while-revalidate` windows bound staleness — but changes then take
-minutes instead of seconds to appear.
+minutes instead of seconds to appear. Profile deletion (`DELETE /developers/me`)
+needs no purge: it 409s while extensions are attached, so nothing
+catalogue-visible changes.

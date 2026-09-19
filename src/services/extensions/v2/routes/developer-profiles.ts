@@ -28,6 +28,7 @@ import {
   toPublicDeveloper
 } from "../schemas/developers";
 import { DeveloperProfilesDatabase } from "../db/developer-profiles";
+import { revalidateCatalogue } from "../revalidate";
 import { UsersDatabase } from "../db/users";
 import { ExtensionsV2App } from "./app";
 
@@ -207,6 +208,9 @@ export function registerDeveloperProfileRoutes(app: ExtensionsV2App): void {
       }
       return response;
     }
+    // Profile edits apply immediately (no moderation staging) and change
+    // catalogue-visible fields (developer name/URL), so purge here too.
+    revalidateCatalogue(c);
     return c.json({ result: data }, 200);
   });
 

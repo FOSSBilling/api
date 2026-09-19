@@ -1,7 +1,22 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { env } from "cloudflare:workers";
-import { setupExtensionsV2Tests, db, authHeaders, post } from "./harness";
-import { insertUser, insertDeveloper, insertExtension } from "./db-fixtures";
+import {
+  setupExtensionsV2Tests,
+  db,
+  authHeaders,
+  post,
+  put,
+  del,
+  sampleCreate,
+  sampleDeveloper
+} from "./harness";
+import {
+  insertUser,
+  insertDeveloper,
+  insertExtension,
+  insertDeveloperClaim,
+  insertUnpublishedExtension
+} from "./db-fixtures";
 
 // Hoisted so no v2 suite can make a real GitHub call. harness.ts applies the
 // default "not found" behaviour in beforeEach and documents why.
@@ -28,7 +43,9 @@ function stubFrontend(status = 200): FetcherStub {
 }
 
 function fetchCalls(fetcher: FetcherStub): Array<[unknown, RequestInit]> {
-  return (fetcher.fetch as ReturnType<typeof vi.fn>).mock.calls;
+  return (fetcher.fetch as ReturnType<typeof vi.fn>).mock.calls as Array<
+    [unknown, RequestInit]
+  >;
 }
 
 afterEach(() => {
@@ -84,6 +101,110 @@ describe("CDN cache revalidation on catalogue mutations", () => {
     expect(JSON.parse(String(init.body))).toEqual({
       tags: ["catalogue", "developers"]
     });
+  });
+
+  it("purges after a revision approval", async () => {
+    await seedModAndExtension();
+    const created = await post(
+      "/extensions/v2/extensions",
+      await authHeaders("user-1"),
+      sampleCreate({ extensionId: "approve-rev" })
+    );
+    expect(created.status).toBe(201);
+    const { result } = (await created.json()) as {
+      result: { id: string; revision_id: string };
+    };
+    const fetcher = stubFrontend();
+
+    const res = await post(
+      `/extensions/v2/extensions/${result.id}/revisions/${result.revision_id}/approve?notify=false`,
+      await authHeaders("mod-1"),
+      {}
+    );
+    expect(res.status).toBe(200);
+    expect(fetchCalls(fetcher)).toHaveLength(1);
+  });
+
+  it("purges after a revision rejection", async () => {
+    await seedModAndExtension();
+    const created = await post(
+      "/extensions/v2/extensions",
+      await authHeaders("user-1"),
+      sampleCreate({ extensionId: "reject-rev" })
+    );
+    expect(created.status).toBe(201);
+    const { result } = (await created.json()) as {
+      result: { id: string; revision_id: string };
+    };
+    const fetcher = stubFrontend();
+
+    const res = await post(
+      `/extensions/v2/extensions/${result.id}/revisions/${result.revision_id}/reject?notify=false`,
+      await authHeaders("mod-1"),
+      { review_note: "Needs work" }
+    );
+    expect(res.status).toBe(200);
+    expect(fetchCalls(fetcher)).toHaveLength(1);
+  });
+
+  it("purges after an approved claim", async () => {
+    await insertUser(db, { id: "mod-1", is_moderator: 1 });
+    await insertUser(db, { id: "claimant-1", email: "claimant@example.com" });
+    await insertDeveloper(db, {
+      id: "legacy-dev",
+      type: "user",
+      name: "Legacy",
+      url: null,
+      owner_user_id: null
+    });
+    await insertDeveloperClaim(db, {
+      id: "claim-1",
+      developer_id: "legacy-dev",
+      claimant_id: "claimant-1"
+    });
+    const fetcher = stubFrontend();
+
+    const res = await post(
+      "/extensions/v2/developers/claims/claim-1/approve?notify=false",
+      await authHeaders("mod-1")
+    );
+    expect(res.status).toBe(200);
+    expect(fetchCalls(fetcher)).toHaveLength(1);
+  });
+
+  it("purges after an owner withdraws an unpublished extension", async () => {
+    await insertUser(db, { id: "user-1", email: "owner@example.com" });
+    await insertDeveloper(db, {
+      id: "new-developer",
+      type: "user",
+      name: "New Developer",
+      url: null,
+      owner_user_id: "user-1"
+    });
+    await insertUnpublishedExtension(db, {
+      id: "draft-ext",
+      developer_id: "new-developer"
+    });
+    const fetcher = stubFrontend();
+
+    const res = await del(
+      "/extensions/v2/extensions/draft-ext",
+      await authHeaders("user-1")
+    );
+    expect(res.status).toBe(200);
+    expect(fetchCalls(fetcher)).toHaveLength(1);
+  });
+
+  it("purges after a developer profile upsert", async () => {
+    const fetcher = stubFrontend();
+
+    const res = await put(
+      "/extensions/v2/developers/me",
+      await authHeaders("user-1"),
+      sampleDeveloper()
+    );
+    expect(res.status).toBe(200);
+    expect(fetchCalls(fetcher)).toHaveLength(1);
   });
 
   it("skips the purge when no secret is configured", async () => {
