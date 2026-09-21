@@ -131,6 +131,82 @@ describe("Extensions API v1", () => {
       expect(data.result.length).toBe(1);
     });
 
+    // Opt-in pagination walks the list in (LOWER(id), id) order - the same
+    // ordering as the catalogue index - so pages are deterministic and
+    // case-mixed ids sort case-insensitively. Without params the response
+    // stays the unpaginated legacy shape (no pagination object).
+    it("should page deterministically with an opt-in limit and offset", async () => {
+      const db = getExtensionsDb(env.DB_EXTENSIONS);
+      await db.insert(extensions).values({
+        ...testExtensionRows[0],
+        id: "alpha-mod",
+        name: "Alpha Module",
+        publishedAt: "2026-01-01T00:00:00.000Z"
+      });
+
+      const page = async (query: string) => {
+        const ctx = createExecutionContext();
+        const res = await app.request(
+          `/extensions/v1/list${query}`,
+          {},
+          env,
+          ctx
+        );
+        await waitOnExecutionContext(ctx);
+        expect(res.status).toBe(200);
+        return (await res.json()) as {
+          result: Array<{ id: string }>;
+          pagination?: { limit: number; offset: number; has_more: boolean };
+        };
+      };
+
+      const first = await page("?limit=1");
+      expect(first.result.map((e) => e.id)).toEqual(["alpha-mod"]);
+      expect(first.pagination).toEqual({
+        limit: 1,
+        offset: 0,
+        has_more: true
+      });
+
+      const second = await page("?limit=1&offset=1");
+      expect(second.result.map((e) => e.id)).toEqual(["Example"]);
+      expect(second.pagination).toEqual({
+        limit: 1,
+        offset: 1,
+        has_more: true
+      });
+
+      const last = await page("?limit=1&offset=2");
+      expect(last.result.map((e) => e.id)).toEqual(["TestTheme"]);
+      expect(last.pagination).toEqual({
+        limit: 1,
+        offset: 2,
+        has_more: false
+      });
+
+      const unpaginated = await page("");
+      expect(unpaginated.result).toHaveLength(3);
+      expect(unpaginated.pagination).toBeUndefined();
+    });
+
+    // offset is only meaningful alongside a limit: a stray offset alone
+    // must not silently fall through to the full legacy response the way
+    // it would if the param were simply ignored.
+    it("should reject offset without limit with 422", async () => {
+      const ctx = createExecutionContext();
+      const res = await app.request(
+        "/extensions/v1/list?offset=1",
+        {},
+        env,
+        ctx
+      );
+      await waitOnExecutionContext(ctx);
+
+      expect(res.status).toBe(422);
+      const data = (await res.json()) as { error: { message: string } };
+      expect(data.error.message).toBe("offset requires limit");
+    });
+
     it("should redirect trailing slash", async () => {
       const ctx = createExecutionContext();
       const res = await app.request("/extensions/v1/list/", {}, env, ctx);

@@ -1,4 +1,5 @@
 import { verify as verifyJwt } from "hono/jwt";
+import { logWarn } from "../logger";
 import { AuthPrincipal, TokenVerifier } from "./interfaces";
 
 const CLOCK_SKEW_SECONDS = 5;
@@ -45,6 +46,33 @@ function isAssertionPayload(value: unknown): value is AssertionPayload {
   );
 }
 
+// Failed verifications are routine public traffic (expired 60s assertions,
+// malformed tokens, junk Authorization headers), so an unthrottled warn is
+// attacker-spammable log volume that drowns out the misconfiguration
+// signal it exists to surface. At most one warn per isolate per minute.
+const WARN_INTERVAL_MS = 60_000;
+let lastAuthWarnAt = 0;
+
+// Per-isolate memo of each secret's imported HMAC CryptoKey: hono's JWT
+// verify re-imports the raw secret on every call otherwise. Holds at most
+// the two configured rotation secrets.
+const importedKeys = new Map<string, Promise<CryptoKey>>();
+
+function importedKeyFor(secret: string): Promise<CryptoKey> {
+  let key = importedKeys.get(secret);
+  if (!key) {
+    key = crypto.subtle.importKey(
+      "raw",
+      new TextEncoder().encode(secret),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["verify"]
+    );
+    importedKeys.set(secret, key);
+  }
+  return key;
+}
+
 // Verifies the Extensions site's compact HS256 assertion
 // (header.payload.signature). Hono performs JWT parsing and signature
 // verification with the algorithm pinned by ASSERTION_VERIFY_OPTIONS; the
@@ -60,7 +88,11 @@ export const bearerAssertionVerifier: TokenVerifier = {
     for (const secret of secrets) {
       let payload: unknown;
       try {
-        payload = await verifyJwt(token, secret, ASSERTION_VERIFY_OPTIONS);
+        payload = await verifyJwt(
+          token,
+          await importedKeyFor(secret),
+          ASSERTION_VERIFY_OPTIONS
+        );
       } catch {
         continue;
       }
@@ -74,6 +106,15 @@ export const bearerAssertionVerifier: TokenVerifier = {
       return { userId: payload.sub, scope: "assertion" };
     }
 
+    // A consistent failure across every configured secret is the only
+    // signal a misconfigured ASSERTION_SIGNING_SECRET produces.
+    const now = Date.now();
+    if (now - lastAuthWarnAt >= WARN_INTERVAL_MS) {
+      lastAuthWarnAt = now;
+      logWarn("auth", "Bearer assertion failed verification", {
+        secretsTried: secrets.length
+      });
+    }
     return null;
   }
 };

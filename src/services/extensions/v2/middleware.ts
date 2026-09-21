@@ -20,13 +20,9 @@ export function optionalAuth(): MiddlewareHandler {
 }
 
 // Returns the principal when optionalAuth() authenticated the caller, or null
-// for anonymous reads. Never throws, unlike getAuth().
+// for anonymous reads - read directly rather than through getAuth()'s throw.
 export function getOptionalAuth(c: Context): AuthPrincipal | null {
-  try {
-    return getAuth(c);
-  } catch {
-    return null;
-  }
+  return (c.get("auth") as AuthPrincipal | undefined) ?? null;
 }
 
 type AuthenticatedCheck = (c: Context) => Promise<Response | undefined>;

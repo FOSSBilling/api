@@ -1,4 +1,5 @@
 import { z } from "@hono/zod-openapi";
+import { ListPaginationQuerySchema, offsetRequiresLimit } from "./common";
 
 export const TransferAcceptanceSchema = z
   .object({ token: z.string().min(64).max(128) })
@@ -66,17 +67,23 @@ export const ClaimNoteSchema = z
 // share one contract; status optionally narrows the mine view.
 export const ClaimsScopeSchema = z.enum(["mine", "pending"]);
 
-export const UnifiedClaimsQuerySchema = z.object({
-  scope: ClaimsScopeSchema.openapi({
-    param: { name: "scope", in: "query" },
-    description:
-      "mine: the caller's own claims. pending: claims awaiting review (moderator only)."
-  }),
-  status: z
-    .enum(["pending", "approved", "rejected", "all"])
-    .default("all")
-    .openapi({
-      param: { name: "status", in: "query" },
-      description: "Filter claims by status (default: all)"
-    })
-});
+export const UnifiedClaimsQuerySchema = z
+  .object({
+    scope: ClaimsScopeSchema.openapi({
+      param: { name: "scope", in: "query" },
+      description:
+        "mine: the caller's own claims. pending: claims awaiting review (moderator only)."
+    }),
+    status: z
+      .enum(["pending", "approved", "rejected", "all"])
+      .default("all")
+      .openapi({
+        param: { name: "status", in: "query" },
+        description: "Filter claims by status (default: all)"
+      }),
+    limit: ListPaginationQuerySchema.shape.limit,
+    offset: ListPaginationQuerySchema.shape.offset
+  })
+  .refine(offsetRequiresLimit, {
+    message: "offset requires limit"
+  });

@@ -114,6 +114,30 @@ describe("moderation notification emails", () => {
     expect(body.body).toContain("Upstream source removed");
   });
 
+  // Moderation routes pass the raw URL param, and ids are matched
+  // case-insensitively everywhere else - the recipient lookup must not
+  // regress to a case-sensitive match or mixed-case ids silently skip
+  // the notification.
+  it("resolves the recipient for a mixed-case id in the URL", async () => {
+    await insertUser(db, { id: "mod-1", is_moderator: 1 });
+    await seedLiveExtension();
+    setEmailEnv();
+    const calls = stubSmtpApi();
+
+    const res = await post(
+      "/extensions/v2/extensions/LIVE-Ext/delist",
+      await authHeaders("mod-1"),
+      { reason: "Upstream source removed" }
+    );
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      result: { status: "delisted", notified: true }
+    });
+    expect(calls).toHaveLength(1);
+    const body = JSON.parse(String(calls[0].init.body));
+    expect(body.to).toBe("author@example.com");
+  });
+
   it("sends ASCII-safe payloads for unicode moderator notes", async () => {
     await insertUser(db, { id: "mod-1", is_moderator: 1 });
     await seedLiveExtension();
@@ -189,7 +213,10 @@ describe("moderation notification emails", () => {
     await insertUser(db, { id: "mod-1", is_moderator: 1 });
     await seedLiveExtension();
     setEmailEnv();
-    stubSmtpApi({ success: false, message: "Invalid server specified." });
+    const calls = stubSmtpApi({
+      success: false,
+      message: "Invalid server specified."
+    });
 
     const res = await post(
       "/extensions/v2/extensions/live-ext/delist",
@@ -197,9 +224,14 @@ describe("moderation notification emails", () => {
       { reason: "Upstream source removed" }
     );
     expect(res.status).toBe(200);
+    // `notified` reports that a send was dispatched (recipient resolved,
+    // provider call handed to waitUntil) - not that the provider accepted
+    // it. The provider failure is visible only in logs; the delist itself
+    // must still succeed.
     await expect(res.json()).resolves.toEqual({
-      result: { id: "live-ext", status: "delisted", notified: false }
+      result: { id: "live-ext", status: "delisted", notified: true }
     });
+    expect(calls).toHaveLength(1);
     expect((await getExtension(db, "live-ext"))?.delist_reason).toBe(
       "Upstream source removed"
     );
@@ -306,6 +338,27 @@ describe("moderation notification emails", () => {
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toMatchObject({
       result: { notified: false }
+    });
+    expect(calls).toHaveLength(0);
+  });
+
+  // Mail configured off (or credentials incomplete) cannot dispatch
+  // anything: the send is skipped up front and notified reports false,
+  // rather than deferring a doomed send and claiming true.
+  it("reports notified:false when the email provider is not configured", async () => {
+    await insertUser(db, { id: "mod-1", is_moderator: 1 });
+    await seedLiveExtension();
+    // No setEmailEnv(): no provider credentials in this test run.
+    const calls = stubSmtpApi();
+
+    const res = await post(
+      "/extensions/v2/extensions/live-ext/delist",
+      await authHeaders("mod-1"),
+      { reason: "Upstream source removed" }
+    );
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      result: { status: "delisted", notified: false }
     });
     expect(calls).toHaveLength(0);
   });

@@ -286,8 +286,11 @@ export class DeveloperClaimsDatabase {
       | {
           scope: "pending";
           status?: "pending" | "approved" | "rejected" | "all";
-        }
-  ): Promise<DatabaseResult<PendingDeveloperClaim[]>> {
+        },
+    page?: { limit: number; offset: number }
+  ): Promise<
+    DatabaseResult<{ items: PendingDeveloperClaim[]; hasMore: boolean }>
+  > {
     const status = filters.status ?? "all";
     let rows;
     try {
@@ -311,26 +314,42 @@ export class DeveloperClaimsDatabase {
         .from(developerClaims)
         .innerJoin(developers, eq(developers.id, developerClaims.developerId))
         .leftJoin(users, eq(users.id, developerClaims.claimantId));
-      rows = await (
-        conditions.length ? base.where(and(...conditions)) : base
-      ).orderBy(
+      const filtered = conditions.length
+        ? base.where(and(...conditions))
+        : base;
+      // Offset pagination needs a deterministic total order: created_at
+      // ties are broken by rowid (insertion order), matching listHistory.
+      // limit+1 probe - see DeveloperProfilesDatabase.listWithOwnerPaged.
+      const ordered = filtered.orderBy(
         filters.scope === "mine"
           ? desc(developerClaims.createdAt)
-          : asc(developerClaims.createdAt)
+          : asc(developerClaims.createdAt),
+        filters.scope === "mine"
+          ? sql`"developer_claims".rowid DESC`
+          : sql`"developer_claims".rowid ASC`
       );
+      rows = page
+        ? await ordered.offset(page.offset).limit(page.limit + 1)
+        : await ordered;
     } catch (error) {
       return databaseError("listScoped", error);
     }
 
+    const hasMore = page ? rows.length > page.limit : false;
+    const trimmed = page && hasMore ? rows.slice(0, page.limit) : rows;
+
     return {
-      data: rows.map((row) => ({
-        ...parseClaimRow(row.claim),
-        developer_name: row.developerName,
-        developer_type:
-          row.developerType as PendingDeveloperClaim["developer_type"],
-        claimant_name: row.claimantName,
-        claimant_github_login: row.claimantGithubLogin
-      })),
+      data: {
+        items: trimmed.map((row) => ({
+          ...parseClaimRow(row.claim),
+          developer_name: row.developerName,
+          developer_type:
+            row.developerType as PendingDeveloperClaim["developer_type"],
+          claimant_name: row.claimantName,
+          claimant_github_login: row.claimantGithubLogin
+        })),
+        hasMore
+      },
       error: null
     };
   }

@@ -63,6 +63,12 @@ export async function verifyGithubOwnership(
   githubToken?: string,
   publisherUrl?: string
 ): Promise<GithubOwnershipVerificationResult> {
+  // The D1 identity read and the GitHub entity lookup are independent -
+  // start both. The identity result is only consumed once the GitHub
+  // entity exists and its type agrees; the early-return paths below just
+  // leave it to finish (it never rejects: DatabaseResult methods classify
+  // their own errors).
+  const identityLookup = new UsersDatabase(db).getGithubIdentity(callerId);
   const githubEntity = await checkGithubEntity(developerId, githubToken ?? "");
 
   if (githubEntity.status === "unavailable") {
@@ -87,7 +93,7 @@ export async function verifyGithubOwnership(
     return { mismatch: true };
   }
 
-  const identity = await new UsersDatabase(db).getGithubIdentity(callerId);
+  const identity = await identityLookup;
   // A real DB/schema failure here is not the same as "caller has no linked
   // GitHub identity" — swallowing it would silently let creation/claiming
   // proceed unverified during an outage instead of surfacing the error.

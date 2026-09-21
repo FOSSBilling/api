@@ -60,12 +60,17 @@ Endpoints are not listed here. The service publishes its own contract:
 
 ## Notes
 
-- Responses are cached in `CACHE_KV`, only for successful lookups - a
-  not-yet-built PR or a transient GitHub error always re-resolves on the
-  next request. `GET /pr/{number}` (`preview:pr:{number}`, also used by
-  `/pr/{number}/download` to avoid re-resolving what the metadata route
-  already cached) and `GET /main` (`preview:main`) use the 60s default,
-  matching how often a moving pointer can realistically change.
+- Responses are cached in `CACHE_KV`. Successful lookups are cached as
+  described below; `not_found` results are also cached, but only for a
+  single 60s KV-floor window - a not-yet-built PR starts resolving within
+  a minute of its build landing on GitHub, while polling clients cost one
+  KV read instead of the full GitHub resolve chain per poll. `unavailable`
+  results (GitHub errors) are never cached - a transient error always
+  re-resolves on the next request. `GET /pr/{number}` (`preview:pr:{number}`,
+  also used by `/pr/{number}/download` to avoid re-resolving what the
+  metadata route already cached) and `GET /main` (`preview:main`) use the
+  60s default, matching how often a moving pointer can realistically
+  change.
   `GET /commit/{sha}` (`preview:commit:{sha}`, likewise shared with
   `/commit/{sha}/download`) uses 3600s instead - a commit's build never
   changes once it exists, so there's no correctness reason to re-check it

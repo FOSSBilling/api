@@ -6,6 +6,11 @@ import { registerMainRoutes } from "./routes/main";
 import { registerPrRoutes } from "./routes/pr";
 import { registerCommitRoutes } from "./routes/commit";
 
+// The document is deterministic once every route is registered, so build
+// it once per isolate on the first /docs request.
+type OpenApiDocument = ReturnType<typeof previewsV1.getOpenAPI31Document>;
+let cachedOpenApiDocument: OpenApiDocument | null = null;
+
 const previewsV1 = new OpenAPIHono<{ Bindings: CloudflareBindings }>({
   defaultHook: (result, c) => {
     if (!result.success) {
@@ -34,7 +39,7 @@ previewsV1.route(
   "/docs",
   Scalar.serve({
     document: () =>
-      previewsV1.getOpenAPI31Document({
+      (cachedOpenApiDocument ??= previewsV1.getOpenAPI31Document({
         openapi: "3.1.0",
         info: {
           title: "FOSSBilling Previews API (v1)",
@@ -43,7 +48,7 @@ previewsV1.route(
             "Read-only lookup of FOSSBilling preview builds - the current main preview and per-PR/per-commit builds produced by FOSSBilling/FOSSBilling's GitHub Actions workflows."
         },
         servers: [{ url: "/previews/v1" }]
-      }),
+      })),
     pageTitle: "FOSSBilling Previews API (v1)",
     agent: { disabled: true },
     documentDownloadType: "none",

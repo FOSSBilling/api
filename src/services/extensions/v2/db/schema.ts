@@ -265,6 +265,25 @@ export const extensionRevisions = sqliteTable(
       table.createdAt,
       table.id
     ),
+    // Covers the "most recently reviewed revision" correlated subquery in
+    // extensions.ts's owner/moderation views (extensions.ts REVIEWED_JOIN).
+    // Without it, that subquery filters revisions by status and sorts by
+    // reviewed_at in a temporary B-tree once per row of every owned list;
+    // with it, the subquery is an ordered seek. reviewed_at is stored
+    // ASCENDING on purpose: SQLite index entries carry rowid ascending as
+    // their implicit final column, so a backward scan of this all-ASC
+    // index yields exactly the subquery's `reviewed_at DESC, rowid DESC`
+    // order - a DESC index scanned either direction would still leave the
+    // rowid tie-break to a per-row sort.
+    index("idx_extension_revisions_reviewed")
+      .on(table.extensionId, table.reviewedAt)
+      .where(sql`${table.status} IN ('approved', 'rejected')`),
+    // Covers the pending-revision guard ("submitter has fewer than 10
+    // pending revisions") and delete-account rejection, which otherwise
+    // scan all of a submitter's revisions across every status.
+    index("idx_extension_revisions_submitter_pending")
+      .on(table.submittedBy)
+      .where(sql`${table.status} = 'pending'`),
     check(
       "extension_revisions_status_check",
       sql`${table.status} IN ('pending', 'approved', 'rejected')`

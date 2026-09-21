@@ -50,6 +50,13 @@ vi.mock("@octokit/graphql", () => ({
 
 let restoreConsole: (() => void) | null = null;
 
+// Requests carrying an Authorization header bypass the hono cache middleware
+// entirely, so tests that mock specific GitHub responses and assert on the
+// handler output are guaranteed to execute the handler rather than read an
+// entry a previous test cached. The cache path itself is covered by
+// "should cache statistics data", which deliberately omits the header.
+const NO_CACHE_HEADERS = { authorization: "test-bypass-cache" } as const;
+
 describe("Stats API v1", () => {
   beforeEach(async () => {
     restoreConsole = suppressConsole();
@@ -77,7 +84,9 @@ describe("Stats API v1", () => {
     it("should return aggregated statistics", async () => {
       const ctx = createExecutionContext();
       const response = await app.fetch(
-        new Request("http://localhost/stats/v1/data"),
+        new Request("http://localhost/stats/v1/data", {
+          headers: NO_CACHE_HEADERS
+        }),
         env,
         ctx
       );
@@ -166,7 +175,9 @@ describe("Stats API v1", () => {
 
       const ctx = createExecutionContext();
       const response = await app.fetch(
-        new Request("http://localhost/stats/v1/data"),
+        new Request("http://localhost/stats/v1/data", {
+          headers: NO_CACHE_HEADERS
+        }),
         env,
         ctx
       );
@@ -235,7 +246,9 @@ describe("Stats API v1", () => {
 
       const ctx = createExecutionContext();
       const response = await app.fetch(
-        new Request("http://localhost/stats/v1/data"),
+        new Request("http://localhost/stats/v1/data", {
+          headers: NO_CACHE_HEADERS
+        }),
         env,
         ctx
       );
@@ -296,7 +309,9 @@ describe("Stats API v1", () => {
 
       const ctx = createExecutionContext();
       const response = await app.fetch(
-        new Request("http://localhost/stats/v1/data"),
+        new Request("http://localhost/stats/v1/data", {
+          headers: NO_CACHE_HEADERS
+        }),
         env,
         ctx
       );

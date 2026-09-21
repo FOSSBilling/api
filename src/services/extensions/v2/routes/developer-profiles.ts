@@ -16,7 +16,10 @@ import {
 import {
   ActiveAccountRequiredResponse,
   IdParamSchema,
-  errorResponse
+  errorResponse,
+  offsetPageFromQuery,
+  offsetPaginationFrom,
+  OffsetPaginationSchema
 } from "../schemas/common";
 import {
   DeveloperDetailResponseSchema,
@@ -46,7 +49,10 @@ export function registerDeveloperProfileRoutes(app: ExtensionsV2App): void {
       200: {
         content: {
           "application/json": {
-            schema: z.object({ result: z.array(DeveloperProfileSchema) })
+            schema: z.object({
+              result: z.array(DeveloperProfileSchema),
+              pagination: OffsetPaginationSchema.optional()
+            })
           }
         },
         description: "Developer profiles matching the status filter"
@@ -62,11 +68,12 @@ export function registerDeveloperProfileRoutes(app: ExtensionsV2App): void {
   });
 
   app.openapi(listDevelopersRoute, async (c) => {
-    const { status } = c.req.valid("query");
+    const { status, limit, offset } = c.req.valid("query");
     const db = new DeveloperProfilesDatabase(
       getExtensionsDb(c.env.DB_EXTENSIONS)
     );
-    const { data, error } = await db.listScoped({ status });
+    const page = offsetPageFromQuery({ limit, offset });
+    const { data, error } = await db.listScoped({ status, page });
     if (error || !data) {
       return c.json(
         {
@@ -78,7 +85,13 @@ export function registerDeveloperProfileRoutes(app: ExtensionsV2App): void {
         500
       );
     }
-    return c.json({ result: data }, 200);
+    return c.json(
+      {
+        result: data.items,
+        pagination: offsetPaginationFrom(page, data.hasMore)
+      },
+      200
+    );
   });
 
   const getOwnDeveloperRoute = createRoute({
@@ -358,8 +371,14 @@ export function registerDeveloperProfileRoutes(app: ExtensionsV2App): void {
     const extDb = getExtensionsDb(c.env.DB_EXTENSIONS);
     const db = new DeveloperProfilesDatabase(extDb);
     if (auth) {
+      // All three reads key off the caller id alone - resolve them
+      // together and keep the original error precedence below.
       const users = new UsersDatabase(extDb);
-      const own = await db.getOwn(auth.userId);
+      const [own, active, access] = await Promise.all([
+        db.getOwn(auth.userId),
+        users.isActive(auth.userId),
+        users.moderatorAccess(auth.userId)
+      ]);
       if (
         !own.error &&
         own.data &&
@@ -369,7 +388,6 @@ export function registerDeveloperProfileRoutes(app: ExtensionsV2App): void {
         // and transfer state, so it stays behind the active-account check
         // the former GET /developers/me enforced. A deactivated owner falls
         // through to the public view below rather than keeping full access.
-        const active = await users.isActive(auth.userId);
         if (active.error) {
           return c.json(
             errorBody(active.error, "Unable to check account"),
@@ -384,7 +402,6 @@ export function registerDeveloperProfileRoutes(app: ExtensionsV2App): void {
       } else if (own.error) {
         return c.json(errorBody(own.error, "Unable to load developer"), 500);
       }
-      const access = await users.moderatorAccess(auth.userId);
       if (access.error) {
         return c.json(errorBody(access.error, "Unable to check access"), 500);
       }

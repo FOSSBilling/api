@@ -104,6 +104,9 @@ describe("Previews API v1 - GET /previews/v1/pr/:number", () => {
       },
       "GET /repos/{owner}/{repo}/actions/artifacts": {
         data: { total_count: 0, artifacts: [] }
+      },
+      "GET /repos/{owner}/{repo}/actions/runs": {
+        data: { total_count: 0, workflow_runs: [] }
       }
     });
 
@@ -199,9 +202,9 @@ describe("Previews API v1 - GET /previews/v1/pr/:number", () => {
     // artifact after $GITHUB_SHA, which GitHub sets to the ephemeral
     // pull_request merge commit rather than the PR's real head commit -
     // see the comment on findPreviewArtifactByCommitSha. The exact-name
-    // query built from the real head SHA (SHA) therefore misses, and only
-    // the fallback scan (matched by the run's real head_sha, unaffected by
-    // what name the artifact was given) finds it.
+    // query built from the real head SHA (SHA) therefore misses, and the
+    // full-SHA runs-API fallback (matched by the run's real head_sha,
+    // unaffected by what name the artifact was given) finds it.
     const mergeShaArtifact = {
       id: 777,
       name: "FOSSBilling-preview-deadbee.zip",
@@ -221,6 +224,19 @@ describe("Previews API v1 - GET /previews/v1/pr/:number", () => {
           if (params?.name) {
             return { data: { total_count: 0, artifacts: [] } };
           }
+          return { data: { total_count: 1, artifacts: [mergeShaArtifact] } };
+        }
+        if (route === "GET /repos/{owner}/{repo}/actions/runs") {
+          return {
+            data: {
+              total_count: 1,
+              workflow_runs: [{ id: 888, head_sha: SHA }]
+            }
+          };
+        }
+        if (
+          route === "GET /repos/{owner}/{repo}/actions/runs/{run_id}/artifacts"
+        ) {
           return { data: { total_count: 1, artifacts: [mergeShaArtifact] } };
         }
         throw new Error(`Unexpected route: ${route}`);

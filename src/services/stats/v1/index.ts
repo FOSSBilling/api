@@ -18,7 +18,7 @@ type StatsEnv = { Bindings: CloudflareBindings };
 
 const STATS_CACHE_KEY = "fossbilling-stats-data";
 const STATS_CACHE_NAME = "stats-api-v1";
-const STATS_CACHE_CONTROL = "max-age: 86400";
+const STATS_CACHE_CONTROL = "max-age=86400";
 const STATS_CACHE_TTL = 86400;
 
 const statsV1 = new Hono<StatsEnv>();
@@ -143,7 +143,8 @@ async function getStats(
   cache: ICache,
   githubToken: string,
   downloadBucket: R2Bucket,
-  updateCache: boolean = false
+  updateCache: boolean = false,
+  waitUntil?: (promise: Promise<unknown>) => void
 ): Promise<{
   stats: StatsData;
   source: "cache" | "fresh" | "stale";
@@ -180,7 +181,8 @@ async function getStats(
     cache,
     githubToken,
     downloadBucket,
-    updateCache
+    updateCache,
+    waitUntil
   );
 
   if (hasNoReleases(result.releases) && result.error) {
@@ -199,9 +201,11 @@ async function getStats(
   const stats = aggregateStats(result.releases);
 
   if (!hasNoReleases(result.releases)) {
-    await cache.put(STATS_CACHE_KEY, JSON.stringify(stats), {
+    const put = cache.put(STATS_CACHE_KEY, JSON.stringify(stats), {
       expirationTtl: STATS_CACHE_TTL
     });
+    if (waitUntil) waitUntil(put);
+    else await put;
     logInfo("stats", "Updated stats cache", {
       cacheKey: STATS_CACHE_KEY,
       releaseCount: Object.keys(result.releases).length
@@ -219,7 +223,9 @@ registerCachedRoute("/data", async (c) => {
   const result = await getStats(
     platform.getCache("CACHE_KV"),
     platform.getEnv("GITHUB_TOKEN") || "",
-    c.env.DOWNLOAD_BUCKET
+    c.env.DOWNLOAD_BUCKET,
+    false,
+    (p) => c.executionCtx.waitUntil(p)
   );
 
   if (result.error && result.stats.releaseSizes.length === 0) {

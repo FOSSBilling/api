@@ -103,3 +103,62 @@ export const PaginationSchema = z
     has_more: z.boolean()
   })
   .openapi("Pagination");
+
+// Opt-in offset pagination for the moderator/audit list endpoints: both
+// params omitted => full unpaginated result, identical to the contract
+// before pagination existed. offset without limit is rejected (422) rather
+// than silently ignored, since the generated schema would otherwise
+// advertise a param the routes drop.
+export const offsetRequiresLimit = (query: {
+  limit?: number;
+  offset?: number;
+}): boolean => query.limit !== undefined || query.offset === undefined;
+
+export const ListPaginationQuerySchema = z
+  .object({
+    limit: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(100)
+      .optional()
+      .openapi({ param: { name: "limit", in: "query" } }),
+    offset: z.coerce
+      .number()
+      .int()
+      .min(0)
+      .optional()
+      .openapi({ param: { name: "offset", in: "query" } })
+  })
+  .refine(offsetRequiresLimit, {
+    message: "offset requires limit"
+  });
+
+export const OffsetPaginationSchema = z
+  .object({
+    limit: z.number().int(),
+    offset: z.number().int(),
+    has_more: z.boolean()
+  })
+  .openapi("OffsetPagination");
+
+// Normalises the validated pagination query into the shape the database
+// readers take: undefined without a limit (the unpaginated default), and
+// offset defaulting to 0.
+export function offsetPageFromQuery(query: {
+  limit?: number;
+  offset?: number;
+}): { limit: number; offset: number } | undefined {
+  return query.limit === undefined
+    ? undefined
+    : { limit: query.limit, offset: query.offset ?? 0 };
+}
+
+// The response half of the same deal: absent without a limit, the
+// OffsetPagination object otherwise.
+export function offsetPaginationFrom(
+  page: { limit: number; offset: number } | undefined,
+  hasMore: boolean
+): { limit: number; offset: number; has_more: boolean } | undefined {
+  return page ? { ...page, has_more: hasMore } : undefined;
+}

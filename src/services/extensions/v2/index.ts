@@ -61,11 +61,16 @@ registerModerationRoutes(extensionsV2);
 registerRevisionRoutes(extensionsV2);
 registerDeveloperProfileRoutes(extensionsV2);
 
+// The document is deterministic once every route is registered, so build
+// it once per isolate on the first /docs request.
+type OpenApiDocument = ReturnType<typeof extensionsV2.getOpenAPI31Document>;
+let cachedOpenApiDocument: OpenApiDocument | null = null;
+
 extensionsV2.route(
   "/docs",
   Scalar.serve({
     document: () =>
-      extensionsV2.getOpenAPI31Document({
+      (cachedOpenApiDocument ??= extensionsV2.getOpenAPI31Document({
         openapi: "3.1.0",
         info: {
           title: "FOSSBilling Extensions API (v2)",
@@ -74,7 +79,7 @@ extensionsV2.route(
             "Self-service extension publishing, ownership, moderation, and public browsing. v1 (/extensions/v1) remains available for existing integrations."
         },
         servers: [{ url: "/extensions/v2" }]
-      }),
+      })),
     pageTitle: "FOSSBilling Extensions API (v2)",
     agent: { disabled: true },
     documentDownloadType: "none",

@@ -6,9 +6,9 @@ import type { EmailSender, EmailSendResult, EnvReader, FetchFn } from "./types";
 // Local dev and tests have no mail credentials: report every send as skipped
 // rather than throwing, so moderation writes never depend on email config.
 // The reason distinguishes "never enabled" from "selected but incomplete" in
-// notify.ts's failure log.
+// notify.ts's skip log.
 export class DisabledSender implements EmailSender {
-  constructor(private reason = "email notifications are disabled") {}
+  constructor(readonly reason = "email notifications are disabled") {}
 
   async send(): Promise<EmailSendResult> {
     return { ok: false, error: this.reason };
