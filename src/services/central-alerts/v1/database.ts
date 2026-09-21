@@ -16,9 +16,9 @@ export class CentralAlertsDatabase {
   }): Promise<DatabaseResult<{ alerts: CentralAlert[]; hasMore: boolean }>> {
     let rows;
     try {
-      // Offset pagination needs a deterministic total order; rowid breaks
-      // datetime ties the same way listHistory does (paged path only - the
-      // unpaginated default keeps its original single-key ordering).
+      // Deterministic total order for both paths: rowid breaks datetime
+      // ties the same way listHistory does. The previous tie order was
+      // arbitrary, so the unpaginated default loses nothing observable.
       const base = this.db
         .select()
         .from(centralAlerts)

@@ -614,15 +614,29 @@ export async function getReleases(
       const releases = sortedReleases;
 
       if (Object.keys(releases).length > 0) {
-        const put = cache.put(RELEASE_CACHE_KEY, JSON.stringify(releases), {
-          expirationTtl: RELEASE_CACHE_TTL
-        });
-        if (waitUntil) waitUntil(put);
-        else await put;
-        logInfo("versions", "Updated releases cache", {
-          cacheKey: RELEASE_CACHE_KEY,
-          releaseCount: Object.keys(releases).length
-        });
+        // The write is deliberately outside the GitHub try/catch: a KV
+        // failure must not be classified as a GitHub outage (or discard
+        // the fresh data just fetched in favour of the stale cache) - it
+        // gets its own log line and the fresh result still returns.
+        const writeCache = cache
+          .put(RELEASE_CACHE_KEY, JSON.stringify(releases), {
+            expirationTtl: RELEASE_CACHE_TTL
+          })
+          .then(() => {
+            logInfo("versions", "Updated releases cache", {
+              cacheKey: RELEASE_CACHE_KEY,
+              releaseCount: Object.keys(releases).length
+            });
+          })
+          .catch((putError) => {
+            logError("versions", "Failed to write releases cache", {
+              cacheKey: RELEASE_CACHE_KEY,
+              error:
+                putError instanceof Error ? putError.message : String(putError)
+            });
+          });
+        if (waitUntil) waitUntil(writeCache);
+        else await writeCache;
       }
 
       const mostCriticalError = getMostCriticalError(errors) || undefined;

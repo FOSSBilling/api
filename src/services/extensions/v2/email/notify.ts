@@ -109,7 +109,7 @@ export async function sendModerationNotification(
     if (sender instanceof DisabledSender) {
       logError("email", "Moderation notification skipped: email not sent", {
         kind: input.kind,
-        reason: "email provider is disabled or not configured"
+        reason: sender.reason
       });
       return false;
     }

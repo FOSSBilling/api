@@ -173,7 +173,17 @@ async function findArtifactByRunHeadSha(
     }>;
 
     for (const run of runs) {
-      if (listingsLeft-- <= 0) return null;
+      if (listingsLeft-- <= 0) {
+        // An exhausted budget is an incomplete scan, not a verdict:
+        // surfacing it as not_found would let callers 404 and
+        // negative-cache an artifact that may exist past the runs we
+        // never examined. Throwing routes this through
+        // findPreviewArtifactByCommitSha's catch as unavailable (503,
+        // never cached) instead.
+        throw new Error(
+          "workflow-run artifact scan exhausted its listing budget before matching"
+        );
+      }
       const artifacts = await listRunArtifacts(githubToken, run.id);
       const match = matchArtifact(
         artifacts
