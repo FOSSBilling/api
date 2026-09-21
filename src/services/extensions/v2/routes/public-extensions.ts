@@ -265,16 +265,22 @@ export function registerPublicExtensionsRoutes(app: ExtensionsV2App): void {
     const extDb = getExtensionsDb(c.env.DB_EXTENSIONS);
     const db = new ExtensionsDatabase(extDb);
 
-    // Authorise with the light ownership probe first, then fetch exactly
-    // one heavy view: the owner/moderator read for privileged callers,
-    // the public read for everyone else.
+    // Authorise with the light ownership probe, then fetch exactly one
+    // heavy view: the owner/moderator read for privileged callers, the
+    // public read for everyone else. The probe and the two user-table
+    // checks depend only on the request (id + auth userId), so they run
+    // concurrently - three serial D1 round trips would otherwise head every
+    // authenticated detail read.
     if (auth) {
-      const ownership = await db.getOwnership(id);
+      const users = new UsersDatabase(extDb);
+      const [ownership, active, access] = await Promise.all([
+        db.getOwnership(id),
+        users.isActive(auth.userId),
+        users.moderatorAccess(auth.userId)
+      ]);
       if (ownership.data) {
-        const users = new UsersDatabase(extDb);
         const isOwner = ownership.data.ownerUserId === auth.userId;
         if (isOwner) {
-          const active = await users.isActive(auth.userId);
           if (active.error) {
             return c.json(
               errorBody(active.error, "Unable to check account"),
@@ -307,7 +313,6 @@ export function registerPublicExtensionsRoutes(app: ExtensionsV2App): void {
             }
           }
         } else {
-          const access = await users.moderatorAccess(auth.userId);
           if (access.error) {
             return c.json(
               errorBody(access.error, "Unable to check access"),

@@ -400,7 +400,9 @@ export class DeveloperClaimsDatabase {
   async approveClaim(
     claimId: string,
     reviewerId: string
-  ): Promise<DatabaseResult<DeveloperProfile>> {
+  ): Promise<
+    DatabaseResult<{ profile: DeveloperProfile; claim: DeveloperClaim }>
+  > {
     const existing = await this.getClaimById(claimId);
     if (existing.error || !existing.data) {
       return {
@@ -497,7 +499,10 @@ export class DeveloperClaimsDatabase {
       ]);
     } catch (error) {
       if (isOwnershipEpochRollback(error)) {
-        return this.explainClaimApprovalNoOp(claim);
+        return this.claimApprovalOutcome(
+          await this.explainClaimApprovalNoOp(claim),
+          claim
+        );
       }
       if (isDeveloperOwnerConflict(error)) {
         return {
@@ -515,10 +520,31 @@ export class DeveloperClaimsDatabase {
     if (!claimResult.meta?.changes) {
       // Diagnose only after the guarded transaction. These reads improve the
       // response without participating in (or weakening) its race safety.
-      return this.explainClaimApprovalNoOp(claim);
+      return this.claimApprovalOutcome(
+        await this.explainClaimApprovalNoOp(claim),
+        claim
+      );
     }
 
-    return new DeveloperProfilesDatabase(this.db).getById(claim.developer_id);
+    // The claim snapshot rides along so the route doesn't need its own
+    // pre-approval read to build the notification (after the transfer the
+    // profile row no longer records who the claimant was).
+    const profile = await new DeveloperProfilesDatabase(this.db).getById(
+      claim.developer_id
+    );
+    return this.claimApprovalOutcome(profile, claim);
+  }
+
+  // Adapts the profile-shaped outcomes of the approval path to the
+  // claim-carrying shape approveClaim returns.
+  private claimApprovalOutcome(
+    profileResult: DatabaseResult<DeveloperProfile>,
+    claim: DeveloperClaim
+  ): DatabaseResult<{ profile: DeveloperProfile; claim: DeveloperClaim }> {
+    if (profileResult.error || !profileResult.data) {
+      return { data: null, error: profileResult.error };
+    }
+    return { data: { profile: profileResult.data, claim }, error: null };
   }
 
   async rejectClaim(

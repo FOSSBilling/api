@@ -101,30 +101,30 @@ export class DeveloperProfilesDatabase {
     | { data: null; error: null }
   > {
     try {
+      // The pending-transfer probe is folded in as a correlated EXISTS so
+      // GET /developers/me (and the developer detail route's Promise.all)
+      // costs one D1 round trip instead of two serial ones.
       const [row] = await this.db
-        .select()
+        .select({
+          developer: developers,
+          hasPendingTransfer: sql<boolean>`EXISTS (
+            SELECT 1 FROM ${developerTransfers}
+            WHERE ${developerTransfers.developerId} = ${developers.id}
+              AND ${developerTransfers.acceptedAt} IS NULL
+              AND ${developerTransfers.revokedAt} IS NULL
+              AND ${developerTransfers.expiresAt} > CURRENT_TIMESTAMP
+          )`
+        })
         .from(developers)
         .where(eq(developers.ownerUserId, userId));
       if (!row) return { data: null, error: null };
 
-      const [pending] = await this.db
-        .select({ id: developerTransfers.id })
-        .from(developerTransfers)
-        .where(
-          and(
-            eq(developerTransfers.developerId, row.id),
-            isNull(developerTransfers.acceptedAt),
-            isNull(developerTransfers.revokedAt),
-            sql`${developerTransfers.expiresAt} > CURRENT_TIMESTAMP`
-          )
-        )
-        .limit(1);
-
       return {
         data: {
-          ...parseDeveloperRow(row),
+          ...parseDeveloperRow(row.developer),
           unclaimed: false,
-          has_pending_transfer: pending !== undefined
+          // SQLite answers EXISTS with 0/1, not a boolean.
+          has_pending_transfer: Number(row.hasPendingTransfer) === 1
         },
         error: null
       };

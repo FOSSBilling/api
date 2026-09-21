@@ -46,18 +46,22 @@ export async function sendModerationNotification(
         });
         return false;
       }
-      to = await resolveClaimantEmail(db, input.claimantId);
+      // Two independent single-row reads - resolve them together rather
+      // than serializing an extra round trip onto every claim moderation.
+      const [claimantEmail, developerEmail] = await Promise.all([
+        resolveClaimantEmail(db, input.claimantId),
+        input.developerId
+          ? resolveDeveloperProfileEmail(db, input.developerId)
+          : Promise.resolve(null)
+      ]);
+      to = claimantEmail;
       if (!to) {
         logError("email", "No address for claim notification", {
           developerId: input.developerId
         });
         return false;
       }
-      if (input.developerId) {
-        developerName = (
-          await resolveDeveloperProfileEmail(db, input.developerId)
-        )?.developerName;
-      }
+      developerName = developerEmail?.developerName;
     } else if (input.extensionId) {
       const recipient = await resolveExtensionEmail(db, input.extensionId);
       if (!recipient) {

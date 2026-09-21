@@ -262,15 +262,18 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
     const extensionsDb = new ExtensionsDatabase(
       getExtensionsDb(c.env.DB_EXTENSIONS)
     );
-    const owned = await extensionsDb.getOwned(id);
-    if (owned.error || !owned.data) {
+    // Light probe instead of the full owner view: authorising the caller
+    // needs only the owner id and the canonical extension id, and the full
+    // view would ship up to 256 KiB of readme/pendingContent per read.
+    const ownership = await extensionsDb.getOwnership(id);
+    if (ownership.error || !ownership.data) {
       return c.json(
-        errorBody(owned.error, "Extension not found"),
-        statusFromErrorCode(owned.error?.code, false)
+        errorBody(ownership.error, "Extension not found"),
+        statusFromErrorCode(ownership.error?.code, false)
       );
     }
 
-    if (owned.data.ownerUserId !== auth.userId) {
+    if (ownership.data.ownerUserId !== auth.userId) {
       const users = new UsersDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
       const moderator = await users.moderatorAccess(auth.userId);
       if (moderator.error) {
@@ -324,7 +327,7 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
       getExtensionsDb(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.listScoped({
-      extensionId: owned.data.extension.id,
+      extensionId: ownership.data.extensionId,
       sort: "newest",
       limit,
       cursor
