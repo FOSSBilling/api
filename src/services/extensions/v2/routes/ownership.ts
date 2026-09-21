@@ -13,8 +13,11 @@ import {
   ActiveAccountRequiredResponse,
   IdParamSchema,
   NotifyQuerySchema,
+  OffsetPaginationSchema,
   ReviewNoteRequiredSchema,
-  errorResponse
+  errorResponse,
+  offsetPageFromQuery,
+  offsetPaginationFrom
 } from "../schemas/common";
 import { DeveloperProfileSchema } from "../schemas/developers";
 import {
@@ -156,7 +159,10 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
       200: {
         content: {
           "application/json": {
-            schema: z.object({ result: z.array(PendingDeveloperClaimSchema) })
+            schema: z.object({
+              result: z.array(PendingDeveloperClaimSchema),
+              pagination: OffsetPaginationSchema.optional()
+            })
           }
         },
         description:
@@ -171,9 +177,10 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
 
   app.openapi(listClaimsRoute, async (c) => {
     const auth = getAuth(c);
-    const { scope, status } = c.req.valid("query");
+    const { scope, status, limit, offset } = c.req.valid("query");
     const extDb = getExtensionsDb(c.env.DB_EXTENSIONS);
     const db = new DeveloperClaimsDatabase(extDb);
+    const page = offsetPageFromQuery({ limit, offset });
     if (scope === "pending") {
       const users = new UsersDatabase(extDb);
       const access = await users.moderatorAccess(auth.userId);
@@ -201,10 +208,13 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
       }
       // The pending scope is the moderator review queue: always pending,
       // regardless of any status filter (which only narrows scope=mine).
-      const { data, error } = await db.listScoped({
-        scope: "pending",
-        status: "pending"
-      });
+      const { data, error } = await db.listScoped(
+        {
+          scope: "pending",
+          status: "pending"
+        },
+        page
+      );
       if (error || !data) {
         return c.json(
           {
@@ -216,13 +226,22 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
           500
         );
       }
-      return c.json({ result: data }, 200);
+      return c.json(
+        {
+          result: data.items,
+          pagination: offsetPaginationFrom(page, data.hasMore)
+        },
+        200
+      );
     }
-    const { data, error } = await db.listScoped({
-      scope: "mine",
-      claimantId: auth.userId,
-      status
-    });
+    const { data, error } = await db.listScoped(
+      {
+        scope: "mine",
+        claimantId: auth.userId,
+        status
+      },
+      page
+    );
     if (error || !data) {
       return c.json(
         {
@@ -234,7 +253,13 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
         500
       );
     }
-    return c.json({ result: data }, 200);
+    return c.json(
+      {
+        result: data.items,
+        pagination: offsetPaginationFrom(page, data.hasMore)
+      },
+      200
+    );
   });
 
   const approveClaimRoute = createRoute({
@@ -251,7 +276,13 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
           "application/json": {
             schema: z.object({
               result: DeveloperProfileSchema.and(
-                z.object({ notified: z.boolean() })
+                z.object({
+                  notified: z
+                    .boolean()
+                    .describe(
+                      "Whether a notification email was dispatched - delivery itself is asynchronous"
+                    )
+                })
               )
             })
           }
@@ -294,11 +325,16 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
     revalidateCatalogue(c);
     let notified = false;
     if (claimResult?.data) {
-      notified = await sendModerationNotification(getPlatform(c), extDb, {
-        kind: "claim-approved",
-        developerId: claimResult.data.developer_id,
-        claimantId: claimResult.data.claimant_id
-      });
+      notified = await sendModerationNotification(
+        getPlatform(c),
+        extDb,
+        {
+          kind: "claim-approved",
+          developerId: claimResult.data.developer_id,
+          claimantId: claimResult.data.claimant_id
+        },
+        (p) => c.executionCtx.waitUntil(p)
+      );
     }
     return c.json({ result: { ...data, notified } }, 200);
   });
@@ -323,7 +359,13 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
           "application/json": {
             schema: z.object({
               result: DeveloperClaimSchema.and(
-                z.object({ notified: z.boolean() })
+                z.object({
+                  notified: z
+                    .boolean()
+                    .describe(
+                      "Whether a notification email was dispatched - delivery itself is asynchronous"
+                    )
+                })
               )
             })
           }
@@ -358,12 +400,17 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
     revalidateCatalogue(c);
     let notified = false;
     if (notifyRequested(query)) {
-      notified = await sendModerationNotification(getPlatform(c), extDb, {
-        kind: "claim-rejected",
-        developerId: data.developer_id,
-        claimantId: data.claimant_id,
-        reason: review_note
-      });
+      notified = await sendModerationNotification(
+        getPlatform(c),
+        extDb,
+        {
+          kind: "claim-rejected",
+          developerId: data.developer_id,
+          claimantId: data.claimant_id,
+          reason: review_note
+        },
+        (p) => c.executionCtx.waitUntil(p)
+      );
     }
     return c.json({ result: { ...data, notified } }, 200);
   });

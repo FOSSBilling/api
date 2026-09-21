@@ -12,10 +12,14 @@ import {
   ActiveAccountRequiredResponse,
   DelistReasonSchema,
   IdParamSchema,
+  ListPaginationQuerySchema,
   NotifyQuerySchema,
+  OffsetPaginationSchema,
   ReviewNoteOptionalSchema,
   ReviewNoteRequiredSchema,
-  errorResponse
+  errorResponse,
+  offsetPageFromQuery,
+  offsetPaginationFrom
 } from "../schemas/common";
 import {
   DeveloperApprovalSchema,
@@ -56,7 +60,11 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
               result: z.object({
                 id: z.string(),
                 status: z.literal("approved"),
-                notified: z.boolean()
+                notified: z
+                  .boolean()
+                  .describe(
+                    "Whether a notification email was dispatched - delivery itself is asynchronous"
+                  )
               })
             })
           }
@@ -100,13 +108,18 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
     revalidateCatalogue(c);
     let notified = false;
     if (notifyRequested(query)) {
-      notified = await sendModerationNotification(getPlatform(c), extDb, {
-        kind: "revision-approved",
-        extensionId: id,
-        // Optional and untrimmed by its schema: a whitespace-only note would
-        // otherwise reach the author as a meaningless "Moderator note:".
-        reason: review_note?.trim() || undefined
-      });
+      notified = await sendModerationNotification(
+        getPlatform(c),
+        extDb,
+        {
+          kind: "revision-approved",
+          extensionId: id,
+          // Optional and untrimmed by its schema: a whitespace-only note would
+          // otherwise reach the author as a meaningless "Moderator note:".
+          reason: review_note?.trim() || undefined
+        },
+        (p) => c.executionCtx.waitUntil(p)
+      );
     }
     return c.json({ result: { ...data, notified } }, 200);
   });
@@ -133,7 +146,11 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
               result: z.object({
                 id: z.string(),
                 status: z.literal("rejected"),
-                notified: z.boolean()
+                notified: z
+                  .boolean()
+                  .describe(
+                    "Whether a notification email was dispatched - delivery itself is asynchronous"
+                  )
               })
             })
           }
@@ -173,11 +190,16 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
     revalidateCatalogue(c);
     let notified = false;
     if (notifyRequested(query)) {
-      notified = await sendModerationNotification(getPlatform(c), extDb, {
-        kind: "revision-rejected",
-        extensionId: id,
-        reason: review_note
-      });
+      notified = await sendModerationNotification(
+        getPlatform(c),
+        extDb,
+        {
+          kind: "revision-rejected",
+          extensionId: id,
+          reason: review_note
+        },
+        (p) => c.executionCtx.waitUntil(p)
+      );
     }
     return c.json({ result: { ...data, notified } }, 200);
   });
@@ -208,7 +230,11 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
               result: z.object({
                 id: z.string(),
                 status: z.literal("delisted"),
-                notified: z.boolean()
+                notified: z
+                  .boolean()
+                  .describe(
+                    "Whether a notification email was dispatched - delivery itself is asynchronous"
+                  )
               })
             })
           }
@@ -246,11 +272,16 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
     revalidateCatalogue(c);
     let notified = false;
     if (notifyRequested(query)) {
-      notified = await sendModerationNotification(getPlatform(c), extDb, {
-        kind: "extension-delisted",
-        extensionId: id,
-        reason
-      });
+      notified = await sendModerationNotification(
+        getPlatform(c),
+        extDb,
+        {
+          kind: "extension-delisted",
+          extensionId: id,
+          reason
+        },
+        (p) => c.executionCtx.waitUntil(p)
+      );
     }
     return c.json(
       { result: { id: data.id, status: "delisted" as const, notified } },
@@ -280,7 +311,11 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
               result: z.object({
                 id: z.string(),
                 approved: z.literal(true),
-                notified: z.boolean()
+                notified: z
+                  .boolean()
+                  .describe(
+                    "Whether a notification email was dispatched - delivery itself is asynchronous"
+                  )
               })
             })
           }
@@ -321,10 +356,15 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
     revalidateCatalogue(c);
     let notified = false;
     if (notifyRequested(query)) {
-      notified = await sendModerationNotification(getPlatform(c), extDb, {
-        kind: "developer-approved",
-        developerId: id
-      });
+      notified = await sendModerationNotification(
+        getPlatform(c),
+        extDb,
+        {
+          kind: "developer-approved",
+          developerId: id
+        },
+        (p) => c.executionCtx.waitUntil(p)
+      );
     }
     return c.json({ result: { ...data, notified } }, 200);
   });
@@ -336,12 +376,15 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
     summary: "List the write history of a developer profile",
     security: [{ Bearer: [] }],
     middleware: [requireModerator()] as const,
-    request: { params: IdParamSchema },
+    request: { params: IdParamSchema, query: ListPaginationQuerySchema },
     responses: {
       200: {
         content: {
           "application/json": {
-            schema: z.object({ result: z.array(DeveloperHistoryEntrySchema) })
+            schema: z.object({
+              result: z.array(DeveloperHistoryEntrySchema),
+              pagination: OffsetPaginationSchema.optional()
+            })
           }
         },
         description: "Snapshots of the profile, newest first"
@@ -351,21 +394,29 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
         ...ActiveAccountRequiredResponse,
         description: "The account is inactive or the caller is not a moderator"
       },
-      422: errorResponse("id param failed validation"),
+      422: errorResponse("id param or pagination query failed validation"),
       500: errorResponse("Database error")
     }
   });
 
   app.openapi(developerHistoryRoute, async (c) => {
     const { id } = c.req.valid("param");
+    const { limit, offset } = c.req.valid("query");
+    const page = offsetPageFromQuery({ limit, offset });
     const db = new DeveloperProfilesDatabase(
       getExtensionsDb(c.env.DB_EXTENSIONS)
     );
-    const { data, error } = await db.listHistory(id);
+    const { data, error } = await db.listHistory(id, page);
     if (error || !data) {
       return c.json(errorBody(error, "Unable to load developer history"), 500);
     }
-    return c.json({ result: data }, 200);
+    return c.json(
+      {
+        result: data.items,
+        pagination: offsetPaginationFrom(page, data.hasMore)
+      },
+      200
+    );
   });
 
   // Queue totals behind the admin tabs. Two small aggregate queries rather

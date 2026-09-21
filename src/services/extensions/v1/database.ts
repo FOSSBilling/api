@@ -65,20 +65,31 @@ interface ExtensionRow {
 export class ExtensionsDatabase {
   constructor(private db: ExtensionsDb) {}
 
-  async getAllExtensions(type?: string): Promise<DatabaseResult<Extension[]>> {
+  // page (when given) bounds the query with a limit+1 probe - the extra
+  // row only answers has_more and is trimmed off. Omitted => every
+  // published extension, unchanged from the original contract. The full
+  // projection is deliberate: this legacy surface is a documented contract
+  // and its consumers read readme/releases on every entry.
+  async getAllExtensions(
+    type?: string,
+    page?: { limit: number; offset: number }
+  ): Promise<DatabaseResult<{ extensions: Extension[]; hasMore: boolean }>> {
     let rows: ExtensionRow[];
     try {
       const published = and(
         isNotNull(extensions.publishedAt),
         isNull(extensions.delistedAt)
       );
-      rows = (await this.db
+      const base = this.db
         .select(EXTENSION_COLUMNS)
         .from(extensions)
         .innerJoin(developers, eq(extensions.developerId, developers.id))
-        .where(
-          type ? and(published, eq(extensions.type, type)) : published
-        )) as ExtensionRow[];
+        .where(type ? and(published, eq(extensions.type, type)) : published);
+      rows = page
+        ? ((await base
+            .offset(page.offset)
+            .limit(page.limit + 1)) as ExtensionRow[])
+        : ((await base) as ExtensionRow[]);
     } catch (error) {
       return {
         data: null,
@@ -89,7 +100,13 @@ export class ExtensionsDatabase {
       };
     }
 
-    return { data: rows.map(parseExtensionRow), error: null };
+    const hasMore = page ? rows.length > page.limit : false;
+    const trimmed = page && hasMore ? rows.slice(0, page.limit) : rows;
+
+    return {
+      data: { extensions: trimmed.map(parseExtensionRow), hasMore },
+      error: null
+    };
   }
 
   async getExtensionById(id: string): Promise<DatabaseResult<Extension>> {

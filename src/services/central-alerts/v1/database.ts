@@ -7,13 +7,22 @@ import { centralAlerts } from "./db/schema";
 export class CentralAlertsDatabase {
   constructor(private db: CentralAlertsDb) {}
 
-  async getAllAlerts(): Promise<DatabaseResult<CentralAlert[]>> {
+  // page (when given) bounds the query with a limit+1 probe - the extra
+  // row only answers has_more and is trimmed off. Omitted => every alert,
+  // unchanged from the original contract.
+  async getAllAlerts(page?: {
+    limit: number;
+    offset: number;
+  }): Promise<DatabaseResult<{ alerts: CentralAlert[]; hasMore: boolean }>> {
     let rows;
     try {
-      rows = await this.db
+      const base = this.db
         .select()
         .from(centralAlerts)
         .orderBy(desc(centralAlerts.datetime));
+      rows = page
+        ? await base.offset(page.offset).limit(page.limit + 1)
+        : await base;
     } catch (error) {
       return {
         data: null,
@@ -24,7 +33,10 @@ export class CentralAlertsDatabase {
       };
     }
 
-    const alerts: CentralAlert[] = rows.map((row) => ({
+    const hasMore = page ? rows.length > page.limit : false;
+    const trimmed = page && hasMore ? rows.slice(0, page.limit) : rows;
+
+    const alerts: CentralAlert[] = trimmed.map((row) => ({
       id: row.id,
       title: row.title,
       message: row.message,
@@ -37,7 +49,7 @@ export class CentralAlertsDatabase {
       datetime: row.datetime
     }));
 
-    return { data: alerts, error: null };
+    return { data: { alerts, hasMore }, error: null };
   }
 }
 

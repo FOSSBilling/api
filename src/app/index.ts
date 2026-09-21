@@ -1,5 +1,4 @@
 import { Hono } from "hono";
-import { contextStorage } from "hono/context-storage";
 import { HTTPException } from "hono/http-exception";
 import centralAlertsV1 from "../services/central-alerts/v1";
 import extensionsV1 from "../services/extensions/v1";
@@ -12,8 +11,6 @@ import { createCloudflareBindings } from "../lib/adapters/cloudflare";
 import { logError } from "../lib/logger";
 
 const app = new Hono<{ Bindings: CloudflareBindings }>();
-
-app.use(contextStorage());
 
 app.use("*", async (c, next) => {
   const bindings = createCloudflareBindings(c.env);
@@ -33,7 +30,8 @@ app.onError((err, c) => {
     return err.getResponse();
   }
   logError("app", "Unhandled request error", {
-    message: err instanceof Error ? err.message : String(err)
+    message: err instanceof Error ? err.message : String(err),
+    stack: err instanceof Error ? err.stack : undefined
   });
   return c.json(
     {

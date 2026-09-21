@@ -13,7 +13,22 @@ centralAlertsV1.get("/list", async (c) => {
   const db = new CentralAlertsDatabase(
     getCentralAlertsDb(c.env.DB_CENTRAL_ALERTS)
   );
-  const { data, error } = await db.getAllAlerts();
+
+  // Opt-in pagination: absent params keep the full-list contract. A
+  // non-numeric limit is treated as absent rather than a 400 - this route
+  // has never validated query params and FOSSBilling's client passes none.
+  const limitParam = Number(c.req.query("limit"));
+  const offsetParam = Number(c.req.query("offset") ?? "0");
+  const page =
+    Number.isInteger(limitParam) && limitParam >= 1 && limitParam <= 100
+      ? {
+          limit: limitParam,
+          offset:
+            Number.isInteger(offsetParam) && offsetParam >= 0 ? offsetParam : 0
+        }
+      : undefined;
+
+  const { data, error } = await db.getAllAlerts(page);
 
   if (error) {
     logError("central-alerts", "Failed to list central alerts", {
@@ -33,7 +48,18 @@ centralAlertsV1.get("/list", async (c) => {
   }
 
   return c.json({
-    result: { alerts: data || [] },
+    result: {
+      alerts: data?.alerts || [],
+      ...(page && data
+        ? {
+            pagination: {
+              limit: page.limit,
+              offset: page.offset,
+              has_more: data.hasMore
+            }
+          }
+        : {})
+    },
     error: null
   });
 });

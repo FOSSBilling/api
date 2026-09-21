@@ -634,14 +634,19 @@ export class DeveloperProfilesDatabase {
   // The two moderator listings differ only by filter and sort order. They are
   // the only readers that join users for owner_name/owner_github_login, which
   // is why DeveloperProfile treats those fields as optional.
-  private async listWithOwner(
+  //
+  // page (when given) bounds the query with a limit+1 probe - the extra row
+  // only answers has_more and is trimmed off - so an admin UI can walk the
+  // table instead of unconditionally streaming all of it.
+  private async listWithOwnerPaged(
     context: string,
     where: SQL | undefined,
-    orderBy: SQL | SQLiteColumn
-  ): Promise<DatabaseResult<DeveloperProfile[]>> {
+    orderBy: SQL | SQLiteColumn,
+    page?: { limit: number; offset: number }
+  ): Promise<DatabaseResult<{ items: DeveloperProfile[]; hasMore: boolean }>> {
     let rows;
     try {
-      rows = await this.db
+      const base = this.db
         .select({
           developer: developers,
           ownerName: users.name,
@@ -651,31 +656,40 @@ export class DeveloperProfilesDatabase {
         .leftJoin(users, eq(users.id, developers.ownerUserId))
         .where(where)
         .orderBy(orderBy);
+      rows = page
+        ? await base.offset(page.offset).limit(page.limit + 1)
+        : await base;
     } catch (error) {
       return databaseError(context, error);
     }
 
-    return { data: rows.map(parseDeveloperRowWithOwner), error: null };
-  }
-
-  async listAll(): Promise<DatabaseResult<DeveloperProfile[]>> {
-    return this.listWithOwner("listAll", undefined, asc(developers.name));
-  }
-
-  async listUnapproved(): Promise<DatabaseResult<DeveloperProfile[]>> {
-    return this.listWithOwner(
-      "listUnapproved",
-      isNull(developers.approvedAt),
-      asc(developers.createdAt)
-    );
+    const hasMore = page ? rows.length > page.limit : false;
+    const trimmed = page && hasMore ? rows.slice(0, page.limit) : rows;
+    return {
+      data: { items: trimmed.map(parseDeveloperRowWithOwner), hasMore },
+      error: null
+    };
   }
 
   // Unified reader for the merged moderator GET /developers?status=.
   async listScoped(filters: {
     status?: "all" | "unapproved";
-  }): Promise<DatabaseResult<DeveloperProfile[]>> {
-    if (filters.status === "unapproved") return this.listUnapproved();
-    return this.listAll();
+    page?: { limit: number; offset: number };
+  }): Promise<DatabaseResult<{ items: DeveloperProfile[]; hasMore: boolean }>> {
+    if (filters.status === "unapproved") {
+      return this.listWithOwnerPaged(
+        "listUnapproved",
+        isNull(developers.approvedAt),
+        asc(developers.createdAt),
+        filters.page
+      );
+    }
+    return this.listWithOwnerPaged(
+      "listAll",
+      undefined,
+      asc(developers.name),
+      filters.page
+    );
   }
 
   async approve(
@@ -748,11 +762,14 @@ export class DeveloperProfilesDatabase {
   }
 
   async listHistory(
-    developerId: string
-  ): Promise<DatabaseResult<DeveloperHistoryEntry[]>> {
+    developerId: string,
+    page?: { limit: number; offset: number }
+  ): Promise<
+    DatabaseResult<{ items: DeveloperHistoryEntry[]; hasMore: boolean }>
+  > {
     let rows;
     try {
-      rows = await this.db
+      const base = this.db
         .select({
           developerId: developerHistory.developerId,
           type: developerHistory.type,
@@ -773,20 +790,30 @@ export class DeveloperProfilesDatabase {
           desc(developerHistory.changedAt),
           sql`"developer_history".rowid DESC`
         );
+      // limit+1 probe - see listWithOwnerPaged.
+      rows = page
+        ? await base.offset(page.offset).limit(page.limit + 1)
+        : await base;
     } catch (error) {
       return databaseError("listHistory", error);
     }
 
+    const hasMore = page ? rows.length > page.limit : false;
+    const trimmed = page && hasMore ? rows.slice(0, page.limit) : rows;
+
     return {
-      data: rows.map((row) => ({
-        developer_id: row.developerId,
-        type: row.type as DeveloperHistoryEntry["type"],
-        name: row.name,
-        URL: row.url ?? undefined,
-        changed_by: row.changedBy,
-        changed_by_name: row.changedByName,
-        changed_at: row.changedAt
-      })),
+      data: {
+        items: trimmed.map((row) => ({
+          developer_id: row.developerId,
+          type: row.type as DeveloperHistoryEntry["type"],
+          name: row.name,
+          URL: row.url ?? undefined,
+          changed_by: row.changedBy,
+          changed_by_name: row.changedByName,
+          changed_at: row.changedAt
+        })),
+        hasMore
+      },
       error: null
     };
   }

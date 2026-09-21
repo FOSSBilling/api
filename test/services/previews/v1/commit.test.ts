@@ -295,12 +295,12 @@ describe("Previews API v1 - GET /previews/v1/commit/:sha", () => {
     );
   });
 
-  it("falls back to a broad scan when the exact artifact name misses (fork PR merge-SHA mismatch)", async () => {
+  it("falls back to the runs API when the exact artifact name misses (fork PR merge-SHA mismatch)", async () => {
     // Simulates a fork PR: CI named the artifact after the pull_request
     // event's ephemeral merge commit ("deadbeef..."), not the PR's real
     // head SHA (SHA) - so the exact-name query for SHA's derived name
-    // returns nothing, and only a name-less scan (filtered by the run's
-    // real head_sha) finds it.
+    // returns nothing, and the full-SHA fallback (runs filtered
+    // server-side by head_sha, then that run's artifacts) finds it.
     const mergeShaArtifact = {
       id: 777,
       name: "FOSSBilling-preview-deadbee.zip",
@@ -313,15 +313,27 @@ describe("Previews API v1 - GET /previews/v1/commit/:sha", () => {
     };
     (vi.mocked(ghRequest) as MockGitHubRequest).mockImplementation(
       async (route: string, params?: { name?: string }) => {
-        if (route !== "GET /repos/{owner}/{repo}/actions/artifacts") {
-          throw new Error(`Unexpected route: ${route}`);
+        if (route === "GET /repos/{owner}/{repo}/actions/artifacts") {
+          if (params?.name) {
+            // The exact-name fast path - misses.
+            return { data: { total_count: 0, artifacts: [] } };
+          }
+          throw new Error("Unexpected name-less artifact list call");
         }
-        if (params?.name) {
-          // The exact-name fast path - misses.
-          return { data: { total_count: 0, artifacts: [] } };
+        if (route === "GET /repos/{owner}/{repo}/actions/runs") {
+          return {
+            data: {
+              total_count: 1,
+              workflow_runs: [{ id: 888, head_sha: SHA }]
+            }
+          };
         }
-        // The fallback broad scan.
-        return { data: { total_count: 1, artifacts: [mergeShaArtifact] } };
+        if (
+          route === "GET /repos/{owner}/{repo}/actions/runs/{run_id}/artifacts"
+        ) {
+          return { data: { total_count: 1, artifacts: [mergeShaArtifact] } };
+        }
+        throw new Error(`Unexpected route: ${route}`);
       }
     );
 
@@ -333,17 +345,24 @@ describe("Previews API v1 - GET /previews/v1/commit/:sha", () => {
     };
     expect(body.result.artifact_id).toBe(777);
     expect(body.result.digest).toBe("sha256:fromfork");
-    expect(ghRequest).toHaveBeenCalledTimes(2);
+    // Exact-name list + runs list + that run's artifacts.
+    expect(ghRequest).toHaveBeenCalledTimes(3);
+    expect(ghRequest).toHaveBeenCalledWith(
+      "GET /repos/{owner}/{repo}/actions/runs",
+      expect.objectContaining({ head_sha: SHA })
+    );
   });
 
-  it("pages through the fallback scan past the old 5-page cap, then stops as soon as it finds a match", async () => {
-    // Regression check: an earlier version of the fallback stopped after
-    // 5 pages (500 artifacts) as a hard cutoff, which would have reported
-    // this commit not_found even though its artifact genuinely exists -
-    // just on page 6. A repo with more than 500 live preview artifacts
-    // isn't hypothetical for an active project; the fallback is the
-    // source of truth for fork PRs and can't trade correctness for a
-    // fixed cutoff the way the fast exact-name path can.
+  it("pages through the short-SHA fallback scan past the old 5-page cap, then stops as soon as it finds a match", async () => {
+    // Regression check: an earlier version of the page-scan fallback
+    // stopped after 5 pages (500 artifacts) as a hard cutoff, which would
+    // have reported this commit not_found even though its artifact
+    // genuinely exists - just on page 6. Short SHAs can't use the
+    // runs-API fallback (GitHub matches head_sha exactly), so they still
+    // page the repo-wide artifact list, and that scan must not trade
+    // correctness for a fixed cutoff.
+    const shortSha = SHA.slice(0, 7);
+    await env.CACHE_KV.delete(`preview:commit:${shortSha}`);
     const fullPage = (offset: number) =>
       Array.from({ length: 100 }, (_, i) => ({
         id: offset + i,
@@ -389,7 +408,7 @@ describe("Previews API v1 - GET /previews/v1/commit/:sha", () => {
       }
     );
 
-    const res = await get(`/previews/v1/commit/${SHA}`);
+    const res = await get(`/previews/v1/commit/${shortSha}`);
 
     expect(res.status).toBe(200);
     const body = (await res.json()) as { result: { artifact_id: number } };

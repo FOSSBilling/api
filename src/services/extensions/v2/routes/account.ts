@@ -162,9 +162,9 @@ export function registerAccountRoutes(app: ExtensionsV2App): void {
     const extDb = getExtensionsDb(c.env.DB_EXTENSIONS);
     const users = new UsersDatabase(extDb);
     // No existence pre-check: updateDisplayName's WHERE already carries
-    // `deleted_at IS NULL` and reports the same NOT_FOUND on zero changes,
-    // so reading the row first only added a round trip to a request that
-    // requireActiveAuth has already validated.
+    // `deleted_at IS NULL` and reports the same NOT_FOUND on zero rows,
+    // and RETURNING hands back the full updated projection - no follow-up
+    // read of the row this request just wrote.
     const result = await users.updateDisplayName(
       auth.userId,
       body.display_name
@@ -175,14 +175,7 @@ export function registerAccountRoutes(app: ExtensionsV2App): void {
         statusFromErrorCode(result.error?.code, false)
       );
     }
-    const full = await users.get(auth.userId);
-    if (full.error || !full.data) {
-      return c.json(
-        errorBody(full.error, "Unable to load profile"),
-        statusFromErrorCode(full.error?.code, false)
-      );
-    }
-    return c.json({ result: toUserResponse(full.data) }, 200);
+    return c.json({ result: toUserResponse(result.data) }, 200);
   });
 
   const deleteUserRoute = createRoute({

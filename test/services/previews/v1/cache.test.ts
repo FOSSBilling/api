@@ -37,14 +37,31 @@ describe("previews/v1 cachedLookup", () => {
     putSpy.mockRestore();
   });
 
-  it("does not cache not_found results", async () => {
+  it("caches not_found results with a short TTL and serves them without re-resolving", async () => {
+    const putSpy = vi.spyOn(env.CACHE_KV, "put");
+    const resolve = vi.fn().mockResolvedValue({ status: "not_found" });
+
+    const result = await cachedLookup(env.CACHE_KV, "test-key", resolve);
+    expect(result.status).toBe("not_found");
+    expect(putSpy).toHaveBeenCalledWith("test-key", "__not_found__", {
+      expirationTtl: 60
+    });
+
+    putSpy.mockRestore();
+    const second = await cachedLookup(env.CACHE_KV, "test-key", resolve);
+    expect(second.status).toBe("not_found");
+    expect(resolve).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not cache unavailable results", async () => {
     const putSpy = vi.spyOn(env.CACHE_KV, "put");
 
     const result = await cachedLookup(env.CACHE_KV, "test-key", async () => ({
-      status: "not_found"
+      status: "unavailable",
+      error: { message: "boom", httpStatus: 500 } as never
     }));
 
-    expect(result.status).toBe("not_found");
+    expect(result.status).toBe("unavailable");
     expect(putSpy).not.toHaveBeenCalled();
     putSpy.mockRestore();
   });

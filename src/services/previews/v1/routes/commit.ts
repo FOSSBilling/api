@@ -81,7 +81,8 @@ export function registerCommitRoutes(app: PreviewsV1App): void {
       c.env.CACHE_KV,
       cacheKeyForSha(sha),
       () => resolveArtifactPreview(githubToken, sha, null),
-      ttlForArtifact
+      ttlForArtifact,
+      (p) => c.executionCtx.waitUntil(p)
     );
 
     return respondWithLookup(
@@ -119,7 +120,8 @@ export function registerCommitRoutes(app: PreviewsV1App): void {
       c.env.CACHE_KV,
       cacheKeyForSha(sha),
       () => resolveArtifactPreview(githubToken, sha, null),
-      ttlForArtifact
+      ttlForArtifact,
+      (p) => c.executionCtx.waitUntil(p)
     );
     return respondWithDownloadRedirect(
       c,

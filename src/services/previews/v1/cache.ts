@@ -1,4 +1,5 @@
 import { GithubLookupResult } from "./github/artifacts";
+import { singleFlight } from "../../../lib/cache";
 
 // Default for anything that moves (main, pr/{number}) - previews churn
 // often (a new commit on a PR supersedes the last build within minutes),
@@ -12,10 +13,15 @@ export const DEFAULT_CACHE_TTL_SECONDS = 60;
 // level, not just an app-level policy choice.
 const KV_MIN_TTL_SECONDS = 60;
 
-// Only "found" results are cached. "not_found"/"unavailable" always
-// re-resolve, so a transient GitHub hiccup or a not-yet-built PR doesn't
-// get stuck negative for the TTL window.
-//
+// "not_found" results are cached for one KV-floor window: without this, a
+// client polling a PR whose build hasn't landed yet pays the full resolve
+// chain on every poll. The cost is at most a 60s delay between a build
+// appearing on GitHub and this service serving it. "unavailable" (GitHub
+// errors) still always re-resolves: a transient hiccup must not pin a
+// route into an error for a TTL window.
+const NEGATIVE_CACHE_TTL_SECONDS = KV_MIN_TTL_SECONDS;
+const NEGATIVE_CACHE_VALUE = "__not_found__";
+
 // ttlSeconds may be a function of the resolved data instead of a fixed
 // number - see routes/commit.ts, which caps the cache lifetime at the
 // artifact's own remaining GitHub retention so a lookup resolved just
@@ -24,13 +30,20 @@ const KV_MIN_TTL_SECONDS = 60;
 // the result is returned but not cached at all - better to re-resolve
 // live for the rest of that final minute than to either violate the floor
 // or round up and cache something past its real expiry.
+//
+// waitUntil, when provided, receives the KV writes so they don't sit on
+// the response path.
 export async function cachedLookup<T>(
   kv: KVNamespace,
   key: string,
   resolve: () => Promise<GithubLookupResult<T>>,
-  ttlSeconds: number | ((data: T) => number) = DEFAULT_CACHE_TTL_SECONDS
+  ttlSeconds: number | ((data: T) => number) = DEFAULT_CACHE_TTL_SECONDS,
+  waitUntil?: (promise: Promise<unknown>) => void
 ): Promise<GithubLookupResult<T>> {
   const cached = await kv.get(key);
+  if (cached === NEGATIVE_CACHE_VALUE) {
+    return { status: "not_found" };
+  }
   if (cached !== null) {
     try {
       return { status: "found", data: JSON.parse(cached) as T };
@@ -39,15 +52,23 @@ export async function cachedLookup<T>(
     }
   }
 
-  const result = await resolve();
+  const result = await singleFlight(`previews:${key}`, resolve);
   if (result.status === "found") {
     const ttl =
       typeof ttlSeconds === "function" ? ttlSeconds(result.data) : ttlSeconds;
     if (ttl >= KV_MIN_TTL_SECONDS) {
-      await kv.put(key, JSON.stringify(result.data), {
+      const put = kv.put(key, JSON.stringify(result.data), {
         expirationTtl: ttl
       });
+      if (waitUntil) waitUntil(put);
+      else await put;
     }
+  } else if (result.status === "not_found") {
+    const put = kv.put(key, NEGATIVE_CACHE_VALUE, {
+      expirationTtl: NEGATIVE_CACHE_TTL_SECONDS
+    });
+    if (waitUntil) waitUntil(put);
+    else await put;
   }
   return result;
 }

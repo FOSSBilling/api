@@ -15,12 +15,38 @@ extensionsV1.get("/list", async (c) => {
   const db = new ExtensionsDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
   const type = c.req.query("type");
 
-  const { data, error } = await db.getAllExtensions(type);
+  // Opt-in pagination: absent params keep the exact original contract
+  // (every published extension, no pagination object). A non-numeric limit
+  // is treated as absent rather than a 400 - this legacy surface has never
+  // validated query params.
+  const limitParam = Number(c.req.query("limit"));
+  const offsetParam = Number(c.req.query("offset") ?? "0");
+  const page =
+    Number.isInteger(limitParam) && limitParam >= 1 && limitParam <= 100
+      ? {
+          limit: limitParam,
+          offset:
+            Number.isInteger(offsetParam) && offsetParam >= 0 ? offsetParam : 0
+        }
+      : undefined;
+
+  const { data, error } = await db.getAllExtensions(type, page);
   if (error) {
     return c.json({ error: { message: "Unable to load extensions" } }, 500);
   }
 
-  return c.json({ result: data });
+  return c.json({
+    result: data?.extensions || [],
+    ...(page && data
+      ? {
+          pagination: {
+            limit: page.limit,
+            offset: page.offset,
+            has_more: data.hasMore
+          }
+        }
+      : {})
+  });
 });
 
 extensionsV1.get("/:id/badges/:type", async (c) => {
@@ -68,6 +94,8 @@ extensionsV1.get("/:id/badges/:type", async (c) => {
     format.color = colorParam;
   }
 
+  // Static import: wrangler's esbuild doesn't code-split, so a dynamic
+  // import here would just be inlined back into the bundle.
   const svg = makeBadge(format);
   c.header("Content-Type", "image/svg+xml");
   return c.body(svg);

@@ -86,23 +86,22 @@ async function listArtifacts(
   return result.data.artifacts as RawArtifact[];
 }
 
-// A circuit breaker, not a correctness bound. This is the fallback's
-// only source of truth for fork PRs - imposing a real cutoff here would
-// just trade the original false-not-found bug for a smaller version of
-// itself, missing a genuine match that happens to sit past page N. Every
-// GitHub Actions artifact expires after 14 days regardless of type, so a
-// repo's total artifact count is inherently finite even for very active
-// repos; this exists only to guarantee termination if the API ever
-// doesn't behave as expected (e.g. never returns a short page), not
-// because 5,000 artifacts is a realistic amount to actually page through.
+// A circuit breaker, not a correctness bound. This fallback is only used
+// for short (prefix) SHAs these days - the runs-API path below handles
+// full SHAs - but a short-SHA caller still deserves termination
+// guarantees. Every GitHub Actions artifact expires after 14 days
+// regardless of type, so a repo's total artifact count is inherently
+// finite even for very active repos; this exists only to guarantee
+// termination if the API ever doesn't behave as expected (e.g. never
+// returns a short page), not because 5,000 artifacts is a realistic
+// amount to actually page through.
 const MAX_FALLBACK_PAGES = 50;
 
-// The fallback path (see findPreviewArtifactByCommitSha) can't filter
-// server-side by name, so a repo with more than one page of live preview
-// artifacts would silently miss a genuine match sitting on page 2+ with a
-// single unpaginated call. Pages through until GitHub returns a page
-// short of per_page - the real "no more results" signal - or a match is
-// found, whichever happens first.
+// The short-SHA fallback can't filter server-side by name, so a repo with
+// more than one page of live preview artifacts would silently miss a
+// genuine match sitting on page 2+ with a single unpaginated call. Pages
+// through until GitHub returns a page short of per_page - the real "no
+// more results" signal - or a match is found, whichever happens first.
 async function findInFallbackPages(
   githubToken: string,
   shaLower: string
@@ -117,6 +116,67 @@ async function findInFallbackPages(
     );
     if (match) return match;
     if (artifacts.length < 100) break; // last page
+  }
+  return null;
+}
+
+// Termination bound for the runs-API fallback below - a commit is not
+// re-run dozens of times in practice, and this mirrors the circuit-breaker
+// role MAX_FALLBACK_PAGES plays for the page-scan path.
+const MAX_RUNS_TO_TRY = 10;
+
+async function listRunArtifacts(
+  githubToken: string,
+  runId: number
+): Promise<RawArtifact[]> {
+  const result = await ghRequest(
+    "GET /repos/{owner}/{repo}/actions/runs/{run_id}/artifacts",
+    {
+      owner: REPO_OWNER,
+      repo: REPO_NAME,
+      run_id: runId,
+      per_page: 100,
+      headers: { Authorization: `Bearer ${githubToken}` }
+    }
+  );
+  return result.data.artifacts as RawArtifact[];
+}
+
+// The full-SHA fallback: list the workflow runs triggered by this exact
+// commit (server-side head_sha filter), then look at each run's artifacts -
+// 1 + (runs tried) calls regardless of repo size, which is what keeps
+// fork-PR polling affordable. The run-level artifact listing carries the
+// same workflow_run metadata as the repo-level one; synthesized from the
+// run at hand if absent, so matchArtifact can rely on it.
+async function findArtifactByRunHeadSha(
+  githubToken: string,
+  shaLower: string
+): Promise<ArtifactMatch | null> {
+  const result = await ghRequest("GET /repos/{owner}/{repo}/actions/runs", {
+    owner: REPO_OWNER,
+    repo: REPO_NAME,
+    head_sha: shaLower,
+    per_page: 100,
+    headers: { Authorization: `Bearer ${githubToken}` }
+  });
+  const runs = (result.data.workflow_runs ?? []) as Array<{
+    id: number;
+    head_sha: string;
+  }>;
+
+  for (const run of runs.slice(0, MAX_RUNS_TO_TRY)) {
+    const artifacts = await listRunArtifacts(githubToken, run.id);
+    const match = matchArtifact(
+      artifacts.map((artifact) => ({
+        ...artifact,
+        workflow_run: artifact.workflow_run ?? {
+          id: run.id,
+          head_sha: run.head_sha
+        }
+      })),
+      shaLower
+    );
+    if (match) return match;
   }
   return null;
 }
@@ -167,18 +227,19 @@ function toPreviewArtifact(match: ArtifactMatch): PreviewArtifact {
 // path since preview-build-pr is fork-only), where $GITHUB_SHA in CI is
 // the actual pushed commit.
 //
-// Falls back to paging through every preview artifact (findInFallbackPages)
-// and matching by the triggering run's real head_sha if that misses. This
-// is what makes fork PRs resolve correctly: GitHub's pull_request event
-// makes $GITHUB_SHA the ephemeral merge commit rather than the PR's real
-// head commit (see
+// Falls back to the triggering run's own head_sha metadata if that
+// misses. This is what makes fork PRs resolve correctly: GitHub's
+// pull_request event makes $GITHUB_SHA the ephemeral merge commit rather
+// than the PR's real head commit (see
 // https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request),
 // so preview-build-pr names its artifact after a SHA this service never
 // asks about - only the run's own head_sha metadata (populated by GitHub
 // independently of what the job saw as $GITHUB_SHA) still says which
-// commit it actually is. Can't filter this scan server-side by name (no
-// exact name to filter by), so it has to page through results instead of
-// trusting a single page holds the match.
+// commit it actually is. Which fallback runs depends on the SHA:
+// full-length SHAs go through the runs API (findArtifactByRunHeadSha,
+// server-side head_sha filter - a handful of calls regardless of repo
+// size); short prefixes stay on the page scan (findInFallbackPages),
+// since the runs API can't be trusted to match on a partial SHA.
 export async function findPreviewArtifactByCommitSha(
   githubToken: string,
   sha: string
@@ -193,7 +254,10 @@ export async function findPreviewArtifactByCommitSha(
     let match = matchArtifact(exact, shaLower);
 
     if (!match) {
-      match = await findInFallbackPages(githubToken, shaLower);
+      match =
+        shaLower.length === 40
+          ? await findArtifactByRunHeadSha(githubToken, shaLower)
+          : await findInFallbackPages(githubToken, shaLower);
     }
 
     if (!match) {

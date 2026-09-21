@@ -1,9 +1,7 @@
 import { z } from "@hono/zod-openapi";
 import { eq } from "drizzle-orm";
 import type { ExtensionsDb } from "../../../../lib/db";
-import { developers, users } from "../db/schema";
-import { DeveloperProfilesDatabase } from "../db/developer-profiles";
-import { ExtensionsDatabase } from "../db/extensions";
+import { developers, extensions, users } from "../db/schema";
 
 // Same constraints as the input schemas (DeveloperInputSchema's
 // contact_email, UserIdentityInputSchema's email): a legacy stored value that
@@ -14,44 +12,20 @@ function isEmail(value: unknown): value is string {
   return emailSchema.safeParse(value).success;
 }
 
-async function getUserEmail(
-  db: ExtensionsDb,
-  userId: string
-): Promise<string | null> {
-  try {
-    const [row] = await db
-      .select({ email: users.email })
-      .from(users)
-      .where(eq(users.id, userId));
-    return isEmail(row?.email) ? row.email : null;
-  } catch {
-    return null;
-  }
-}
-
 // Developer contact email wins; the owner's account email is the fallback.
 // Either may be missing (legacy/unclaimed profiles, auth without email).
-async function resolveDeveloperEmail(
-  db: ExtensionsDb,
-  developerId: string,
-  contact: string | null
-): Promise<string | null> {
-  if (contact) return contact;
-
-  try {
-    const [row] = await db
-      .select({ ownerUserId: developers.ownerUserId })
-      .from(developers)
-      .where(eq(developers.id, developerId));
-    if (row?.ownerUserId) {
-      return getUserEmail(db, row.ownerUserId);
-    }
-  } catch {
-    return null;
-  }
+function pickEmail(
+  contactEmail: string | null,
+  accountEmail: string | null
+): string | null {
+  if (contactEmail && isEmail(contactEmail)) return contactEmail;
+  if (accountEmail && isEmail(accountEmail)) return accountEmail;
   return null;
 }
 
+// Notification only needs the extension name and the developer's address,
+// so one join answers it - the heavy owned view (revision joins,
+// pendingContent) and its serial lookups add nothing here.
 export async function resolveExtensionEmail(
   db: ExtensionsDb,
   extensionId: string
@@ -61,46 +35,72 @@ export async function resolveExtensionEmail(
   developerId: string;
   developerName?: string;
 } | null> {
-  const extensions = new ExtensionsDatabase(db);
-  const { data } = await extensions.getOwned(extensionId);
-  if (!data) return null;
+  try {
+    const [row] = await db
+      .select({
+        extensionName: extensions.name,
+        developerId: extensions.developerId,
+        developerName: developers.name,
+        contactEmail: developers.contactEmail,
+        accountEmail: users.email
+      })
+      .from(extensions)
+      .innerJoin(developers, eq(extensions.developerId, developers.id))
+      .leftJoin(users, eq(developers.ownerUserId, users.id))
+      .where(eq(extensions.id, extensionId));
 
-  const profiles = new DeveloperProfilesDatabase(db);
-  const { data: profile } = await profiles.getById(data.extension.developer.id);
-  const contact =
-    profile && isEmail(profile.contact_email) ? profile.contact_email : null;
-  const to = await resolveDeveloperEmail(
-    db,
-    data.extension.developer.id,
-    contact
-  );
-  if (!to) return null;
+    if (!row) return null;
 
-  return {
-    to,
-    extensionName: data.extension.published?.name,
-    developerId: data.extension.developer.id,
-    developerName: data.extension.developer.name
-  };
+    const to = pickEmail(row.contactEmail, row.accountEmail);
+    if (!to) return null;
+
+    return {
+      to,
+      extensionName: row.extensionName ?? undefined,
+      developerId: row.developerId,
+      developerName: row.developerName
+    };
+  } catch {
+    return null;
+  }
 }
 
 export async function resolveDeveloperProfileEmail(
   db: ExtensionsDb,
   developerId: string
 ): Promise<{ to: string; developerName?: string } | null> {
-  const profiles = new DeveloperProfilesDatabase(db);
-  const { data } = await profiles.getById(developerId);
-  if (!data) return null;
+  try {
+    const [row] = await db
+      .select({
+        developerName: developers.name,
+        contactEmail: developers.contactEmail,
+        accountEmail: users.email
+      })
+      .from(developers)
+      .leftJoin(users, eq(developers.ownerUserId, users.id))
+      .where(eq(developers.id, developerId));
 
-  const contact = isEmail(data.contact_email) ? data.contact_email : null;
-  const to = await resolveDeveloperEmail(db, developerId, contact);
-  if (!to) return null;
-  return { to, developerName: data.name };
+    if (!row) return null;
+
+    const to = pickEmail(row.contactEmail, row.accountEmail);
+    if (!to) return null;
+    return { to, developerName: row.developerName };
+  } catch {
+    return null;
+  }
 }
 
 export async function resolveClaimantEmail(
   db: ExtensionsDb,
   claimantId: string
 ): Promise<string | null> {
-  return getUserEmail(db, claimantId);
+  try {
+    const [row] = await db
+      .select({ email: users.email })
+      .from(users)
+      .where(eq(users.id, claimantId));
+    return isEmail(row?.email) ? row.email : null;
+  } catch {
+    return null;
+  }
 }

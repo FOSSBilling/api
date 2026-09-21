@@ -1,4 +1,5 @@
 import { z } from "@hono/zod-openapi";
+import { ListPaginationQuerySchema } from "./common";
 
 export const TransferAcceptanceSchema = z
   .object({ token: z.string().min(64).max(128) })
@@ -78,5 +79,7 @@ export const UnifiedClaimsQuerySchema = z.object({
     .openapi({
       param: { name: "status", in: "query" },
       description: "Filter claims by status (default: all)"
-    })
+    }),
+  limit: ListPaginationQuerySchema.shape.limit,
+  offset: ListPaginationQuerySchema.shape.offset
 });

@@ -6,7 +6,7 @@ import {
 } from "../schemas/previews";
 import { resolvePullRequestHeadSha } from "../github/artifacts";
 import { PreviewLookupResult, resolveArtifactPreview } from "../resolve";
-import { cachedLookup } from "../cache";
+import { cachedLookup, DEFAULT_CACHE_TTL_SECONDS } from "../cache";
 import { respondWithDownloadRedirect, respondWithLookup } from "./respond";
 import { PreviewsV1App } from "./app";
 
@@ -54,7 +54,9 @@ export function registerPrRoutes(app: PreviewsV1App): void {
     const result = await cachedLookup(
       c.env.CACHE_KV,
       `preview:pr:${number}`,
-      () => resolvePrPreview(githubToken, number)
+      () => resolvePrPreview(githubToken, number),
+      DEFAULT_CACHE_TTL_SECONDS,
+      (p) => c.executionCtx.waitUntil(p)
     );
 
     return respondWithLookup(c, result, notFoundMessage(number));
@@ -87,7 +89,9 @@ export function registerPrRoutes(app: PreviewsV1App): void {
     const artifact = await cachedLookup(
       c.env.CACHE_KV,
       `preview:pr:${number}`,
-      () => resolvePrPreview(githubToken, number)
+      () => resolvePrPreview(githubToken, number),
+      DEFAULT_CACHE_TTL_SECONDS,
+      (p) => c.executionCtx.waitUntil(p)
     );
     return respondWithDownloadRedirect(
       c,

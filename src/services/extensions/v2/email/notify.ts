@@ -20,10 +20,17 @@ export interface ModerationNotifyInput {
 // Resolves the recipient, builds the template and sends. Never throws:
 // moderation writes must succeed even when mail is unconfigured, the address
 // is missing, or the provider is down. Every skip/failure is logged.
+//
+// Recipient resolution stays on the response path (its result is what
+// `notified` reports); when the caller provides waitUntil, the provider POST
+// is deferred out of the response - its 10s abort timeout is not worth
+// blocking a moderation write on. `true` then means "recipient resolved and
+// send dispatched", not "delivered"; delivery failures surface only in logs.
 export async function sendModerationNotification(
   env: EnvReader,
   db: ExtensionsDb,
-  input: ModerationNotifyInput
+  input: ModerationNotifyInput,
+  waitUntil?: (promise: Promise<unknown>) => void
 ): Promise<boolean> {
   try {
     let to: string | null;
@@ -96,15 +103,30 @@ export async function sendModerationNotification(
     });
 
     const sender = createEmailSender(env);
-    const result = await sender.send(message);
-    if (!result.ok) {
-      logError("email", "Moderation notification failed", {
-        kind: input.kind,
-        error: result.error
-      });
-      return false;
+    const send = (async () => {
+      try {
+        const result = await sender.send(message);
+        if (!result.ok) {
+          logError("email", "Moderation notification failed", {
+            kind: input.kind,
+            error: result.error
+          });
+          return false;
+        }
+        return true;
+      } catch (error) {
+        logError("email", "Moderation notification error", {
+          message: error instanceof Error ? error.message : String(error)
+        });
+        return false;
+      }
+    })();
+
+    if (waitUntil) {
+      waitUntil(send);
+      return true;
     }
-    return true;
+    return send;
   } catch (error) {
     logError("email", "Moderation notification error", {
       message: error instanceof Error ? error.message : String(error)

@@ -189,7 +189,10 @@ describe("moderation notification emails", () => {
     await insertUser(db, { id: "mod-1", is_moderator: 1 });
     await seedLiveExtension();
     setEmailEnv();
-    stubSmtpApi({ success: false, message: "Invalid server specified." });
+    const calls = stubSmtpApi({
+      success: false,
+      message: "Invalid server specified."
+    });
 
     const res = await post(
       "/extensions/v2/extensions/live-ext/delist",
@@ -197,9 +200,14 @@ describe("moderation notification emails", () => {
       { reason: "Upstream source removed" }
     );
     expect(res.status).toBe(200);
+    // `notified` reports that a send was dispatched (recipient resolved,
+    // provider call handed to waitUntil) - not that the provider accepted
+    // it. The provider failure is visible only in logs; the delist itself
+    // must still succeed.
     await expect(res.json()).resolves.toEqual({
-      result: { id: "live-ext", status: "delisted", notified: false }
+      result: { id: "live-ext", status: "delisted", notified: true }
     });
+    expect(calls).toHaveLength(1);
     expect((await getExtension(db, "live-ext"))?.delist_reason).toBe(
       "Upstream source removed"
     );

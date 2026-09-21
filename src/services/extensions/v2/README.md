@@ -57,11 +57,14 @@ email the affected author unless the moderator opts out with `?notify=false`.
 The recipient is the developer's `contact_email`, falling back to the owning
 account's `email`; claim decisions go to the claimant's account email.
 Sending is best-effort and never fails the write: the result carries
-`notified: boolean`, and a missing address, missing mail credentials, or
-provider failure only logs an error. See `email/` for the provider
-abstraction (`mxroute` via `https://smtpapi.mxroute.com/`, `resend`, or
-`disabled`) and the root README for the `EXTENSIONS_V2_EMAIL_*`
-configuration.
+`notified: boolean`, which reports whether a recipient was resolved and the
+send dispatched. The provider POST itself runs via `waitUntil` after the
+response (it has a 10s abort timeout and is not worth blocking a moderation
+write on), so delivery failures surface only in logs. A missing address or
+missing mail credentials skip the send before the response and report
+`notified: false`. See `email/` for the provider abstraction (`mxroute` via
+`https://smtpapi.mxroute.com/`, `resend`, or `disabled`) and the root README
+for the `EXTENSIONS_V2_EMAIL_*` configuration.
 
 The id and the developer are properties of the extension, not of a revision: an
 edit cannot rename an extension or move it to another developer, and approving

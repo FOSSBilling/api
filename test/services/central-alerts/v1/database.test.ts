@@ -35,11 +35,20 @@ describe("CentralAlertsDatabase", () => {
       const { data, error } = await db.getAllAlerts();
 
       expect(error).toBeNull();
-      expect(data).toHaveLength(1);
-      expect(data?.[0].id).toBe("1");
-      expect(data?.[0].title).toBe("Test Alert");
-      expect(data?.[0].buttons).toHaveLength(1);
-      expect(data?.[0].buttons?.[0].text).toBe("Test Button");
+      expect(data?.alerts).toHaveLength(1);
+      expect(data?.alerts[0].id).toBe("1");
+      expect(data?.alerts[0].title).toBe("Test Alert");
+      expect(data?.alerts[0].buttons).toHaveLength(1);
+      expect(data?.alerts[0].buttons?.[0].text).toBe("Test Button");
+      expect(data?.hasMore).toBe(false);
+    });
+
+    it("should honor an opt-in pagination window", async () => {
+      const paged = await db.getAllAlerts({ limit: 1, offset: 0 });
+
+      expect(paged.error).toBeNull();
+      expect(paged.data?.alerts).toHaveLength(1);
+      expect(paged.data?.hasMore).toBe(false);
     });
   });
 });

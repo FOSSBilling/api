@@ -446,6 +446,27 @@ export class ExtensionsDatabase {
     };
   }
 
+  // Light authorisation probe for the merged public/owner detail read:
+  // deciding which view a caller gets must not cost the full owner view
+  // (two revision joins plus up to 256 KiB of pendingContent).
+  async getOwnership(
+    id: string
+  ): Promise<DatabaseResult<{ ownerUserId: string | null }>> {
+    try {
+      const rows = await this.db
+        .select({ ownerUserId: developers.ownerUserId })
+        .from(extensions)
+        .innerJoin(developers, eq(extensions.developerId, developers.id))
+        .where(sql`LOWER(${extensions.id}) = LOWER(${id})`);
+
+      const row = rows[0];
+      if (!row) return notFound(id);
+      return { data: { ownerUserId: row.ownerUserId }, error: null };
+    } catch (error) {
+      return databaseError("getOwnership", error);
+    }
+  }
+
   // Returns the owner view plus the two ids a route needs to authorise the
   // caller, so a detail read is one query rather than a fetch-then-check.
   async getOwned(

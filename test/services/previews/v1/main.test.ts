@@ -45,6 +45,7 @@ describe("Previews API v1 - GET /previews/v1/main", () => {
   beforeEach(async () => {
     restoreConsole = suppressConsole();
     await env.CACHE_KV.delete("preview:main");
+    await env.CACHE_KV.delete("preview:main:url");
     await env.DOWNLOAD_BUCKET.delete(MAIN_PREVIEW_KEY);
     vi.clearAllMocks();
   });
@@ -223,6 +224,7 @@ describe("Previews API v1 - GET /previews/v1/main/download", () => {
   beforeEach(async () => {
     restoreConsole = suppressConsole();
     await env.CACHE_KV.delete("preview:main");
+    await env.CACHE_KV.delete("preview:main:url");
     await env.DOWNLOAD_BUCKET.delete(MAIN_PREVIEW_KEY);
     vi.clearAllMocks();
     (vi.mocked(ghRequest) as MockGitHubRequest).mockImplementation(

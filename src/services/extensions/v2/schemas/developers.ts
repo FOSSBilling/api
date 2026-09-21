@@ -1,5 +1,5 @@
 import { z } from "@hono/zod-openapi";
-import { httpUrl, lowercaseId } from "./common";
+import { httpUrl, lowercaseId, ListPaginationQuerySchema } from "./common";
 
 // GET /developers/unapproved has been merged into GET /developers?status=.
 // "unapproved" is therefore no longer a shadowed static route, but stays
@@ -61,8 +61,8 @@ export const DeveloperProfileSchema = DeveloperSchema.extend({
   // action (never by the opportunistic per-login re-check, which stays
   // GitHub-API-free by design).
   github_url_verified: z.boolean().optional(),
-  // Only populated by the moderator listAll/listUnapproved queries (see
-  // DeveloperProfilesDatabase.listAll/listUnapproved) — other DeveloperProfile
+  // Only populated by the moderator listing (see
+  // DeveloperProfilesDatabase.listWithOwnerPaged) — other DeveloperProfile
   // producers (getById, create/update/claim/transfer results) don't join
   // for it, so it's absent rather than null there. `unclaimed` is the
   // authoritative "has an owner" signal (owner_user_id IS NULL) — don't
@@ -151,7 +151,9 @@ export const DeveloperListQuerySchema = z.object({
       param: { name: "status", in: "query" },
       description:
         "all: every profile. unapproved: only profiles awaiting review."
-    })
+    }),
+  limit: ListPaginationQuerySchema.shape.limit,
+  offset: ListPaginationQuerySchema.shape.offset
 });
 
 // Merged GET /developers/{id} (optional auth, role-aware): anonymous callers

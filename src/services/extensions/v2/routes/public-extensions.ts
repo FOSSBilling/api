@@ -123,7 +123,12 @@ export function registerPublicExtensionsRoutes(app: ExtensionsV2App): void {
 
     const users = new UsersDatabase(extDb);
     if (scope === "mine") {
-      const active = await users.isActive(auth.userId);
+      // Both reads key off the caller id alone - resolve them together.
+      // Error precedence below matches the original serial order.
+      const [active, owner] = await Promise.all([
+        users.isActive(auth.userId),
+        new DeveloperProfilesDatabase(extDb).getOwnRef(auth.userId)
+      ]);
       if (active.error) {
         return c.json(errorBody(active.error, "Unable to check account"), 500);
       }
@@ -149,9 +154,6 @@ export function registerPublicExtensionsRoutes(app: ExtensionsV2App): void {
           422
         );
       }
-      const owner = await new DeveloperProfilesDatabase(extDb).getOwnRef(
-        auth.userId
-      );
       if (owner.error) {
         return c.json(errorBody(owner.error, "Unable to load developer"), 500);
       }
@@ -263,11 +265,15 @@ export function registerPublicExtensionsRoutes(app: ExtensionsV2App): void {
     const extDb = getExtensionsDb(c.env.DB_EXTENSIONS);
     const db = new ExtensionsDatabase(extDb);
 
+    // Authorise with the light ownership probe first, then fetch exactly
+    // one heavy view: the owner/moderator read for privileged callers,
+    // the public read for everyone else.
     if (auth) {
-      const owned = await db.getOwned(id);
-      if (owned.data) {
+      const ownership = await db.getOwnership(id);
+      if (ownership.data) {
         const users = new UsersDatabase(extDb);
-        if (owned.data.ownerUserId === auth.userId) {
+        const isOwner = ownership.data.ownerUserId === auth.userId;
+        if (isOwner) {
           const active = await users.isActive(auth.userId);
           if (active.error) {
             return c.json(
@@ -276,6 +282,10 @@ export function registerPublicExtensionsRoutes(app: ExtensionsV2App): void {
             );
           }
           if (active.data) {
+            const owned = await db.getOwned(id);
+            if (owned.error || !owned.data) {
+              return c.json(errorBody(owned.error, "Extension not found"), 500);
+            }
             const res = c.json({ result: owned.data.extension }, 200);
             res.headers.set("Vary", "Authorization");
             return res;
@@ -289,13 +299,17 @@ export function registerPublicExtensionsRoutes(app: ExtensionsV2App): void {
             );
           }
           if (access.data?.moderator) {
+            const owned = await db.getOwned(id);
+            if (owned.error || !owned.data) {
+              return c.json(errorBody(owned.error, "Extension not found"), 500);
+            }
             const res = c.json({ result: owned.data.extension }, 200);
             res.headers.set("Vary", "Authorization");
             return res;
           }
         }
-      } else if (owned.error && owned.error.code !== "NOT_FOUND") {
-        return c.json(errorBody(owned.error, "Extension not found"), 500);
+      } else if (ownership.error && ownership.error.code !== "NOT_FOUND") {
+        return c.json(errorBody(ownership.error, "Extension not found"), 500);
       }
     }
 

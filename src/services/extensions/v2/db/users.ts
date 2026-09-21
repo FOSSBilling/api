@@ -102,6 +102,28 @@ function hasUsableGithubOrgs(
   }
 }
 
+// Shared row mapper so RETURNING-based writes and get() project the exact
+// same UserRecord shape.
+function parseUserRow(row: typeof users.$inferSelect): UserRecord {
+  const active = row.deletedAt === null;
+  return {
+    id: row.id,
+    name: row.name,
+    email: row.email,
+    emailVerified: row.emailVerified === 1,
+    picture: row.picture,
+    displayName: row.displayName,
+    isModerator: active && row.isModerator === 1,
+    // A whitespace-only login is not a linked identity: trim before
+    // the truthiness check so sync artifacts can never read as linked.
+    githubLinked:
+      active &&
+      Boolean(row.githubLogin?.trim()) &&
+      hasUsableGithubOrgs(row.githubOrgs, row.githubOrgsExpiresAt),
+    deletedAt: row.deletedAt
+  };
+}
+
 export class UsersDatabase {
   constructor(private db: ExtensionsDb) {}
 
@@ -129,7 +151,8 @@ export class UsersDatabase {
     };
 
     try {
-      await this.db
+      // RETURNING: the upsert already produced the row, so no re-read.
+      const [row] = await this.db
         .insert(users)
         .values({ ...projection, id: userId, createdAt: now })
         // Insert and update must write the same projection - a field added to
@@ -137,9 +160,15 @@ export class UsersDatabase {
         // returning ones, or the reverse. created_at is the only difference,
         // and it is deliberately not re-stamped on conflict.
         .onConflictDoUpdate({ target: users.id, set: projection })
-        .run();
+        .returning();
 
-      return this.get(userId);
+      if (!row) {
+        return {
+          data: null,
+          error: { message: "User not found", code: "NOT_FOUND" }
+        };
+      }
+      return { data: parseUserRow(row), error: null };
     } catch (error) {
       return databaseError("syncIdentity", error);
     }
@@ -158,26 +187,7 @@ export class UsersDatabase {
         };
       }
 
-      const active = row.deletedAt === null;
-      return {
-        data: {
-          id: row.id,
-          name: row.name,
-          email: row.email,
-          emailVerified: row.emailVerified === 1,
-          picture: row.picture,
-          displayName: row.displayName,
-          isModerator: active && row.isModerator === 1,
-          // A whitespace-only login is not a linked identity: trim before
-          // the truthiness check so sync artifacts can never read as linked.
-          githubLinked:
-            active &&
-            Boolean(row.githubLogin?.trim()) &&
-            hasUsableGithubOrgs(row.githubOrgs, row.githubOrgsExpiresAt),
-          deletedAt: row.deletedAt
-        },
-        error: null
-      };
+      return { data: parseUserRow(row), error: null };
     } catch (error) {
       return databaseError("get", error);
     }
@@ -198,20 +208,22 @@ export class UsersDatabase {
   async updateDisplayName(
     userId: string,
     displayName: string | null
-  ): Promise<DatabaseResult<{ displayName: string | null }>> {
+  ): Promise<DatabaseResult<UserRecord>> {
     try {
-      const result = await this.db
+      // RETURNING hands back the full updated projection, so callers don't
+      // need a second read of the row they just wrote.
+      const [row] = await this.db
         .update(users)
         .set({ displayName, updatedAt: new Date().toISOString() })
         .where(and(eq(users.id, userId), isNull(users.deletedAt)))
-        .run();
-      if (!result.meta?.changes) {
+        .returning();
+      if (!row) {
         return {
           data: null,
           error: { message: "User not found", code: "NOT_FOUND" }
         };
       }
-      return { data: { displayName }, error: null };
+      return { data: parseUserRow(row), error: null };
     } catch (error) {
       return databaseError("updateDisplayName", error);
     }
