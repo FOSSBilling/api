@@ -1277,6 +1277,34 @@ describe("Extensions API v2", () => {
       expect(data.result[0].changed_by).toBe("user-1");
     });
 
+    // Params omitted used to mean "stream every row" - developer_history is
+    // append-only, so the default is now a bounded window (100) with the
+    // pagination envelope reporting what was applied.
+    it("applies the default pagination window when params are omitted", async () => {
+      await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        sampleDeveloper()
+      );
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+
+      const res = await get(
+        "/extensions/v2/developers/dev-developer/history",
+        await authHeaders("mod-1")
+      );
+
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as {
+        result: unknown[];
+        pagination: { limit: number; offset: number; has_more: boolean };
+      };
+      expect(data.pagination).toEqual({
+        limit: 100,
+        offset: 0,
+        has_more: false
+      });
+    });
+
     it("orders entries newest-first and snapshots each write", async () => {
       await put(
         "/extensions/v2/developers/me",

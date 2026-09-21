@@ -54,6 +54,10 @@ describe("Previews API v1 - GET /previews/v1/pr/:number", () => {
   beforeEach(async () => {
     restoreConsole = suppressConsole();
     await env.CACHE_KV.delete(`preview:pr:${PR_NUMBER}`);
+    // The PR route now shares the commit-keyed cache entry for its head
+    // SHA (see resolvePrPreview), so a negative/positive entry left by an
+    // earlier test's mocks must not leak into this one.
+    await env.CACHE_KV.delete(`preview:commit:${SHA.toLowerCase()}`);
     vi.clearAllMocks();
   });
 
@@ -195,6 +199,51 @@ describe("Previews API v1 - GET /previews/v1/pr/:number", () => {
       { expirationTtl: 60 }
     );
     putSpy.mockRestore();
+  });
+
+  it("shares the commit-keyed entry the PR resolve warms with /commit/{sha}", async () => {
+    // Same reason commit.test.ts uses a far-future expiry: an artifact
+    // whose retention has lapsed must not be cached under the commit key
+    // (ttlForArtifact goes negative), which would defeat what this test
+    // verifies.
+    const liveArtifact = {
+      ...SAMPLE_ARTIFACTS.artifacts[0],
+      expires_at: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString()
+    };
+    let artifactsListCalls = 0;
+    (vi.mocked(ghRequest) as MockGitHubRequest).mockImplementation(
+      async (route: string) => {
+        if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}") {
+          return { data: { head: { sha: SHA } } };
+        }
+        if (route === "GET /repos/{owner}/{repo}/actions/artifacts") {
+          artifactsListCalls++;
+          return { data: { total_count: 1, artifacts: [liveArtifact] } };
+        }
+        throw new Error(`Unexpected route: ${route}`);
+      }
+    );
+
+    await get(`/previews/v1/pr/${PR_NUMBER}`);
+    expect(artifactsListCalls).toBe(1);
+
+    // The canonical /commit/{sha} form (what download_url points clients
+    // at) reuses the entry the PR resolve wrote under the commit key -
+    // no second GitHub resolve chain within the window.
+    const commitRes = await get(`/previews/v1/commit/${SHA}`);
+    expect(commitRes.status).toBe(200);
+    const commitBody = (await commitRes.json()) as {
+      result: { pr_number: number | null };
+    };
+    expect(commitBody.result.pr_number).toBeNull();
+    expect(artifactsListCalls).toBe(1);
+
+    // While the PR view of the same artifact keeps the PR's own number.
+    const prRes = await get(`/previews/v1/pr/${PR_NUMBER}`);
+    const prBody = (await prRes.json()) as {
+      result: { pr_number: number | null };
+    };
+    expect(prBody.result.pr_number).toBe(PR_NUMBER);
   });
 
   it("resolves a fork PR whose artifact was named from the merge SHA, not the head SHA", async () => {

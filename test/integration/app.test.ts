@@ -5,6 +5,12 @@ import {
 } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import app from "../../src/app/index";
+
+// Requests carrying an Authorization header bypass hono's cache middleware so
+// tests that assert KV writes or handler runs reach the live handler rather
+// than an edge-cached response from an earlier test. /update calls keep
+// their exact auth headers and are excluded.
+const BYPASS_CACHE = { authorization: "test-bypass-cache" } as const;
 import { mockGitHubReleases, mockComposerJson } from "../mocks/github-releases";
 import { setupGitHubApiMock } from "../utils/mock-helpers";
 import { applyTestMigrations } from "../utils/apply-migrations";
@@ -54,20 +60,30 @@ describe("FOSSBilling API Worker - Full App Integration", () => {
   describe("Service Discovery and Routing", () => {
     it("should route to all services correctly", async () => {
       const ctx1 = createExecutionContext();
-      const versionsResponse = await app.request("/versions/v1", {}, env, ctx1);
+      const versionsResponse = await app.request(
+        "/versions/v1",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx1
+      );
       await waitOnExecutionContext(ctx1);
 
       const ctx2 = createExecutionContext();
       const alertsResponse = await app.request(
         "/central-alerts/v1/list",
-        {},
+        { headers: BYPASS_CACHE },
         env,
         ctx2
       );
       await waitOnExecutionContext(ctx2);
 
       const ctx3 = createExecutionContext();
-      const statsResponse = await app.request("/stats/v1/data", {}, env, ctx3);
+      const statsResponse = await app.request(
+        "/stats/v1/data",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx3
+      );
       await waitOnExecutionContext(ctx3);
 
       expect(versionsResponse.status).toBe(200);
@@ -84,7 +100,12 @@ describe("FOSSBilling API Worker - Full App Integration", () => {
 
     it("should return 404 for unknown routes", async () => {
       const ctx = createExecutionContext();
-      const response = await app.request("/unknown/path", {}, env, ctx);
+      const response = await app.request(
+        "/unknown/path",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(404);
@@ -92,7 +113,12 @@ describe("FOSSBilling API Worker - Full App Integration", () => {
 
     it("should return service information at root path", async () => {
       const ctx = createExecutionContext();
-      const response = await app.request("/", {}, env, ctx);
+      const response = await app.request(
+        "/",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);
@@ -106,7 +132,7 @@ describe("FOSSBilling API Worker - Full App Integration", () => {
   describe("Cross-Service Communication", () => {
     it("should allow services to share cached data", async () => {
       const ctx = createExecutionContext();
-      await app.request("/versions/v1", {}, env, ctx);
+      await app.request("/versions/v1", { headers: BYPASS_CACHE }, env, ctx);
       await waitOnExecutionContext(ctx);
 
       const cached = await env.CACHE_KV.get("gh-fossbilling-releases");
@@ -117,7 +143,12 @@ describe("FOSSBilling API Worker - Full App Integration", () => {
   describe("Context Storage Middleware", () => {
     it("should make environment bindings available to all services", async () => {
       const ctx = createExecutionContext();
-      const response = await app.request("/versions/v1", {}, env, ctx);
+      const response = await app.request(
+        "/versions/v1",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);
@@ -130,7 +161,7 @@ describe("FOSSBilling API Worker - Full App Integration", () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/central-alerts/v1/list",
-        {},
+        { headers: BYPASS_CACHE },
         env,
         ctx
       );
@@ -282,7 +313,12 @@ describe("FOSSBilling API Worker - Full App Integration", () => {
 
     it("should include ETag headers on cacheable responses", async () => {
       const ctx = createExecutionContext();
-      const response = await app.request("/versions/v1", {}, env, ctx);
+      const response = await app.request(
+        "/versions/v1",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       const etag = response.headers.get("ETag");

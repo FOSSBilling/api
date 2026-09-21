@@ -119,6 +119,12 @@ enriched pending shape. `GET /developers/{id}` is role-aware like
 moderator. `PATCH /users/me` returns the full account projection, like
 `GET /users/me`.
 
+`GET /developers`, `GET /developers/claims`, and `GET /developers/{id}/history`
+support offset pagination via `?limit=` (1-100) and `?offset=`. `offset`
+without `limit` is rejected with 422; with no params at all the routes apply
+a bounded default window (100 rows) instead of streaming every row, and the
+response always carries `pagination: {limit, offset, has_more}`.
+
 ## Authentication
 
 Requests carry a short-lived bearer assertion minted by the Extensions site and verified here with a shared HMAC secret (`ASSERTION_SIGNING_SECRET`; see the root README for where to configure it).

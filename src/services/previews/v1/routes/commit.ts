@@ -16,7 +16,11 @@ import { PreviewsV1App } from "./app";
 // 60x for the same commit within an hour.
 const COMMIT_CACHE_TTL_SECONDS = 3600;
 
-const cacheKeyForSha = (sha: string) => `preview:commit:${sha.toLowerCase()}`;
+// Exported for the PR routes: /pr/{n} resolves its head SHA to the same
+// artifact /commit/{sha} would serve, so both routes converge on one cache
+// entry instead of paying the GitHub resolve chain twice per window.
+export const cacheKeyForSha = (sha: string) =>
+  `preview:commit:${sha.toLowerCase()}`;
 
 // Subtracted from the computed TTL so the value we write already accounts
 // for the round-trip between computing it here and cache.ts's kv.put()
@@ -35,7 +39,7 @@ const WRITE_SAFETY_MARGIN_SECONDS = 5;
 // the artifact naturally falls out of GitHub's own list) is served live
 // instead of cached - a short burst of extra GitHub calls right at the
 // end of an artifact's life, never stale data.
-function ttlForArtifact(artifact: ArtifactPreview): number {
+export function ttlForArtifact(artifact: ArtifactPreview): number {
   const remainingSeconds = Math.floor(
     (new Date(artifact.expires_at).getTime() - Date.now()) / 1000
   );

@@ -1,5 +1,6 @@
 import { bearerAuth } from "hono/bearer-auth";
 import { Hono, type Context, type Handler } from "hono";
+import { cache } from "hono/cache";
 import { cors } from "hono/cors";
 import { etag } from "hono/etag";
 import { prettyJSON } from "hono/pretty-json";
@@ -13,10 +14,10 @@ import {
   valid as semverValid
 } from "semver";
 import { Releases, ReleaseDetails, ResolvedReleaseDetails } from "./interfaces";
-import { getReleaseR2Object } from "./r2";
+import { getReleaseR2Object, ReleaseR2Object } from "./r2";
 import { getPlatform } from "../../../lib/middleware";
 import { ICache } from "../../../lib/interfaces";
-import { singleFlight } from "../../../lib/cache";
+import { publicCacheKey, singleFlight } from "../../../lib/cache";
 import { logError, logWarn, logInfo } from "../../../lib/logger";
 import {
   GitHubError,
@@ -29,8 +30,15 @@ import {
 
 const REPO_OWNER = "FOSSBilling";
 const REPO_NAME = "FOSSBilling";
-const RELEASE_CACHE_KEY = "gh-fossbilling-releases";
-const RELEASES_CACHE_CONTROL = "max-age=86400";
+// Shared with stats/v1, which reads the same blob and threads its own read
+// into getReleases - exported so that contract stays defined in one place.
+export const RELEASE_CACHE_KEY = "gh-fossbilling-releases";
+// Client-side caching of these endpoints is immaterial (the real consumers
+// re-request per update check and don't cache), so this TTL is sized for the
+// edge cache alone: short enough that a post-/update refresh is visible
+// within minutes without purge machinery, long enough that the vast majority
+// of repeat traffic never wakes the Worker.
+const RELEASES_CACHE_CONTROL = "max-age=300";
 const RELEASE_CACHE_TTL = 86400;
 const RELEASES_URL = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases`;
 type VersionsEnv = { Bindings: CloudflareBindings };
@@ -68,16 +76,58 @@ async function getUpdateToken(cache: ICache): Promise<string> {
   return token;
 }
 
+// Edge (Cache API) response caching, mirroring stats/v1: Cloudflare does not
+// auto-cache Worker responses regardless of Cache-Control, so without this
+// every request wakes the isolate and pays the KV read + parse + stringify
+// + etag hash for a payload that only changes when a release lands. The
+// middleware skips Authorization-bearing requests and caches only 200s.
+const VERSIONS_CACHE_NAME = "versions-api-v1";
+
+// Transient failures must not be client-cached: FOSSBilling's Update.php
+// honors Cache-Control, so a 503 during a GitHub outage or a 404 for a
+// not-yet-published version would suppress update checks for the TTL. A
+// thrown error never reaches the status check, so catch-and-rethrow keeps
+// the eventual 500 from inheriting the cacheable header either.
+async function stampCacheHeaders(
+  c: Context<VersionsEnv>,
+  next: () => Promise<void>
+) {
+  c.header("Cache-Control", RELEASES_CACHE_CONTROL);
+  try {
+    await next();
+  } catch (error) {
+    c.header("Cache-Control", "no-store");
+    throw error;
+  }
+  if (c.res.status >= 400) {
+    c.header("Cache-Control", "no-store");
+  }
+}
+
+interface CachedRouteOptions {
+  // Cache-key overrides forwarded to hono's cache middleware; default is
+  // the normalized URL.
+  keyGenerator?: (c: Context<VersionsEnv>) => string;
+  // Response headers the body varies on. Declaring them lets hono fold the
+  // request's header value into the cache key instead of refusing to store
+  // the response at all.
+  vary?: string[];
+}
+
 function registerCachedRoute<P extends string>(
   path: P,
-  handler: Handler<VersionsEnv, P>
+  handler: Handler<VersionsEnv, P>,
+  { keyGenerator = publicCacheKey, vary }: CachedRouteOptions = {}
 ) {
   return versionsV1.get(
     path,
-    async (c, next) => {
-      c.header("Cache-Control", RELEASES_CACHE_CONTROL);
-      return next();
-    },
+    cache({
+      cacheName: VERSIONS_CACHE_NAME,
+      cacheControl: RELEASES_CACHE_CONTROL,
+      keyGenerator,
+      ...(vary ? { vary } : {})
+    }),
+    stampCacheHeaders,
     etag(),
     prettyJSON(),
     handler
@@ -199,30 +249,39 @@ function getReleaseZipAsset(
   );
 }
 
-registerCachedRoute("/", async (c) => {
-  const result = await loadReleases(c);
-  const releases = result.releases;
+registerCachedRoute(
+  "/",
+  async (c) => {
+    const result = await loadReleases(c);
+    const releases = result.releases;
 
-  if (hasNoReleases(releases) && result.error) {
-    return c.json(buildUnavailableResponse(result.error), 503);
-  }
+    if (hasNoReleases(releases) && result.error) {
+      return c.json(buildUnavailableResponse(result.error), 503);
+    }
 
-  if (hasNoReleases(releases)) {
-    c.header("Vary", "*");
-  } else {
-    c.header("Vary", "User-Agent");
-  }
+    if (hasNoReleases(releases)) {
+      // `Vary: *` keeps intermediaries from pinning this degenerate
+      // response; hono's cache middleware will refuse to store it.
+      c.header("Vary", "*");
+    } else {
+      // The body varies by mirror trust (derived from the UA); declaring it
+      // also lets hono's cache middleware key entries per UA instead of
+      // refusing to store the response.
+      c.header("Vary", "User-Agent");
+    }
 
-  const userAgent = c.req.header("User-Agent");
-  const resolvedReleases = Object.fromEntries(
-    Object.entries(releases).map(([tag, release]) => [
-      tag,
-      resolveReleaseForClient(release, userAgent)
-    ])
-  );
+    const userAgent = c.req.header("User-Agent");
+    const resolvedReleases = Object.fromEntries(
+      Object.entries(releases).map(([tag, release]) => [
+        tag,
+        resolveReleaseForClient(release, userAgent)
+      ])
+    );
 
-  return c.json(buildSuccessResponse(resolvedReleases, result.source));
-});
+    return c.json(buildSuccessResponse(resolvedReleases, result.source));
+  },
+  { vary: ["User-Agent"] }
+);
 
 versionsV1.get(
   "/update",
@@ -347,76 +406,83 @@ registerCachedRoute("/count", async (c) => {
   return c.json(buildSuccessResponse(releaseCount, result.source));
 });
 
-registerCachedRoute("/:version", async (c) => {
-  const version = c.req.param("version");
-  let result = await loadReleases(c);
+registerCachedRoute(
+  "/:version",
+  async (c) => {
+    const version = c.req.param("version");
+    let result = await loadReleases(c);
 
-  if (!version) {
-    c.status(400);
-    return c.json({
-      result: null,
-      error_code: 400,
-      message: "Version parameter is required."
-    });
-  }
+    if (!version) {
+      c.status(400);
+      return c.json({
+        result: null,
+        error_code: 400,
+        message: "Version parameter is required."
+      });
+    }
 
-  let releases = result.releases;
+    let releases = result.releases;
 
-  // Retry once on transient failures (network blips, empty responses). A rate
-  // limit or auth rejection will not succeed any better on retry and only
-  // burns quota, so skip it in those cases.
-  const retryable =
-    !result.error ||
-    (!(result.error instanceof RateLimitError) &&
-      !(result.error instanceof AuthError));
-  if (hasNoReleases(releases) && retryable) {
-    result = await loadReleases(c, true);
-    releases = result.releases;
-  }
+    // Retry once on transient failures (network blips, empty responses). A rate
+    // limit or auth rejection will not succeed any better on retry and only
+    // burns quota, so skip it in those cases.
+    const retryable =
+      !result.error ||
+      (!(result.error instanceof RateLimitError) &&
+        !(result.error instanceof AuthError));
+    if (hasNoReleases(releases) && retryable) {
+      result = await loadReleases(c, true);
+      releases = result.releases;
+    }
 
-  if (hasNoReleases(releases) && result.error) {
-    return c.json(buildUnavailableResponse(result.error), 503);
-  }
+    if (hasNoReleases(releases) && result.error) {
+      return c.json(buildUnavailableResponse(result.error), 503);
+    }
 
-  if (hasNoReleases(releases)) {
+    if (hasNoReleases(releases)) {
+      c.status(404);
+      return c.json({
+        result: null,
+        error_code: 404,
+        message:
+          "No releases are currently available. Please try again later or check the GitHub releases page."
+      });
+    }
+
+    // The body varies by mirror trust (derived from the UA); declaring it
+    // also lets hono's cache middleware key entries per UA instead of
+    // refusing to store the response.
+    c.header("Vary", "User-Agent");
+    const userAgent = c.req.header("User-Agent");
+
+    if (version === "latest") {
+      const sortedKeys = Object.keys(releases).sort(semverCompare);
+      const lastKey = sortedKeys.at(-1);
+      const resolved = lastKey
+        ? resolveReleaseForClient(releases[lastKey], userAgent)
+        : null;
+
+      return c.json(buildSuccessResponse(resolved, result.source));
+    }
+
+    if (version in releases) {
+      return c.json(
+        buildSuccessResponse(
+          resolveReleaseForClient(releases[version], userAgent),
+          result.source
+        )
+      );
+    }
+
     c.status(404);
     return c.json({
       result: null,
       error_code: 404,
-      message:
-        "No releases are currently available. Please try again later or check the GitHub releases page."
+      message: `FOSSBilling version ${version} does not appear to exist.`
     });
-  }
-
-  c.header("Vary", "User-Agent");
-  const userAgent = c.req.header("User-Agent");
-
-  if (version === "latest") {
-    const sortedKeys = Object.keys(releases).sort(semverCompare);
-    const lastKey = sortedKeys.at(-1);
-    const resolved = lastKey
-      ? resolveReleaseForClient(releases[lastKey], userAgent)
-      : null;
-
-    return c.json(buildSuccessResponse(resolved, result.source));
-  }
-
-  if (version in releases) {
-    return c.json(
-      buildSuccessResponse(
-        resolveReleaseForClient(releases[version], userAgent),
-        result.source
-      )
-    );
-  }
-
-  c.status(404);
-  return c.json({
-    result: null,
-    error_code: 404,
-    message: `FOSSBilling version ${version} does not appear to exist.`
-  });
-});
+  },
+  { vary: ["User-Agent"] }
+);
 
 export default versionsV1;
 
@@ -435,16 +501,24 @@ export async function getReleases(
   githubToken: string,
   downloadBucket: R2Bucket,
   updateCache: boolean = false,
-  waitUntil?: (promise: Promise<unknown>) => void
+  waitUntil?: (promise: Promise<unknown>) => void,
+  // Lets a caller that already read RELEASE_CACHE_KEY (stats' parallel
+  // cold-path read) thread the value through instead of forcing a second
+  // identical KV round trip. `null` means "known empty", distinct from
+  // undefined (no pre-read; fetch it).
+  preReadReleases?: string | null
 ): Promise<GetReleasesResult> {
-  const cachedReleases = await cache.get(RELEASE_CACHE_KEY);
+  const cachedReleases =
+    preReadReleases !== undefined
+      ? preReadReleases
+      : await cache.get(RELEASE_CACHE_KEY);
 
   // Parsed once and reused for the serve-from-cache short circuit below,
   // the PHP-version reuse, and the stale fallback - re-parsing the full
   // changelog-bearing blob per use is measurable on this route.
   let parsedCache: Releases | null = null;
   if (cachedReleases) {
-    parsedCache = parseCachedReleases(
+    parsedCache = parseCachedReleasesMemoized(
       cachedReleases,
       "Cache corruption detected, attempting fresh fetch"
     );
@@ -494,6 +568,7 @@ export async function getReleases(
         release: (typeof result.data)[number];
         zipAsset: ReleaseAsset;
         cachedPhpVersion: string | undefined;
+        cachedMirror: ReleaseR2Object | undefined;
       };
 
       const releasesToProcess: ProcessedRelease[] = [];
@@ -514,16 +589,29 @@ export async function getReleases(
           continue;
         }
 
-        const cachedPhpVersion = parsedCache?.[tag]?.minimum_php_version;
+        const cachedEntry = parsedCache?.[tag];
+        const cachedPhpVersion = cachedEntry?.minimum_php_version;
         const cachedPhpVersionValue =
           typeof cachedPhpVersion === "string" && cachedPhpVersion.trim() !== ""
             ? cachedPhpVersion
+            : undefined;
+        // A complete persisted mirror pair is reused as-is (same trade as
+        // the PHP version above); an absent or null pair still re-heads R2
+        // below, so a mirror that only appears later is picked up on the
+        // next rebuild.
+        const cachedMirror =
+          typeof cachedEntry?.mirror_download_url === "string"
+            ? {
+                downloadUrl: cachedEntry.mirror_download_url,
+                digest: cachedEntry.mirror_digest
+              }
             : undefined;
         releasesToProcess.push({
           tag,
           release,
           zipAsset,
-          cachedPhpVersion: cachedPhpVersionValue
+          cachedPhpVersion: cachedPhpVersionValue,
+          cachedMirror
         });
 
         if (cachedPhpVersionValue === undefined) {
@@ -566,21 +654,32 @@ export async function getReleases(
       // decided per-request in resolveReleaseForClient().
       const releaseEntries: [string, ReleaseDetails][] = await Promise.all(
         releasesToProcess.map(
-          async ({ tag, release, zipAsset, cachedPhpVersion }) => {
+          async ({
+            tag,
+            release,
+            zipAsset,
+            cachedPhpVersion,
+            cachedMirror
+          }) => {
             const phpVersion =
               cachedPhpVersion !== undefined
                 ? cachedPhpVersion
                 : (batchPhpVersions.get(tag) ?? "");
 
-            // Releases before R2_MIRROR_MIN_VERSION were never uploaded to R2
-            // and never will be, so skip the lookup rather than issuing a
-            // HeadObject that's guaranteed to miss - Cloudflare's own R2
-            // binding instrumentation logs every miss as an error-level span,
-            // regardless of how we handle the resulting null here.
-            let r2Object = null;
-            if (semverGte(tag, R2_MIRROR_MIN_VERSION)) {
+            // Reuse the persisted mirror pair when complete: the archive for
+            // a released version is uploaded to R2 once, at release time, and
+            // is stable, so re-heading every object on every rebuild burns up
+            // to N subrequests rediscovering data the cached blob already
+            // carries. Otherwise: releases before R2_MIRROR_MIN_VERSION were
+            // never uploaded to R2 and never will be, so skip the lookup
+            // rather than issuing a HeadObject that's guaranteed to miss -
+            // Cloudflare's own R2 binding instrumentation logs every miss as
+            // an error-level span, regardless of how we handle the resulting
+            // null here.
+            let mirror: ReleaseR2Object | null = cachedMirror ?? null;
+            if (!mirror && semverGte(tag, R2_MIRROR_MIN_VERSION)) {
               try {
-                r2Object = await getReleaseR2Object(downloadBucket, tag);
+                mirror = await getReleaseR2Object(downloadBucket, tag);
               } catch (r2Error) {
                 logWarn("versions", "Failed to look up release in R2", {
                   tag,
@@ -595,13 +694,13 @@ export async function getReleases(
               released_on: release.published_at ?? "",
               minimum_php_version: phpVersion,
               download_url: zipAsset.browser_download_url,
-              mirror_download_url: r2Object?.downloadUrl ?? null,
+              mirror_download_url: mirror?.downloadUrl ?? null,
               size_bytes: zipAsset.size,
               is_prerelease: Boolean(release.prerelease),
               github_release_id: release.id ?? 0,
               changelog: release.body || "",
               digest: zipAsset.digest ?? null,
-              mirror_digest: r2Object?.digest ?? null
+              mirror_digest: mirror?.digest ?? null
             };
             return [tag, releaseDetails];
           }
@@ -699,6 +798,33 @@ export async function getReleases(
       };
     }
   });
+}
+
+// Parsing the full changelog-bearing blob is measurable on this route and
+// the blob is byte-identical across requests until a rebuild refreshes KV,
+// so memoize the parse keyed by the raw string rather than by time: a
+// refreshed value simply misses the memo, and nothing can serve a stale
+// parse of a changed blob. Tiny cap bounds memory; FIFO eviction is fine
+// since at most two blobs (old + new) exist at any moment in practice.
+const RELEASES_PARSE_MEMO_LIMIT = 4;
+const releasesParseMemo = new Map<string, Releases>();
+
+function parseCachedReleasesMemoized(
+  cachedReleases: string,
+  logMessage: string
+): Releases | null {
+  const memoized = releasesParseMemo.get(cachedReleases);
+  if (memoized) return memoized;
+
+  const parsed = parseCachedReleases(cachedReleases, logMessage);
+  if (parsed) {
+    if (releasesParseMemo.size >= RELEASES_PARSE_MEMO_LIMIT) {
+      const oldest = releasesParseMemo.keys().next().value;
+      if (oldest !== undefined) releasesParseMemo.delete(oldest);
+    }
+    releasesParseMemo.set(cachedReleases, parsed);
+  }
+  return parsed;
 }
 
 function parseCachedReleases(

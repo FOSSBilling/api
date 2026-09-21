@@ -383,7 +383,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
           "application/json": {
             schema: z.object({
               result: z.array(DeveloperHistoryEntrySchema),
-              pagination: OffsetPaginationSchema.optional()
+              pagination: OffsetPaginationSchema
             })
           }
         },

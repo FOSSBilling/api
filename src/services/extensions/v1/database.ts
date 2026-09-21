@@ -150,6 +150,60 @@ export class ExtensionsDatabase {
 
     return { data: parseExtensionRow(row), error: null };
   }
+
+  // Badge/version endpoints read only these two columns, and badges are the
+  // highest-volume path in this service (README embeds + crawlers) - selecting
+  // the full projection would ship every row's readme blob to render a
+  // few-hundred-byte SVG.
+  async getExtensionBadgeData(
+    id: string
+  ): Promise<
+    DatabaseResult<{ latestRelease: Release | null; license: { name: string } }>
+  > {
+    let rows: { releases: string; license: string }[];
+    try {
+      rows = (await this.db
+        .select({ releases: extensions.releases, license: extensions.license })
+        .from(extensions)
+        .where(
+          and(
+            sql`LOWER(${extensions.id}) = LOWER(${id})`,
+            isNotNull(extensions.publishedAt),
+            isNull(extensions.delistedAt)
+          )
+        )) as { releases: string; license: string }[];
+    } catch (error) {
+      return {
+        data: null,
+        error: {
+          message: error instanceof Error ? error.message : String(error),
+          code: "DATABASE_ERROR"
+        }
+      };
+    }
+
+    const row = rows[0];
+    if (!row) {
+      return {
+        data: null,
+        error: {
+          message: `Cannot find extension by id: ${id}`,
+          code: "NOT_FOUND"
+        }
+      };
+    }
+
+    const releases = sortReleasesDescending(
+      parseJSON<Release[]>(row.releases, [])
+    );
+    return {
+      data: {
+        latestRelease: releases[0] ?? null,
+        license: parseJSON(row.license, { name: "" })
+      },
+      error: null
+    };
+  }
 }
 
 function parseExtensionRow(row: ExtensionRow): Extension {

@@ -1,5 +1,6 @@
 import { Context } from "hono";
 import { getPlatform } from "../../../lib/middleware";
+import { invalidateListCache } from "../v1/list-cache";
 
 // The extensions site route-caches its public catalogue pages behind
 // Cloudflare-CDN-Cache-Control (maxAge + stale-while-revalidate). Those
@@ -11,12 +12,18 @@ import { getPlatform } from "../../../lib/middleware";
 // successful write (see AGENTS.md). The call is fire-and-forget: failures
 // are logged and swallowed, because the mutation has already succeeded and
 // the cache windows bound any resulting staleness.
+//
+// The v1 list body cache (../v1/list-cache) hangs off the same catalogue, so
+// it is invalidated here too - same fire-and-forget trade: a failed delete
+// merely leaves the list stale until its own short TTL expires.
 const REVALIDATE_TAGS = ["catalogue", "developers"];
 const REVALIDATE_URL = "https://extensions.fossbilling.org/api/revalidate";
 
 export function revalidateCatalogue(
   c: Context<{ Bindings: CloudflareBindings }>
 ): void {
+  invalidateListCache(c.env.CACHE_KV, (p) => c.executionCtx.waitUntil(p));
+
   const secret = getPlatform(c).getEnv("EXTENSIONS_REVALIDATE_SECRET");
   if (!secret) {
     // Unconfigured (e.g. local dev without the secret): skipping is safe —

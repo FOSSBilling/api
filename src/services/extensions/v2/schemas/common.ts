@@ -104,11 +104,14 @@ export const PaginationSchema = z
   })
   .openapi("Pagination");
 
-// Opt-in offset pagination for the moderator/audit list endpoints: both
-// params omitted => full unpaginated result, identical to the contract
-// before pagination existed. offset without limit is rejected (422) rather
-// than silently ignored, since the generated schema would otherwise
-// advertise a param the routes drop.
+// Opt-in offset pagination for the moderator/audit list endpoints: offset
+// without limit is rejected (422) rather than silently ignored, since the
+// generated schema would otherwise advertise a param the routes drop.
+// Params entirely omitted fall back to a bounded default window - these
+// lists are moderator-only, developer_history is append-only, and
+// "no params" previously meant streaming every row. Callers that want
+// everything page through with limit=100; the response envelope reports
+// has_more either way.
 export const offsetRequiresLimit = (query: {
   limit?: number;
   offset?: number;
@@ -143,22 +146,26 @@ export const OffsetPaginationSchema = z
   .openapi("OffsetPagination");
 
 // Normalises the validated pagination query into the shape the database
-// readers take: undefined without a limit (the unpaginated default), and
-// offset defaulting to 0.
+// readers take: offset defaults to 0, and params entirely omitted fall back
+// to a bounded default window (see the contract note above) instead of an
+// unbounded read.
+const DEFAULT_OFFSET_PAGE = { limit: 100, offset: 0 };
+
 export function offsetPageFromQuery(query: {
   limit?: number;
   offset?: number;
-}): { limit: number; offset: number } | undefined {
-  return query.limit === undefined
-    ? undefined
-    : { limit: query.limit, offset: query.offset ?? 0 };
+}): { limit: number; offset: number } {
+  return {
+    limit: query.limit ?? DEFAULT_OFFSET_PAGE.limit,
+    offset: query.offset ?? 0
+  };
 }
 
-// The response half of the same deal: absent without a limit, the
-// OffsetPagination object otherwise.
+// The response half of the same deal: the OffsetPagination envelope,
+// reporting the applied window and whether more rows follow it.
 export function offsetPaginationFrom(
-  page: { limit: number; offset: number } | undefined,
+  page: { limit: number; offset: number },
   hasMore: boolean
-): { limit: number; offset: number; has_more: boolean } | undefined {
-  return page ? { ...page, has_more: hasMore } : undefined;
+): { limit: number; offset: number; has_more: boolean } {
+  return { ...page, has_more: hasMore };
 }

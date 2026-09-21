@@ -446,22 +446,32 @@ export class ExtensionsDatabase {
     };
   }
 
-  // Light authorisation probe for the merged public/owner detail read:
-  // deciding which view a caller gets must not cost the full owner view
-  // (two revision joins plus up to 256 KiB of pendingContent).
+  // Light authorisation probe for the merged public/owner detail read and
+  // the revisions route: deciding which view a caller gets - and learning
+  // the canonical id for exact-match scoped queries - must not cost the
+  // full owner view (two revision joins plus up to 256 KiB of
+  // pendingContent).
   async getOwnership(
     id: string
-  ): Promise<DatabaseResult<{ ownerUserId: string | null }>> {
+  ): Promise<
+    DatabaseResult<{ extensionId: string; ownerUserId: string | null }>
+  > {
     try {
       const rows = await this.db
-        .select({ ownerUserId: developers.ownerUserId })
+        .select({
+          extensionId: extensions.id,
+          ownerUserId: developers.ownerUserId
+        })
         .from(extensions)
         .innerJoin(developers, eq(extensions.developerId, developers.id))
         .where(sql`LOWER(${extensions.id}) = LOWER(${id})`);
 
       const row = rows[0];
       if (!row) return notFound(id);
-      return { data: { ownerUserId: row.ownerUserId }, error: null };
+      return {
+        data: { extensionId: row.extensionId, ownerUserId: row.ownerUserId },
+        error: null
+      };
     } catch (error) {
       return databaseError("getOwnership", error);
     }

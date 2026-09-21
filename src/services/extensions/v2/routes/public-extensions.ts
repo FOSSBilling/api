@@ -265,23 +265,28 @@ export function registerPublicExtensionsRoutes(app: ExtensionsV2App): void {
     const extDb = getExtensionsDb(c.env.DB_EXTENSIONS);
     const db = new ExtensionsDatabase(extDb);
 
-    // Authorise with the light ownership probe first, then fetch exactly
-    // one heavy view: the owner/moderator read for privileged callers,
-    // the public read for everyone else.
+    // Authorise with the light ownership probe, then fetch exactly one
+    // heavy view: the owner/moderator read for privileged callers, the
+    // public read for everyone else. moderatorAccess() reads active and
+    // moderator from the same row, so it serves both branches and the
+    // probe + check run concurrently - two serial D1 round trips would
+    // otherwise head every authenticated detail read.
     if (auth) {
-      const ownership = await db.getOwnership(id);
+      const users = new UsersDatabase(extDb);
+      const [ownership, access] = await Promise.all([
+        db.getOwnership(id),
+        users.moderatorAccess(auth.userId)
+      ]);
       if (ownership.data) {
-        const users = new UsersDatabase(extDb);
         const isOwner = ownership.data.ownerUserId === auth.userId;
         if (isOwner) {
-          const active = await users.isActive(auth.userId);
-          if (active.error) {
+          if (access.error) {
             return c.json(
-              errorBody(active.error, "Unable to check account"),
+              errorBody(access.error, "Unable to check account"),
               500
             );
           }
-          if (active.data) {
+          if (access.data?.active) {
             const owned = await db.getOwned(id);
             // getOwned re-reports the owner from the same row it served:
             // an ownership transfer that committed between the probe and
@@ -307,7 +312,6 @@ export function registerPublicExtensionsRoutes(app: ExtensionsV2App): void {
             }
           }
         } else {
-          const access = await users.moderatorAccess(auth.userId);
           if (access.error) {
             return c.json(
               errorBody(access.error, "Unable to check access"),

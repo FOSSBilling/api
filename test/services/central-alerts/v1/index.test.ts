@@ -8,6 +8,11 @@ import app from "../../../../src/app";
 import type { CentralAlertsResponse } from "../../../utils/test-types";
 import { applyTestMigrations } from "../../../utils/apply-migrations";
 
+// Authorization header makes hono's cache middleware skip (same pattern as
+// the stats tests) so each request reaches the handler; the cache path is
+// covered by the dedicated cache test below, which omits the header.
+const BYPASS_CACHE = { authorization: "test-bypass-cache" } as const;
+
 // No fixture-insertion setup needed beyond migrations: migrations already
 // seed exactly the row these tests assert on (see
 // src/services/central-alerts/v1/db/migrations/0001_seed_initial_alert.sql)
@@ -20,7 +25,7 @@ describe("Central Alerts API v1", () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/central-alerts/v1/list",
-        {},
+        { headers: BYPASS_CACHE },
         env,
         ctx
       );
@@ -35,6 +40,45 @@ describe("Central Alerts API v1", () => {
       expect(Array.isArray(data.result.alerts)).toBe(true);
     });
 
+    // Deliberately omits BYPASS_CACHE so hono's cache middleware
+    // participates: the second identical request is served from the edge
+    // cache without reaching D1.
+    it("should serve a repeated request from the edge cache", async () => {
+      const requestOnce = async () => {
+        const ctx = createExecutionContext();
+        const response = await app.request(
+          "/central-alerts/v1/list",
+          {},
+          env,
+          ctx
+        );
+        await waitOnExecutionContext(ctx);
+        return response;
+      };
+
+      const first = await requestOnce();
+      expect(first.status).toBe(200);
+      expect(first.headers.get("cache-control")).toContain("max-age=60");
+      const firstBody = await first.text();
+
+      // Break D1 so a second request that reaches the handler fails loudly:
+      // body equality alone can't tell a cache hit from a deterministic
+      // handler re-run (same pattern as the error-case test below).
+      const realDb = env.DB_CENTRAL_ALERTS;
+      env.DB_CENTRAL_ALERTS = {
+        prepare() {
+          throw new Error("secret schema detail");
+        }
+      } as unknown as D1Database;
+      try {
+        const second = await requestOnce();
+        expect(second.status).toBe(200);
+        await expect(second.text()).resolves.toBe(firstBody);
+      } finally {
+        env.DB_CENTRAL_ALERTS = realDb;
+      }
+    });
+
     // offset is only meaningful alongside a limit: a stray offset alone
     // must not silently fall through to the full legacy response the way
     // it would if the param were simply ignored.
@@ -42,7 +86,7 @@ describe("Central Alerts API v1", () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/central-alerts/v1/list?offset=1",
-        {},
+        { headers: BYPASS_CACHE },
         env,
         ctx
       );
@@ -62,7 +106,7 @@ describe("Central Alerts API v1", () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/central-alerts/v1/list",
-        {},
+        { headers: BYPASS_CACHE },
         env,
         ctx
       );
@@ -82,7 +126,7 @@ describe("Central Alerts API v1", () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/central-alerts/v1/list",
-        {},
+        { headers: BYPASS_CACHE },
         env,
         ctx
       );
@@ -107,7 +151,7 @@ describe("Central Alerts API v1", () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/central-alerts/v1/list/",
-        {},
+        { headers: BYPASS_CACHE },
         env,
         ctx
       );
@@ -123,7 +167,7 @@ describe("Central Alerts API v1", () => {
       const ctx1 = createExecutionContext();
       const response1 = await app.request(
         "/central-alerts/v1/list",
-        {},
+        { headers: BYPASS_CACHE },
         env,
         ctx1
       );
@@ -133,7 +177,7 @@ describe("Central Alerts API v1", () => {
       const ctx2 = createExecutionContext();
       const response2 = await app.request(
         "/central-alerts/v1/list",
-        {},
+        { headers: BYPASS_CACHE },
         env,
         ctx2
       );
@@ -147,7 +191,7 @@ describe("Central Alerts API v1", () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/central-alerts/v1/list",
-        {},
+        { headers: BYPASS_CACHE },
         env,
         ctx
       );
@@ -175,7 +219,7 @@ describe("Central Alerts API v1", () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/central-alerts/v1/list",
-        {},
+        { headers: BYPASS_CACHE },
         env,
         ctx
       );
@@ -193,7 +237,7 @@ describe("Central Alerts API v1", () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/central-alerts/v1/unknown",
-        {},
+        { headers: BYPASS_CACHE },
         env,
         ctx
       );
@@ -204,7 +248,12 @@ describe("Central Alerts API v1", () => {
 
     it("should redirect root path with trailing slash", async () => {
       const ctx = createExecutionContext();
-      const response = await app.request("/central-alerts/v1/", {}, env, ctx);
+      const response = await app.request(
+        "/central-alerts/v1/",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(301);

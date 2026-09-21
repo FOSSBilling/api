@@ -161,7 +161,7 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
           "application/json": {
             schema: z.object({
               result: z.array(PendingDeveloperClaimSchema),
-              pagination: OffsetPaginationSchema.optional()
+              pagination: OffsetPaginationSchema
             })
           }
         },
@@ -310,11 +310,6 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
     const query = c.req.valid("query");
     const extDb = getExtensionsDb(c.env.DB_EXTENSIONS);
     const db = new DeveloperClaimsDatabase(extDb);
-    // Read before approveClaim() transfers ownership: afterwards the profile
-    // row no longer records who the claimant was.
-    const claimResult = notifyRequested(query)
-      ? await db.getClaimById(id)
-      : null;
     const { data, error } = await db.approveClaim(id, auth.userId);
     if (error || !data) {
       return c.json(
@@ -324,19 +319,22 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
     }
     revalidateCatalogue(c);
     let notified = false;
-    if (claimResult?.data) {
+    if (notifyRequested(query)) {
+      // approveClaim returns the pre-transfer claim snapshot it already
+      // loaded (afterwards the profile row no longer records who the
+      // claimant was), so no separate read is needed here.
       notified = await sendModerationNotification(
         getPlatform(c),
         extDb,
         {
           kind: "claim-approved",
-          developerId: claimResult.data.developer_id,
-          claimantId: claimResult.data.claimant_id
+          developerId: data.claim.developer_id,
+          claimantId: data.claim.claimant_id
         },
         (p) => c.executionCtx.waitUntil(p)
       );
     }
-    return c.json({ result: { ...data, notified } }, 200);
+    return c.json({ result: { ...data.profile, notified } }, 200);
   });
 
   const rejectClaimRoute = createRoute({

@@ -5,6 +5,8 @@ import {
 } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import app from "../../../src/app";
+
+const BYPASS_CACHE = { authorization: "test-bypass-cache" } as const;
 import {
   mockGitHubReleases,
   mockComposerJson
@@ -53,7 +55,12 @@ describe("Versions API v1 - Integration Tests", () => {
   describe("Full Request/Response Cycle", () => {
     it("should handle complete flow from request to cached response", async () => {
       const ctx1 = createExecutionContext();
-      const response1 = await app.request("/versions/v1", {}, env, ctx1);
+      const response1 = await app.request(
+        "/versions/v1",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx1
+      );
       await waitOnExecutionContext(ctx1);
 
       expect(response1.status).toBe(200);
@@ -64,7 +71,12 @@ describe("Versions API v1 - Integration Tests", () => {
       expect(cached).toBeTruthy();
 
       const ctx2 = createExecutionContext();
-      const response2 = await app.request("/versions/v1", {}, env, ctx2);
+      const response2 = await app.request(
+        "/versions/v1",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx2
+      );
       await waitOnExecutionContext(ctx2);
 
       expect(response2.status).toBe(200);
@@ -97,7 +109,12 @@ describe("Versions API v1 - Integration Tests", () => {
       expect(cached).toBeTruthy();
 
       const ctx2 = createExecutionContext();
-      const response2 = await app.request("/versions/v1", {}, env, ctx2);
+      const response2 = await app.request(
+        "/versions/v1",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx2
+      );
       await waitOnExecutionContext(ctx2);
 
       expect(response2.status).toBe(200);
@@ -105,17 +122,32 @@ describe("Versions API v1 - Integration Tests", () => {
 
     it("should return correct data across all endpoints", async () => {
       const ctx1 = createExecutionContext();
-      const response1 = await app.request("/versions/v1", {}, env, ctx1);
+      const response1 = await app.request(
+        "/versions/v1",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx1
+      );
       await waitOnExecutionContext(ctx1);
       const allVersions: VersionsResponse = await response1.json();
 
       const ctx2 = createExecutionContext();
-      const response2 = await app.request("/versions/v1/latest", {}, env, ctx2);
+      const response2 = await app.request(
+        "/versions/v1/latest",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx2
+      );
       await waitOnExecutionContext(ctx2);
       const latest = (await response2.json()) as VersionsResponse;
 
       const ctx3 = createExecutionContext();
-      const response3 = await app.request("/versions/v1/0.6.0", {}, env, ctx3);
+      const response3 = await app.request(
+        "/versions/v1/0.6.0",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx3
+      );
       await waitOnExecutionContext(ctx3);
       const specific = (await response3.json()) as VersionsResponse;
 
@@ -131,7 +163,12 @@ describe("Versions API v1 - Integration Tests", () => {
 
       for (let i = 0; i < requests; i++) {
         const ctx = createExecutionContext();
-        const response = await app.request("/versions/v1", {}, env, ctx);
+        const response = await app.request(
+          "/versions/v1",
+          { headers: BYPASS_CACHE },
+          env,
+          ctx
+        );
         await waitOnExecutionContext(ctx);
         responses.push(await response.json());
       }
@@ -145,7 +182,7 @@ describe("Versions API v1 - Integration Tests", () => {
 
     it("should refresh cache when update endpoint is called", async () => {
       const ctx1 = createExecutionContext();
-      await app.request("/versions/v1", {}, env, ctx1);
+      await app.request("/versions/v1", { headers: BYPASS_CACHE }, env, ctx1);
       await waitOnExecutionContext(ctx1);
 
       const cachedBefore = await env.CACHE_KV.get("gh-fossbilling-releases");
@@ -207,7 +244,12 @@ describe("Versions API v1 - Integration Tests", () => {
       for (let i = 0; i < 10; i++) {
         const ctx = createExecutionContext();
         const promise = (async () => {
-          const response = await app.request("/versions/v1", {}, env, ctx);
+          const response = await app.request(
+            "/versions/v1",
+            { headers: BYPASS_CACHE },
+            env,
+            ctx
+          );
           await waitOnExecutionContext(ctx);
           return response.json();
         })();
@@ -229,7 +271,7 @@ describe("Versions API v1 - Integration Tests", () => {
   describe("Error Recovery", () => {
     it("should recover from GitHub API failure using cache", async () => {
       const ctx1 = createExecutionContext();
-      await app.request("/versions/v1", {}, env, ctx1);
+      await app.request("/versions/v1", { headers: BYPASS_CACHE }, env, ctx1);
       await waitOnExecutionContext(ctx1);
 
       (vi.mocked(ghRequest) as MockGitHubRequest).mockRejectedValueOnce(
@@ -237,7 +279,12 @@ describe("Versions API v1 - Integration Tests", () => {
       );
 
       const ctx2 = createExecutionContext();
-      const response2 = await app.request("/versions/v1", {}, env, ctx2);
+      const response2 = await app.request(
+        "/versions/v1",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx2
+      );
       await waitOnExecutionContext(ctx2);
 
       expect(response2.status).toBe(200);
@@ -281,7 +328,12 @@ describe("Versions API v1 - Integration Tests", () => {
   describe("Service Integration", () => {
     it("should work when called through main app router", async () => {
       const ctx = createExecutionContext();
-      const response = await app.request("/versions/v1", {}, env, ctx);
+      const response = await app.request(
+        "/versions/v1",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);

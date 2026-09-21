@@ -265,4 +265,19 @@ describe("Previews API v1 - GET /previews/v1/main/download", () => {
     expect(headSpy).toHaveBeenCalledTimes(1);
     headSpy.mockRestore();
   });
+
+  // /main owns the shared cache entry: a cold download request must not
+  // write an unenriched body that would clobber a cached enriched one.
+  it("does not write the shared entry from a cold download request", async () => {
+    await env.DOWNLOAD_BUCKET.put(MAIN_PREVIEW_KEY, "test archive contents");
+    const putSpy = vi.spyOn(env.CACHE_KV, "put");
+
+    const res = await get("/previews/v1/main/download");
+    expect(res.status).toBe(302);
+
+    // All of the route's KV writes go through waitUntil, which the get()
+    // helper has already settled - so a write would be visible on the spy.
+    expect(putSpy).not.toHaveBeenCalled();
+    putSpy.mockRestore();
+  });
 });
