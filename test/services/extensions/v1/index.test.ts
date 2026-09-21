@@ -189,6 +189,24 @@ describe("Extensions API v1", () => {
       expect(unpaginated.pagination).toBeUndefined();
     });
 
+    // offset is only meaningful alongside a limit: a stray offset alone
+    // must not silently fall through to the full legacy response the way
+    // it would if the param were simply ignored.
+    it("should reject offset without limit with 422", async () => {
+      const ctx = createExecutionContext();
+      const res = await app.request(
+        "/extensions/v1/list?offset=1",
+        {},
+        env,
+        ctx
+      );
+      await waitOnExecutionContext(ctx);
+
+      expect(res.status).toBe(422);
+      const data = (await res.json()) as { error: { message: string } };
+      expect(data.error.message).toBe("offset requires limit");
+    });
+
     it("should redirect trailing slash", async () => {
       const ctx = createExecutionContext();
       const res = await app.request("/extensions/v1/list/", {}, env, ctx);

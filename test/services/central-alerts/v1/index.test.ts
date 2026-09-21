@@ -35,6 +35,29 @@ describe("Central Alerts API v1", () => {
       expect(Array.isArray(data.result.alerts)).toBe(true);
     });
 
+    // offset is only meaningful alongside a limit: a stray offset alone
+    // must not silently fall through to the full legacy response the way
+    // it would if the param were simply ignored.
+    it("should reject offset without limit with 422", async () => {
+      const ctx = createExecutionContext();
+      const response = await app.request(
+        "/central-alerts/v1/list?offset=1",
+        {},
+        env,
+        ctx
+      );
+      await waitOnExecutionContext(ctx);
+
+      expect(response.status).toBe(422);
+      const data = (await response.json()) as {
+        result: null;
+        error: { message: string; code: string };
+      };
+      expect(data.result).toBeNull();
+      expect(data.error.message).toBe("offset requires limit");
+      expect(data.error.code).toBe("VALIDATION_ERROR");
+    });
+
     it("should return alerts from static data", async () => {
       const ctx = createExecutionContext();
       const response = await app.request(

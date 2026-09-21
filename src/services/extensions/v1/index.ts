@@ -18,17 +18,25 @@ extensionsV1.get("/list", async (c) => {
   // Opt-in pagination: absent params keep the exact original contract
   // (every published extension, no pagination object). A non-numeric limit
   // is treated as absent rather than a 400 - this legacy surface has never
-  // validated query params.
+  // validated query params. offset is the exception: only a caller opting
+  // into pagination can send it, so offset without a usable limit is a 422
+  // (matching the v2 pagination endpoints) rather than a silently ignored
+  // param that returns the full list.
   const limitParam = Number(c.req.query("limit"));
-  const offsetParam = Number(c.req.query("offset") ?? "0");
-  const page =
-    Number.isInteger(limitParam) && limitParam >= 1 && limitParam <= 100
-      ? {
-          limit: limitParam,
-          offset:
-            Number.isInteger(offsetParam) && offsetParam >= 0 ? offsetParam : 0
-        }
-      : undefined;
+  const hasValidLimit =
+    Number.isInteger(limitParam) && limitParam >= 1 && limitParam <= 100;
+  const rawOffset = c.req.query("offset");
+  if (rawOffset !== undefined && !hasValidLimit) {
+    return c.json({ error: { message: "offset requires limit" } }, 422);
+  }
+  const offsetParam = rawOffset === undefined ? 0 : Number(rawOffset);
+  const page = hasValidLimit
+    ? {
+        limit: limitParam,
+        offset:
+          Number.isInteger(offsetParam) && offsetParam >= 0 ? offsetParam : 0
+      }
+    : undefined;
 
   const { data, error } = await db.getAllExtensions(type, page);
   if (error) {

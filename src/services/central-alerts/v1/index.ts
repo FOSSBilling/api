@@ -17,16 +17,30 @@ centralAlertsV1.get("/list", async (c) => {
   // Opt-in pagination: absent params keep the full-list contract. A
   // non-numeric limit is treated as absent rather than a 400 - this route
   // has never validated query params and FOSSBilling's client passes none.
+  // offset is the exception: only a caller opting into pagination can send
+  // it, so offset without a usable limit is a 422 (matching the v2
+  // pagination endpoints) rather than a silently ignored param.
   const limitParam = Number(c.req.query("limit"));
-  const offsetParam = Number(c.req.query("offset") ?? "0");
-  const page =
-    Number.isInteger(limitParam) && limitParam >= 1 && limitParam <= 100
-      ? {
-          limit: limitParam,
-          offset:
-            Number.isInteger(offsetParam) && offsetParam >= 0 ? offsetParam : 0
-        }
-      : undefined;
+  const hasValidLimit =
+    Number.isInteger(limitParam) && limitParam >= 1 && limitParam <= 100;
+  const rawOffset = c.req.query("offset");
+  if (rawOffset !== undefined && !hasValidLimit) {
+    return c.json(
+      {
+        result: null,
+        error: { message: "offset requires limit", code: "VALIDATION_ERROR" }
+      },
+      422
+    );
+  }
+  const offsetParam = rawOffset === undefined ? 0 : Number(rawOffset);
+  const page = hasValidLimit
+    ? {
+        limit: limitParam,
+        offset:
+          Number.isInteger(offsetParam) && offsetParam >= 0 ? offsetParam : 0
+      }
+    : undefined;
 
   const { data, error } = await db.getAllAlerts(page);
 
