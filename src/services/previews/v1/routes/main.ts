@@ -5,7 +5,7 @@ import {
   MainPreviewResponseSchema,
   errorResponse
 } from "../schemas/previews";
-import { getMainPreviewObject } from "../r2";
+import { getMainPreviewObject, MainPreviewObject } from "../r2";
 import { findPreviewArtifactByCommitSha } from "../github/artifacts";
 import { singleFlight } from "../../../../lib/cache";
 import { notFoundBody } from "./errors";
@@ -65,7 +65,7 @@ function resolveMainObject(c: Context<{ Bindings: CloudflareBindings }>) {
 // one route 404ing or serving a stale URL while the other resolves fine -
 // which a single shared entry rules out by construction.
 function buildMainPreview(
-  object: NonNullable<Awaited<ReturnType<typeof getMainPreviewObject>>>,
+  object: MainPreviewObject,
   artifactFields: Pick<
     MainPreview,
     "run_id" | "artifact_id" | "created_at" | "expires_at"
