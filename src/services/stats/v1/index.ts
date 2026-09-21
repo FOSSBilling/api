@@ -5,7 +5,7 @@ import { etag } from "hono/etag";
 import { prettyJSON } from "hono/pretty-json";
 import { trimTrailingSlash } from "hono/trailing-slash";
 import { compare as semverCompare } from "semver";
-import { getReleases } from "../../versions/v1/index";
+import { getReleases, RELEASE_CACHE_KEY } from "../../versions/v1/index";
 import { Releases } from "../../versions/v1/interfaces";
 import { StatsData, ReleasesPerYearData } from "./interfaces";
 import { getPlatform } from "../../../lib/middleware";
@@ -150,7 +150,13 @@ async function getStats(
   source: "cache" | "fresh" | "stale";
   error?: GitHubError;
 }> {
-  const cachedStats = await cache.get(STATS_CACHE_KEY);
+  // Both KV reads are needed on the cold path (stats value + the shared
+  // releases blob getReleases consumes), so issue them together instead of
+  // serializing two round trips on an already-slow request.
+  const [cachedStats, cachedReleases] = await Promise.all([
+    cache.get(STATS_CACHE_KEY),
+    cache.get(RELEASE_CACHE_KEY)
+  ]);
 
   if (cachedStats && !updateCache) {
     try {
@@ -176,13 +182,15 @@ async function getStats(
   // getReleases shares its cache with the versions service (same
   // RELEASE_CACHE_KEY), so a fresh fetch here must still resolve R2
   // download_url/digest - otherwise a stats-triggered refresh would
-  // overwrite that cache with GitHub-only URLs for up to a day.
+  // overwrite that cache with GitHub-only URLs for up to a day. The
+  // pre-read value from above is threaded through so it isn't fetched twice.
   const result = await getReleases(
     cache,
     githubToken,
     downloadBucket,
     updateCache,
-    waitUntil
+    waitUntil,
+    cachedReleases
   );
 
   if (hasNoReleases(result.releases) && result.error) {

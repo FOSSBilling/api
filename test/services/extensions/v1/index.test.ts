@@ -87,6 +87,14 @@ describe("Extensions API v1", () => {
     await db.delete(extensions);
     await db.delete(developers);
 
+    // The /list route caches assembled bodies in CACHE_KV; drop that
+    // namespace so tests observe live D1 state rather than a response a
+    // previous test cached.
+    const cached = await env.CACHE_KV.list({ prefix: "extensions:v1:list" });
+    for (const key of cached.keys) {
+      await env.CACHE_KV.delete(key.name);
+    }
+
     await db.insert(developers).values({
       id: "fossbilling",
       type: "organization",
@@ -113,6 +121,34 @@ describe("Extensions API v1", () => {
       const data = (await res.json()) as { result: unknown[] };
       expect(Array.isArray(data.result)).toBe(true);
       expect(data.result.length).toBe(2);
+    });
+
+    // The assembled body is cached in CACHE_KV (60s TTL): the second request
+    // must be served byte-identical from KV even after the underlying rows
+    // change, until revalidateCatalogue deletes the key or the TTL lapses.
+    it("should serve a repeated request from the cached body", async () => {
+      const requestOnce = async () => {
+        const ctx = createExecutionContext();
+        const res = await app.request("/extensions/v1/list", {}, env, ctx);
+        await waitOnExecutionContext(ctx);
+        return res;
+      };
+
+      const first = await requestOnce();
+      expect(first.status).toBe(200);
+      const firstBody = await first.text();
+
+      const cachedKeys = await env.CACHE_KV.list({
+        prefix: "extensions:v1:list"
+      });
+      expect(cachedKeys.keys.length).toBe(1);
+
+      const db = getExtensionsDb(env.DB_EXTENSIONS);
+      await db.delete(extensions);
+
+      const second = await requestOnce();
+      expect(second.status).toBe(200);
+      await expect(second.text()).resolves.toBe(firstBody);
     });
 
     it("should filter by type", async () => {
