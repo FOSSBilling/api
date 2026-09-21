@@ -39,6 +39,11 @@ import { request as ghRequest } from "@octokit/request";
 import { graphql } from "@octokit/graphql";
 import { resetUpdateTokenCache } from "../../../../src/services/versions/v1/index";
 
+// Requests carrying an Authorization header bypass hono's cache middleware
+// (same pattern as index.test.ts) so each test sees live handler output
+// instead of a response an earlier test cached.
+const BYPASS_CACHE = { authorization: "test-bypass-cache" } as const;
+
 let restoreConsole: (() => void) | null = null;
 
 describe("Versions API v1 - Error Handling", () => {
@@ -225,7 +230,12 @@ describe("Versions API v1 - Error Handling", () => {
       );
 
       const ctx = createExecutionContext();
-      const response = await app.request("/versions/v1", {}, env, ctx);
+      const response = await app.request(
+        "/versions/v1",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(503);
@@ -260,7 +270,12 @@ describe("Versions API v1 - Error Handling", () => {
       );
 
       const ctx = createExecutionContext();
-      const response = await app.request("/versions/v1", {}, env, ctx);
+      const response = await app.request(
+        "/versions/v1",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);
@@ -280,7 +295,12 @@ describe("Versions API v1 - Error Handling", () => {
       );
 
       const ctx = createExecutionContext();
-      const response = await app.request("/versions/v1", {}, env, ctx);
+      const response = await app.request(
+        "/versions/v1",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);
@@ -319,7 +339,12 @@ describe("Versions API v1 - Error Handling", () => {
       );
 
       const ctx = createExecutionContext();
-      const response = await app.request("/versions/v1", {}, env, ctx);
+      const response = await app.request(
+        "/versions/v1",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);
@@ -337,7 +362,12 @@ describe("Versions API v1 - Error Handling", () => {
       });
 
       const ctx = createExecutionContext();
-      const response = await app.request("/versions/v1", {}, env, ctx);
+      const response = await app.request(
+        "/versions/v1",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(503);
@@ -353,7 +383,12 @@ describe("Versions API v1 - Error Handling", () => {
       await env.CACHE_KV.put("gh-fossbilling-releases", "invalid json {{{");
 
       const ctx = createExecutionContext();
-      const response = await app.request("/versions/v1", {}, env, ctx);
+      const response = await app.request(
+        "/versions/v1",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);
@@ -363,7 +398,12 @@ describe("Versions API v1 - Error Handling", () => {
       await env.CACHE_KV.put("gh-fossbilling-releases", "");
 
       const ctx = createExecutionContext();
-      const response = await app.request("/versions/v1", {}, env, ctx);
+      const response = await app.request(
+        "/versions/v1",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);
@@ -373,7 +413,12 @@ describe("Versions API v1 - Error Handling", () => {
       await env.CACHE_KV.put("gh-fossbilling-releases", "null");
 
       const ctx = createExecutionContext();
-      const response = await app.request("/versions/v1", {}, env, ctx);
+      const response = await app.request(
+        "/versions/v1",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);
@@ -386,7 +431,12 @@ describe("Versions API v1 - Error Handling", () => {
       );
 
       const ctx = createExecutionContext();
-      const response = await app.request("/versions/v1", {}, env, ctx);
+      const response = await app.request(
+        "/versions/v1",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(503);
@@ -424,7 +474,12 @@ describe("Versions API v1 - Error Handling", () => {
       );
 
       const ctx = createExecutionContext();
-      const response = await app.request("/versions/v1", {}, env, ctx);
+      const response = await app.request(
+        "/versions/v1",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);
@@ -461,7 +516,12 @@ describe("Versions API v1 - Error Handling", () => {
       );
 
       const ctx = createExecutionContext();
-      const response = await app.request("/versions/v1", {}, env, ctx);
+      const response = await app.request(
+        "/versions/v1",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);
@@ -499,7 +559,12 @@ describe("Versions API v1 - Error Handling", () => {
       );
 
       const ctx = createExecutionContext();
-      const response = await app.request("/versions/v1", {}, env, ctx);
+      const response = await app.request(
+        "/versions/v1",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);
@@ -513,7 +578,12 @@ describe("Versions API v1 - Error Handling", () => {
       );
 
       const ctx = createExecutionContext();
-      const response = await app.request("/versions/v1/0.5.0", {}, env, ctx);
+      const response = await app.request(
+        "/versions/v1/0.5.0",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);
@@ -529,7 +599,12 @@ describe("Versions API v1 - Error Handling", () => {
       );
 
       const ctx = createExecutionContext();
-      const response = await app.request("/versions/v1/0.5.0", {}, env, ctx);
+      const response = await app.request(
+        "/versions/v1/0.5.0",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);
@@ -545,7 +620,12 @@ describe("Versions API v1 - Error Handling", () => {
       );
 
       const ctx = createExecutionContext();
-      const response = await app.request("/versions/v1/0.5.0", {}, env, ctx);
+      const response = await app.request(
+        "/versions/v1/0.5.0",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);

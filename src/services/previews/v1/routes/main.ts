@@ -150,6 +150,9 @@ async function resolveMainDownloadUrl(
 
   const object = await resolveMainObject(c);
   if (!object) {
+    // The R2 miss is single-flighted, so every concurrent route saw the
+    // same outcome and this negative write can't contradict a concurrent
+    // positive one.
     waitUntil(
       c.env.CACHE_KV.put(MAIN_CACHE_KEY, MAIN_NEGATIVE_CACHE_VALUE, {
         expirationTtl: MAIN_NEGATIVE_CACHE_TTL_SECONDS
@@ -158,22 +161,11 @@ async function resolveMainDownloadUrl(
     return null;
   }
 
-  waitUntil(
-    c.env.CACHE_KV.put(
-      MAIN_CACHE_KEY,
-      JSON.stringify(
-        buildMainPreview(object, {
-          run_id: null,
-          artifact_id: null,
-          created_at: null,
-          expires_at: null
-        })
-      ),
-      {
-        expirationTtl: MAIN_CACHE_TTL_SECONDS
-      }
-    )
-  );
+  // No positive write here, by design: /main owns the shared entry, and an
+  // unenriched body written from this route would silently clobber a
+  // concurrently-cached enriched one. The cost of not warming from the
+  // download path is one single-flighted R2 head per cold download request -
+  // rare next to the embed traffic that hits /main and populates the entry.
   return object.downloadUrl;
 }
 

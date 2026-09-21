@@ -36,6 +36,12 @@ import { request as ghRequest } from "@octokit/request";
 import { graphql } from "@octokit/graphql";
 import { resetUpdateTokenCache } from "../../../../src/services/versions/v1/index";
 
+// Requests carrying an Authorization header bypass hono's cache middleware,
+// so each test exercises the full middleware chain on a live handler run
+// (the /update tests are excluded - their auth semantics depend on the
+// exact Authorization header). /update itself is never edge-cached.
+const BYPASS_CACHE = { authorization: "test-bypass-cache" } as const;
+
 let restoreConsole: (() => void) | null = null;
 
 describe("Versions API v1 - Middleware", () => {
@@ -64,7 +70,12 @@ describe("Versions API v1 - Middleware", () => {
   describe("CORS Middleware", () => {
     it("should set CORS headers on successful requests", async () => {
       const ctx = createExecutionContext();
-      const response = await app.request("/versions/v1", {}, env, ctx);
+      const response = await app.request(
+        "/versions/v1",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       expect(response.headers.get("Access-Control-Allow-Origin")).toBe("*");
@@ -74,7 +85,7 @@ describe("Versions API v1 - Middleware", () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/versions/v1/nonexistent-version",
-        {},
+        { headers: BYPASS_CACHE },
         env,
         ctx
       );
@@ -103,7 +114,12 @@ describe("Versions API v1 - Middleware", () => {
   describe("Trailing Slash Middleware", () => {
     it("should redirect paths with trailing slash to non-trailing", async () => {
       const ctx = createExecutionContext();
-      const response = await app.request("/versions/v1/", {}, env, ctx);
+      const response = await app.request(
+        "/versions/v1/",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(301);
@@ -114,7 +130,12 @@ describe("Versions API v1 - Middleware", () => {
 
     it("should not redirect paths without trailing slash", async () => {
       const ctx = createExecutionContext();
-      const response = await app.request("/versions/v1", {}, env, ctx);
+      const response = await app.request(
+        "/versions/v1",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);
@@ -122,7 +143,12 @@ describe("Versions API v1 - Middleware", () => {
 
     it("should redirect nested paths with trailing slash", async () => {
       const ctx = createExecutionContext();
-      const response = await app.request("/versions/v1/latest/", {}, env, ctx);
+      const response = await app.request(
+        "/versions/v1/latest/",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(301);
@@ -135,7 +161,12 @@ describe("Versions API v1 - Middleware", () => {
   describe("ETag Middleware", () => {
     it("should generate ETag header for cacheable responses", async () => {
       const ctx = createExecutionContext();
-      const response = await app.request("/versions/v1", {}, env, ctx);
+      const response = await app.request(
+        "/versions/v1",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       const etag = response.headers.get("ETag");
@@ -145,12 +176,22 @@ describe("Versions API v1 - Middleware", () => {
 
     it("should return same ETag for identical content", async () => {
       const ctx1 = createExecutionContext();
-      const response1 = await app.request("/versions/v1", {}, env, ctx1);
+      const response1 = await app.request(
+        "/versions/v1",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx1
+      );
       await waitOnExecutionContext(ctx1);
       const etag1 = response1.headers.get("ETag");
 
       const ctx2 = createExecutionContext();
-      const response2 = await app.request("/versions/v1", {}, env, ctx2);
+      const response2 = await app.request(
+        "/versions/v1",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx2
+      );
       await waitOnExecutionContext(ctx2);
       const etag2 = response2.headers.get("ETag");
 
@@ -159,7 +200,12 @@ describe("Versions API v1 - Middleware", () => {
 
     it("should return 304 for matching If-None-Match", async () => {
       const ctx1 = createExecutionContext();
-      const response1 = await app.request("/versions/v1", {}, env, ctx1);
+      const response1 = await app.request(
+        "/versions/v1",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx1
+      );
       await waitOnExecutionContext(ctx1);
       const etag = response1.headers.get("ETag");
       expect(etag).toBeTruthy();
@@ -169,7 +215,8 @@ describe("Versions API v1 - Middleware", () => {
         "/versions/v1",
         {
           headers: {
-            "If-None-Match": etag as string
+            "If-None-Match": etag as string,
+            authorization: BYPASS_CACHE.authorization
           }
         },
         env,
@@ -184,7 +231,12 @@ describe("Versions API v1 - Middleware", () => {
   describe("Cache Control Headers", () => {
     it("should set cache headers for GET / endpoint", async () => {
       const ctx = createExecutionContext();
-      const response = await app.request("/versions/v1", {}, env, ctx);
+      const response = await app.request(
+        "/versions/v1",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       const cacheControl = response.headers.get("Cache-Control");
@@ -194,7 +246,12 @@ describe("Versions API v1 - Middleware", () => {
 
     it("should set cache headers for GET /:version endpoint", async () => {
       const ctx = createExecutionContext();
-      const response = await app.request("/versions/v1/latest", {}, env, ctx);
+      const response = await app.request(
+        "/versions/v1/latest",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       const cacheControl = response.headers.get("Cache-Control");
@@ -205,7 +262,7 @@ describe("Versions API v1 - Middleware", () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/versions/v1/build_changelog/0.5.0",
-        {},
+        { headers: BYPASS_CACHE },
         env,
         ctx
       );
@@ -221,7 +278,12 @@ describe("Versions API v1 - Middleware", () => {
       );
 
       const ctx = createExecutionContext();
-      const response = await app.request("/versions/v1", {}, env, ctx);
+      const response = await app.request(
+        "/versions/v1",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(503);
@@ -293,7 +355,12 @@ describe("Versions API v1 - Middleware", () => {
   describe("JSON Response Middleware", () => {
     it("should set correct Content-Type header", async () => {
       const ctx = createExecutionContext();
-      const response = await app.request("/versions/v1", {}, env, ctx);
+      const response = await app.request(
+        "/versions/v1",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       expect(response.headers.get("Content-Type")).toContain(
@@ -305,7 +372,12 @@ describe("Versions API v1 - Middleware", () => {
   describe("Middleware Interaction", () => {
     it("should apply all middleware in correct order", async () => {
       const ctx = createExecutionContext();
-      const response = await app.request("/versions/v1/", {}, env, ctx);
+      const response = await app.request(
+        "/versions/v1/",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(301);

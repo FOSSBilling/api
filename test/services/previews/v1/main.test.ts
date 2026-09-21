@@ -265,4 +265,19 @@ describe("Previews API v1 - GET /previews/v1/main/download", () => {
     expect(headSpy).toHaveBeenCalledTimes(1);
     headSpy.mockRestore();
   });
+
+  // /main owns the shared cache entry: a cold download request must not
+  // write an unenriched body that would clobber a cached enriched one.
+  it("does not write the shared entry from a cold download request", async () => {
+    await env.DOWNLOAD_BUCKET.put(MAIN_PREVIEW_KEY, "test archive contents");
+
+    const res = await get("/previews/v1/main/download");
+    expect(res.status).toBe(302);
+
+    // Let the waitUntil'd writes (if any) settle, then confirm no positive
+    // body was cached - only /main's enriched resolve may populate it.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const cached = await env.CACHE_KV.get("preview:main");
+    expect(cached).toBeNull();
+  });
 });

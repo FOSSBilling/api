@@ -11,6 +11,12 @@ import {
   waitOnExecutionContext
 } from "cloudflare:test";
 import app from "../../src/app/index";
+
+// Requests carrying an Authorization header bypass hono's cache middleware so
+// tests that assert KV writes or handler runs reach the live handler rather
+// than an edge-cached response from an earlier test. /update calls keep
+// their exact auth headers and are excluded.
+const BYPASS_CACHE = { authorization: "test-bypass-cache" } as const;
 import {
   ApiResponse,
   CentralAlertsResponse,
@@ -107,7 +113,12 @@ describe("FOSSBilling API Worker - Main App", () => {
   describe("Route Delegation", () => {
     it("should route /versions/v1 to versions service", async () => {
       const ctx = createExecutionContext();
-      const response = await app.request("/versions/v1", {}, env, ctx);
+      const response = await app.request(
+        "/versions/v1",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);
@@ -123,7 +134,7 @@ describe("FOSSBilling API Worker - Main App", () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/central-alerts/v1/list",
-        {},
+        { headers: BYPASS_CACHE },
         env,
         ctx
       );
@@ -140,7 +151,12 @@ describe("FOSSBilling API Worker - Main App", () => {
 
     it("should return 404 for unknown routes", async () => {
       const ctx = createExecutionContext();
-      const response = await app.request("/unknown/path", {}, env, ctx);
+      const response = await app.request(
+        "/unknown/path",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(404);
@@ -148,7 +164,12 @@ describe("FOSSBilling API Worker - Main App", () => {
 
     it("should return 200 with notice for root path", async () => {
       const ctx = createExecutionContext();
-      const response = await app.request("/", {}, env, ctx);
+      const response = await app.request(
+        "/",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);
@@ -162,7 +183,12 @@ describe("FOSSBilling API Worker - Main App", () => {
   describe("Context Storage Middleware", () => {
     it("should make context available to nested routes", async () => {
       const ctx = createExecutionContext();
-      const response = await app.request("/versions/v1", {}, env, ctx);
+      const response = await app.request(
+        "/versions/v1",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       // If context storage works, the versions endpoint should be able to access env bindings
@@ -175,7 +201,7 @@ describe("FOSSBilling API Worker - Main App", () => {
 
     it("should provide access to KV namespace through context", async () => {
       const ctx = createExecutionContext();
-      await app.request("/versions/v1", {}, env, ctx);
+      await app.request("/versions/v1", { headers: BYPASS_CACHE }, env, ctx);
       await waitOnExecutionContext(ctx);
 
       // Verify that KV was accessed (data should be cached)
@@ -205,7 +231,12 @@ describe("FOSSBilling API Worker - Main App", () => {
   describe("Service Integration", () => {
     it("should allow versions service to function correctly", async () => {
       const ctx = createExecutionContext();
-      const response = await app.request("/versions/v1/latest", {}, env, ctx);
+      const response = await app.request(
+        "/versions/v1/latest",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx
+      );
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);
@@ -222,7 +253,7 @@ describe("FOSSBilling API Worker - Main App", () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/central-alerts/v1/list",
-        {},
+        { headers: BYPASS_CACHE },
         env,
         ctx
       );

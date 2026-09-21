@@ -52,23 +52,32 @@ export async function cachedLookup<T>(
     }
   }
 
-  const result = await singleFlight(`previews:${key}`, resolve);
-  if (result.status === "found") {
-    const ttl =
-      typeof ttlSeconds === "function" ? ttlSeconds(result.data) : ttlSeconds;
-    if (ttl >= KV_MIN_TTL_SECONDS) {
-      const put = kv.put(key, JSON.stringify(result.data), {
-        expirationTtl: ttl
+  // The KV write runs inside the flight, not per joiner: singleFlight only
+  // coalesces the resolve, so without this, N concurrent requests arriving
+  // on a cold key would each re-put identical bytes (and N duplicate
+  // negative-cache writes on a miss).
+  const result = await singleFlight(`previews:${key}`, async () => {
+    const resolved = await resolve();
+    if (resolved.status === "found") {
+      const ttl =
+        typeof ttlSeconds === "function"
+          ? ttlSeconds(resolved.data)
+          : ttlSeconds;
+      if (ttl >= KV_MIN_TTL_SECONDS) {
+        const put = kv.put(key, JSON.stringify(resolved.data), {
+          expirationTtl: ttl
+        });
+        if (waitUntil) waitUntil(put);
+        else await put;
+      }
+    } else if (resolved.status === "not_found") {
+      const put = kv.put(key, NEGATIVE_CACHE_VALUE, {
+        expirationTtl: NEGATIVE_CACHE_TTL_SECONDS
       });
       if (waitUntil) waitUntil(put);
       else await put;
     }
-  } else if (result.status === "not_found") {
-    const put = kv.put(key, NEGATIVE_CACHE_VALUE, {
-      expirationTtl: NEGATIVE_CACHE_TTL_SECONDS
-    });
-    if (waitUntil) waitUntil(put);
-    else await put;
-  }
+    return resolved;
+  });
   return result;
 }
