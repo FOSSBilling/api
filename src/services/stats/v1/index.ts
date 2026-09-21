@@ -152,10 +152,14 @@ async function getStats(
 }> {
   // Both KV reads are needed on the cold path (stats value + the shared
   // releases blob getReleases consumes), so issue them together instead of
-  // serializing two round trips on an already-slow request.
+  // serializing two round trips on an already-slow request. Only the stats
+  // read may reject the whole call: a transient failure on the releases
+  // read degrades to "no pre-read" (getReleases does its own read, the
+  // pre-parallelization behavior) rather than discarding a valid cached
+  // stats value behind it.
   const [cachedStats, cachedReleases] = await Promise.all([
     cache.get(STATS_CACHE_KEY),
-    cache.get(RELEASE_CACHE_KEY)
+    cache.get(RELEASE_CACHE_KEY).catch(() => undefined)
   ]);
 
   if (cachedStats && !updateCache) {

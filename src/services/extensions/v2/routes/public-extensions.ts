@@ -267,27 +267,26 @@ export function registerPublicExtensionsRoutes(app: ExtensionsV2App): void {
 
     // Authorise with the light ownership probe, then fetch exactly one
     // heavy view: the owner/moderator read for privileged callers, the
-    // public read for everyone else. The probe and the two user-table
-    // checks depend only on the request (id + auth userId), so they run
-    // concurrently - three serial D1 round trips would otherwise head every
-    // authenticated detail read.
+    // public read for everyone else. moderatorAccess() reads active and
+    // moderator from the same row, so it serves both branches and the
+    // probe + check run concurrently - two serial D1 round trips would
+    // otherwise head every authenticated detail read.
     if (auth) {
       const users = new UsersDatabase(extDb);
-      const [ownership, active, access] = await Promise.all([
+      const [ownership, access] = await Promise.all([
         db.getOwnership(id),
-        users.isActive(auth.userId),
         users.moderatorAccess(auth.userId)
       ]);
       if (ownership.data) {
         const isOwner = ownership.data.ownerUserId === auth.userId;
         if (isOwner) {
-          if (active.error) {
+          if (access.error) {
             return c.json(
-              errorBody(active.error, "Unable to check account"),
+              errorBody(access.error, "Unable to check account"),
               500
             );
           }
-          if (active.data) {
+          if (access.data?.active) {
             const owned = await db.getOwned(id);
             // getOwned re-reports the owner from the same row it served:
             // an ownership transfer that committed between the probe and

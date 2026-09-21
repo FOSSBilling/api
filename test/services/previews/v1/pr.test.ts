@@ -201,7 +201,7 @@ describe("Previews API v1 - GET /previews/v1/pr/:number", () => {
     putSpy.mockRestore();
   });
 
-  it("shares the commit-keyed entry with /commit/{sha} in both directions", async () => {
+  it("shares the commit-keyed entry the PR resolve warms with /commit/{sha}", async () => {
     // Same reason commit.test.ts uses a far-future expiry: an artifact
     // whose retention has lapsed must not be cached under the commit key
     // (ttlForArtifact goes negative), which would defeat what this test

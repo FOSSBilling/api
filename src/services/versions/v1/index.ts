@@ -17,11 +17,7 @@ import { Releases, ReleaseDetails, ResolvedReleaseDetails } from "./interfaces";
 import { getReleaseR2Object, ReleaseR2Object } from "./r2";
 import { getPlatform } from "../../../lib/middleware";
 import { ICache } from "../../../lib/interfaces";
-import {
-  normalizePublicCacheKey,
-  publicCacheKey,
-  singleFlight
-} from "../../../lib/cache";
+import { publicCacheKey, singleFlight } from "../../../lib/cache";
 import { logError, logWarn, logInfo } from "../../../lib/logger";
 import {
   GitHubError,
@@ -37,7 +33,12 @@ const REPO_NAME = "FOSSBilling";
 // Shared with stats/v1, which reads the same blob and threads its own read
 // into getReleases - exported so that contract stays defined in one place.
 export const RELEASE_CACHE_KEY = "gh-fossbilling-releases";
-const RELEASES_CACHE_CONTROL = "max-age=86400";
+// Client-side caching of these endpoints is immaterial (the real consumers
+// re-request per update check and don't cache), so this TTL is sized for the
+// edge cache alone: short enough that a post-/update refresh is visible
+// within minutes without purge machinery, long enough that the vast majority
+// of repeat traffic never wakes the Worker.
+const RELEASES_CACHE_CONTROL = "max-age=300";
 const RELEASE_CACHE_TTL = 86400;
 const RELEASES_URL = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases`;
 type VersionsEnv = { Bindings: CloudflareBindings };
@@ -79,62 +80,58 @@ async function getUpdateToken(cache: ICache): Promise<string> {
 // auto-cache Worker responses regardless of Cache-Control, so without this
 // every request wakes the isolate and pays the KV read + parse + stringify
 // + etag hash for a payload that only changes when a release lands. The
-// middleware skips Authorization-bearing requests (keeping /update-style
-// authenticated calls out) and caches only 200s; `cacheControl` directives
-// are appended to whatever the handler set, never overwritten.
+// middleware skips Authorization-bearing requests and caches only 200s.
 const VERSIONS_CACHE_NAME = "versions-api-v1";
 
-// Transient failures must not be client-cached for a day: FOSSBilling's
-// Update.php honors Cache-Control, so a 503 during a GitHub outage or a 404
-// for a not-yet-published version would suppress update checks for 24h.
+// Transient failures must not be client-cached: FOSSBilling's Update.php
+// honors Cache-Control, so a 503 during a GitHub outage or a 404 for a
+// not-yet-published version would suppress update checks for the TTL. A
+// thrown error never reaches the status check, so catch-and-rethrow keeps
+// the eventual 500 from inheriting the cacheable header either.
 async function stampCacheHeaders(
   c: Context<VersionsEnv>,
   next: () => Promise<void>
 ) {
   c.header("Cache-Control", RELEASES_CACHE_CONTROL);
-  await next();
+  try {
+    await next();
+  } catch (error) {
+    c.header("Cache-Control", "no-store");
+    throw error;
+  }
   if (c.res.status >= 400) {
     c.header("Cache-Control", "no-store");
   }
 }
 
 interface CachedRouteOptions {
-  // Cache key override for responses whose body depends on request headers
-  // (see mirrorAwareCacheKey). Defaults to the normalized URL.
+  // Cache-key overrides forwarded to hono's cache middleware; default is
+  // the normalized URL.
   keyGenerator?: (c: Context<VersionsEnv>) => string;
+  // Response headers the body varies on. Declaring them lets hono fold the
+  // request's header value into the cache key instead of refusing to store
+  // the response at all.
+  vary?: string[];
 }
 
 function registerCachedRoute<P extends string>(
   path: P,
   handler: Handler<VersionsEnv, P>,
-  { keyGenerator = publicCacheKey }: CachedRouteOptions = {}
+  { keyGenerator = publicCacheKey, vary }: CachedRouteOptions = {}
 ) {
   return versionsV1.get(
     path,
     cache({
       cacheName: VERSIONS_CACHE_NAME,
       cacheControl: RELEASES_CACHE_CONTROL,
-      keyGenerator
+      keyGenerator,
+      ...(vary ? { vary } : {})
     }),
     stampCacheHeaders,
     etag(),
     prettyJSON(),
     handler
   );
-}
-
-// /, /latest and /:version bodies depend on the caller's mirror trust, which
-// is derived from the User-Agent. The edge key encodes that boolean instead
-// of the raw header - folding the full UA string into the key would fragment
-// the cache per client for what are only ever two response variants. The
-// handlers therefore no longer set `Vary: User-Agent`: the key is the source
-// of truth for the distinction, and an undeclared response Vary would make
-// hono's cache middleware refuse to store anything at all.
-function mirrorAwareCacheKey(c: Context<VersionsEnv>): string {
-  const variant = clientTrustsMirror(c.req.header("User-Agent"))
-    ? "mirror"
-    : "github";
-  return `${normalizePublicCacheKey(c.req.url)}::${variant}`;
 }
 
 async function loadReleases(
@@ -263,13 +260,15 @@ registerCachedRoute(
     }
 
     if (hasNoReleases(releases)) {
-      // The body is UA-independent here, but `Vary: *` keeps any intermediary
-      // from pinning this degenerate response; hono's cache middleware will
-      // (correctly) refuse to store it.
+      // `Vary: *` keeps intermediaries from pinning this degenerate
+      // response; hono's cache middleware will refuse to store it.
       c.header("Vary", "*");
+    } else {
+      // The body varies by mirror trust (derived from the UA); declaring it
+      // also lets hono's cache middleware key entries per UA instead of
+      // refusing to store the response.
+      c.header("Vary", "User-Agent");
     }
-    // Otherwise the body varies by mirror trust, but the edge cache key already
-    // encodes that (see mirrorAwareCacheKey), so no Vary header is needed.
 
     const userAgent = c.req.header("User-Agent");
     const resolvedReleases = Object.fromEntries(
@@ -281,7 +280,7 @@ registerCachedRoute(
 
     return c.json(buildSuccessResponse(resolvedReleases, result.source));
   },
-  { keyGenerator: mirrorAwareCacheKey }
+  { vary: ["User-Agent"] }
 );
 
 versionsV1.get(
@@ -450,8 +449,10 @@ registerCachedRoute(
       });
     }
 
-    // The body varies by mirror trust, but the edge cache key already encodes
-    // that (see mirrorAwareCacheKey), so no Vary header is needed.
+    // The body varies by mirror trust (derived from the UA); declaring it
+    // also lets hono's cache middleware key entries per UA instead of
+    // refusing to store the response.
+    c.header("Vary", "User-Agent");
     const userAgent = c.req.header("User-Agent");
 
     if (version === "latest") {
@@ -480,7 +481,7 @@ registerCachedRoute(
       message: `FOSSBilling version ${version} does not appear to exist.`
     });
   },
-  { keyGenerator: mirrorAwareCacheKey }
+  { vary: ["User-Agent"] }
 );
 
 export default versionsV1;

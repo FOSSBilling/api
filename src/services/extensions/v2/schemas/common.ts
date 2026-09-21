@@ -149,7 +149,7 @@ export const OffsetPaginationSchema = z
 // readers take: offset defaults to 0, and params entirely omitted fall back
 // to a bounded default window (see the contract note above) instead of an
 // unbounded read.
-export const DEFAULT_OFFSET_PAGE = { limit: 100, offset: 0 };
+const DEFAULT_OFFSET_PAGE = { limit: 100, offset: 0 };
 
 export function offsetPageFromQuery(query: {
   limit?: number;

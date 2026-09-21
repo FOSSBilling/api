@@ -161,7 +161,7 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
           "application/json": {
             schema: z.object({
               result: z.array(PendingDeveloperClaimSchema),
-              pagination: OffsetPaginationSchema.optional()
+              pagination: OffsetPaginationSchema
             })
           }
         },

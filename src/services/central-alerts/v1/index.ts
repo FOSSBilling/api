@@ -4,7 +4,6 @@ import { cors } from "hono/cors";
 import { trimTrailingSlash } from "hono/trailing-slash";
 import { CentralAlertsDatabase } from "./database";
 import { getCentralAlertsDb } from "../../../lib/db";
-import { publicCacheKey } from "../../../lib/cache";
 import { logError } from "../../../lib/logger";
 
 const centralAlertsV1 = new Hono<{ Bindings: CloudflareBindings }>();
@@ -14,13 +13,16 @@ centralAlertsV1.use("/*", cors({ origin: "*" }), trimTrailingSlash());
 // Admin panels poll this route constantly; the alert set changes at human
 // speed, so an edge-cached response with a short window keeps those polls
 // off D1. Authorization-bearing requests skip the cache (hono default), and
-// only 200s are stored, so validation failures and D1 errors stay live.
+// only 200s are stored, so validation failures and D1 errors stay live. The
+// key is the full URL: unlike the versions routes, the limit/offset query
+// changes the response body, so a query-stripped key would serve page one
+// to every pagination window for a minute.
 centralAlertsV1.get(
   "/list",
   cache({
     cacheName: "central-alerts-v1",
     cacheControl: "max-age=60",
-    keyGenerator: publicCacheKey
+    keyGenerator: (c) => c.req.url
   }),
   async (c) => {
     const db = new CentralAlertsDatabase(

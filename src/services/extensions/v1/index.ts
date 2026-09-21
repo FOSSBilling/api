@@ -16,8 +16,8 @@ extensionsV1.use("/*", trimTrailingSlash());
 // from a full-table D1 read (per the documented legacy contract) on every
 // request - yet catalogue content changes at human speed. Cache the serialized
 // response body in CACHE_KV and let concurrent cold misses share one build per
-// isolate. Cached responses freeze today's otherwise-nondeterministic row
-// order, which is a strict improvement for consumers diffing consecutive polls.
+// isolate; a cached response also freezes the unpaginated query's otherwise
+// nondeterministic row order.
 
 extensionsV1.get("/list", async (c) => {
   const db = new ExtensionsDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
@@ -45,43 +45,54 @@ extensionsV1.get("/list", async (c) => {
           Number.isInteger(offsetParam) && offsetParam >= 0 ? offsetParam : 0
       }
     : undefined;
-
   const cacheKey = listCacheKey(type, page);
 
-  const respond = async (): Promise<Response> => {
-    const cached = await c.env.CACHE_KV.get(cacheKey);
-    if (cached) {
-      return c.body(cached, 200, { "Content-Type": "application/json" });
-    }
+  // singleFlight coalesces the serialized body STRING, not the Response:
+  // a Response's body stream is single-use, so sharing one Response object
+  // across a cold burst would break every request after the first. Each
+  // caller builds its own Response from the shared string. Cache-read
+  // failures fall through to D1 - the cache is an optimization, not an
+  // availability dependency - and the write is best-effort (a failed put
+  // merely leaves the next request paying for a rebuild).
+  const body = await singleFlight(
+    cacheKey,
+    async (): Promise<string | null> => {
+      let cached: string | null = null;
+      try {
+        cached = await c.env.CACHE_KV.get(cacheKey);
+      } catch {
+        // Fall through to the D1 build.
+      }
+      if (cached) return cached;
 
-    const { data, error } = await db.getAllExtensions(type, page);
-    if (error) {
-      return c.json({ error: { message: "Unable to load extensions" } }, 500);
-    }
+      const { data, error } = await db.getAllExtensions(type, page);
+      if (error) return null;
 
-    const body = JSON.stringify({
-      result: data?.extensions || [],
-      ...(page && data
-        ? {
-            pagination: {
-              limit: page.limit,
-              offset: page.offset,
-              has_more: data.hasMore
+      const serialized = JSON.stringify({
+        result: data?.extensions || [],
+        ...(page && data
+          ? {
+              pagination: {
+                limit: page.limit,
+                offset: page.offset,
+                has_more: data.hasMore
+              }
             }
-          }
-        : {})
-    });
-    c.executionCtx.waitUntil(
-      c.env.CACHE_KV.put(cacheKey, body, {
-        expirationTtl: LIST_CACHE_TTL_SECONDS
-      })
-    );
-    return c.body(body, 200, { "Content-Type": "application/json" });
-  };
+          : {})
+      });
+      c.executionCtx.waitUntil(
+        c.env.CACHE_KV.put(cacheKey, serialized, {
+          expirationTtl: LIST_CACHE_TTL_SECONDS
+        }).catch(() => {})
+      );
+      return serialized;
+    }
+  );
 
-  // One KV read + one D1 read per cold burst instead of one per request;
-  // failures propagate so nothing error-shaped is ever cached.
-  return singleFlight(cacheKey, respond);
+  if (body === null) {
+    return c.json({ error: { message: "Unable to load extensions" } }, 500);
+  }
+  return c.body(body, 200, { "Content-Type": "application/json" });
 });
 
 extensionsV1.get("/:id/badges/:type", async (c) => {

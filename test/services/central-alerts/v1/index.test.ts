@@ -61,9 +61,22 @@ describe("Central Alerts API v1", () => {
       expect(first.headers.get("cache-control")).toContain("max-age=60");
       const firstBody = await first.text();
 
-      const second = await requestOnce();
-      expect(second.status).toBe(200);
-      await expect(second.text()).resolves.toBe(firstBody);
+      // Break D1 so a second request that reaches the handler fails loudly:
+      // body equality alone can't tell a cache hit from a deterministic
+      // handler re-run (same pattern as the error-case test below).
+      const realDb = env.DB_CENTRAL_ALERTS;
+      env.DB_CENTRAL_ALERTS = {
+        prepare() {
+          throw new Error("secret schema detail");
+        }
+      } as unknown as D1Database;
+      try {
+        const second = await requestOnce();
+        expect(second.status).toBe(200);
+        await expect(second.text()).resolves.toBe(firstBody);
+      } finally {
+        env.DB_CENTRAL_ALERTS = realDb;
+      }
     });
 
     // offset is only meaningful alongside a limit: a stray offset alone

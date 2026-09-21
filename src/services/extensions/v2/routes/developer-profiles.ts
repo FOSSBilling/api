@@ -51,7 +51,7 @@ export function registerDeveloperProfileRoutes(app: ExtensionsV2App): void {
           "application/json": {
             schema: z.object({
               result: z.array(DeveloperProfileSchema),
-              pagination: OffsetPaginationSchema.optional()
+              pagination: OffsetPaginationSchema
             })
           }
         },

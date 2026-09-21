@@ -309,9 +309,7 @@ describe("Versions API v1", () => {
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);
-      // Mirror trust is encoded in the edge cache key (mirrorAwareCacheKey),
-      // not in a Vary header.
-      expect(response.headers.get("Vary")).toBeNull();
+      expect(response.headers.get("Vary")).toContain("User-Agent");
       const data: ApiResponse<VersionInfo | null> = await response.json();
       if (!data.result) {
         throw new Error("Expected latest release data");
@@ -1304,12 +1302,12 @@ describe("Versions API v1", () => {
 
         const first = await requestOnce();
         expect(first.status).toBe(200);
-        expect(first.headers.get("cache-control")).toContain("max-age=86400");
+        expect(first.headers.get("cache-control")).toContain("max-age=300");
         const firstBody = await first.text();
 
         const second = await requestOnce();
         expect(second.status).toBe(200);
-        expect(second.text()).resolves.toBe(firstBody);
+        await expect(second.text()).resolves.toBe(firstBody);
       });
 
       it("keys mirror-trust variants separately on the same URL", async () => {
@@ -1384,9 +1382,11 @@ describe("Versions API v1", () => {
         expect(first.headers.get("cache-control")).toBe("no-store");
 
         // A repeat reaches the handler again instead of serving the failure
-        // from cache.
+        // from cache - a cached-5xx regression would still answer 503 here,
+        // so count the upstream calls the second request costs.
         const second = await requestOnce();
         expect(second.status).toBe(503);
+        expect(vi.mocked(ghRequest)).toHaveBeenCalledTimes(2);
       });
     });
   });

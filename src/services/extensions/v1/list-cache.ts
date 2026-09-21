@@ -10,7 +10,12 @@ export function listCacheKey(
   type: string | undefined,
   page: { limit: number; offset: number } | undefined
 ): string {
-  const typePart = type ?? "all";
+  // `type` is caller-controlled, so it must not collide with the key's own
+  // structure or the unfiltered sentinel: present types are percent-encoded
+  // (encodeURIComponent never emits a bare ":") behind a "%" prefix, which
+  // leaves "all" - the unfiltered sentinel - unreachable as an encoded
+  // value.
+  const typePart = type === undefined ? "all" : `%${encodeURIComponent(type)}`;
   const pagePart = page ? `:${page.limit}:${page.offset}` : "";
   return `${KEY_PREFIX}:${typePart}${pagePart}`;
 }
@@ -25,8 +30,12 @@ export function invalidateListCache(
   kv: KVNamespace,
   waitUntil: (promise: Promise<unknown>) => void
 ): void {
-  for (const type of ["all", ...EXTENSION_TYPES] as const) {
-    const key = listCacheKey(type === "all" ? undefined : type, undefined);
+  // Mirrors listCacheKey's encoding: the "all" sentinel for the unfiltered
+  // list, "%"-prefixed encoded keys per type.
+  const keys = [listCacheKey(undefined, undefined)].concat(
+    EXTENSION_TYPES.map((type) => listCacheKey(type, undefined))
+  );
+  for (const key of keys) {
     waitUntil(kv.delete(key).catch(() => {}));
   }
 }
