@@ -13,12 +13,6 @@ import { PreviewsV1App } from "./app";
 
 const MAIN_CACHE_KEY = "preview:main";
 const MAIN_CACHE_TTL_SECONDS = 60;
-// /main/download's own entry, separate from MAIN_CACHE_KEY: /main's cached
-// body carries GitHub-enriched artifact fields that /main/download neither
-// needs nor wants to pay for on a cold cache. The download path does fall
-// back to reading MAIN_CACHE_KEY when present - /main usually ran first
-// and already paid for it.
-const MAIN_URL_CACHE_KEY = "preview:main:url";
 // Both routes 404 while no main preview has been published - cache that
 // state briefly so the 404 path costs a KV read instead of an R2 head per
 // request. An R2 miss is a stable signal (the object only exists once CI
@@ -64,6 +58,32 @@ function resolveMainObject(c: Context<{ Bindings: CloudflareBindings }>) {
   );
 }
 
+// Both routes share this one entry: /main stores the enriched body, and
+// /main/download stores the same shape with enrichment left null (the
+// fields are optional and enrichment is best-effort by contract). Two
+// differently-shaped or independently-negative entries could disagree -
+// one route 404ing or serving a stale URL while the other resolves fine -
+// which a single shared entry rules out by construction.
+function buildMainPreview(
+  object: NonNullable<Awaited<ReturnType<typeof getMainPreviewObject>>>,
+  artifactFields: Pick<
+    MainPreview,
+    "run_id" | "artifact_id" | "created_at" | "expires_at"
+  >
+): MainPreview {
+  return {
+    commit_sha: object.commitSha,
+    short_sha: object.commitSha?.slice(0, 7) ?? null,
+    pr_number: null,
+    ...artifactFields,
+    digest: object.digest,
+    size_bytes: object.sizeBytes,
+    last_modified: object.lastModified,
+    download_url: object.downloadUrl,
+    source: "r2"
+  };
+}
+
 // Shared by /main - the full body, GitHub-enrichment included.
 async function resolveMainPreview(
   c: Context<{ Bindings: CloudflareBindings }>
@@ -98,17 +118,7 @@ async function resolveMainPreview(
     object.commitSha
   );
 
-  const result: MainPreview = {
-    commit_sha: object.commitSha,
-    short_sha: object.commitSha?.slice(0, 7) ?? null,
-    pr_number: null,
-    ...artifactFields,
-    digest: object.digest,
-    size_bytes: object.sizeBytes,
-    last_modified: object.lastModified,
-    download_url: object.downloadUrl,
-    source: "r2"
-  };
+  const result = buildMainPreview(object, artifactFields);
 
   waitUntil(
     c.env.CACHE_KV.put(MAIN_CACHE_KEY, JSON.stringify(result), {
@@ -119,33 +129,19 @@ async function resolveMainPreview(
   return result;
 }
 
-// Shared by /main/download - existence plus the fixed download URL only,
-// with no GitHub enrichment. Checks MAIN_URL_CACHE_KEY first, then the
-// full metadata entry (see MAIN_URL_CACHE_KEY above), then R2.
+// Shared by /main/download - the fixed download URL, no GitHub enrichment.
 async function resolveMainDownloadUrl(
   c: Context<{ Bindings: CloudflareBindings }>
 ): Promise<string | null> {
   const waitUntil = (p: Promise<unknown>) => c.executionCtx.waitUntil(p);
 
-  const urlCache = await c.env.CACHE_KV.get(MAIN_URL_CACHE_KEY);
-  if (urlCache === MAIN_NEGATIVE_CACHE_VALUE) {
+  const cached = await c.env.CACHE_KV.get(MAIN_CACHE_KEY);
+  if (cached === MAIN_NEGATIVE_CACHE_VALUE) {
     return null;
   }
-  if (urlCache) {
+  if (cached) {
     try {
-      return JSON.parse(urlCache) as string;
-    } catch {
-      // Corrupt cache entry - fall through.
-    }
-  }
-
-  const fullCache = await c.env.CACHE_KV.get(MAIN_CACHE_KEY);
-  if (fullCache === MAIN_NEGATIVE_CACHE_VALUE) {
-    return null;
-  }
-  if (fullCache) {
-    try {
-      const parsed = JSON.parse(fullCache) as MainPreview;
+      const parsed = JSON.parse(cached) as MainPreview;
       if (parsed.download_url) return parsed.download_url;
     } catch {
       // Corrupt cache entry - fall through to a fresh R2 lookup.
@@ -155,7 +151,7 @@ async function resolveMainDownloadUrl(
   const object = await resolveMainObject(c);
   if (!object) {
     waitUntil(
-      c.env.CACHE_KV.put(MAIN_URL_CACHE_KEY, MAIN_NEGATIVE_CACHE_VALUE, {
+      c.env.CACHE_KV.put(MAIN_CACHE_KEY, MAIN_NEGATIVE_CACHE_VALUE, {
         expirationTtl: MAIN_NEGATIVE_CACHE_TTL_SECONDS
       })
     );
@@ -163,9 +159,20 @@ async function resolveMainDownloadUrl(
   }
 
   waitUntil(
-    c.env.CACHE_KV.put(MAIN_URL_CACHE_KEY, JSON.stringify(object.downloadUrl), {
-      expirationTtl: MAIN_CACHE_TTL_SECONDS
-    })
+    c.env.CACHE_KV.put(
+      MAIN_CACHE_KEY,
+      JSON.stringify(
+        buildMainPreview(object, {
+          run_id: null,
+          artifact_id: null,
+          created_at: null,
+          expires_at: null
+        })
+      ),
+      {
+        expirationTtl: MAIN_CACHE_TTL_SECONDS
+      }
+    )
   );
   return object.downloadUrl;
 }

@@ -1,4 +1,4 @@
-import { desc } from "drizzle-orm";
+import { desc, sql } from "drizzle-orm";
 import { CentralAlert } from "./interfaces";
 import { DatabaseResult } from "../../../lib/interfaces";
 import { CentralAlertsDb } from "../../../lib/db";
@@ -16,10 +16,13 @@ export class CentralAlertsDatabase {
   }): Promise<DatabaseResult<{ alerts: CentralAlert[]; hasMore: boolean }>> {
     let rows;
     try {
+      // Offset pagination needs a deterministic total order; rowid breaks
+      // datetime ties the same way listHistory does (paged path only - the
+      // unpaginated default keeps its original single-key ordering).
       const base = this.db
         .select()
         .from(centralAlerts)
-        .orderBy(desc(centralAlerts.datetime));
+        .orderBy(desc(centralAlerts.datetime), sql`rowid DESC`);
       rows = page
         ? await base.offset(page.offset).limit(page.limit + 1)
         : await base;

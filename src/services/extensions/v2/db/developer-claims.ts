@@ -317,11 +317,16 @@ export class DeveloperClaimsDatabase {
       const filtered = conditions.length
         ? base.where(and(...conditions))
         : base;
+      // Offset pagination needs a deterministic total order: created_at
+      // ties are broken by rowid (insertion order), matching listHistory.
       // limit+1 probe - see DeveloperProfilesDatabase.listWithOwnerPaged.
       const ordered = filtered.orderBy(
         filters.scope === "mine"
           ? desc(developerClaims.createdAt)
-          : asc(developerClaims.createdAt)
+          : asc(developerClaims.createdAt),
+        filters.scope === "mine"
+          ? sql`"developer_claims".rowid DESC`
+          : sql`"developer_claims".rowid ASC`
       );
       rows = page
         ? await ordered.offset(page.offset).limit(page.limit + 1)

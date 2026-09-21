@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "5270b9f5-0e30-4c3e-8728-fdde50ddfd08",
+  "id": "94fe44c4-3101-4040-b57c-a72e4d543066",
   "prevId": "d9c02d59-2b8a-4e8b-9a7c-f97ab0260be4",
   "tables": {
     "developer_claims": {
@@ -646,7 +646,7 @@
         },
         "idx_extension_revisions_reviewed": {
           "name": "idx_extension_revisions_reviewed",
-          "columns": ["extension_id", "\"reviewed_at\" desc"],
+          "columns": ["extension_id", "reviewed_at"],
           "isUnique": false,
           "where": "\"extension_revisions\".\"status\" IN ('approved', 'rejected')"
         },
@@ -1011,13 +1011,6 @@
             "isExpression": true
           },
           "\"id\" desc": {
-            "isExpression": true
-          }
-        }
-      },
-      "idx_extension_revisions_reviewed": {
-        "columns": {
-          "\"reviewed_at\" desc": {
             "isExpression": true
           }
         }

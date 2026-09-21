@@ -1,2 +1,0 @@
-CREATE INDEX `idx_extension_revisions_reviewed` ON `extension_revisions` (`extension_id`,"reviewed_at" desc) WHERE "extension_revisions"."status" IN ('approved', 'rejected');--> statement-breakpoint
-CREATE INDEX `idx_extension_revisions_submitter_pending` ON `extension_revisions` (`submitted_by`) WHERE "extension_revisions"."status" = 'pending';

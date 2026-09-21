@@ -106,22 +106,33 @@ export const PaginationSchema = z
 
 // Opt-in offset pagination for the moderator/audit list endpoints: both
 // params omitted => full unpaginated result, identical to the contract
-// before pagination existed.
-export const ListPaginationQuerySchema = z.object({
-  limit: z.coerce
-    .number()
-    .int()
-    .min(1)
-    .max(100)
-    .optional()
-    .openapi({ param: { name: "limit", in: "query" } }),
-  offset: z.coerce
-    .number()
-    .int()
-    .min(0)
-    .optional()
-    .openapi({ param: { name: "offset", in: "query" } })
-});
+// before pagination existed. offset without limit is rejected (422) rather
+// than silently ignored, since the generated schema would otherwise
+// advertise a param the routes drop.
+export const offsetRequiresLimit = (query: {
+  limit?: number;
+  offset?: number;
+}): boolean => query.limit !== undefined || query.offset === undefined;
+
+export const ListPaginationQuerySchema = z
+  .object({
+    limit: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(100)
+      .optional()
+      .openapi({ param: { name: "limit", in: "query" } }),
+    offset: z.coerce
+      .number()
+      .int()
+      .min(0)
+      .optional()
+      .openapi({ param: { name: "offset", in: "query" } })
+  })
+  .refine(offsetRequiresLimit, {
+    message: "offset requires limit"
+  });
 
 export const OffsetPaginationSchema = z
   .object({

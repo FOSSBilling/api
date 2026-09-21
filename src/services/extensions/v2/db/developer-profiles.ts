@@ -646,6 +646,9 @@ export class DeveloperProfilesDatabase {
   ): Promise<DatabaseResult<{ items: DeveloperProfile[]; hasMore: boolean }>> {
     let rows;
     try {
+      // Offset pagination needs a deterministic total order: the orderBy
+      // keys (name, created_at) are not unique, so rowid breaks ties the
+      // same way listHistory does.
       const base = this.db
         .select({
           developer: developers,
@@ -655,7 +658,7 @@ export class DeveloperProfilesDatabase {
         .from(developers)
         .leftJoin(users, eq(users.id, developers.ownerUserId))
         .where(where)
-        .orderBy(orderBy);
+        .orderBy(orderBy, sql`"developers".rowid ASC`);
       rows = page
         ? await base.offset(page.offset).limit(page.limit + 1)
         : await base;

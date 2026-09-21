@@ -44,11 +44,31 @@ describe("CentralAlertsDatabase", () => {
     });
 
     it("should honor an opt-in pagination window", async () => {
-      const paged = await db.getAllAlerts({ limit: 1, offset: 0 });
+      // A second, newer alert so a limit-1 page actually has a boundary
+      // to probe: hasMore must come from the limit+1 row, not the count.
+      const drizzleDb = getCentralAlertsDb(env.DB_CENTRAL_ALERTS);
+      await drizzleDb.insert(centralAlerts).values({
+        id: "2",
+        title: "Second Alert",
+        message: "Newer alert",
+        type: "info",
+        dismissible: false,
+        minFossbillingVersion: "0.0.0",
+        maxFossbillingVersion: "1.0.0",
+        includePreviewBranch: false,
+        buttons: null,
+        datetime: "2024-01-01T00:00:00Z"
+      });
 
-      expect(paged.error).toBeNull();
-      expect(paged.data?.alerts).toHaveLength(1);
-      expect(paged.data?.hasMore).toBe(false);
+      const firstPage = await db.getAllAlerts({ limit: 1, offset: 0 });
+      expect(firstPage.error).toBeNull();
+      expect(firstPage.data?.alerts.map((alert) => alert.id)).toEqual(["2"]);
+      expect(firstPage.data?.hasMore).toBe(true);
+
+      const secondPage = await db.getAllAlerts({ limit: 1, offset: 1 });
+      expect(secondPage.error).toBeNull();
+      expect(secondPage.data?.alerts.map((alert) => alert.id)).toEqual(["1"]);
+      expect(secondPage.data?.hasMore).toBe(false);
     });
   });
 });

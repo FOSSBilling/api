@@ -311,6 +311,19 @@ describe("Previews API v1 - GET /previews/v1/commit/:sha", () => {
       digest: "sha256:fromfork",
       workflow_run: { id: 888, head_sha: SHA }
     };
+    // preview-build.yml also uploads an unprefixed "preview-build"
+    // artifact (a build.tar, not the zip) on the same run; it must never
+    // be returned as the preview just because its head_sha matches.
+    const genericRunArtifact = {
+      id: 778,
+      name: "preview-build",
+      size_in_bytes: 123456,
+      created_at: "2026-08-13T11:30:00Z",
+      expires_at: FAR_FUTURE_EXPIRES_AT,
+      expired: false,
+      digest: "sha256:generic",
+      workflow_run: { id: 888, head_sha: SHA }
+    };
     (vi.mocked(ghRequest) as MockGitHubRequest).mockImplementation(
       async (route: string, params?: { name?: string }) => {
         if (route === "GET /repos/{owner}/{repo}/actions/artifacts") {
@@ -331,7 +344,12 @@ describe("Previews API v1 - GET /previews/v1/commit/:sha", () => {
         if (
           route === "GET /repos/{owner}/{repo}/actions/runs/{run_id}/artifacts"
         ) {
-          return { data: { total_count: 1, artifacts: [mergeShaArtifact] } };
+          return {
+            data: {
+              total_count: 2,
+              artifacts: [genericRunArtifact, mergeShaArtifact]
+            }
+          };
         }
         throw new Error(`Unexpected route: ${route}`);
       }
@@ -352,7 +370,6 @@ describe("Previews API v1 - GET /previews/v1/commit/:sha", () => {
       expect.objectContaining({ head_sha: SHA })
     );
   });
-
   it("pages through the short-SHA fallback scan past the old 5-page cap, then stops as soon as it finds a match", async () => {
     // Regression check: an earlier version of the page-scan fallback
     // stopped after 5 pages (500 artifacts) as a hard cutoff, which would

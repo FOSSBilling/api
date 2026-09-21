@@ -1,5 +1,10 @@
 import { z } from "@hono/zod-openapi";
-import { httpUrl, lowercaseId, ListPaginationQuerySchema } from "./common";
+import {
+  httpUrl,
+  lowercaseId,
+  ListPaginationQuerySchema,
+  offsetRequiresLimit
+} from "./common";
 
 // GET /developers/unapproved has been merged into GET /developers?status=.
 // "unapproved" is therefore no longer a shadowed static route, but stays
@@ -143,18 +148,22 @@ export const DeveloperApprovalSchema = z
 // Merged moderator GET /developers: status=all (default) lists every profile,
 // status=unapproved lists only profiles awaiting review. Replaces the former
 // GET /developers/unapproved sibling route.
-export const DeveloperListQuerySchema = z.object({
-  status: z
-    .enum(["all", "unapproved"])
-    .default("all")
-    .openapi({
-      param: { name: "status", in: "query" },
-      description:
-        "all: every profile. unapproved: only profiles awaiting review."
-    }),
-  limit: ListPaginationQuerySchema.shape.limit,
-  offset: ListPaginationQuerySchema.shape.offset
-});
+export const DeveloperListQuerySchema = z
+  .object({
+    status: z
+      .enum(["all", "unapproved"])
+      .default("all")
+      .openapi({
+        param: { name: "status", in: "query" },
+        description:
+          "all: every profile. unapproved: only profiles awaiting review."
+      }),
+    limit: ListPaginationQuerySchema.shape.limit,
+    offset: ListPaginationQuerySchema.shape.offset
+  })
+  .refine(offsetRequiresLimit, {
+    message: "offset requires limit"
+  });
 
 // Merged GET /developers/{id} (optional auth, role-aware): anonymous callers
 // get the sanitized PublicDeveloper, the owning caller gets their full Owned

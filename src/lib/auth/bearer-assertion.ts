@@ -46,6 +46,13 @@ function isAssertionPayload(value: unknown): value is AssertionPayload {
   );
 }
 
+// Failed verifications are routine public traffic (expired 60s assertions,
+// malformed tokens, junk Authorization headers), so an unthrottled warn is
+// attacker-spammable log volume that drowns out the misconfiguration
+// signal it exists to surface. At most one warn per isolate per minute.
+const WARN_INTERVAL_MS = 60_000;
+let lastAuthWarnAt = 0;
+
 // Per-isolate memo of each secret's imported HMAC CryptoKey: hono's JWT
 // verify re-imports the raw secret on every call otherwise. Holds at most
 // the two configured rotation secrets.
@@ -101,9 +108,13 @@ export const bearerAssertionVerifier: TokenVerifier = {
 
     // A consistent failure across every configured secret is the only
     // signal a misconfigured ASSERTION_SIGNING_SECRET produces.
-    logWarn("auth", "Bearer assertion failed verification", {
-      secretsTried: secrets.length
-    });
+    const now = Date.now();
+    if (now - lastAuthWarnAt >= WARN_INTERVAL_MS) {
+      lastAuthWarnAt = now;
+      logWarn("auth", "Bearer assertion failed verification", {
+        secretsTried: secrets.length
+      });
+    }
     return null;
   }
 };

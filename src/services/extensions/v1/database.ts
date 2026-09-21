@@ -85,8 +85,12 @@ export class ExtensionsDatabase {
         .from(extensions)
         .innerJoin(developers, eq(extensions.developerId, developers.id))
         .where(type ? and(published, eq(extensions.type, type)) : published);
+      // Offset pagination needs a deterministic order (the unpaginated
+      // default deliberately stays unordered) - (LOWER(id), id) matches
+      // the published-catalogue index and is unique.
       rows = page
         ? ((await base
+            .orderBy(sql`LOWER(${extensions.id})`, extensions.id)
             .offset(page.offset)
             .limit(page.limit + 1)) as ExtensionRow[])
         : ((await base) as ExtensionRow[]);

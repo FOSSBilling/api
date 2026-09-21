@@ -120,10 +120,11 @@ async function findInFallbackPages(
   return null;
 }
 
-// Termination bound for the runs-API fallback below - a commit is not
-// re-run dozens of times in practice, and this mirrors the circuit-breaker
-// role MAX_FALLBACK_PAGES plays for the page-scan path.
-const MAX_RUNS_TO_TRY = 10;
+// Circuit-breaker budget on run-artifact listings, not a correctness
+// bound: a commit is not re-run dozens of times, so the match lands in
+// the first run or two in practice. Mirrors MAX_FALLBACK_PAGES' role for
+// the page-scan path - a guarantee of termination if the API misbehaves.
+const MAX_RUN_ARTIFACT_LISTINGS = 50;
 
 async function listRunArtifacts(
   githubToken: string,
@@ -143,42 +144,54 @@ async function listRunArtifacts(
 }
 
 // The full-SHA fallback: list the workflow runs triggered by this exact
-// commit (server-side head_sha filter), then look at each run's artifacts -
-// 1 + (runs tried) calls regardless of repo size, which is what keeps
-// fork-PR polling affordable. The run-level artifact listing carries the
-// same workflow_run metadata as the repo-level one; synthesized from the
-// run at hand if absent, so matchArtifact can rely on it.
+// commit (server-side head_sha filter, all pages), then look at each
+// run's artifacts - a handful of calls regardless of repo size, which is
+// what keeps fork-PR polling affordable. Run artifacts are filtered to
+// preview-prefixed names before matching: preview-build.yml also uploads
+// an unprefixed `preview-build` artifact (a build.tar, not the
+// downloadable zip) whose head_sha matches everything on its run.
+// workflow_run is synthesized from the run at hand when absent, so
+// matchArtifact can rely on it.
 async function findArtifactByRunHeadSha(
   githubToken: string,
   shaLower: string
 ): Promise<ArtifactMatch | null> {
-  const result = await ghRequest("GET /repos/{owner}/{repo}/actions/runs", {
-    owner: REPO_OWNER,
-    repo: REPO_NAME,
-    head_sha: shaLower,
-    per_page: 100,
-    headers: { Authorization: `Bearer ${githubToken}` }
-  });
-  const runs = (result.data.workflow_runs ?? []) as Array<{
-    id: number;
-    head_sha: string;
-  }>;
+  let listingsLeft = MAX_RUN_ARTIFACT_LISTINGS;
 
-  for (const run of runs.slice(0, MAX_RUNS_TO_TRY)) {
-    const artifacts = await listRunArtifacts(githubToken, run.id);
-    const match = matchArtifact(
-      artifacts.map((artifact) => ({
-        ...artifact,
-        workflow_run: artifact.workflow_run ?? {
-          id: run.id,
-          head_sha: run.head_sha
-        }
-      })),
-      shaLower
-    );
-    if (match) return match;
+  for (let page = 1; ; page++) {
+    const result = await ghRequest("GET /repos/{owner}/{repo}/actions/runs", {
+      owner: REPO_OWNER,
+      repo: REPO_NAME,
+      head_sha: shaLower,
+      per_page: 100,
+      page,
+      headers: { Authorization: `Bearer ${githubToken}` }
+    });
+    const runs = (result.data.workflow_runs ?? []) as Array<{
+      id: number;
+      head_sha: string;
+    }>;
+
+    for (const run of runs) {
+      if (listingsLeft-- <= 0) return null;
+      const artifacts = await listRunArtifacts(githubToken, run.id);
+      const match = matchArtifact(
+        artifacts
+          .filter((artifact) => artifact.name?.startsWith(ARTIFACT_NAME_PREFIX))
+          .map((artifact) => ({
+            ...artifact,
+            workflow_run: artifact.workflow_run ?? {
+              id: run.id,
+              head_sha: run.head_sha
+            }
+          })),
+        shaLower
+      );
+      if (match) return match;
+    }
+
+    if (runs.length < 100) return null; // last page
   }
-  return null;
 }
 
 // Newest non-expired artifact whose triggering run's real head commit

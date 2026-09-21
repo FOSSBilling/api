@@ -283,12 +283,28 @@ export function registerPublicExtensionsRoutes(app: ExtensionsV2App): void {
           }
           if (active.data) {
             const owned = await db.getOwned(id);
-            if (owned.error || !owned.data) {
-              return c.json(errorBody(owned.error, "Extension not found"), 500);
+            // getOwned re-reports the owner from the same row it served:
+            // an ownership transfer that committed between the probe and
+            // this read must not hand the former owner the new owner's
+            // view, so fall through to the public read if it no longer
+            // matches.
+            if (
+              owned.error ||
+              !owned.data ||
+              owned.data.ownerUserId !== auth.userId
+            ) {
+              if (owned.error && owned.error.code !== "NOT_FOUND") {
+                const status = statusFromErrorCode(owned.error.code, false);
+                return c.json(
+                  errorBody(owned.error, "Extension not found"),
+                  status
+                );
+              }
+            } else {
+              const res = c.json({ result: owned.data.extension }, 200);
+              res.headers.set("Vary", "Authorization");
+              return res;
             }
-            const res = c.json({ result: owned.data.extension }, 200);
-            res.headers.set("Vary", "Authorization");
-            return res;
           }
         } else {
           const access = await users.moderatorAccess(auth.userId);
@@ -301,7 +317,11 @@ export function registerPublicExtensionsRoutes(app: ExtensionsV2App): void {
           if (access.data?.moderator) {
             const owned = await db.getOwned(id);
             if (owned.error || !owned.data) {
-              return c.json(errorBody(owned.error, "Extension not found"), 500);
+              const status = statusFromErrorCode(owned.error?.code, false);
+              return c.json(
+                errorBody(owned.error, "Extension not found"),
+                status
+              );
             }
             const res = c.json({ result: owned.data.extension }, 200);
             res.headers.set("Vary", "Authorization");

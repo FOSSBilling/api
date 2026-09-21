@@ -1,6 +1,6 @@
 import type { ExtensionsDb } from "../../../../lib/db";
 import { logError } from "../../../../lib/logger";
-import { createEmailSender } from "./factory";
+import { createEmailSender, DisabledSender } from "./factory";
 import {
   resolveClaimantEmail,
   resolveDeveloperProfileEmail,
@@ -103,6 +103,16 @@ export async function sendModerationNotification(
     });
 
     const sender = createEmailSender(env);
+    // An unconfigured or incomplete provider cannot dispatch anything:
+    // report notified:false up front rather than handing a doomed send to
+    // waitUntil, so the flag keeps meaning "a real send was dispatched".
+    if (sender instanceof DisabledSender) {
+      logError("email", "Moderation notification skipped: email not sent", {
+        kind: input.kind,
+        reason: "email provider is disabled or not configured"
+      });
+      return false;
+    }
     const send = (async () => {
       try {
         const result = await sender.send(message);

@@ -242,8 +242,11 @@ versionsV1.get(
       platform.getCache("CACHE_KV"),
       platform.getEnv("GITHUB_TOKEN") || "",
       c.env.DOWNLOAD_BUCKET,
-      true,
-      (p) => c.executionCtx.waitUntil(p)
+      true
+      // No waitUntil: /update's contract is "refresh the cache", so the
+      // KV write is awaited inline and its failure surfaces in the
+      // response instead of reporting success for a write still in
+      // flight.
     );
     const releaseCount = Object.keys(result.releases).length;
 

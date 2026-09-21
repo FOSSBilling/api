@@ -1,5 +1,5 @@
 import { z } from "@hono/zod-openapi";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import type { ExtensionsDb } from "../../../../lib/db";
 import { developers, extensions, users } from "../db/schema";
 
@@ -47,7 +47,10 @@ export async function resolveExtensionEmail(
       .from(extensions)
       .innerJoin(developers, eq(extensions.developerId, developers.id))
       .leftJoin(users, eq(developers.ownerUserId, users.id))
-      .where(eq(extensions.id, extensionId));
+      // Moderation routes pass the raw URL param, and ids are matched
+      // case-insensitively everywhere else (LOWER(id) = LOWER(id)) - mixed
+      // case is a supported input, not a miss.
+      .where(sql`LOWER(${extensions.id}) = LOWER(${extensionId})`);
 
     if (!row) return null;
 
