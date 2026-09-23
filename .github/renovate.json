@@ -18,5 +18,6 @@
   "automergeSchedule": ["at any time"],
   "automergeStrategy": "squash",
   "postUpdateOptions": ["npmDedupe"],
+  "rangeStrategy": "bump",
   "skipInstalls": false
 }
