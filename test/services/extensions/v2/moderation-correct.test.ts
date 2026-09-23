@@ -15,6 +15,7 @@ import {
   insertUser,
   insertExtension,
   insertUnpublishedExtension,
+  countRevisions,
   getDeveloper,
   getExtension,
   getRevision,
@@ -89,6 +90,8 @@ describe("POST /extensions/{id}/moderator-correct (api#251)", () => {
       error: { code: "ACCOUNT_INACTIVE" }
     });
     expect((await getExtension(db, "live-ext"))?.readme).toBe("old readme");
+    // The guarded INSERT never ran, so no orphan revision row is left behind.
+    expect(await countRevisions(db)).toBe(0);
   });
 
   it("404s for an unknown extension", async () => {
@@ -120,6 +123,7 @@ describe("POST /extensions/{id}/moderator-correct (api#251)", () => {
     await expect(res.json()).resolves.toMatchObject({
       error: { code: "CONFLICT" }
     });
+    expect(await countRevisions(db)).toBe(0);
   });
 
   it("409s for a delisted extension", async () => {
@@ -135,6 +139,7 @@ describe("POST /extensions/{id}/moderator-correct (api#251)", () => {
     await expect(res.json()).resolves.toMatchObject({
       error: { code: "CONFLICT" }
     });
+    expect(await countRevisions(db)).toBe(0);
   });
 
   it("409s when a pending revision exists", async () => {
@@ -153,6 +158,9 @@ describe("POST /extensions/{id}/moderator-correct (api#251)", () => {
     });
     // Neither the live content nor the pending edit moves.
     expect((await getExtension(db, "live-ext"))?.readme).toBe("old readme");
+    // Only the author's pending revision exists: the failed correction added
+    // no row of its own.
+    expect(await countRevisions(db)).toBe(1);
   });
 
   it("422s on a blank correction_note", async () => {
@@ -163,6 +171,17 @@ describe("POST /extensions/{id}/moderator-correct (api#251)", () => {
       correctBody({ correction_note: "   " })
     );
     expect(res.status).toBe(422);
+  });
+
+  it("422s on an overlong correction_note", async () => {
+    await seedPublished();
+    const res = await post(
+      PATH,
+      await authHeaders("mod-1"),
+      correctBody({ correction_note: "x".repeat(2001) })
+    );
+    expect(res.status).toBe(422);
+    expect(await countRevisions(db)).toBe(0);
   });
 
   it("422s on invalid content", async () => {

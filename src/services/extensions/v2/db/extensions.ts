@@ -981,10 +981,18 @@ export class ExtensionsDatabase {
     }
 
     // Canonical id for the response (the path param may differ in case).
-    const [row] = await this.db
-      .select({ canonicalId: extensions.id })
-      .from(extensions)
-      .where(sql`LOWER(${extensions.id}) = LOWER(${id})`);
+    // Inside error handling like every other read here: the correction is
+    // already committed, so a failure must report a database error rather
+    // than throw past the route.
+    let row: { canonicalId: string } | undefined;
+    try {
+      [row] = await this.db
+        .select({ canonicalId: extensions.id })
+        .from(extensions)
+        .where(sql`LOWER(${extensions.id}) = LOWER(${id})`);
+    } catch (error) {
+      return databaseError("moderatorCorrect", error);
+    }
     return {
       data: { id: row?.canonicalId ?? id, revisionId },
       error: null
