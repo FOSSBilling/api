@@ -340,7 +340,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
         extDb,
         {
           kind: "extension-relisted",
-          extensionId: id,
+          extensionId: data.id,
           reason: review_note?.trim() || undefined
         },
         (p) => c.executionCtx.waitUntil(p)

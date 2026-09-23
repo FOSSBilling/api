@@ -79,6 +79,6 @@ export const UnifiedClaimsQuerySchema = CursorPaginationQuerySchema.extend({
     .openapi({
       param: { name: "status", in: "query" },
       description:
-        "Filter claims by status (default: all). Only valid with scope=mine."
+        "Filter claims by status (default: all). With scope=mine, narrows claims; with scope=pending, only all or pending is allowed."
     })
 });

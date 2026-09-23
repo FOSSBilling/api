@@ -176,6 +176,42 @@ describe("Extensions API v2 contract", () => {
     expect(crossed.status).toBe(422);
   });
 
+  it("rejects a mine cursor reused by another claimant", async () => {
+    await seedUnownedDeveloper("legacy-a");
+    await seedUnownedDeveloper("legacy-b");
+    await seedUnownedDeveloper("legacy-c");
+    await post(
+      "/extensions/v2/developers/legacy-a/claim",
+      await authHeaders("user-1"),
+      {}
+    );
+    await post(
+      "/extensions/v2/developers/legacy-b/claim",
+      await authHeaders("user-1"),
+      {}
+    );
+    await post(
+      "/extensions/v2/developers/legacy-c/claim",
+      await authHeaders("user-2"),
+      {}
+    );
+
+    const mine = await get(
+      "/extensions/v2/developers/claims?scope=mine&limit=1",
+      await authHeaders("user-1")
+    );
+    const mineBody = (await mine.json()) as {
+      pagination: { next_cursor: string | null; has_more: boolean };
+    };
+    expect(mineBody.pagination.has_more).toBe(true);
+
+    const crossed = await get(
+      `/extensions/v2/developers/claims?scope=mine&cursor=${encodeURIComponent(mineBody.pagination.next_cursor as string)}`,
+      await authHeaders("user-2")
+    );
+    expect(crossed.status).toBe(422);
+  });
+
   it("rejects a history cursor from another developer", async () => {
     await put(
       "/extensions/v2/developers/me",

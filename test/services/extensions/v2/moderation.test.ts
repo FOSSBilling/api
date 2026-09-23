@@ -1141,6 +1141,57 @@ describe("Extensions API v2", () => {
         (await get("/extensions/v2/extensions", {})).json()
       ).resolves.toMatchObject({ result: [{ id: "live-ext" }] });
     });
+
+    it("answers with the stored canonical id for a mixed-case path", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await seedDeveloper("new-developer", "user-1");
+      await insertExtension(db, {
+        id: "LIVE-ext",
+        developer_id: "new-developer"
+      });
+      const mod = await authHeaders("mod-1");
+      await post("/extensions/v2/extensions/live-ext/delist", mod, {
+        reason: "Upstream source removed"
+      });
+
+      const res = await post(
+        "/extensions/v2/extensions/Live-EXT/relist",
+        mod,
+        {}
+      );
+      expect(res.status).toBe(200);
+      await expect(res.json()).resolves.toEqual({
+        result: { id: "LIVE-ext", status: "relisted", notified: false }
+      });
+    });
+
+    it("403s for a moderator demoted after authenticating", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await seedDeveloper("new-developer", "user-1");
+      await insertExtension(db, {
+        id: "live-ext",
+        developer_id: "new-developer"
+      });
+      const mod = await authHeaders("mod-1");
+      await post("/extensions/v2/extensions/live-ext/delist", mod, {
+        reason: "Upstream source removed"
+      });
+
+      await db
+        .prepare("UPDATE users SET is_moderator = 0 WHERE id = ?")
+        .bind("mod-1")
+        .run();
+
+      const res = await post(
+        "/extensions/v2/extensions/live-ext/relist",
+        mod,
+        {}
+      );
+      expect(res.status).toBe(403);
+      expect(await getExtension(db, "live-ext")).toMatchObject({
+        delisted_at: expect.any(String)
+      });
+    });
   });
 
   describe("developer moderation", () => {

@@ -308,8 +308,16 @@ export class DeveloperClaimsDatabase {
     // so a cursor from one scope would seek from the wrong key boundary in
     // the other: reject it rather than return a silently wrong page. (The
     // status filter within scope=mine shares the same ordering, so it needs
-    // no tag.)
-    if (page?.cursor && (!decoded || decoded.s !== filters.scope)) {
+    // no tag.) Mine cursors are additionally bound to the claimant, like
+    // history cursors to their developer: claimantId is the primary filter
+    // of that projection, and another user's cursor would otherwise skip
+    // this caller's newest claims.
+    if (
+      page?.cursor &&
+      (!decoded ||
+        decoded.s !== filters.scope ||
+        (filters.scope === "mine" && decoded.c !== filters.claimantId))
+    ) {
       return {
         data: null,
         error: { message: "Invalid pagination cursor", code: "INVALID_CURSOR" }
@@ -395,7 +403,8 @@ export class DeveloperClaimsDatabase {
               ? encodeClaimCursor(
                   last.claim.createdAt,
                   String(last.rowid),
-                  filters.scope
+                  filters.scope,
+                  filters.scope === "mine" ? filters.claimantId : undefined
                 )
               : null
         },
@@ -646,14 +655,18 @@ interface ClaimCursor {
   k1: string;
   k2: string;
   s: "mine" | "pending";
+  c?: string;
 }
 
 function encodeClaimCursor(
   k1: string,
   k2: string,
-  s: "mine" | "pending"
+  s: "mine" | "pending",
+  claimantId?: string
 ): string {
-  return encode({ k1, k2, s });
+  return encode(
+    claimantId === undefined ? { k1, k2, s } : { k1, k2, s, c: claimantId }
+  );
 }
 
 function isClaimCursor(
@@ -662,7 +675,8 @@ function isClaimCursor(
   return (
     typeof parsed.k1 === "string" &&
     typeof parsed.k2 === "string" &&
-    (parsed.s === "mine" || parsed.s === "pending")
+    (parsed.s === "mine" || parsed.s === "pending") &&
+    (parsed.c === undefined || typeof parsed.c === "string")
   );
 }
 

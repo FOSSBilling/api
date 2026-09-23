@@ -768,14 +768,18 @@ export class ExtensionsDatabase {
   // Inverse of delist(): restores a delisted-but-published extension to the
   // catalogue. Content and history are untouched; only the delist markers
   // are cleared. `AND delisted_at IS NOT NULL` makes this a single atomic
-  // check-and-set mirroring delist().
+  // check-and-set mirroring delist(). The actor guard re-checks moderator
+  // status inside the statement (not just activity): requireModerator()
+  // can only reject before the write, and a role revoked in between must
+  // still fail the write itself. RETURNING hands back the stored canonical
+  // id, which can differ in case from the path param.
   async relist(
     id: string,
     moderatorId: string
   ): Promise<DatabaseResult<{ id: string }>> {
-    let result;
+    let rows;
     try {
-      result = await this.db
+      rows = await this.db
         .update(extensions)
         .set({
           delistedAt: null,
@@ -789,19 +793,23 @@ export class ExtensionsDatabase {
             isNotNull(extensions.delistedAt),
             sql`EXISTS (
               SELECT 1 FROM ${users}
-              WHERE ${users.id} = ${moderatorId} AND ${users.deletedAt} IS NULL
+              WHERE ${users.id} = ${moderatorId}
+                AND ${users.deletedAt} IS NULL
+                AND ${users.isModerator} = 1
             )`
           )
-        );
+        )
+        .returning({ id: extensions.id });
     } catch (error) {
       return databaseError("relist", error);
     }
 
-    if (!result.meta?.changes) {
+    const [row] = rows;
+    if (!row) {
       return this.relistBlockedError(id, moderatorId);
     }
 
-    return { data: { id }, error: null };
+    return { data: { id: row.id }, error: null };
   }
 
   private async relistBlockedError(
@@ -810,6 +818,25 @@ export class ExtensionsDatabase {
   ): Promise<DatabaseResult<never>> {
     const inactive = await inactiveActorError(this.db, moderatorId);
     if (inactive) return { data: null, error: inactive };
+
+    // Matches the in-statement guard above: a moderator demoted after
+    // requireModerator() ran fails the write, and must be told so (403)
+    // rather than misreported as a state conflict.
+    let actor: { isModerator: number | null } | undefined;
+    try {
+      [actor] = await this.db
+        .select({ isModerator: users.isModerator })
+        .from(users)
+        .where(eq(users.id, moderatorId));
+    } catch (error) {
+      return databaseError("relist", error);
+    }
+    if (!actor || actor.isModerator !== 1) {
+      return {
+        data: null,
+        error: { message: "Moderator access required", code: "FORBIDDEN" }
+      };
+    }
 
     let existing:
       { publishedAt: string | null; delistedAt: string | null } | undefined;
