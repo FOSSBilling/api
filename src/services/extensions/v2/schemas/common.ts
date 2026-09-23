@@ -114,9 +114,8 @@ export const NotifiedSchema = z
   )
   .openapi({ example: true });
 
-// Cursor pagination for moderator/audit lists (RFC 0001): every v2 list
-// now pages by opaque keyset cursor, matching GET /extensions and
-// GET /revisions. `limit` bounds the window (default 50, max 100);
+// Cursor pagination for moderator/audit lists: every v2 list pages by
+// opaque keyset cursor, matching GET /extensions and GET /revisions. `limit` bounds the window (default 50, max 100);
 // `cursor` is the `next_cursor` of the previous page. An invalid cursor is
 // rejected with INVALID_CURSOR (422) rather than restarting pagination.
 // Callers that want everything page through with limit=100; the response

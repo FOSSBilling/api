@@ -17,10 +17,9 @@ vi.mock("@octokit/request", async () =>
 
 setupExtensionsV2Tests();
 
-// RFC 0001 contract invariants: static routes beat param routes, reserved
-// ids stay unreachable as data, scope misuse 422s instead of silently
-// returning the wrong projection, and every list answers the cursor
-// envelope.
+// Contract invariants: static routes beat param routes, reserved ids stay
+// unreachable as data, scope misuse 422s instead of silently returning the
+// wrong projection, and every list answers the cursor envelope.
 describe("Extensions API v2 contract", () => {
   it("serves static developer routes ahead of /developers/{id}", async () => {
     await put(
