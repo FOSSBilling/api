@@ -6,6 +6,7 @@ import { sortReleasesDescending } from "../../../../lib/releases";
 import { parseJSON } from "../../../../lib/json";
 import { extensions, extensionRevisions, developers, users } from "./schema";
 import { databaseError, inactiveActorError } from "./errors";
+import { UsersDatabase } from "./users";
 import { toD1Statement } from "./batch";
 import { encodeCursor as encode, decodeCursor as decode } from "./cursor";
 import {
@@ -816,22 +817,32 @@ export class ExtensionsDatabase {
     id: string,
     moderatorId: string
   ): Promise<DatabaseResult<never>> {
-    const inactive = await inactiveActorError(this.db, moderatorId);
-    if (inactive) return { data: null, error: inactive };
-
-    // Matches the in-statement guard above: a moderator demoted after
+    // One row answers both halves of the actor check, matching the
+    // in-statement guard above: a moderator deactivated or demoted after
     // requireModerator() ran fails the write, and must be told so (403)
     // rather than misreported as a state conflict.
-    let actor: { isModerator: number | null } | undefined;
-    try {
-      [actor] = await this.db
-        .select({ isModerator: users.isModerator })
-        .from(users)
-        .where(eq(users.id, moderatorId));
-    } catch (error) {
-      return databaseError("relist", error);
+    const access = await new UsersDatabase(this.db).moderatorAccess(
+      moderatorId
+    );
+    if (access.error || !access.data) {
+      return {
+        data: null,
+        error: access.error ?? {
+          message: "Active account required",
+          code: "ACCOUNT_INACTIVE"
+        }
+      };
     }
-    if (!actor || actor.isModerator !== 1) {
+    if (!access.data.active) {
+      return {
+        data: null,
+        error: {
+          message: "Active account required",
+          code: "ACCOUNT_INACTIVE"
+        }
+      };
+    }
+    if (!access.data.moderator) {
       return {
         data: null,
         error: { message: "Moderator access required", code: "FORBIDDEN" }
