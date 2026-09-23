@@ -23,7 +23,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@hono/zod-openapi": "^1.5.1",
+    "@hono/zod-openapi": "^1.6.3",
     "@octokit/graphql": "^9.0.4",
     "@octokit/request": "^10.0.13",
     "@scalar/hono-api-reference": "^0.12.0",
