@@ -304,7 +304,12 @@ export class DeveloperClaimsDatabase {
   > {
     const limit = page?.limit ?? 50;
     const decoded = page?.cursor ? decodeClaimCursor(page.cursor) : null;
-    if (page?.cursor && !decoded) {
+    // Scopes order oppositely (mine newest-first, pending oldest-first),
+    // so a cursor from one scope would seek from the wrong key boundary in
+    // the other: reject it rather than return a silently wrong page. (The
+    // status filter within scope=mine shares the same ordering, so it needs
+    // no tag.)
+    if (page?.cursor && (!decoded || decoded.s !== filters.scope)) {
       return {
         data: null,
         error: { message: "Invalid pagination cursor", code: "INVALID_CURSOR" }
@@ -387,7 +392,11 @@ export class DeveloperClaimsDatabase {
           hasMore,
           nextCursor:
             hasMore && last
-              ? encodeClaimCursor(last.claim.createdAt, String(last.rowid))
+              ? encodeClaimCursor(
+                  last.claim.createdAt,
+                  String(last.rowid),
+                  filters.scope
+                )
               : null
         },
         error: null
@@ -636,16 +645,25 @@ export class DeveloperClaimsDatabase {
 interface ClaimCursor {
   k1: string;
   k2: string;
+  s: "mine" | "pending";
 }
 
-function encodeClaimCursor(k1: string, k2: string): string {
-  return encode({ k1, k2 });
+function encodeClaimCursor(
+  k1: string,
+  k2: string,
+  s: "mine" | "pending"
+): string {
+  return encode({ k1, k2, s });
 }
 
 function isClaimCursor(
   parsed: Record<string, unknown>
 ): parsed is ClaimCursor & Record<string, unknown> {
-  return typeof parsed.k1 === "string" && typeof parsed.k2 === "string";
+  return (
+    typeof parsed.k1 === "string" &&
+    typeof parsed.k2 === "string" &&
+    (parsed.s === "mine" || parsed.s === "pending")
+  );
 }
 
 function decodeClaimCursor(cursor: string): ClaimCursor | null {

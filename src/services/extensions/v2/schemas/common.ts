@@ -120,7 +120,10 @@ export const NotifiedSchema = z
 // rejected with INVALID_CURSOR (422) rather than restarting pagination.
 // Callers that want everything page through with limit=100; the response
 // envelope (PaginationSchema) reports has_more either way.
-export const CursorPaginationQuerySchema = z.object({
+// Strict: unknown query params (notably the retired `offset`) are rejected
+// with 422 rather than silently stripped, so a caller paginating the old
+// way gets an error instead of page one on repeat.
+export const CursorPaginationQuerySchema = z.strictObject({
   limit: z.coerce
     .number()
     .int()

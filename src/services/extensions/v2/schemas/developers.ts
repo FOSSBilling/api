@@ -162,7 +162,7 @@ export const DeveloperListQuerySchema = CursorPaginationQuerySchema.extend({
     .enum(["all", "unapproved"])
     .optional()
     .openapi({
-      param: { name: "status", in: "query" },
+      param: { name: "status", in: "query", deprecated: true },
       description: "Deprecated alias for scope."
     })
 });

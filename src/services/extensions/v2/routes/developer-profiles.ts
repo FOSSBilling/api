@@ -60,7 +60,9 @@ export function registerDeveloperProfileRoutes(app: ExtensionsV2App): void {
         ...ActiveAccountRequiredResponse,
         description: "The account is inactive or the caller is not a moderator"
       },
-      422: errorResponse("scope, limit, or cursor query failed validation"),
+      422: errorResponse(
+        "scope, status, limit, or cursor query failed validation"
+      ),
       500: errorResponse("Database error")
     }
   });

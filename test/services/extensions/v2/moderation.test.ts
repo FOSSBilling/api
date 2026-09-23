@@ -1081,6 +1081,35 @@ describe("Extensions API v2", () => {
       expect(res.status).toBe(409);
     });
 
+    // A body-less call sends no Content-Type in production (browser fetch
+    // and the generated client omit it when there is no body), and the
+    // validator defaults that to {} — the same as the approve route. (The
+    // harness always sets Content-Type, so it is stripped here to exercise
+    // the production shape.)
+    it("accepts a body-less relist (note is optional)", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await seedDeveloper("new-developer", "user-1");
+      await insertExtension(db, {
+        id: "live-ext",
+        developer_id: "new-developer"
+      });
+      const mod = await authHeaders("mod-1");
+      await post("/extensions/v2/extensions/live-ext/delist", mod, {
+        reason: "Upstream source removed"
+      });
+
+      const { "Content-Type": _dropped, ...noContentType } = mod;
+      expect(_dropped).toBe("application/json");
+      const res = await post(
+        "/extensions/v2/extensions/live-ext/relist",
+        noContentType
+      );
+      expect(res.status).toBe(200);
+      await expect(res.json()).resolves.toEqual({
+        result: { id: "live-ext", status: "relisted", notified: false }
+      });
+    });
+
     it("restores a delisted extension to the public catalogue", async () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await seedDeveloper("new-developer", "user-1");
@@ -1445,6 +1474,48 @@ describe("Extensions API v2", () => {
         pagination: { next_cursor: string | null; has_more: boolean };
       };
       expect(data.pagination).toEqual({
+        next_cursor: null,
+        has_more: false
+      });
+    });
+
+    it("bounds history pages to the requested limit", async () => {
+      await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        sampleDeveloper({ name: "Original Name" })
+      );
+      await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        sampleDeveloper({ name: "Edited Name" })
+      );
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      const mod = await authHeaders("mod-1");
+
+      const first = await get(
+        "/extensions/v2/developers/dev-developer/history?limit=1",
+        mod
+      );
+      expect(first.status).toBe(200);
+      const firstBody = (await first.json()) as {
+        result: Array<{ name: string }>;
+        pagination: { next_cursor: string | null; has_more: boolean };
+      };
+      expect(firstBody.result.map((e) => e.name)).toEqual(["Edited Name"]);
+      expect(firstBody.pagination.has_more).toBe(true);
+      expect(firstBody.pagination.next_cursor).toBeTruthy();
+
+      const second = await get(
+        `/extensions/v2/developers/dev-developer/history?limit=1&cursor=${encodeURIComponent(firstBody.pagination.next_cursor as string)}`,
+        mod
+      );
+      const secondBody = (await second.json()) as {
+        result: Array<{ name: string }>;
+        pagination: { next_cursor: string | null; has_more: boolean };
+      };
+      expect(secondBody.result.map((e) => e.name)).toEqual(["Original Name"]);
+      expect(secondBody.pagination).toEqual({
         next_cursor: null,
         has_more: false
       });

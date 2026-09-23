@@ -828,7 +828,9 @@ export class DeveloperProfilesDatabase {
   // CURRENT_TIMESTAMP has only second resolution, so two writes in the same
   // second tie on changed_at; rowid (insertion order) breaks the tie so
   // "newest first" is never ambiguous, exactly as the offset implementation
-  // did. The opaque cursor carries rowid.
+  // did. The opaque cursor carries rowid and is bound to this developer: a
+  // cursor from another developer (or another list) is rejected rather than
+  // seeking from the wrong key boundary.
   async listHistory(
     developerId: string,
     page?: { limit?: number; cursor?: string }
@@ -841,7 +843,12 @@ export class DeveloperProfilesDatabase {
   > {
     const limit = page?.limit ?? 50;
     const decoded = page?.cursor ? decodeHistoryCursor(page.cursor) : null;
-    if (page?.cursor && !decoded) {
+    // Case-insensitive like the id matching everywhere else: ids are
+    // lowercase slugs by schema, but adopted rows predate that.
+    if (
+      page?.cursor &&
+      (!decoded || decoded.d.toLowerCase() !== developerId.toLowerCase())
+    ) {
       return {
         data: null,
         error: { message: "Invalid pagination cursor", code: "INVALID_CURSOR" }
@@ -910,7 +917,11 @@ export class DeveloperProfilesDatabase {
         hasMore,
         nextCursor:
           hasMore && last
-            ? encodeHistoryCursor(last.changedAt, String(last.rowid))
+            ? encodeHistoryCursor(
+                last.changedAt,
+                String(last.rowid),
+                developerId
+              )
             : null
       },
       error: null
@@ -1190,16 +1201,21 @@ function decodeDeveloperCursor(cursor: string): DeveloperListCursor | null {
 interface HistoryCursor {
   k1: string;
   k2: string;
+  d: string;
 }
 
-function encodeHistoryCursor(k1: string, k2: string): string {
-  return encode({ k1, k2 });
+function encodeHistoryCursor(k1: string, k2: string, d: string): string {
+  return encode({ k1, k2, d });
 }
 
 function isHistoryCursor(
   parsed: Record<string, unknown>
 ): parsed is HistoryCursor & Record<string, unknown> {
-  return typeof parsed.k1 === "string" && typeof parsed.k2 === "string";
+  return (
+    typeof parsed.k1 === "string" &&
+    typeof parsed.k2 === "string" &&
+    typeof parsed.d === "string"
+  );
 }
 
 function decodeHistoryCursor(cursor: string): HistoryCursor | null {
