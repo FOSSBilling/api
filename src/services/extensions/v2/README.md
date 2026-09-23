@@ -37,6 +37,17 @@ against it.
   the extension. `POST /extensions/{id}/relist` restores it (optional
   `review_note`, same `?notify` opt-out); see `ExtensionsDatabase.delist()`
   and `relist()`.
+- `POST /extensions/{id}/moderator-correct` corrects a published extension's
+  live content as a moderator (api#251): truncated readmes, broken links, or
+  other corruption that should not wait for the author to resubmit. One write
+  inserts an already-approved revision row (`submitted_by` and `reviewer_id`
+  both the moderator, `correction_note` as the `review_note`) and publishes
+  it, leaving `published_at` and ownership untouched; the catalogue is
+  revalidated afterwards. Requires a published, listed extension with no
+  pending revision (409 otherwise — approve or reject the pending edit
+  first, never supersede it). Unlike every other moderation write there is no
+  `?notify` query and no author email: the correction is recorded in revision
+  history and surfaced by the directory UI. See `ExtensionsDatabase.moderatorCorrect()`.
 - `GET /extensions/{id}` is role-aware: anonymous and unrelated callers get
   the published projection (or 404, which hides existence for drafts and
   delisted rows); the owner and moderators get the full `OwnedExtension`,
@@ -69,6 +80,23 @@ missing mail credentials skip the send before the response and report
 `notified: false`. See `email/` for the provider abstraction (`mxroute` via
 `https://smtpapi.mxroute.com/`, `resend`, or `disabled`) and the root README
 for the `EXTENSIONS_V2_EMAIL_*` configuration.
+
+### Correcting Live Content
+
+Three paths, in order of preference (api#251):
+
+- **Moderator edit** (`POST /extensions/{id}/moderator-correct`): live
+  catalogue corruption — a truncated readme, a broken link — on a published,
+  listed extension. Immediate, audited (an approved revision row), no author
+  email.
+- **Ask the author to resubmit**: wording disputes, new releases, unpublished
+  or delisted extensions, or anything while a pending edit exists. The normal
+  propose/review queue, with its notification emails.
+- **Direct D1 edit (break-glass only)**: the API is down, or the stored data
+  violates a constraint the API cannot express a fix through. Back up the row
+  first, write down why in the change record, and trigger a catalogue
+  revalidate manually afterwards — the audit trail and purge that the API
+  would have done do not happen by themselves.
 
 The id and the developer are properties of the extension, not of a revision: an
 edit cannot rename an extension or move it to another developer, and approving

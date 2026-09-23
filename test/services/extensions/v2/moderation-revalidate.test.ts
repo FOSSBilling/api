@@ -7,6 +7,7 @@ import {
   post,
   put,
   del,
+  sampleContent,
   sampleCreate,
   sampleDeveloper
 } from "./harness";
@@ -143,6 +144,19 @@ describe("CDN cache revalidation on catalogue mutations", () => {
       `/extensions/v2/extensions/${result.id}/revisions/${result.revision_id}/approve?notify=false`,
       await authHeaders("mod-1"),
       {}
+    );
+    expect(res.status).toBe(200);
+    expect(fetchCalls(fetcher)).toHaveLength(1);
+  });
+
+  it("purges after a moderator correction", async () => {
+    await seedModAndExtension();
+    const fetcher = stubFrontend();
+
+    const res = await post(
+      "/extensions/v2/extensions/live-ext/moderator-correct",
+      await authHeaders("mod-1"),
+      { ...sampleContent(), correction_note: "Fix truncated readme" }
     );
     expect(res.status).toBe(200);
     expect(fetchCalls(fetcher)).toHaveLength(1);
