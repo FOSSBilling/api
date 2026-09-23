@@ -34,8 +34,9 @@ against it.
   the public catalogue for cause (its upstream source disappearing, for
   example). Moderator-only, and the inverse of neither `approve` nor
   `reject`: content and history are kept, so the owner can still see and edit
-  the extension, and a moderator can re-list it by hand later. There is no
-  `relist` endpoint yet - see `ExtensionsDatabase.delist()`.
+  the extension. `POST /extensions/{id}/relist` restores it (optional
+  `review_note`, same `?notify` opt-out); see `ExtensionsDatabase.delist()`
+  and `relist()`.
 - `GET /extensions/{id}` is role-aware: anonymous and unrelated callers get
   the published projection (or 404, which hides existence for drafts and
   delisted rows); the owner and moderators get the full `OwnedExtension`,
@@ -52,8 +53,11 @@ against it.
 
 ### Moderation Notification Emails
 
-Revision approve/reject, delist, developer approve, and claim approve/reject
-email the affected author unless the moderator opts out with `?notify=false`.
+Revision approve/reject, delist/relist, developer approve, and claim
+approve/reject email the affected author unless the moderator opts out with
+`?notify=false`. Automatic decisions by the FOSSBilling Bot account use the
+same routes and mail path; they are identified by the `[auto policy=…]`
+`review_note` prefix (no schema change).
 The recipient is the developer's `contact_email`, falling back to the owning
 account's `email`; claim decisions go to the claimant's account email.
 Sending is best-effort and never fails the write: the result carries
@@ -110,20 +114,23 @@ newest first, for its owner or any moderator. `GET /revisions` is the global
 review queue (moderator only, `?status=` defaulting to `pending`, oldest
 first).
 
-`GET /developers?status=` (`all` default, `unapproved` for the review queue)
-replaces `GET /developers/unapproved`. `GET /developers/claims?scope=mine`
-(the caller's claims) and `?scope=pending` (moderator queue) replace
-`GET /developers/claims/mine` and `GET /developers/claims`; both return the
-enriched pending shape. `GET /developers/{id}` is role-aware like
+`GET /developers?scope=` (`all` default, `unapproved` for the review queue;
+`?status=` remains as a deprecated alias during the coordinated migration and
+422s when it disagrees with `?scope=`) replaces `GET /developers/unapproved`.
+`GET /developers/claims?scope=mine` (the caller's claims) and `?scope=pending`
+(moderator queue) replace `GET /developers/claims/mine` and
+`GET /developers/claims`; both return the enriched pending shape, and a
+`status` filter disagreeing with `scope=pending` is rejected with 422 rather
+than silently ignored. `GET /developers/{id}` is role-aware like
 `GET /extensions/{id}`: public view anonymously, full view for the owner or a
 moderator. `PATCH /users/me` returns the full account projection, like
 `GET /users/me`.
 
 `GET /developers`, `GET /developers/claims`, and `GET /developers/{id}/history`
-support offset pagination via `?limit=` (1-100) and `?offset=`. `offset`
-without `limit` is rejected with 422; with no params at all the routes apply
-a bounded default window (100 rows) instead of streaming every row, and the
-response always carries `pagination: {limit, offset, has_more}`.
+page by opaque keyset cursor like every other v2 list: `?limit=` (1-100,
+default 50) with `?cursor=` carried from the previous page's
+`pagination.next_cursor`. An invalid cursor is rejected with `INVALID_CURSOR`
+(422); the response envelope is always `pagination: {next_cursor, has_more}`.
 
 ## Authentication
 

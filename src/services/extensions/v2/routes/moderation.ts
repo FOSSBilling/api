@@ -10,16 +10,15 @@ import {
 } from "./errors";
 import {
   ActiveAccountRequiredResponse,
+  CursorPaginationQuerySchema,
   DelistReasonSchema,
   IdParamSchema,
-  ListPaginationQuerySchema,
+  NotifiedSchema,
   NotifyQuerySchema,
-  OffsetPaginationSchema,
+  PaginationSchema,
   ReviewNoteOptionalSchema,
   ReviewNoteRequiredSchema,
-  errorResponse,
-  offsetPageFromQuery,
-  offsetPaginationFrom
+  errorResponse
 } from "../schemas/common";
 import {
   DeveloperApprovalSchema,
@@ -60,11 +59,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
               result: z.object({
                 id: z.string(),
                 status: z.literal("approved"),
-                notified: z
-                  .boolean()
-                  .describe(
-                    "Whether a notification email was dispatched - delivery itself is asynchronous"
-                  )
+                notified: NotifiedSchema
               })
             })
           }
@@ -146,11 +141,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
               result: z.object({
                 id: z.string(),
                 status: z.literal("rejected"),
-                notified: z
-                  .boolean()
-                  .describe(
-                    "Whether a notification email was dispatched - delivery itself is asynchronous"
-                  )
+                notified: NotifiedSchema
               })
             })
           }
@@ -230,11 +221,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
               result: z.object({
                 id: z.string(),
                 status: z.literal("delisted"),
-                notified: z
-                  .boolean()
-                  .describe(
-                    "Whether a notification email was dispatched - delivery itself is asynchronous"
-                  )
+                notified: NotifiedSchema
               })
             })
           }
@@ -289,6 +276,82 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
     );
   });
 
+  const relistRoute = createRoute({
+    method: "post",
+    path: "/extensions/{id}/relist",
+    tags: ["Moderation"],
+    summary: "Restore a delisted extension to the public catalogue",
+    security: [{ Bearer: [] }],
+    middleware: [requireModerator()] as const,
+    request: {
+      params: IdParamSchema,
+      query: NotifyQuerySchema,
+      body: {
+        content: { "application/json": { schema: ReviewNoteOptionalSchema } }
+      }
+    },
+    responses: {
+      200: {
+        content: {
+          "application/json": {
+            schema: z.object({
+              result: z.object({
+                id: z.string(),
+                status: z.literal("relisted"),
+                notified: NotifiedSchema
+              })
+            })
+          }
+        },
+        description:
+          "Extension restored to the public catalogue. Content and history unchanged."
+      },
+      401: errorResponse("Missing or invalid bearer token"),
+      403: {
+        ...ActiveAccountRequiredResponse,
+        description: "The account is inactive or the caller is not a moderator"
+      },
+      404: errorResponse("No such extension"),
+      409: errorResponse("Extension is not delisted, or was never published"),
+      422: errorResponse(
+        "Path params, review_note body, or notify query failed validation"
+      ),
+      500: errorResponse("Database error")
+    }
+  });
+
+  app.openapi(relistRoute, async (c) => {
+    const auth = getAuth(c);
+    const { id } = c.req.valid("param");
+    const { review_note } = c.req.valid("json");
+    const query = c.req.valid("query");
+    const extDb = getExtensionsDb(c.env.DB_EXTENSIONS);
+    const db = new ExtensionsDatabase(extDb);
+    const { data, error } = await db.relist(id, auth.userId);
+    if (error || !data) {
+      const status = statusFromWriteErrorCode(error?.code);
+      return c.json(errorBody(error, "Unable to relist extension"), status);
+    }
+    revalidateCatalogue(c);
+    let notified = false;
+    if (notifyRequested(query)) {
+      notified = await sendModerationNotification(
+        getPlatform(c),
+        extDb,
+        {
+          kind: "extension-relisted",
+          extensionId: id,
+          reason: review_note?.trim() || undefined
+        },
+        (p) => c.executionCtx.waitUntil(p)
+      );
+    }
+    return c.json(
+      { result: { id: data.id, status: "relisted" as const, notified } },
+      200
+    );
+  });
+
   const approveDeveloperRoute = createRoute({
     method: "post",
     path: "/developers/{id}/approve",
@@ -311,11 +374,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
               result: z.object({
                 id: z.string(),
                 approved: z.literal(true),
-                notified: z
-                  .boolean()
-                  .describe(
-                    "Whether a notification email was dispatched - delivery itself is asynchronous"
-                  )
+                notified: NotifiedSchema
               })
             })
           }
@@ -376,14 +435,14 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
     summary: "List the write history of a developer profile",
     security: [{ Bearer: [] }],
     middleware: [requireModerator()] as const,
-    request: { params: IdParamSchema, query: ListPaginationQuerySchema },
+    request: { params: IdParamSchema, query: CursorPaginationQuerySchema },
     responses: {
       200: {
         content: {
           "application/json": {
             schema: z.object({
               result: z.array(DeveloperHistoryEntrySchema),
-              pagination: OffsetPaginationSchema
+              pagination: PaginationSchema
             })
           }
         },
@@ -394,26 +453,28 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
         ...ActiveAccountRequiredResponse,
         description: "The account is inactive or the caller is not a moderator"
       },
-      422: errorResponse("id param or pagination query failed validation"),
+      422: errorResponse("id param, limit, or cursor query failed validation"),
       500: errorResponse("Database error")
     }
   });
 
   app.openapi(developerHistoryRoute, async (c) => {
     const { id } = c.req.valid("param");
-    const { limit, offset } = c.req.valid("query");
-    const page = offsetPageFromQuery({ limit, offset });
+    const { limit, cursor } = c.req.valid("query");
     const db = new DeveloperProfilesDatabase(
       getExtensionsDb(c.env.DB_EXTENSIONS)
     );
-    const { data, error } = await db.listHistory(id, page);
+    const { data, error } = await db.listHistory(id, { limit, cursor });
     if (error || !data) {
-      return c.json(errorBody(error, "Unable to load developer history"), 500);
+      return c.json(
+        errorBody(error, "Unable to load developer history"),
+        error?.code === "INVALID_CURSOR" ? 422 : 500
+      );
     }
     return c.json(
       {
         result: data.items,
-        pagination: offsetPaginationFrom(page, data.hasMore)
+        pagination: { next_cursor: data.nextCursor, has_more: data.hasMore }
       },
       200
     );

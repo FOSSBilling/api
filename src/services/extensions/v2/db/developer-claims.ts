@@ -1,6 +1,7 @@
-import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, isNull, lt, or, sql, SQL } from "drizzle-orm";
 import { DatabaseResult } from "../../../../lib/interfaces";
 import { ExtensionsDb } from "../../../../lib/db";
+import { encodeCursor as encode, decodeCursor as decode } from "./cursor";
 import { developerClaims, developers, users } from "./schema";
 import {
   databaseError,
@@ -272,10 +273,16 @@ export class DeveloperClaimsDatabase {
   // Unified reader for the merged GET /developers/claims?scope=. Always
   // returns the enriched Pending shape so mine and pending share one
   // contract; scope=mine is caller-filtered (any status unless narrowed),
-  // scope=pending is moderator-wide (pending by default). The filter is a
-  // discriminated union so scope=mine cannot be called without the caller's
-  // id, which would otherwise drop the ownership predicate and return every
-  // claim in the table.
+  // scope=pending is moderator-wide (pending only — the route rejects any
+  // other status filter with 422). The filter is a discriminated union so
+  // scope=mine cannot be called without the caller's id, which would
+  // otherwise drop the ownership predicate and return every claim in the
+  // table.
+  //
+  // Keyset (cursor) pagination: mine orders newest-first, pending
+  // oldest-first (same keys, opposite directions — the cursor comparison
+  // flips like ExtensionRevisionsDatabase.page). Ties on created_at are
+  // broken by rowid (insertion order), as the offset implementation did.
   async listScoped(
     filters:
       | {
@@ -287,14 +294,33 @@ export class DeveloperClaimsDatabase {
           scope: "pending";
           status?: "pending" | "approved" | "rejected" | "all";
         },
-    page?: { limit: number; offset: number }
+    page?: { limit?: number; cursor?: string }
   ): Promise<
-    DatabaseResult<{ items: PendingDeveloperClaim[]; hasMore: boolean }>
+    DatabaseResult<{
+      items: PendingDeveloperClaim[];
+      nextCursor: string | null;
+      hasMore: boolean;
+    }>
   > {
+    const limit = page?.limit ?? 50;
+    const decoded = page?.cursor ? decodeClaimCursor(page.cursor) : null;
+    if (page?.cursor && !decoded) {
+      return {
+        data: null,
+        error: { message: "Invalid pagination cursor", code: "INVALID_CURSOR" }
+      };
+    }
+    const afterRowid = decoded ? Number(decoded.k2) : NaN;
+    if (decoded && !Number.isInteger(afterRowid)) {
+      return {
+        data: null,
+        error: { message: "Invalid pagination cursor", code: "INVALID_CURSOR" }
+      };
+    }
     const status = filters.status ?? "all";
-    let rows;
+    const newestFirst = filters.scope === "mine";
     try {
-      const conditions = [];
+      const conditions: SQL[] = [];
       if (filters.scope === "mine") {
         conditions.push(eq(developerClaims.claimantId, filters.claimantId));
       }
@@ -303,55 +329,72 @@ export class DeveloperClaimsDatabase {
       } else if (status !== "all") {
         conditions.push(eq(developerClaims.status, status));
       }
-      const base = this.db
+      if (decoded) {
+        conditions.push(
+          newestFirst
+            ? or(
+                lt(developerClaims.createdAt, decoded.k1),
+                and(
+                  eq(developerClaims.createdAt, decoded.k1),
+                  sql`"developer_claims".rowid < ${afterRowid}`
+                )
+              )!
+            : or(
+                gt(developerClaims.createdAt, decoded.k1),
+                and(
+                  eq(developerClaims.createdAt, decoded.k1),
+                  sql`"developer_claims".rowid > ${afterRowid}`
+                )
+              )!
+        );
+      }
+      const rows = await this.db
         .select({
           claim: developerClaims,
           developerName: developers.name,
           developerType: developers.type,
           claimantName: users.name,
-          claimantGithubLogin: users.githubLogin
+          claimantGithubLogin: users.githubLogin,
+          rowid: sql<number>`"developer_claims".rowid`
         })
         .from(developerClaims)
         .innerJoin(developers, eq(developers.id, developerClaims.developerId))
-        .leftJoin(users, eq(users.id, developerClaims.claimantId));
-      const filtered = conditions.length
-        ? base.where(and(...conditions))
-        : base;
-      // Offset pagination needs a deterministic total order: created_at
-      // ties are broken by rowid (insertion order), matching listHistory.
-      // limit+1 probe - see DeveloperProfilesDatabase.listWithOwnerPaged.
-      const ordered = filtered.orderBy(
-        filters.scope === "mine"
-          ? desc(developerClaims.createdAt)
-          : asc(developerClaims.createdAt),
-        filters.scope === "mine"
-          ? sql`"developer_claims".rowid DESC`
-          : sql`"developer_claims".rowid ASC`
-      );
-      rows = page
-        ? await ordered.offset(page.offset).limit(page.limit + 1)
-        : await ordered;
+        .leftJoin(users, eq(users.id, developerClaims.claimantId))
+        .where(conditions.length ? and(...conditions)! : undefined)
+        .orderBy(
+          newestFirst
+            ? desc(developerClaims.createdAt)
+            : asc(developerClaims.createdAt),
+          newestFirst
+            ? sql`"developer_claims".rowid DESC`
+            : sql`"developer_claims".rowid ASC`
+        )
+        .limit(limit + 1);
+
+      const hasMore = rows.length > limit;
+      const pageRows = rows.slice(0, limit);
+      const last = pageRows.at(-1);
+      return {
+        data: {
+          items: pageRows.map((row) => ({
+            ...parseClaimRow(row.claim),
+            developer_name: row.developerName,
+            developer_type:
+              row.developerType as PendingDeveloperClaim["developer_type"],
+            claimant_name: row.claimantName,
+            claimant_github_login: row.claimantGithubLogin
+          })),
+          hasMore,
+          nextCursor:
+            hasMore && last
+              ? encodeClaimCursor(last.claim.createdAt, String(last.rowid))
+              : null
+        },
+        error: null
+      };
     } catch (error) {
       return databaseError("listScoped", error);
     }
-
-    const hasMore = page ? rows.length > page.limit : false;
-    const trimmed = page && hasMore ? rows.slice(0, page.limit) : rows;
-
-    return {
-      data: {
-        items: trimmed.map((row) => ({
-          ...parseClaimRow(row.claim),
-          developer_name: row.developerName,
-          developer_type:
-            row.developerType as PendingDeveloperClaim["developer_type"],
-          claimant_name: row.claimantName,
-          claimant_github_login: row.claimantGithubLogin
-        })),
-        hasMore
-      },
-      error: null
-    };
   }
 
   private async explainClaimApprovalNoOp(
@@ -588,4 +631,23 @@ export class DeveloperClaimsDatabase {
 
     return this.getClaimById(claimId);
   }
+}
+
+interface ClaimCursor {
+  k1: string;
+  k2: string;
+}
+
+function encodeClaimCursor(k1: string, k2: string): string {
+  return encode({ k1, k2 });
+}
+
+function isClaimCursor(
+  parsed: Record<string, unknown>
+): parsed is ClaimCursor & Record<string, unknown> {
+  return typeof parsed.k1 === "string" && typeof parsed.k2 === "string";
+}
+
+function decodeClaimCursor(cursor: string): ClaimCursor | null {
+  return decode(cursor, isClaimCursor);
 }

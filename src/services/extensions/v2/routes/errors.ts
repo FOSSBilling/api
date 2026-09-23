@@ -52,12 +52,6 @@ export function statusFromWriteErrorCode(
   return statusFromErrorCode(code);
 }
 
-export function statusFromOwnershipErrorCode(code?: string): 403 | 404 | 500 {
-  if (code === "NOT_FOUND") return 404;
-  if (code === "FORBIDDEN" || code === "ACCOUNT_INACTIVE") return 403;
-  return 500;
-}
-
 // Every handler reports a failed DatabaseResult the same way: the database's
 // own message and code when it supplied one, a route-specific fallback and
 // DATABASE_ERROR when it did not. The status stays at the call site, since

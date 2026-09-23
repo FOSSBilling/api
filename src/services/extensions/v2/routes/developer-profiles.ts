@@ -16,10 +16,8 @@ import {
 import {
   ActiveAccountRequiredResponse,
   IdParamSchema,
-  errorResponse,
-  offsetPageFromQuery,
-  offsetPaginationFrom,
-  OffsetPaginationSchema
+  PaginationSchema,
+  errorResponse
 } from "../schemas/common";
 import {
   DeveloperDetailResponseSchema,
@@ -39,9 +37,9 @@ export function registerDeveloperProfileRoutes(app: ExtensionsV2App): void {
   const listDevelopersRoute = createRoute({
     method: "get",
     path: "/developers",
-    tags: ["Moderation"],
+    tags: ["Developers"],
     summary:
-      "List developer profiles: every profile (status=all) or awaiting review (status=unapproved)",
+      "List developer profiles: every profile (scope=all) or awaiting review (scope=unapproved)",
     security: [{ Bearer: [] }],
     middleware: [requireModerator()] as const,
     request: { query: DeveloperListQuerySchema },
@@ -51,44 +49,59 @@ export function registerDeveloperProfileRoutes(app: ExtensionsV2App): void {
           "application/json": {
             schema: z.object({
               result: z.array(DeveloperProfileSchema),
-              pagination: OffsetPaginationSchema
+              pagination: PaginationSchema
             })
           }
         },
-        description: "Developer profiles matching the status filter"
+        description: "Developer profiles matching the scope filter"
       },
       401: errorResponse("Missing or invalid bearer token"),
       403: {
         ...ActiveAccountRequiredResponse,
         description: "The account is inactive or the caller is not a moderator"
       },
-      422: errorResponse("status query failed validation"),
+      422: errorResponse("scope, limit, or cursor query failed validation"),
       500: errorResponse("Database error")
     }
   });
 
   app.openapi(listDevelopersRoute, async (c) => {
-    const { status, limit, offset } = c.req.valid("query");
+    const { scope, status, limit, cursor } = c.req.valid("query");
+    if (scope !== undefined && status !== undefined && scope !== status) {
+      return c.json(
+        {
+          error: {
+            message: "scope and status must agree",
+            code: "VALIDATION_ERROR"
+          }
+        },
+        422
+      );
+    }
+    const effective = scope ?? status ?? "all";
     const db = new DeveloperProfilesDatabase(
       getExtensionsDb(c.env.DB_EXTENSIONS)
     );
-    const page = offsetPageFromQuery({ limit, offset });
-    const { data, error } = await db.listScoped({ status, page });
+    const { data, error } = await db.listScoped({
+      scope: effective,
+      limit,
+      cursor
+    });
     if (error || !data) {
       return c.json(
         {
           error: {
             message: error?.message ?? "Unable to load developers",
-            code: "DATABASE_ERROR"
+            code: error?.code ?? "DATABASE_ERROR"
           }
         },
-        500
+        error?.code === "INVALID_CURSOR" ? 422 : 500
       );
     }
     return c.json(
       {
         result: data.items,
-        pagination: offsetPaginationFrom(page, data.hasMore)
+        pagination: { next_cursor: data.nextCursor, has_more: data.hasMore }
       },
       200
     );

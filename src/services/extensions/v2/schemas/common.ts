@@ -104,68 +104,41 @@ export const PaginationSchema = z
   })
   .openapi("Pagination");
 
-// Opt-in offset pagination for the moderator/audit list endpoints: offset
-// without limit is rejected (422) rather than silently ignored, since the
-// generated schema would otherwise advertise a param the routes drop.
-// Params entirely omitted fall back to a bounded default window - these
-// lists are moderator-only, developer_history is append-only, and
-// "no params" previously meant streaming every row. Callers that want
-// everything page through with limit=100; the response envelope reports
-// has_more either way.
-export const offsetRequiresLimit = (query: {
-  limit?: number;
-  offset?: number;
-}): boolean => query.limit !== undefined || query.offset === undefined;
+// Shared moderation-write envelope fragment: whether a notification email
+// was dispatched (delivery itself is asynchronous). Declared once so every
+// moderation transition reports `notified` identically.
+export const NotifiedSchema = z
+  .boolean()
+  .describe(
+    "Whether a notification email was dispatched - delivery itself is asynchronous"
+  )
+  .openapi({ example: true });
 
-export const ListPaginationQuerySchema = z
-  .object({
-    limit: z.coerce
-      .number()
-      .int()
-      .min(1)
-      .max(100)
-      .optional()
-      .openapi({ param: { name: "limit", in: "query" } }),
-    offset: z.coerce
-      .number()
-      .int()
-      .min(0)
-      .optional()
-      .openapi({ param: { name: "offset", in: "query" } })
-  })
-  .refine(offsetRequiresLimit, {
-    message: "offset requires limit"
-  });
-
-export const OffsetPaginationSchema = z
-  .object({
-    limit: z.number().int(),
-    offset: z.number().int(),
-    has_more: z.boolean()
-  })
-  .openapi("OffsetPagination");
-
-// Normalises the validated pagination query into the shape the database
-// readers take: offset defaults to 0, and params entirely omitted fall back
-// to a bounded default window (see the contract note above) instead of an
-// unbounded read.
-const DEFAULT_OFFSET_PAGE = { limit: 100, offset: 0 };
-
-export function offsetPageFromQuery(query: {
-  limit?: number;
-  offset?: number;
-}): { limit: number; offset: number } {
-  return {
-    limit: query.limit ?? DEFAULT_OFFSET_PAGE.limit,
-    offset: query.offset ?? 0
-  };
-}
-
-// The response half of the same deal: the OffsetPagination envelope,
-// reporting the applied window and whether more rows follow it.
-export function offsetPaginationFrom(
-  page: { limit: number; offset: number },
-  hasMore: boolean
-): { limit: number; offset: number; has_more: boolean } {
-  return { ...page, has_more: hasMore };
-}
+// Cursor pagination for moderator/audit lists (RFC 0001): every v2 list
+// now pages by opaque keyset cursor, matching GET /extensions and
+// GET /revisions. `limit` bounds the window (default 50, max 100);
+// `cursor` is the `next_cursor` of the previous page. An invalid cursor is
+// rejected with INVALID_CURSOR (422) rather than restarting pagination.
+// Callers that want everything page through with limit=100; the response
+// envelope (PaginationSchema) reports has_more either way.
+export const CursorPaginationQuerySchema = z.object({
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(100)
+    .default(50)
+    .openapi({ param: { name: "limit", in: "query" } }),
+  // min(1) matches ExtensionListQuerySchema: without it `?cursor=` arrives
+  // as an empty string, which the page helper would treat as "no cursor"
+  // and silently restart pagination instead of reporting the malformed value.
+  cursor: z
+    .string()
+    .min(1)
+    .max(1000)
+    .optional()
+    .openapi({
+      param: { name: "cursor", in: "query" },
+      description: "Opaque cursor returned by the previous page"
+    })
+});

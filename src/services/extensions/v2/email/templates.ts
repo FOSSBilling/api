@@ -2,6 +2,7 @@ import type { EmailMessage } from "./types";
 
 export type ModerationEmailKind =
   | "extension-delisted"
+  | "extension-relisted"
   | "revision-approved"
   | "revision-rejected"
   | "developer-approved"
@@ -152,6 +153,15 @@ export function buildModerationEmail(
       paragraphs = [
         `${extDisplay} has been removed from the public FOSSBilling extension directory by a moderator. Its content and history are kept, and you can still see it in your dashboard.`,
         input.reason ? `Reason given: ${input.reason}` : "No reason was given.",
+        `View it here: ${DASHBOARD_URL}`
+      ];
+      break;
+    case "extension-relisted":
+      subject = `${extLabel} restored to the FOSSBilling directory`;
+      title = "Your extension is back in the directory";
+      paragraphs = [
+        `${extDisplay} has been restored to the public FOSSBilling extension directory by a moderator.`,
+        ...(input.reason ? [`Moderator note: ${input.reason}`] : []),
         `View it here: ${DASHBOARD_URL}`
       ];
       break;

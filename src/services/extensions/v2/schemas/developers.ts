@@ -1,12 +1,7 @@
 import { z } from "@hono/zod-openapi";
-import {
-  httpUrl,
-  lowercaseId,
-  ListPaginationQuerySchema,
-  offsetRequiresLimit
-} from "./common";
+import { httpUrl, lowercaseId, CursorPaginationQuerySchema } from "./common";
 
-// GET /developers/unapproved has been merged into GET /developers?status=.
+// GET /developers/unapproved has been merged into GET /developers?scope=.
 // "unapproved" is therefore no longer a shadowed static route, but stays
 // reserved so an adopted row can never collide with a future static segment.
 // "claims" and "me" are still live static routes under /developers/*.
@@ -145,25 +140,32 @@ export const DeveloperApprovalSchema = z
   .strict()
   .openapi("DeveloperApproval");
 
-// Merged moderator GET /developers: status=all (default) lists every profile,
-// status=unapproved lists only profiles awaiting review. Replaces the former
-// GET /developers/unapproved sibling route.
-export const DeveloperListQuerySchema = z
-  .object({
-    status: z
-      .enum(["all", "unapproved"])
-      .default("all")
-      .openapi({
-        param: { name: "status", in: "query" },
-        description:
-          "all: every profile. unapproved: only profiles awaiting review."
-      }),
-    limit: ListPaginationQuerySchema.shape.limit,
-    offset: ListPaginationQuerySchema.shape.offset
-  })
-  .refine(offsetRequiresLimit, {
-    message: "offset requires limit"
-  });
+// Moderator GET /developers: scope=all (default) lists every profile,
+// scope=unapproved lists only profiles awaiting review. Replaces the former
+// GET /developers/unapproved sibling route. `scope` (not `status`) selects
+// the projection, matching GET /extensions?scope= and
+// GET /developers/claims?scope=.
+export const DeveloperListQuerySchema = CursorPaginationQuerySchema.extend({
+  scope: z
+    .enum(["all", "unapproved"])
+    .optional()
+    .openapi({
+      param: { name: "scope", in: "query" },
+      description:
+        "all: every profile (default). unapproved: only profiles awaiting review."
+    }),
+  // Deprecated alias for the coordinated migration: ?status=all|unapproved
+  // behaves like ?scope=. Explicit conflict (?scope=X&status=Y, X!=Y) is
+  // rejected with 422 in the route so a caller cannot mistake one
+  // projection for another. Remove once the site migrates to ?scope=.
+  status: z
+    .enum(["all", "unapproved"])
+    .optional()
+    .openapi({
+      param: { name: "status", in: "query" },
+      description: "Deprecated alias for scope."
+    })
+});
 
 // Merged GET /developers/{id} (optional auth, role-aware): anonymous callers
 // get the sanitized PublicDeveloper, the owning caller gets their full Owned

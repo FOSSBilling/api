@@ -764,6 +764,90 @@ export class ExtensionsDatabase {
       error: { message: "Extension could not be delisted", code: "CONFLICT" }
     };
   }
+
+  // Inverse of delist(): restores a delisted-but-published extension to the
+  // catalogue. Content and history are untouched; only the delist markers
+  // are cleared. `AND delisted_at IS NOT NULL` makes this a single atomic
+  // check-and-set mirroring delist().
+  async relist(
+    id: string,
+    moderatorId: string
+  ): Promise<DatabaseResult<{ id: string }>> {
+    let result;
+    try {
+      result = await this.db
+        .update(extensions)
+        .set({
+          delistedAt: null,
+          delistReason: null,
+          updatedAt: sql`CURRENT_TIMESTAMP`
+        })
+        .where(
+          and(
+            sql`LOWER(${extensions.id}) = LOWER(${id})`,
+            isNotNull(extensions.publishedAt),
+            isNotNull(extensions.delistedAt),
+            sql`EXISTS (
+              SELECT 1 FROM ${users}
+              WHERE ${users.id} = ${moderatorId} AND ${users.deletedAt} IS NULL
+            )`
+          )
+        );
+    } catch (error) {
+      return databaseError("relist", error);
+    }
+
+    if (!result.meta?.changes) {
+      return this.relistBlockedError(id, moderatorId);
+    }
+
+    return { data: { id }, error: null };
+  }
+
+  private async relistBlockedError(
+    id: string,
+    moderatorId: string
+  ): Promise<DatabaseResult<never>> {
+    const inactive = await inactiveActorError(this.db, moderatorId);
+    if (inactive) return { data: null, error: inactive };
+
+    let existing:
+      { publishedAt: string | null; delistedAt: string | null } | undefined;
+    try {
+      [existing] = await this.db
+        .select({
+          publishedAt: extensions.publishedAt,
+          delistedAt: extensions.delistedAt
+        })
+        .from(extensions)
+        .where(sql`LOWER(${extensions.id}) = LOWER(${id})`);
+    } catch (error) {
+      return databaseError("relist", error);
+    }
+    if (!existing) return notFound(id);
+    if (!existing.publishedAt) {
+      return {
+        data: null,
+        error: {
+          message: "Only a published extension can be relisted",
+          code: "CONFLICT"
+        }
+      };
+    }
+    if (!existing.delistedAt) {
+      return {
+        data: null,
+        error: {
+          message: "This extension is not delisted",
+          code: "CONFLICT"
+        }
+      };
+    }
+    return {
+      data: null,
+      error: { message: "Extension could not be relisted", code: "CONFLICT" }
+    };
+  }
 }
 
 // Escapes SQLite LIKE metacharacters in a caller-supplied search term so a
