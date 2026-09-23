@@ -114,6 +114,37 @@ describe("moderation notification emails", () => {
     expect(body.body).toContain("Upstream source removed");
   });
 
+  it("emails the author on relist with the moderator note", async () => {
+    await insertUser(db, { id: "mod-1", is_moderator: 1 });
+    await seedLiveExtension();
+    await post(
+      "/extensions/v2/extensions/live-ext/delist?notify=false",
+      await authHeaders("mod-1"),
+      { reason: "Upstream source removed" }
+    );
+    setEmailEnv();
+    const calls = stubSmtpApi();
+
+    const res = await post(
+      "/extensions/v2/extensions/live-ext/relist",
+      await authHeaders("mod-1"),
+      { review_note: "Upstream is back" }
+    );
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual({
+      result: { id: "live-ext", status: "relisted", notified: true }
+    });
+
+    expect(calls).toHaveLength(1);
+    const body = JSON.parse(String(calls[0].init.body));
+    expect(body).toMatchObject({
+      to: "author@example.com",
+      from: "extensions@fossbilling.org"
+    });
+    expect(body.subject).toContain("live-ext");
+    expect(body.body).toContain("Upstream is back");
+  });
+
   // Moderation routes pass the raw URL param, and ids are matched
   // case-insensitively everywhere else - the recipient lookup must not
   // regress to a case-sensitive match or mixed-case ids silently skip

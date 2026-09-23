@@ -7,17 +7,16 @@ import {
   errorBody,
   statusFromErrorCode,
   statusFromGithubErrorCode,
-  statusFromOwnershipErrorCode
+  statusFromWriteErrorCode
 } from "./errors";
 import {
   ActiveAccountRequiredResponse,
   IdParamSchema,
+  NotifiedSchema,
   NotifyQuerySchema,
-  OffsetPaginationSchema,
+  PaginationSchema,
   ReviewNoteRequiredSchema,
-  errorResponse,
-  offsetPageFromQuery,
-  offsetPaginationFrom
+  errorResponse
 } from "../schemas/common";
 import { DeveloperProfileSchema } from "../schemas/developers";
 import {
@@ -161,7 +160,7 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
           "application/json": {
             schema: z.object({
               result: z.array(PendingDeveloperClaimSchema),
-              pagination: OffsetPaginationSchema
+              pagination: PaginationSchema
             })
           }
         },
@@ -170,18 +169,34 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
       },
       401: errorResponse("Missing or invalid bearer token"),
       403: ActiveAccountRequiredResponse,
-      422: errorResponse("scope query failed validation"),
+      422: errorResponse(
+        "scope, status, limit, or cursor query failed validation"
+      ),
       500: errorResponse("Database error")
     }
   });
 
   app.openapi(listClaimsRoute, async (c) => {
     const auth = getAuth(c);
-    const { scope, status, limit, offset } = c.req.valid("query");
+    const { scope, status, limit, cursor } = c.req.valid("query");
     const extDb = getExtensionsDb(c.env.DB_EXTENSIONS);
     const db = new DeveloperClaimsDatabase(extDb);
-    const page = offsetPageFromQuery({ limit, offset });
+    const page = { limit, cursor };
     if (scope === "pending") {
+      // The pending scope is the moderator review queue: always pending.
+      // A status filter that disagrees is rejected rather than silently
+      // ignored so a caller cannot mistake one projection for another.
+      if (status !== "all" && status !== "pending") {
+        return c.json(
+          {
+            error: {
+              message: "status is only valid with scope=mine",
+              code: "VALIDATION_ERROR"
+            }
+          },
+          422
+        );
+      }
       const users = new UsersDatabase(extDb);
       const access = await users.moderatorAccess(auth.userId);
       if (access.error) {
@@ -206,8 +221,6 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
           403
         );
       }
-      // The pending scope is the moderator review queue: always pending,
-      // regardless of any status filter (which only narrows scope=mine).
       const { data, error } = await db.listScoped(
         {
           scope: "pending",
@@ -220,16 +233,16 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
           {
             error: {
               message: error?.message ?? "Unable to load pending claims",
-              code: "DATABASE_ERROR"
+              code: error?.code ?? "DATABASE_ERROR"
             }
           },
-          500
+          error?.code === "INVALID_CURSOR" ? 422 : 500
         );
       }
       return c.json(
         {
           result: data.items,
-          pagination: offsetPaginationFrom(page, data.hasMore)
+          pagination: { next_cursor: data.nextCursor, has_more: data.hasMore }
         },
         200
       );
@@ -247,16 +260,16 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
         {
           error: {
             message: error?.message ?? "Unable to load claims",
-            code: "DATABASE_ERROR"
+            code: error?.code ?? "DATABASE_ERROR"
           }
         },
-        500
+        error?.code === "INVALID_CURSOR" ? 422 : 500
       );
     }
     return c.json(
       {
         result: data.items,
-        pagination: offsetPaginationFrom(page, data.hasMore)
+        pagination: { next_cursor: data.nextCursor, has_more: data.hasMore }
       },
       200
     );
@@ -265,7 +278,7 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
   const approveClaimRoute = createRoute({
     method: "post",
     path: "/developers/claims/{id}/approve",
-    tags: ["Moderation"],
+    tags: ["Developers"],
     summary: "Approve a pending profile claim",
     security: [{ Bearer: [] }],
     middleware: [requireModerator()] as const,
@@ -277,11 +290,7 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
             schema: z.object({
               result: DeveloperProfileSchema.and(
                 z.object({
-                  notified: z
-                    .boolean()
-                    .describe(
-                      "Whether a notification email was dispatched - delivery itself is asynchronous"
-                    )
+                  notified: NotifiedSchema
                 })
               )
             })
@@ -340,7 +349,7 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
   const rejectClaimRoute = createRoute({
     method: "post",
     path: "/developers/claims/{id}/reject",
-    tags: ["Moderation"],
+    tags: ["Developers"],
     summary: "Reject a pending profile claim",
     security: [{ Bearer: [] }],
     middleware: [requireModerator()] as const,
@@ -358,11 +367,7 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
             schema: z.object({
               result: DeveloperClaimSchema.and(
                 z.object({
-                  notified: z
-                    .boolean()
-                    .describe(
-                      "Whether a notification email was dispatched - delivery itself is asynchronous"
-                    )
+                  notified: NotifiedSchema
                 })
               )
             })
@@ -438,6 +443,7 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
           "The account is inactive or the caller does not own this profile"
       },
       404: errorResponse("No developer with that id"),
+      409: errorResponse("Ownership conflict"),
       422: errorResponse("id param failed validation"),
       500: errorResponse("Database error")
     }
@@ -453,7 +459,7 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
     if (error || !data) {
       return c.json(
         errorBody(error, "Unable to create transfer"),
-        statusFromOwnershipErrorCode(error?.code)
+        statusFromWriteErrorCode(error?.code)
       );
     }
     return c.json({ result: data }, 200);
@@ -485,6 +491,7 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
           "The account is inactive or the caller does not own this profile"
       },
       404: errorResponse("No developer with that id"),
+      409: errorResponse("Ownership conflict"),
       422: errorResponse("id param failed validation"),
       500: errorResponse("Database error")
     }
@@ -500,7 +507,7 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
     if (error || !data) {
       return c.json(
         errorBody(error, "Unable to revoke transfer"),
-        statusFromOwnershipErrorCode(error?.code)
+        statusFromWriteErrorCode(error?.code)
       );
     }
     return c.json({ result: data }, 200);

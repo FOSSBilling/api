@@ -103,6 +103,29 @@ describe("CDN cache revalidation on catalogue mutations", () => {
     });
   });
 
+  it("purges the catalogue tags after a successful relist", async () => {
+    await seedModAndExtension();
+    expect((await delist("mod-1")).status).toBe(200);
+    const fetcher = stubFrontend();
+
+    const res = await post(
+      "/extensions/v2/extensions/live-ext/relist?notify=false",
+      await authHeaders("mod-1"),
+      {}
+    );
+    expect(res.status).toBe(200);
+
+    expect(fetchCalls(fetcher)).toHaveLength(1);
+    const [url, init] = fetchCalls(fetcher)[0];
+    expect(String(url)).toBe(
+      "https://extensions.fossbilling.org/api/revalidate"
+    );
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual({
+      tags: ["catalogue", "developers"]
+    });
+  });
+
   it("purges after a revision approval", async () => {
     await seedModAndExtension();
     const created = await post(

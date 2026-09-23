@@ -1,7 +1,7 @@
-import { and, asc, desc, eq, isNull, or, sql, SQL } from "drizzle-orm";
-import { SQLiteColumn } from "drizzle-orm/sqlite-core";
+import { and, asc, desc, eq, gt, isNull, lt, or, sql, SQL } from "drizzle-orm";
 import { DatabaseResult } from "../../../../lib/interfaces";
 import { ExtensionsDb } from "../../../../lib/db";
+import { encodeCursor as encode, decodeCursor as decode } from "./cursor";
 import {
   developers,
   developerHistory,
@@ -635,64 +635,124 @@ export class DeveloperProfilesDatabase {
   // the only readers that join users for owner_name/owner_github_login, which
   // is why DeveloperProfile treats those fields as optional.
   //
-  // page (when given) bounds the query with a limit+1 probe - the extra row
-  // only answers has_more and is trimmed off - so an admin UI can walk the
-  // table instead of unconditionally streaming all of it.
-  private async listWithOwnerPaged(
-    context: string,
-    where: SQL | undefined,
-    orderBy: SQL | SQLiteColumn,
-    page?: { limit: number; offset: number }
-  ): Promise<DatabaseResult<{ items: DeveloperProfile[]; hasMore: boolean }>> {
+  // Keyset (cursor) pagination, matching GET /extensions and GET /revisions:
+  // limit+1 probe answers has_more and is trimmed off. Ties are broken by
+  // rowid (insertion order) — the order keys alone (name, created_at) are
+  // not unique and timestamps are second-granular, so same-second ties are
+  // the common case, not the exception. The opaque cursor carries rowid;
+  // it is never exposed outside the cursor.
+  // The cursor tags its scope (`s`): `all` orders by name, `unapproved` by
+  // created_at, so a cursor from one scope must 422 in the other rather than
+  // compare names against timestamps.
+  async listScoped(filters: {
+    scope?: "all" | "unapproved";
+    status?: "all" | "unapproved";
+    limit?: number;
+    cursor?: string;
+  }): Promise<
+    DatabaseResult<{
+      items: DeveloperProfile[];
+      nextCursor: string | null;
+      hasMore: boolean;
+    }>
+  > {
+    const scope = filters.scope ?? filters.status ?? "all";
+    const limit = filters.limit ?? 50;
+    const decoded = filters.cursor
+      ? decodeDeveloperCursor(filters.cursor)
+      : null;
+    if (filters.cursor && !decoded) {
+      return {
+        data: null,
+        error: { message: "Invalid pagination cursor", code: "INVALID_CURSOR" }
+      };
+    }
+    if (decoded && decoded.s !== scope) {
+      return {
+        data: null,
+        error: { message: "Invalid pagination cursor", code: "INVALID_CURSOR" }
+      };
+    }
+    const afterRowid = decoded ? Number(decoded.k2) : NaN;
+    if (decoded && !Number.isInteger(afterRowid)) {
+      return {
+        data: null,
+        error: { message: "Invalid pagination cursor", code: "INVALID_CURSOR" }
+      };
+    }
+
+    const conditions: SQL[] = [];
+    let orderBy;
+    if (scope === "unapproved") {
+      conditions.push(isNull(developers.approvedAt));
+      if (decoded) {
+        conditions.push(
+          or(
+            gt(developers.createdAt, decoded.k1),
+            and(
+              eq(developers.createdAt, decoded.k1),
+              sql`"developers".rowid > ${afterRowid}`
+            )
+          )!
+        );
+      }
+      orderBy = [
+        asc(developers.createdAt),
+        sql`"developers".rowid ASC`
+      ] as const;
+    } else {
+      if (decoded) {
+        conditions.push(
+          or(
+            gt(developers.name, decoded.k1),
+            and(
+              eq(developers.name, decoded.k1),
+              sql`"developers".rowid > ${afterRowid}`
+            )
+          )!
+        );
+      }
+      orderBy = [asc(developers.name), sql`"developers".rowid ASC`] as const;
+    }
+
     let rows;
     try {
-      // Offset pagination needs a deterministic total order: the orderBy
-      // keys (name, created_at) are not unique, so rowid breaks ties the
-      // same way listHistory does.
-      const base = this.db
+      rows = await this.db
         .select({
           developer: developers,
           ownerName: users.name,
-          ownerGithubLogin: users.githubLogin
+          ownerGithubLogin: users.githubLogin,
+          rowid: sql<number>`"developers".rowid`
         })
         .from(developers)
         .leftJoin(users, eq(users.id, developers.ownerUserId))
-        .where(where)
-        .orderBy(orderBy, sql`"developers".rowid ASC`);
-      rows = page
-        ? await base.offset(page.offset).limit(page.limit + 1)
-        : await base;
+        .where(conditions.length ? and(...conditions)! : undefined)
+        .orderBy(...orderBy)
+        .limit(limit + 1);
     } catch (error) {
-      return databaseError(context, error);
+      return databaseError("listScoped", error);
     }
 
-    const hasMore = page ? rows.length > page.limit : false;
-    const trimmed = page && hasMore ? rows.slice(0, page.limit) : rows;
+    const hasMore = rows.length > limit;
+    const pageRows = rows.slice(0, limit);
+    const last = pageRows.at(-1);
     return {
-      data: { items: trimmed.map(parseDeveloperRowWithOwner), hasMore },
+      data: {
+        items: pageRows.map(parseDeveloperRowWithOwner),
+        hasMore,
+        nextCursor:
+          hasMore && last
+            ? encodeDeveloperCursor(
+                scope,
+                scope === "unapproved"
+                  ? last.developer.createdAt
+                  : last.developer.name,
+                String(last.rowid)
+              )
+            : null
+      },
       error: null
     };
-  }
-
-  // Unified reader for the merged moderator GET /developers?status=.
-  async listScoped(filters: {
-    status?: "all" | "unapproved";
-    page?: { limit: number; offset: number };
-  }): Promise<DatabaseResult<{ items: DeveloperProfile[]; hasMore: boolean }>> {
-    if (filters.status === "unapproved") {
-      return this.listWithOwnerPaged(
-        "listUnapproved",
-        isNull(developers.approvedAt),
-        asc(developers.createdAt),
-        filters.page
-      );
-    }
-    return this.listWithOwnerPaged(
-      "listAll",
-      undefined,
-      asc(developers.name),
-      filters.page
-    );
   }
 
   async approve(
@@ -764,15 +824,59 @@ export class DeveloperProfilesDatabase {
     return { data: { id, approved: true }, error: null };
   }
 
+  // Newest-first keyset pages of one developer's audit history.
+  // CURRENT_TIMESTAMP has only second resolution, so two writes in the same
+  // second tie on changed_at; rowid (insertion order) breaks the tie so
+  // "newest first" is never ambiguous, exactly as the offset implementation
+  // did. The opaque cursor carries rowid and is bound to this developer: a
+  // cursor from another developer (or another list) is rejected rather than
+  // seeking from the wrong key boundary.
   async listHistory(
     developerId: string,
-    page?: { limit: number; offset: number }
+    page?: { limit?: number; cursor?: string }
   ): Promise<
-    DatabaseResult<{ items: DeveloperHistoryEntry[]; hasMore: boolean }>
+    DatabaseResult<{
+      items: DeveloperHistoryEntry[];
+      nextCursor: string | null;
+      hasMore: boolean;
+    }>
   > {
+    const limit = page?.limit ?? 50;
+    const decoded = page?.cursor ? decodeHistoryCursor(page.cursor) : null;
+    // Case-insensitive like the id matching everywhere else: ids are
+    // lowercase slugs by schema, but adopted rows predate that.
+    if (
+      page?.cursor &&
+      (!decoded || decoded.d.toLowerCase() !== developerId.toLowerCase())
+    ) {
+      return {
+        data: null,
+        error: { message: "Invalid pagination cursor", code: "INVALID_CURSOR" }
+      };
+    }
+    const afterRowid = decoded ? Number(decoded.k2) : NaN;
+    if (decoded && !Number.isInteger(afterRowid)) {
+      return {
+        data: null,
+        error: { message: "Invalid pagination cursor", code: "INVALID_CURSOR" }
+      };
+    }
+
     let rows;
     try {
-      const base = this.db
+      const conditions = [eq(developerHistory.developerId, developerId)];
+      if (decoded) {
+        conditions.push(
+          or(
+            lt(developerHistory.changedAt, decoded.k1),
+            and(
+              eq(developerHistory.changedAt, decoded.k1),
+              sql`"developer_history".rowid < ${afterRowid}`
+            )
+          )!
+        );
+      }
+      rows = await this.db
         .select({
           developerId: developerHistory.developerId,
           type: developerHistory.type,
@@ -780,29 +884,24 @@ export class DeveloperProfilesDatabase {
           url: developerHistory.url,
           changedBy: developerHistory.changedBy,
           changedByName: users.name,
-          changedAt: developerHistory.changedAt
+          changedAt: developerHistory.changedAt,
+          rowid: sql<number>`"developer_history".rowid`
         })
         .from(developerHistory)
         .leftJoin(users, eq(users.id, developerHistory.changedBy))
-        .where(eq(developerHistory.developerId, developerId))
-        // CURRENT_TIMESTAMP has only second resolution, so two writes in
-        // the same second tie on changed_at; rowid (insertion order,
-        // implicit - not a declared schema column) breaks the tie so
-        // "newest first" is never ambiguous.
+        .where(and(...conditions))
         .orderBy(
           desc(developerHistory.changedAt),
           sql`"developer_history".rowid DESC`
-        );
-      // limit+1 probe - see listWithOwnerPaged.
-      rows = page
-        ? await base.offset(page.offset).limit(page.limit + 1)
-        : await base;
+        )
+        .limit(limit + 1);
     } catch (error) {
       return databaseError("listHistory", error);
     }
 
-    const hasMore = page ? rows.length > page.limit : false;
-    const trimmed = page && hasMore ? rows.slice(0, page.limit) : rows;
+    const hasMore = rows.length > limit;
+    const trimmed = rows.slice(0, limit);
+    const last = trimmed.at(-1);
 
     return {
       data: {
@@ -815,7 +914,15 @@ export class DeveloperProfilesDatabase {
           changed_by_name: row.changedByName,
           changed_at: row.changedAt
         })),
-        hasMore
+        hasMore,
+        nextCursor:
+          hasMore && last
+            ? encodeHistoryCursor(
+                last.changedAt,
+                String(last.rowid),
+                developerId
+              )
+            : null
       },
       error: null
     };
@@ -1061,4 +1168,56 @@ export class DeveloperProfilesDatabase {
       return databaseError("reverifyOwn", error);
     }
   }
+}
+
+interface DeveloperListCursor {
+  k1: string;
+  k2: string;
+  s: "all" | "unapproved";
+}
+
+function encodeDeveloperCursor(
+  scope: "all" | "unapproved",
+  k1: string,
+  k2: string
+): string {
+  return encode({ k1, k2, s: scope });
+}
+
+function isDeveloperListCursor(
+  parsed: Record<string, unknown>
+): parsed is DeveloperListCursor & Record<string, unknown> {
+  return (
+    typeof parsed.k1 === "string" &&
+    typeof parsed.k2 === "string" &&
+    (parsed.s === "all" || parsed.s === "unapproved")
+  );
+}
+
+function decodeDeveloperCursor(cursor: string): DeveloperListCursor | null {
+  return decode(cursor, isDeveloperListCursor);
+}
+
+interface HistoryCursor {
+  k1: string;
+  k2: string;
+  d: string;
+}
+
+function encodeHistoryCursor(k1: string, k2: string, d: string): string {
+  return encode({ k1, k2, d });
+}
+
+function isHistoryCursor(
+  parsed: Record<string, unknown>
+): parsed is HistoryCursor & Record<string, unknown> {
+  return (
+    typeof parsed.k1 === "string" &&
+    typeof parsed.k2 === "string" &&
+    typeof parsed.d === "string"
+  );
+}
+
+function decodeHistoryCursor(cursor: string): HistoryCursor | null {
+  return decode(cursor, isHistoryCursor);
 }

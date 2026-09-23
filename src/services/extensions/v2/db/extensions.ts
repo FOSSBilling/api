@@ -6,6 +6,7 @@ import { sortReleasesDescending } from "../../../../lib/releases";
 import { parseJSON } from "../../../../lib/json";
 import { extensions, extensionRevisions, developers, users } from "./schema";
 import { databaseError, inactiveActorError } from "./errors";
+import { UsersDatabase } from "./users";
 import { toD1Statement } from "./batch";
 import { encodeCursor as encode, decodeCursor as decode } from "./cursor";
 import {
@@ -762,6 +763,127 @@ export class ExtensionsDatabase {
     return {
       data: null,
       error: { message: "Extension could not be delisted", code: "CONFLICT" }
+    };
+  }
+
+  // Inverse of delist(): restores a delisted-but-published extension to the
+  // catalogue. Content and history are untouched; only the delist markers
+  // are cleared. `AND delisted_at IS NOT NULL` makes this a single atomic
+  // check-and-set mirroring delist(). The actor guard re-checks moderator
+  // status inside the statement (not just activity): requireModerator()
+  // can only reject before the write, and a role revoked in between must
+  // still fail the write itself. RETURNING hands back the stored canonical
+  // id, which can differ in case from the path param.
+  async relist(
+    id: string,
+    moderatorId: string
+  ): Promise<DatabaseResult<{ id: string }>> {
+    let rows;
+    try {
+      rows = await this.db
+        .update(extensions)
+        .set({
+          delistedAt: null,
+          delistReason: null,
+          updatedAt: sql`CURRENT_TIMESTAMP`
+        })
+        .where(
+          and(
+            sql`LOWER(${extensions.id}) = LOWER(${id})`,
+            isNotNull(extensions.publishedAt),
+            isNotNull(extensions.delistedAt),
+            sql`EXISTS (
+              SELECT 1 FROM ${users}
+              WHERE ${users.id} = ${moderatorId}
+                AND ${users.deletedAt} IS NULL
+                AND ${users.isModerator} = 1
+            )`
+          )
+        )
+        .returning({ id: extensions.id });
+    } catch (error) {
+      return databaseError("relist", error);
+    }
+
+    const [row] = rows;
+    if (!row) {
+      return this.relistBlockedError(id, moderatorId);
+    }
+
+    return { data: { id: row.id }, error: null };
+  }
+
+  private async relistBlockedError(
+    id: string,
+    moderatorId: string
+  ): Promise<DatabaseResult<never>> {
+    // One row answers both halves of the actor check, matching the
+    // in-statement guard above: a moderator deactivated or demoted after
+    // requireModerator() ran fails the write, and must be told so (403)
+    // rather than misreported as a state conflict.
+    const access = await new UsersDatabase(this.db).moderatorAccess(
+      moderatorId
+    );
+    if (access.error || !access.data) {
+      return {
+        data: null,
+        error: access.error ?? {
+          message: "Active account required",
+          code: "ACCOUNT_INACTIVE"
+        }
+      };
+    }
+    if (!access.data.active) {
+      return {
+        data: null,
+        error: {
+          message: "Active account required",
+          code: "ACCOUNT_INACTIVE"
+        }
+      };
+    }
+    if (!access.data.moderator) {
+      return {
+        data: null,
+        error: { message: "Moderator access required", code: "FORBIDDEN" }
+      };
+    }
+
+    let existing:
+      { publishedAt: string | null; delistedAt: string | null } | undefined;
+    try {
+      [existing] = await this.db
+        .select({
+          publishedAt: extensions.publishedAt,
+          delistedAt: extensions.delistedAt
+        })
+        .from(extensions)
+        .where(sql`LOWER(${extensions.id}) = LOWER(${id})`);
+    } catch (error) {
+      return databaseError("relist", error);
+    }
+    if (!existing) return notFound(id);
+    if (!existing.publishedAt) {
+      return {
+        data: null,
+        error: {
+          message: "Only a published extension can be relisted",
+          code: "CONFLICT"
+        }
+      };
+    }
+    if (!existing.delistedAt) {
+      return {
+        data: null,
+        error: {
+          message: "This extension is not delisted",
+          code: "CONFLICT"
+        }
+      };
+    }
+    return {
+      data: null,
+      error: { message: "Extension could not be relisted", code: "CONFLICT" }
     };
   }
 }

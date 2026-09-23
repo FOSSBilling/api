@@ -89,7 +89,7 @@ apply when modifying the code.
 ## Cache Revalidation
 
 Any endpoint that mutates catalogue-visible content (revision approve/reject,
-delist, developer approve, developer profile upsert via `PUT /developers/me`,
+delist/relist, developer approve, developer profile upsert via `PUT /developers/me`,
 profile deletion via `DELETE /developers/me`, claim approve/reject, extension
 withdraw) must call `revalidateCatalogue(c)` from
 `src/services/extensions/v2/revalidate.ts` after a successful write. Skipping it

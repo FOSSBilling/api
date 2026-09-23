@@ -1038,6 +1038,162 @@ describe("Extensions API v2", () => {
     });
   });
 
+  describe("POST /extensions/{id}/relist", () => {
+    it("requires moderator access", async () => {
+      await seedDeveloper("new-developer", "user-1");
+      await insertExtension(db, {
+        id: "live-ext",
+        developer_id: "new-developer"
+      });
+
+      const res = await post(
+        "/extensions/v2/extensions/live-ext/relist",
+        await authHeaders("user-1"),
+        {}
+      );
+      expect(res.status).toBe(403);
+    });
+
+    it("404s for an unknown extension", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+
+      const res = await post(
+        "/extensions/v2/extensions/no-such-extension/relist",
+        await authHeaders("mod-1"),
+        {}
+      );
+      expect(res.status).toBe(404);
+    });
+
+    it("409s for an extension that is not delisted", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await seedDeveloper("new-developer", "user-1");
+      await insertExtension(db, {
+        id: "live-ext",
+        developer_id: "new-developer"
+      });
+
+      const res = await post(
+        "/extensions/v2/extensions/live-ext/relist",
+        await authHeaders("mod-1"),
+        {}
+      );
+      expect(res.status).toBe(409);
+    });
+
+    // A body-less call sends no Content-Type in production (browser fetch
+    // and the generated client omit it when there is no body), and the
+    // validator defaults that to {} — the same as the approve route. (The
+    // harness always sets Content-Type, so it is stripped here to exercise
+    // the production shape.)
+    it("accepts a body-less relist (note is optional)", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await seedDeveloper("new-developer", "user-1");
+      await insertExtension(db, {
+        id: "live-ext",
+        developer_id: "new-developer"
+      });
+      const mod = await authHeaders("mod-1");
+      await post("/extensions/v2/extensions/live-ext/delist", mod, {
+        reason: "Upstream source removed"
+      });
+
+      const { "Content-Type": _dropped, ...noContentType } = mod;
+      expect(_dropped).toBe("application/json");
+      const res = await post(
+        "/extensions/v2/extensions/live-ext/relist",
+        noContentType
+      );
+      expect(res.status).toBe(200);
+      await expect(res.json()).resolves.toEqual({
+        result: { id: "live-ext", status: "relisted", notified: false }
+      });
+    });
+
+    it("restores a delisted extension to the public catalogue", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await seedDeveloper("new-developer", "user-1");
+      await insertExtension(db, {
+        id: "live-ext",
+        developer_id: "new-developer"
+      });
+      const mod = await authHeaders("mod-1");
+      await post("/extensions/v2/extensions/live-ext/delist", mod, {
+        reason: "Upstream source removed"
+      });
+      expect((await get("/extensions/v2/extensions", {})).status).toBe(200);
+      await expect(
+        (await get("/extensions/v2/extensions", {})).json()
+      ).resolves.toMatchObject({ result: [] });
+
+      const res = await post("/extensions/v2/extensions/live-ext/relist", mod, {
+        review_note: "Upstream is back"
+      });
+      expect(res.status).toBe(200);
+      await expect(res.json()).resolves.toEqual({
+        result: { id: "live-ext", status: "relisted", notified: false }
+      });
+
+      expect(await getExtension(db, "live-ext")).toMatchObject({
+        delisted_at: null
+      });
+      await expect(
+        (await get("/extensions/v2/extensions", {})).json()
+      ).resolves.toMatchObject({ result: [{ id: "live-ext" }] });
+    });
+
+    it("answers with the stored canonical id for a mixed-case path", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await seedDeveloper("new-developer", "user-1");
+      await insertExtension(db, {
+        id: "LIVE-ext",
+        developer_id: "new-developer"
+      });
+      const mod = await authHeaders("mod-1");
+      await post("/extensions/v2/extensions/live-ext/delist", mod, {
+        reason: "Upstream source removed"
+      });
+
+      const res = await post(
+        "/extensions/v2/extensions/Live-EXT/relist",
+        mod,
+        {}
+      );
+      expect(res.status).toBe(200);
+      await expect(res.json()).resolves.toEqual({
+        result: { id: "LIVE-ext", status: "relisted", notified: false }
+      });
+    });
+
+    it("403s for a moderator demoted after authenticating", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      await seedDeveloper("new-developer", "user-1");
+      await insertExtension(db, {
+        id: "live-ext",
+        developer_id: "new-developer"
+      });
+      const mod = await authHeaders("mod-1");
+      await post("/extensions/v2/extensions/live-ext/delist", mod, {
+        reason: "Upstream source removed"
+      });
+
+      await db
+        .prepare("UPDATE users SET is_moderator = 0 WHERE id = ?")
+        .bind("mod-1")
+        .run();
+
+      const res = await post(
+        "/extensions/v2/extensions/live-ext/relist",
+        mod,
+        {}
+      );
+      expect(res.status).toBe(403);
+      expect(await getExtension(db, "live-ext")).toMatchObject({
+        delisted_at: expect.any(String)
+      });
+    });
+  });
+
   describe("developer moderation", () => {
     it("binds approval to the exact profile revision reviewed", async () => {
       await put(
@@ -1233,6 +1389,78 @@ describe("Extensions API v2", () => {
       expect(res.status).toBe(403);
     });
 
+    it("lists by scope and rejects a conflicting scope/status pair", async () => {
+      await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        sampleDeveloper()
+      );
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      const mod = await authHeaders("mod-1");
+
+      const scoped = await get(
+        "/extensions/v2/developers?scope=unapproved",
+        mod
+      );
+      expect(scoped.status).toBe(200);
+      await expect(scoped.json()).resolves.toMatchObject({
+        result: [{ id: "dev-developer" }],
+        pagination: { next_cursor: null, has_more: false }
+      });
+
+      const conflict = await get(
+        "/extensions/v2/developers?scope=all&status=unapproved",
+        mod
+      );
+      expect(conflict.status).toBe(422);
+    });
+
+    it("walks the developer list by cursor", async () => {
+      await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        sampleDeveloper({ id: "aaa-developer", name: "Aaa Developer" })
+      );
+      await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-2"),
+        sampleDeveloper({ id: "zzz-developer", name: "Zzz Developer" })
+      );
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      const mod = await authHeaders("mod-1");
+
+      const first = await get("/extensions/v2/developers?limit=1", mod);
+      expect(first.status).toBe(200);
+      const firstBody = (await first.json()) as {
+        result: Array<{ id: string }>;
+        pagination: { next_cursor: string | null; has_more: boolean };
+      };
+      expect(firstBody.result.map((d) => d.id)).toEqual(["aaa-developer"]);
+      expect(firstBody.pagination.has_more).toBe(true);
+      expect(firstBody.pagination.next_cursor).toBeTruthy();
+
+      const second = await get(
+        `/extensions/v2/developers?limit=1&cursor=${encodeURIComponent(firstBody.pagination.next_cursor!)}`,
+        mod
+      );
+      expect(second.status).toBe(200);
+      const secondBody = (await second.json()) as {
+        result: Array<{ id: string }>;
+        pagination: { next_cursor: string | null; has_more: boolean };
+      };
+      expect(secondBody.result.map((d) => d.id)).toEqual(["zzz-developer"]);
+      expect(secondBody.pagination).toEqual({
+        next_cursor: null,
+        has_more: false
+      });
+
+      const bad = await get(
+        "/extensions/v2/developers?cursor=not-a-cursor",
+        mod
+      );
+      expect(bad.status).toBe(422);
+    });
+
     it("blocks non-moderators from approving developers", async () => {
       await put(
         "/extensions/v2/developers/me",
@@ -1277,9 +1505,7 @@ describe("Extensions API v2", () => {
       expect(data.result[0].changed_by).toBe("user-1");
     });
 
-    // Params omitted used to mean "stream every row" - developer_history is
-    // append-only, so the default is now a bounded window (100) with the
-    // pagination envelope reporting what was applied.
+    // Params omitted fall back to a bounded cursor window (default limit 50).
     it("applies the default pagination window when params are omitted", async () => {
       await put(
         "/extensions/v2/developers/me",
@@ -1296,13 +1522,64 @@ describe("Extensions API v2", () => {
       expect(res.status).toBe(200);
       const data = (await res.json()) as {
         result: unknown[];
-        pagination: { limit: number; offset: number; has_more: boolean };
+        pagination: { next_cursor: string | null; has_more: boolean };
       };
       expect(data.pagination).toEqual({
-        limit: 100,
-        offset: 0,
+        next_cursor: null,
         has_more: false
       });
+    });
+
+    it("bounds history pages to the requested limit", async () => {
+      await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        sampleDeveloper({ name: "Original Name" })
+      );
+      await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("user-1"),
+        sampleDeveloper({ name: "Edited Name" })
+      );
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      const mod = await authHeaders("mod-1");
+
+      const first = await get(
+        "/extensions/v2/developers/dev-developer/history?limit=1",
+        mod
+      );
+      expect(first.status).toBe(200);
+      const firstBody = (await first.json()) as {
+        result: Array<{ name: string }>;
+        pagination: { next_cursor: string | null; has_more: boolean };
+      };
+      expect(firstBody.result.map((e) => e.name)).toEqual(["Edited Name"]);
+      expect(firstBody.pagination.has_more).toBe(true);
+      expect(firstBody.pagination.next_cursor).toBeTruthy();
+
+      const second = await get(
+        `/extensions/v2/developers/dev-developer/history?limit=1&cursor=${encodeURIComponent(firstBody.pagination.next_cursor as string)}`,
+        mod
+      );
+      const secondBody = (await second.json()) as {
+        result: Array<{ name: string }>;
+        pagination: { next_cursor: string | null; has_more: boolean };
+      };
+      expect(secondBody.result.map((e) => e.name)).toEqual(["Original Name"]);
+      expect(secondBody.pagination).toEqual({
+        next_cursor: null,
+        has_more: false
+      });
+    });
+
+    it("rejects an invalid cursor with 422", async () => {
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+
+      const res = await get(
+        "/extensions/v2/developers/dev-developer/history?cursor=not-a-cursor",
+        await authHeaders("mod-1")
+      );
+      expect(res.status).toBe(422);
     });
 
     it("orders entries newest-first and snapshots each write", async () => {

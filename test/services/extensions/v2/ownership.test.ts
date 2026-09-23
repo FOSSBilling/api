@@ -634,7 +634,7 @@ describe("Extensions API v2", () => {
       expect(pendingData.result[0].developer_name).toBe("Legacy Developer");
     });
 
-    it("keeps the pending queue to pending claims even with a status filter", async () => {
+    it("rejects a status filter that disagrees with the pending queue", async () => {
       await seedUnownedDeveloper("legacy-developer");
       await post(
         "/extensions/v2/developers/legacy-developer/claim",
@@ -643,12 +643,20 @@ describe("Extensions API v2", () => {
       );
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
 
-      const res = await get(
+      // status only narrows scope=mine; on scope=pending anything but
+      // pending/all is a 422 rather than a silently ignored filter.
+      const rejected = await get(
         "/extensions/v2/developers/claims?scope=pending&status=approved",
         await authHeaders("mod-1")
       );
-      expect(res.status).toBe(200);
-      await expect(res.json()).resolves.toMatchObject({
+      expect(rejected.status).toBe(422);
+
+      const pending = await get(
+        "/extensions/v2/developers/claims?scope=pending&status=pending",
+        await authHeaders("mod-1")
+      );
+      expect(pending.status).toBe(200);
+      await expect(pending.json()).resolves.toMatchObject({
         result: [{ status: "pending" }]
       });
     });
