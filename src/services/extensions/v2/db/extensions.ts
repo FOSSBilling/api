@@ -12,6 +12,7 @@ import { encodeCursor as encode, decodeCursor as decode } from "./cursor";
 import {
   Extension,
   ExtensionContent,
+  ExtensionContentSchema,
   ExtensionListItem,
   License,
   OwnedExtension,
@@ -884,6 +885,207 @@ export class ExtensionsDatabase {
     return {
       data: null,
       error: { message: "Extension could not be relisted", code: "CONFLICT" }
+    };
+  }
+
+  // Moderator correction of live catalogue content (api#251): a truncated
+  // readme or broken link the owner should not have to resubmit to fix. One
+  // D1 batch() like approve(): the first statement inserts an
+  // already-approved revision row (submitted_by and reviewer both the
+  // moderator, ownership_epoch carried from the owner row), the second
+  // publishes it gated on `changes() = 1`. published_at is left untouched
+  // and ownership never written; guards on published, listed, no pending
+  // revision, and active moderator.
+  async moderatorCorrect(
+    id: string,
+    moderatorId: string,
+    content: ExtensionContent,
+    correctionNote: string
+  ): Promise<DatabaseResult<{ id: string; revisionId: string }>> {
+    const parsed = ExtensionContentSchema.safeParse(content);
+    if (!parsed.success) {
+      return {
+        data: null,
+        error: {
+          message: "Extension content failed validation",
+          code: "CONFLICT"
+        }
+      };
+    }
+    const valid = parsed.data;
+    const revisionId = crypto.randomUUID();
+
+    let results;
+    try {
+      const correctStmt = toD1Statement(this.db.$client, {
+        sql: `INSERT INTO extension_revisions
+                (id, extension_id, developer_id, submitted_by, status, content,
+                 reviewer_id, review_note, reviewed_at, ownership_epoch)
+              SELECT ?, e.id, e.developer_id, ?, 'approved', ?, ?, ?, CURRENT_TIMESTAMP, d.ownership_epoch
+              FROM extensions e
+              JOIN developers d ON d.id = e.developer_id
+              WHERE LOWER(e.id) = LOWER(?)
+                AND e.published_at IS NOT NULL
+                AND e.delisted_at IS NULL
+                AND NOT EXISTS (
+                  SELECT 1 FROM extension_revisions r
+                  WHERE r.extension_id = e.id AND r.status = 'pending'
+                )
+                AND EXISTS (
+                  SELECT 1 FROM users u
+                  WHERE u.id = ? AND u.deleted_at IS NULL AND u.is_moderator = 1
+                )`,
+        params: [
+          revisionId,
+          moderatorId,
+          JSON.stringify(valid),
+          moderatorId,
+          correctionNote,
+          id,
+          moderatorId
+        ]
+      });
+
+      const publishStmt = toD1Statement(this.db.$client, {
+        sql: `UPDATE extensions
+              SET type = ?, name = ?, description = ?, releases = ?, website = ?,
+                  license = ?, icon_url = ?, readme = ?, source = ?, version = ?,
+                  download_url = ?,
+                  published_revision_id = ?,
+                  updated_at = CURRENT_TIMESTAMP
+              WHERE changes() = 1 AND LOWER(id) = LOWER(?)`,
+        params: [
+          valid.type,
+          valid.name,
+          valid.description,
+          JSON.stringify(valid.releases),
+          valid.website,
+          JSON.stringify(valid.license),
+          valid.icon_url ?? null,
+          valid.readme,
+          JSON.stringify(valid.source),
+          valid.version,
+          valid.download_url,
+          revisionId,
+          id
+        ]
+      });
+
+      results = await this.db.$client.batch([correctStmt, publishStmt]);
+    } catch (error) {
+      return databaseError("moderatorCorrect", error);
+    }
+
+    if (!results[0]?.meta?.changes) {
+      return this.moderatorCorrectBlockedError(id, moderatorId);
+    }
+
+    // Canonical id for the response (the path param may differ in case).
+    const [row] = await this.db
+      .select({ canonicalId: extensions.id })
+      .from(extensions)
+      .where(sql`LOWER(${extensions.id}) = LOWER(${id})`);
+    return {
+      data: { id: row?.canonicalId ?? id, revisionId },
+      error: null
+    };
+  }
+
+  // Separates the ways moderatorCorrect()'s guard can affect no rows, so the
+  // route can answer 403/404/409 rather than one opaque failure. Mirrors
+  // relistBlockedError's actor check first: a moderator deactivated or
+  // demoted after requireModerator() ran fails the write and must be told so.
+  private async moderatorCorrectBlockedError(
+    id: string,
+    moderatorId: string
+  ): Promise<DatabaseResult<never>> {
+    const access = await new UsersDatabase(this.db).moderatorAccess(
+      moderatorId
+    );
+    if (access.error || !access.data) {
+      return {
+        data: null,
+        error: access.error ?? {
+          message: "Active account required",
+          code: "ACCOUNT_INACTIVE"
+        }
+      };
+    }
+    if (!access.data.active) {
+      return {
+        data: null,
+        error: {
+          message: "Active account required",
+          code: "ACCOUNT_INACTIVE"
+        }
+      };
+    }
+    if (!access.data.moderator) {
+      return {
+        data: null,
+        error: { message: "Moderator access required", code: "FORBIDDEN" }
+      };
+    }
+
+    let existing:
+      { publishedAt: string | null; delistedAt: string | null } | undefined;
+    try {
+      [existing] = await this.db
+        .select({
+          publishedAt: extensions.publishedAt,
+          delistedAt: extensions.delistedAt
+        })
+        .from(extensions)
+        .where(sql`LOWER(${extensions.id}) = LOWER(${id})`);
+    } catch (error) {
+      return databaseError("moderatorCorrect", error);
+    }
+    if (!existing) return notFound(id);
+    if (!existing.publishedAt) {
+      return {
+        data: null,
+        error: {
+          message: "Only a published extension can be corrected",
+          code: "CONFLICT"
+        }
+      };
+    }
+    if (existing.delistedAt) {
+      return {
+        data: null,
+        error: {
+          message: "A delisted extension cannot be corrected; relist it first",
+          code: "CONFLICT"
+        }
+      };
+    }
+
+    try {
+      const [pending] = await this.db
+        .select({ one: sql`1` })
+        .from(extensionRevisions)
+        .where(
+          and(
+            sql`LOWER(${extensionRevisions.extensionId}) = LOWER(${id})`,
+            eq(extensionRevisions.status, "pending")
+          )
+        );
+      if (pending) {
+        return {
+          data: null,
+          error: {
+            message:
+              "An edit to this extension is already awaiting review; approve or reject it first",
+            code: "CONFLICT"
+          }
+        };
+      }
+    } catch (error) {
+      return databaseError("moderatorCorrect", error);
+    }
+    return {
+      data: null,
+      error: { message: "Extension could not be corrected", code: "CONFLICT" }
     };
   }
 }

@@ -25,6 +25,7 @@ import {
   DeveloperHistoryEntrySchema
 } from "../schemas/developers";
 import { RevisionIdParamSchema } from "../schemas/revisions";
+import { ExtensionUpdateSchema } from "../schemas/extensions";
 import { DeveloperProfilesDatabase } from "../db/developer-profiles";
 import { ExtensionsDatabase } from "../db/extensions";
 import { ExtensionRevisionsDatabase } from "../db/revisions";
@@ -348,6 +349,93 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
     }
     return c.json(
       { result: { id: data.id, status: "relisted" as const, notified } },
+      200
+    );
+  });
+
+  // Moderator correction of live content (api#251): unlike approve, which
+  // only publishes what an author proposed, this inserts an already-approved
+  // revision row and publishes it at once. No ?notify query and no mail
+  // path - the correction is recorded in history, and the author is not
+  // emailed.
+  const correctRoute = createRoute({
+    method: "post",
+    path: "/extensions/{id}/moderator-correct",
+    tags: ["Moderation"],
+    summary: "Correct a published extension's live content as a moderator",
+    security: [{ Bearer: [] }],
+    middleware: [requireModerator()] as const,
+    request: {
+      params: IdParamSchema,
+      body: {
+        content: {
+          "application/json": {
+            schema: ExtensionUpdateSchema.extend({
+              correction_note: z.string().trim().min(1).max(2000)
+            })
+              .strict()
+              .openapi("ModeratorCorrect")
+          }
+        }
+      }
+    },
+    responses: {
+      200: {
+        content: {
+          "application/json": {
+            schema: z.object({
+              result: z.object({
+                id: z.string(),
+                revision_id: z.string(),
+                status: z.literal("approved")
+              })
+            })
+          }
+        },
+        description:
+          "Content corrected and published. Recorded as an approved moderator revision; no author email is sent."
+      },
+      401: errorResponse("Missing or invalid bearer token"),
+      403: {
+        ...ActiveAccountRequiredResponse,
+        description: "The account is inactive or the caller is not a moderator"
+      },
+      404: errorResponse("No such extension"),
+      409: errorResponse(
+        "Extension is unpublished or delisted, or an edit is already awaiting review"
+      ),
+      422: errorResponse(
+        "Path params, content, or correction_note failed validation"
+      ),
+      500: errorResponse("Database error")
+    }
+  });
+
+  app.openapi(correctRoute, async (c) => {
+    const auth = getAuth(c);
+    const { id } = c.req.valid("param");
+    const { correction_note, ...content } = c.req.valid("json");
+    const extDb = getExtensionsDb(c.env.DB_EXTENSIONS);
+    const db = new ExtensionsDatabase(extDb);
+    const { data, error } = await db.moderatorCorrect(
+      id,
+      auth.userId,
+      content,
+      correction_note
+    );
+    if (error || !data) {
+      const status = statusFromWriteErrorCode(error?.code);
+      return c.json(errorBody(error, "Unable to correct extension"), status);
+    }
+    revalidateCatalogue(c);
+    return c.json(
+      {
+        result: {
+          id: data.id,
+          revision_id: data.revisionId,
+          status: "approved" as const
+        }
+      },
       200
     );
   });
