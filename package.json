@@ -29,7 +29,7 @@
     "@scalar/hono-api-reference": "0.12.7",
     "badge-maker": "6.0.0",
     "drizzle-orm": "0.45.3",
-    "hono": "4.13.10",
+    "hono": "4.13.11",
     "semver": "7.8.5",
     "spdx-license-ids": "3.0.24",
     "zod": "4.6.5"
