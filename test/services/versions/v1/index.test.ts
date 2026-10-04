@@ -1347,57 +1347,133 @@ describe("Versions API v1", () => {
         }
       );
 
-      it("keys mirror-trust variants separately on the same URL", async () => {
-        setupGitHubApiMock(
-          vi.mocked(ghRequest) as MockGitHubRequest,
-          vi.mocked(graphql) as unknown as MockGitHubGraphQL,
-          [...mockGitHubReleases, mockMirroredRelease],
-          mockComposerJson
-        );
-        await env.DOWNLOAD_BUCKET.put(
-          "releases/0.8.0/FOSSBilling-0.8.0.zip",
-          "mirrored archive contents",
-          {
-            customMetadata: {
-              digest:
-                "sha256:deadbeefcafe0000000000000000000000000000000000000000000000000000",
-              version: "0.8.0"
-            }
-          }
-        );
-
-        const requestAs = async (userAgent: string) => {
-          const ctx = createExecutionContext();
-          const response = await app.request(
-            "/versions/v1/latest",
-            { headers: { "User-Agent": userAgent } },
-            env,
-            ctx
+      it.each([
+        ["", false],
+        ["", true],
+        ["/latest", false],
+        ["/latest", true],
+        ["/0.8.0", false],
+        ["/0.8.0", true]
+      ] as const)(
+        "bounds mirror-trust cache variants for %s (mirror first: %s)",
+        async (path, mirrorFirst) => {
+          setupGitHubApiMock(
+            vi.mocked(ghRequest) as MockGitHubRequest,
+            vi.mocked(graphql) as unknown as MockGitHubGraphQL,
+            [...mockGitHubReleases, mockMirroredRelease],
+            mockComposerJson
           );
-          await waitOnExecutionContext(ctx);
-          const data: ApiResponse<VersionInfo | null> = await response.json();
-          return data.result?.download_url;
-        };
+          await env.DOWNLOAD_BUCKET.put(
+            "releases/0.8.0/FOSSBilling-0.8.0.zip",
+            "mirrored archive contents",
+            {
+              customMetadata: {
+                digest:
+                  "sha256:deadbeefcafe0000000000000000000000000000000000000000000000000000",
+                version: "0.8.0"
+              }
+            }
+          );
 
-        const trusting = "FOSSBilling/0.8.7";
-        const distrusting = "curl/8.0.0";
+          const requestAs = async (
+            userAgent?: string,
+            ifNoneMatch?: string
+          ) => {
+            const ctx = createExecutionContext();
+            const headers = new Headers({
+              authorization: "Bearer unused-public-credential"
+            });
+            if (userAgent !== undefined) headers.set("User-Agent", userAgent);
+            if (ifNoneMatch) headers.set("If-None-Match", ifNoneMatch);
+            const response = await app.request(
+              `/versions/v1${path}`,
+              { headers },
+              env,
+              ctx
+            );
+            await waitOnExecutionContext(ctx);
+            return response;
+          };
 
-        // Two variants populate two distinct cache entries for one URL.
-        expect(await requestAs(distrusting)).toBe(
-          "https://github.com/FOSSBilling/FOSSBilling/releases/download/0.8.0/FOSSBilling.zip"
-        );
-        expect(await requestAs(trusting)).toBe(
-          "https://download.fossbilling.org/releases/0.8.0/FOSSBilling-0.8.0.zip"
-        );
+          const warm = async (trusted: boolean) => {
+            const response = await requestAs(
+              trusted ? "FOSSBilling/0.8.7" : "FOSSBilling/0.8.6"
+            );
+            expect(response.status).toBe(200);
+            const body = await response.text();
+            const data = JSON.parse(body);
+            const release = path ? data.result : data.result["0.8.0"];
+            expect(release.download_url).toBe(
+              trusted
+                ? "https://download.fossbilling.org/releases/0.8.0/FOSSBilling-0.8.0.zip"
+                : "https://github.com/FOSSBilling/FOSSBilling/releases/download/0.8.0/FOSSBilling.zip"
+            );
+            expect(release.digest).toBe(
+              trusted
+                ? "sha256:deadbeefcafe0000000000000000000000000000000000000000000000000000"
+                : mockMirroredRelease.assets[0].digest
+            );
+            expect(release).not.toHaveProperty("mirror_download_url");
+            expect(release).not.toHaveProperty("mirror_digest");
+            const etag = response.headers.get("ETag");
+            expect(etag).toBeTruthy();
+            return { body, etag: etag! };
+          };
+          const first = await warm(mirrorFirst);
+          const second = await warm(!mirrorFirst);
+          const mirror = mirrorFirst ? first : second;
+          const github = mirrorFirst ? second : first;
+          expect(mirror.etag).not.toBe(github.etag);
 
-        // Repeats hit the cached variants without cross-contamination.
-        expect(await requestAs(distrusting)).toBe(
-          "https://github.com/FOSSBilling/FOSSBilling/releases/download/0.8.0/FOSSBilling.zip"
-        );
-        expect(await requestAs(trusting)).toBe(
-          "https://download.fossbilling.org/releases/0.8.0/FOSSBilling-0.8.0.zip"
-        );
-      });
+          const get = vi
+            .spyOn(env.CACHE_KV, "get")
+            .mockRejectedValue(new Error("backend must not be read"));
+          try {
+            for (const [trusted, userAgents] of [
+              [
+                false,
+                [
+                  undefined,
+                  "",
+                  "curl/unique-a",
+                  "attacker/unique-b",
+                  "FOSSBilling/0.8.4",
+                  "FOSSBilling/0.8.7-rc.1",
+                  "FOSSBilling/invalid",
+                  "FOSSBilling/0.8.7 extra"
+                ]
+              ],
+              [
+                true,
+                [
+                  "FOSSBilling/0.8.8",
+                  "FOSSBilling/1.0.0",
+                  "FOSSBilling/v0.8.7",
+                  "FOSSBilling/0.8.7+unique-a"
+                ]
+              ]
+            ] as const) {
+              const expected = trusted ? mirror : github;
+              const other = trusted ? github : mirror;
+              for (const userAgent of userAgents) {
+                const response = await requestAs(userAgent, other.etag);
+                expect(response.status).toBe(200);
+                expect(response.headers.get("Vary")?.toLowerCase()).toBe(
+                  "user-agent"
+                );
+                expect(response.headers.get("ETag")).toBe(expected.etag);
+                await expect(response.text()).resolves.toBe(expected.body);
+
+                const conditional = await requestAs(userAgent, expected.etag);
+                expect(conditional.status).toBe(304);
+              }
+            }
+            expect(get).not.toHaveBeenCalled();
+          } finally {
+            get.mockRestore();
+          }
+        }
+      );
 
       it("does not edge-cache error responses and stamps no-store", async () => {
         vi.mocked(ghRequest).mockRejectedValue(new Error("GitHub down"));

@@ -4,7 +4,7 @@
 
 Provides release metadata from the FOSSBilling GitHub repo. Responses are cached in `CACHE_KV` for 24 hours.
 
-Successful GET responses are also edge-cached (Cache API, per-PoP) for 5 minutes, so repeat requests don't wake the Worker at all; the window deliberately bounds how long a post-`/update` refresh takes to become visible everywhere. Unused Authorization headers do not bypass this public cache. Non-200s bypass it, and 4xx/5xx responses are stamped `Cache-Control: no-store` so a transient failure can't be pinned client-side. `/`, `/latest`, and `/{version}` bodies vary by mirror trust (derived from `User-Agent`), which they declare with `Vary: User-Agent`; the edge cache folds that header into its key.
+Successful GET responses are also edge-cached (Cache API, per-PoP) for 5 minutes, so repeat requests don't wake the Worker at all; the window deliberately bounds how long a post-`/update` refresh takes to become visible everywhere. Unused Authorization headers do not bypass this public cache. Non-200s bypass it, and 4xx/5xx responses are stamped `Cache-Control: no-store` so a transient failure can't be pinned client-side. `/`, `/latest`, and `/{version}` bodies vary by mirror trust (derived from `User-Agent`), which they declare with `Vary: User-Agent`; the internal edge cache canonicalizes that header into two mirror-trust classes before lookup and storage, so different clients in the same class reuse one entry.
 
 ## Authentication
 
