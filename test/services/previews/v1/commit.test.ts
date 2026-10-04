@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   createExecutionContext,
+  runInDurableObject,
   waitOnExecutionContext
 } from "cloudflare:test";
 import { env } from "cloudflare:workers";
@@ -52,6 +53,12 @@ let restoreConsole: (() => void) | null = null;
 describe("Previews API v1 - GET /previews/v1/commit/:sha", () => {
   beforeEach(async () => {
     restoreConsole = suppressConsole();
+    await runInDurableObject(
+      env.PREVIEW_GITHUB_BUDGET.getByName("previews"),
+      (_instance, state) => {
+        state.storage.sql.exec("DELETE FROM buckets");
+      }
+    );
     await env.CACHE_KV.delete(`preview:commit:${SHA.toLowerCase()}`);
     vi.clearAllMocks();
   });

@@ -98,9 +98,18 @@ Every previews GitHub request reserves a token from the singleton
 fallback pages, PR head lookups, live download redirects and main enrichment.
 Metadata cache hits and R2 downloads spend no tokens. All locations and lookup
 keys share a token bucket with a 60-call burst and a refill of 1000 calls/hour.
-Each client IP shares a second bucket with a 60-call burst and 120 calls/hour
-refill; only a SHA-256 digest of Cloudflare's connecting IP is stored. Missing
-addresses share one allowance. Idle client buckets expire after 30 minutes.
+Each client shares a second bucket with a 12-call burst and 120 calls/hour
+refill, so one client cannot spend the whole global burst. IPv4 addresses use
+one allowance per address; IPv6 addresses share an allowance per /64, with
+IPv4-mapped IPv6 addresses using their IPv4 allowance. Only a SHA-256 digest of
+this normalized identity from Cloudflare's connecting IP is stored. Missing or
+invalid addresses share one allowance. Idle client buckets expire after 30 minutes.
+
+Each incoming request also has an eight-call ceiling shared across PR head
+resolution, artifact fallback, main enrichment and live download resolution.
+Exhausting this ceiling returns unavailable rather than a false not-found result.
+A match beyond the ceiling requires a cheaper lookup (such as a full commit SHA)
+or a later cached result; repeating a cold lookup does not resume its scan.
 
 Abbreviated SHAs and fork-PR resolution remain supported within these budgets.
 Exhaustion or budget-service failure stops before another GitHub request and

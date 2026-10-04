@@ -1,8 +1,8 @@
 import { DurableObject } from "cloudflare:workers";
 
 // One singleton for all preview traffic, independent of URL, client and colo.
-// Token buckets permit 60 calls in a burst, then 1000/hour globally and
-// 120/hour per client. Every upstream call (not just each lookup) costs one.
+// Token buckets permit 60 calls globally and 12 per client in a burst,
+// then refill at 1000/hour globally and 120/hour per client. Every upstream call (not just each lookup) costs one.
 export class PreviewGitHubBudget extends DurableObject<CloudflareBindings> {
   constructor(ctx: DurableObjectState, env: CloudflareBindings) {
     super(ctx, env);
@@ -14,15 +14,16 @@ export class PreviewGitHubBudget extends DurableObject<CloudflareBindings> {
   reserve(client: string): boolean {
     const now = Date.now();
     return this.ctx.storage.transactionSync(() => {
-      // A client bucket is full after 30 minutes; discard only older state.
+      // A client bucket is full after six minutes; retaining thirty minutes
+      // of idle state avoids granting an early reset.
       this.ctx.storage.sql.exec(
         "DELETE FROM buckets WHERE key != 'global' AND updated_at < ?",
         now - 1800000
       );
       const buckets = [
-        { key: "global", rate: 1000 / 3600000 },
-        { key: `client:${client}`, rate: 120 / 3600000 }
-      ].map(({ key, rate }) => {
+        { key: "global", capacity: 60, rate: 1000 / 3600000 },
+        { key: `client:${client}`, capacity: 12, rate: 120 / 3600000 }
+      ].map(({ key, capacity, rate }) => {
         const row = this.ctx.storage.sql
           .exec<{ tokens: number; updated_at: number }>(
             "SELECT tokens, updated_at FROM buckets WHERE key = ?",
@@ -30,8 +31,11 @@ export class PreviewGitHubBudget extends DurableObject<CloudflareBindings> {
           )
           .toArray()[0];
         const tokens = row
-          ? Math.min(60, row.tokens + Math.max(0, now - row.updated_at) * rate)
-          : 60;
+          ? Math.min(
+              capacity,
+              row.tokens + Math.max(0, now - row.updated_at) * rate
+            )
+          : capacity;
         return { key, tokens };
       });
       if (buckets.some(({ tokens }) => tokens < 1)) return false;

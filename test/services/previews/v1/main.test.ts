@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   createExecutionContext,
+  runInDurableObject,
   waitOnExecutionContext
 } from "cloudflare:test";
 import { env } from "cloudflare:workers";
@@ -44,6 +45,12 @@ let restoreConsole: (() => void) | null = null;
 describe("Previews API v1 - GET /previews/v1/main", () => {
   beforeEach(async () => {
     restoreConsole = suppressConsole();
+    await runInDurableObject(
+      env.PREVIEW_GITHUB_BUDGET.getByName("previews"),
+      (_instance, state) => {
+        state.storage.sql.exec("DELETE FROM buckets");
+      }
+    );
     await env.CACHE_KV.delete("preview:main");
     await env.DOWNLOAD_BUCKET.delete(MAIN_PREVIEW_KEY);
     vi.clearAllMocks();
@@ -222,6 +229,12 @@ describe("Previews API v1 - GET /previews/v1/main", () => {
 describe("Previews API v1 - GET /previews/v1/main/download", () => {
   beforeEach(async () => {
     restoreConsole = suppressConsole();
+    await runInDurableObject(
+      env.PREVIEW_GITHUB_BUDGET.getByName("previews"),
+      (_instance, state) => {
+        state.storage.sql.exec("DELETE FROM buckets");
+      }
+    );
     await env.CACHE_KV.delete("preview:main");
     await env.DOWNLOAD_BUCKET.delete(MAIN_PREVIEW_KEY);
     vi.clearAllMocks();
