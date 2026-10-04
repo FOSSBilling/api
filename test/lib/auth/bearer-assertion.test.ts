@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { bearerAssertionVerifier } from "../../../src/lib/auth/bearer-assertion";
+import {
+  bearerAssertionVerifier,
+  identitySyncAssertionVerifier
+} from "../../../src/lib/auth/bearer-assertion";
 import { PlatformContext } from "../../../src/lib/context";
 import { base64UrlEncodeString, signAssertion } from "./assertion-helper";
 
@@ -205,5 +208,83 @@ describe("bearerAssertionVerifier", () => {
     );
 
     expect(principal).toBeNull();
+  });
+});
+
+describe("identitySyncAssertionVerifier", () => {
+  it("requires the dedicated purpose and a signed SHA-256 digest", async () => {
+    expect(
+      await identitySyncAssertionVerifier.verify(
+        await signAssertion(SECRET),
+        platformWithSecret(SECRET)
+      )
+    ).toBeNull();
+    const digest = "a".repeat(64);
+    const token = await signAssertion(SECRET, {
+      purpose: "identity-sync",
+      bodySha256: digest
+    });
+    expect(
+      await identitySyncAssertionVerifier.verify(
+        token,
+        platformWithSecret(SECRET)
+      )
+    ).toEqual({ userId: "user-1", scope: "identity_sync", bodySha256: digest });
+    expect(
+      await bearerAssertionVerifier.verify(token, platformWithSecret(SECRET))
+    ).toBeNull();
+  });
+  it.each([undefined, "", "A".repeat(64), "a".repeat(63), "z".repeat(64)])(
+    "rejects an invalid digest %s",
+    async (bodySha256) => {
+      const token = await signAssertion(SECRET, {
+        purpose: "identity-sync",
+        bodySha256
+      });
+      expect(
+        await identitySyncAssertionVerifier.verify(
+          token,
+          platformWithSecret(SECRET)
+        )
+      ).toBeNull();
+    }
+  );
+  it.each([
+    { iss: "wrong" },
+    { aud: "wrong" },
+    { ver: 2 },
+    { exp: Math.floor(Date.now() / 1000) - 1 },
+    { iat: Math.floor(Date.now() / 1000) + 10 },
+    { exp: Math.floor(Date.now() / 1000) + 120 }
+  ])("rejects invalid identity proof metadata %j", async (overrides) => {
+    const token = await signAssertion(SECRET, {
+      purpose: "identity-sync",
+      bodySha256: "a".repeat(64),
+      ...overrides
+    });
+    expect(
+      await identitySyncAssertionVerifier.verify(
+        token,
+        platformWithSecret(SECRET)
+      )
+    ).toBeNull();
+  });
+  it("preserves secret rotation for service proofs", async () => {
+    const token = await signAssertion("previous", {
+      purpose: "identity-sync",
+      bodySha256: "a".repeat(64)
+    });
+    expect(
+      await identitySyncAssertionVerifier.verify(
+        token,
+        platformWithSecret(SECRET, "previous")
+      )
+    ).not.toBeNull();
+    expect(
+      await identitySyncAssertionVerifier.verify(
+        token,
+        platformWithSecret(SECRET)
+      )
+    ).toBeNull();
   });
 });

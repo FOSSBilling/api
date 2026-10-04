@@ -14,7 +14,9 @@ declare module "hono" {
 // and requireAuth() itself don't change.
 const verifiers: TokenVerifier[] = [bearerAssertionVerifier];
 
-export function requireAuth(): MiddlewareHandler {
+export function requireAuth(
+  tokenVerifiers: readonly TokenVerifier[] = verifiers
+): MiddlewareHandler {
   return async (c, next) => {
     const header = c.req.header("Authorization");
     const token = header?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim() || null;
@@ -28,7 +30,7 @@ export function requireAuth(): MiddlewareHandler {
     }
 
     const platform = getPlatform(c);
-    for (const verifier of verifiers) {
+    for (const verifier of tokenVerifiers) {
       const principal = await verifier.verify(token, platform);
       if (principal) {
         c.set("auth", principal);

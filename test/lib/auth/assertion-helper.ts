@@ -13,6 +13,7 @@ export function base64UrlEncodeString(value: string): string {
 
 export interface AssertionOverrides {
   sub?: string;
+  bodySha256?: string;
   iat?: number;
   exp?: number;
   iss?: string;
@@ -42,6 +43,9 @@ export async function signAssertion(
       ver: overrides.ver ?? 1
     });
   }
+
+  if (overrides.bodySha256 !== undefined)
+    payload.body_sha256 = overrides.bodySha256;
 
   const headerB64 = base64UrlEncodeString(
     JSON.stringify(overrides.header ?? { alg: "HS256", typ: "JWT" })

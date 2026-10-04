@@ -96,6 +96,31 @@ export async function authHeaders(
   };
 }
 
+export async function identityHeaders(
+  sub: string,
+  body: unknown
+): Promise<Record<string, string>> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(JSON.stringify(body))
+  );
+  const bodySha256 = Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0")
+  ).join("");
+  return {
+    Authorization: `Bearer ${await signAssertion(SECRET, { sub, purpose: "identity-sync", bodySha256 })}`,
+    "Content-Type": "application/json"
+  };
+}
+
+export async function syncIdentity(sub: string, body: unknown) {
+  return put(
+    "/extensions/v2/users/me/identity",
+    await identityHeaders(sub, body),
+    body
+  );
+}
+
 // The PUT /extensions/{id} body: content only, no id and no developer. Both
 // are now properties of the extension record rather than of the edit.
 export function sampleContent(overrides?: { name?: string }) {

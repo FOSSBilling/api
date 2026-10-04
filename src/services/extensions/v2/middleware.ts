@@ -1,4 +1,8 @@
 import { type Context, type MiddlewareHandler } from "hono";
+import {
+  bearerAssertionVerifier,
+  identitySyncAssertionVerifier
+} from "../../../lib/auth/bearer-assertion";
 import { getAuth, requireAuth } from "../../../lib/auth";
 import type { AuthPrincipal } from "../../../lib/auth";
 import { getExtensionsDb } from "../../../lib/db";
@@ -27,8 +31,10 @@ export function getOptionalAuth(c: Context): AuthPrincipal | null {
 
 type AuthenticatedCheck = (c: Context) => Promise<Response | undefined>;
 
-function withAuthenticatedCheck(check: AuthenticatedCheck): MiddlewareHandler {
-  const authenticate = requireAuth();
+function withAuthenticatedCheck(
+  check: AuthenticatedCheck,
+  authenticate = requireAuth()
+): MiddlewareHandler {
   return async (c, next) => {
     let response: Response | undefined;
     const authenticationResult = await authenticate(c, async () => {
@@ -60,19 +66,43 @@ export function requireActiveAuth(): MiddlewareHandler {
 }
 
 export function requireIdentitySync(): MiddlewareHandler {
-  return withAuthenticatedCheck(async (c) => {
-    if (getAuth(c).scope !== "assertion") {
-      return c.json(
-        {
-          error: {
-            message: "Identity synchronization requires a trusted assertion",
-            code: "FORBIDDEN"
-          }
-        },
-        403
+  return withAuthenticatedCheck(
+    async (c) => {
+      const auth = getAuth(c);
+      if (auth.scope !== "identity_sync") {
+        return c.json(
+          {
+            error: {
+              message: "Identity synchronization requires a trusted assertion",
+              code: "FORBIDDEN"
+            }
+          },
+          403
+        );
+      }
+      // Hash the exact bytes before JSON parsing. Hono caches this buffer so
+      // validation and persistence consume the same authenticated body.
+      const digest = await crypto.subtle.digest(
+        "SHA-256",
+        await c.req.arrayBuffer()
       );
-    }
-  });
+      const hex = Array.from(new Uint8Array(digest), (byte) =>
+        byte.toString(16).padStart(2, "0")
+      ).join("");
+      if (hex !== auth.bodySha256) {
+        return c.json(
+          {
+            error: {
+              message: "Identity payload does not match assertion",
+              code: "FORBIDDEN"
+            }
+          },
+          403
+        );
+      }
+    },
+    requireAuth([identitySyncAssertionVerifier, bearerAssertionVerifier])
+  );
 }
 
 // Moderator routes list this alone, not behind requireActiveAuth(): it
