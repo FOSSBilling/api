@@ -15,6 +15,8 @@ import { DeveloperClaim, PendingDeveloperClaim } from "../schemas/ownership";
 import { DeveloperProfilesDatabase } from "./developer-profiles";
 import { verifyGithubOwnership } from "../github/identity";
 
+import { reserveClaimVerification } from "./claim-verification-budget";
+
 type ClaimRow = typeof developerClaims.$inferSelect;
 
 function parseClaimRow(row: ClaimRow): DeveloperClaim {
@@ -162,6 +164,18 @@ export class DeveloperClaimsDatabase {
             error: {
               code: "CONFLICT",
               message: "You already have a pending claim on this profile"
+            }
+          };
+        }
+
+        if (
+          !(await reserveClaimVerification(this.db, claimantId, developerId))
+        ) {
+          return {
+            data: null,
+            error: {
+              code: "RATE_LIMITED",
+              message: "Claim verification allowance exhausted; try again later"
             }
           };
         }

@@ -257,3 +257,12 @@ Migration `0021` also drops any submission filed under a developer that no longe
 ## Code Layout
 
 See `AGENTS.md` for what belongs in `routes/`, `db/`, `schemas/`, `github/`, and `middleware.ts`. This service is the reference layout for larger services.
+
+Claim verification is limited before contacting GitHub: 3 attempts per account
+and per normalized developer ID per 60 seconds, plus 300 aggregate claim
+verification attempts per hour. D1 reserves all budgets atomically. Mismatches,
+upstream failures, and cancellation do not refund attempts. Exhaustion returns
+429 (`RATE_LIMITED`); pending duplicates still return 409 without spending quota.
+Deploy migration `0024_claim_verification_budgets.sql` before the Worker update.
+The aggregate budget covers claims only and leaves shared GitHub capacity for
+other workflows; it is not a budget for every GitHub consumer.

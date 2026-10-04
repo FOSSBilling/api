@@ -394,3 +394,16 @@ export const developerClaims = sqliteTable(
     )
   ]
 );
+
+// No identity foreign keys: deleting an account or claim must not reset quota.
+export const claimVerificationBudgets = sqliteTable(
+  "claim_verification_budgets",
+  {
+    key: text("key").primaryKey(),
+    attempts: integer("attempts").notNull(),
+    expiresAt: integer("expires_at").notNull()
+  },
+  (table) => [
+    index("idx_claim_verification_budgets_expiry").on(table.expiresAt)
+  ]
+);
