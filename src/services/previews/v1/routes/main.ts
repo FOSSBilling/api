@@ -1,3 +1,4 @@
+import { PreviewGitHub, previewGitHub } from "../github/request";
 import { createRoute } from "@hono/zod-openapi";
 import { Context } from "hono";
 import {
@@ -26,7 +27,7 @@ const MAIN_NEGATIVE_CACHE_VALUE = "__main_preview_missing__";
 // leaves them null; it never fails or degrades the response, since
 // download_url/digest below are R2-sourced and don't depend on this.
 async function resolveArtifactFields(
-  githubToken: string,
+  github: PreviewGitHub,
   commitSha: string | null
 ): Promise<
   Pick<MainPreview, "run_id" | "artifact_id" | "created_at" | "expires_at">
@@ -39,7 +40,7 @@ async function resolveArtifactFields(
   };
   if (!commitSha) return empty;
 
-  const artifact = await findPreviewArtifactByCommitSha(githubToken, commitSha);
+  const artifact = await findPreviewArtifactByCommitSha(github, commitSha);
   if (artifact.status !== "found") return empty;
 
   return {
@@ -114,7 +115,7 @@ async function resolveMainPreview(
   }
 
   const artifactFields = await resolveArtifactFields(
-    c.env.GITHUB_TOKEN,
+    previewGitHub(c),
     object.commitSha
   );
 

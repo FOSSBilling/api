@@ -1,3 +1,4 @@
+import { previewGitHub } from "../github/request";
 import { createRoute } from "@hono/zod-openapi";
 import {
   ArtifactPreview,
@@ -79,12 +80,12 @@ export function registerCommitRoutes(app: PreviewsV1App): void {
 
   app.openapi(commitRoute, async (c) => {
     const { sha } = c.req.valid("param");
-    const githubToken = c.env.GITHUB_TOKEN;
+    const github = previewGitHub(c);
 
     const result = await cachedLookup(
       c.env.CACHE_KV,
       cacheKeyForSha(sha),
-      () => resolveArtifactPreview(githubToken, sha, null),
+      () => resolveArtifactPreview(github, sha, null),
       ttlForArtifact,
       (p) => c.executionCtx.waitUntil(p)
     );
@@ -114,7 +115,7 @@ export function registerCommitRoutes(app: PreviewsV1App): void {
 
   app.openapi(commitDownloadRoute, async (c) => {
     const { sha } = c.req.valid("param");
-    const githubToken = c.env.GITHUB_TOKEN;
+    const github = previewGitHub(c);
 
     // Shares the metadata route's cache entry for which artifact to
     // download - only the signed URL itself (resolved inside
@@ -123,13 +124,13 @@ export function registerCommitRoutes(app: PreviewsV1App): void {
     const artifact = await cachedLookup(
       c.env.CACHE_KV,
       cacheKeyForSha(sha),
-      () => resolveArtifactPreview(githubToken, sha, null),
+      () => resolveArtifactPreview(github, sha, null),
       ttlForArtifact,
       (p) => c.executionCtx.waitUntil(p)
     );
     return respondWithDownloadRedirect(
       c,
-      githubToken,
+      github,
       artifact,
       `No preview artifact exists for commit ${sha}.`
     );

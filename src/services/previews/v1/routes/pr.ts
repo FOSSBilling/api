@@ -1,3 +1,4 @@
+import { PreviewGitHub, previewGitHub } from "../github/request";
 import { createRoute } from "@hono/zod-openapi";
 import {
   ArtifactPreviewResponseSchema,
@@ -19,18 +20,18 @@ import { PreviewsV1App } from "./app";
 // commit route's shape); the PR number is overlaid here, after the shared
 // read.
 async function resolvePrPreview(
-  githubToken: string,
+  github: PreviewGitHub,
   prNumber: number,
   kv: KVNamespace,
   waitUntil?: (promise: Promise<unknown>) => void
 ): Promise<PreviewLookupResult> {
-  const head = await resolvePullRequestHeadSha(githubToken, prNumber);
+  const head = await resolvePullRequestHeadSha(github, prNumber);
   if (head.status !== "found") return head;
 
   const commit = await cachedLookup(
     kv,
     cacheKeyForSha(head.data),
-    () => resolveArtifactPreview(githubToken, head.data, null),
+    () => resolveArtifactPreview(github, head.data, null),
     ttlForArtifact,
     waitUntil
   );
@@ -68,13 +69,13 @@ export function registerPrRoutes(app: PreviewsV1App): void {
 
   app.openapi(prRoute, async (c) => {
     const { number } = c.req.valid("param");
-    const githubToken = c.env.GITHUB_TOKEN;
+    const github = previewGitHub(c);
 
     const result = await cachedLookup(
       c.env.CACHE_KV,
       `preview:pr:${number}`,
       () =>
-        resolvePrPreview(githubToken, number, c.env.CACHE_KV, (p) =>
+        resolvePrPreview(github, number, c.env.CACHE_KV, (p) =>
           c.executionCtx.waitUntil(p)
         ),
       DEFAULT_CACHE_TTL_SECONDS,
@@ -102,7 +103,7 @@ export function registerPrRoutes(app: PreviewsV1App): void {
 
   app.openapi(prDownloadRoute, async (c) => {
     const { number } = c.req.valid("param");
-    const githubToken = c.env.GITHUB_TOKEN;
+    const github = previewGitHub(c);
 
     // Shares the metadata route's cache entry - see the equivalent comment
     // in routes/commit.ts. Without this, every download hit would cost 3
@@ -112,7 +113,7 @@ export function registerPrRoutes(app: PreviewsV1App): void {
       c.env.CACHE_KV,
       `preview:pr:${number}`,
       () =>
-        resolvePrPreview(githubToken, number, c.env.CACHE_KV, (p) =>
+        resolvePrPreview(github, number, c.env.CACHE_KV, (p) =>
           c.executionCtx.waitUntil(p)
         ),
       DEFAULT_CACHE_TTL_SECONDS,
@@ -120,7 +121,7 @@ export function registerPrRoutes(app: PreviewsV1App): void {
     );
     return respondWithDownloadRedirect(
       c,
-      githubToken,
+      github,
       artifact,
       notFoundMessage(number)
     );

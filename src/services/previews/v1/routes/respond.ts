@@ -1,3 +1,4 @@
+import { PreviewGitHub } from "../github/request";
 import { Context } from "hono";
 import { getArtifactDownloadUrl } from "../github/artifacts";
 import { PreviewLookupResult } from "../resolve";
@@ -30,7 +31,7 @@ export function respondWithLookup(
 // and abandoned.
 export async function respondWithDownloadRedirect(
   c: Context,
-  githubToken: string,
+  github: PreviewGitHub,
   artifact: PreviewLookupResult,
   notFoundMessage: string
 ) {
@@ -45,7 +46,7 @@ export async function respondWithDownloadRedirect(
   }
 
   const redirect = await getArtifactDownloadUrl(
-    githubToken,
+    github,
     artifact.data.artifact_id
   );
   if (redirect.status === "not_found") {
