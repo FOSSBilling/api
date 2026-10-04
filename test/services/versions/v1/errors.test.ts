@@ -1,3 +1,4 @@
+import { isolateEdgeCache } from "../../../utils/isolate-edge-cache";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   createExecutionContext,
@@ -39,12 +40,13 @@ import { request as ghRequest } from "@octokit/request";
 import { graphql } from "@octokit/graphql";
 import { resetUpdateTokenCache } from "../../../../src/services/versions/v1/index";
 
-// Requests carrying an Authorization header bypass hono's cache middleware
-// (same pattern as index.test.ts) so each test sees live handler output
-// instead of a response an earlier test cached.
-const BYPASS_CACHE = { authorization: "test-bypass-cache" } as const;
+// Arbitrary credentials must behave like anonymous public requests.
+// Edge entries are cleared between tests to exercise live handlers.
+const PUBLIC_HEADERS = { authorization: "test-bypass-cache" } as const;
 
 let restoreConsole: (() => void) | null = null;
+
+const resetEdgeCache = isolateEdgeCache();
 
 describe("Versions API v1 - Error Handling", () => {
   beforeEach(async () => {
@@ -54,6 +56,7 @@ describe("Versions API v1 - Error Handling", () => {
     await env.AUTH_KV.put("UPDATE_TOKEN", "test-update-token-12345");
 
     vi.resetAllMocks();
+    resetEdgeCache();
     (vi.mocked(ghRequest) as MockGitHubRequest).mockImplementation(
       async (route: string) => {
         if (route === "GET /repos/{owner}/{repo}/releases") {
@@ -232,7 +235,7 @@ describe("Versions API v1 - Error Handling", () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/versions/v1",
-        { headers: BYPASS_CACHE },
+        { headers: PUBLIC_HEADERS },
         env,
         ctx
       );
@@ -272,7 +275,7 @@ describe("Versions API v1 - Error Handling", () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/versions/v1",
-        { headers: BYPASS_CACHE },
+        { headers: PUBLIC_HEADERS },
         env,
         ctx
       );
@@ -297,7 +300,7 @@ describe("Versions API v1 - Error Handling", () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/versions/v1",
-        { headers: BYPASS_CACHE },
+        { headers: PUBLIC_HEADERS },
         env,
         ctx
       );
@@ -341,7 +344,7 @@ describe("Versions API v1 - Error Handling", () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/versions/v1",
-        { headers: BYPASS_CACHE },
+        { headers: PUBLIC_HEADERS },
         env,
         ctx
       );
@@ -364,7 +367,7 @@ describe("Versions API v1 - Error Handling", () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/versions/v1",
-        { headers: BYPASS_CACHE },
+        { headers: PUBLIC_HEADERS },
         env,
         ctx
       );
@@ -385,7 +388,7 @@ describe("Versions API v1 - Error Handling", () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/versions/v1",
-        { headers: BYPASS_CACHE },
+        { headers: PUBLIC_HEADERS },
         env,
         ctx
       );
@@ -400,7 +403,7 @@ describe("Versions API v1 - Error Handling", () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/versions/v1",
-        { headers: BYPASS_CACHE },
+        { headers: PUBLIC_HEADERS },
         env,
         ctx
       );
@@ -415,7 +418,7 @@ describe("Versions API v1 - Error Handling", () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/versions/v1",
-        { headers: BYPASS_CACHE },
+        { headers: PUBLIC_HEADERS },
         env,
         ctx
       );
@@ -433,7 +436,7 @@ describe("Versions API v1 - Error Handling", () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/versions/v1",
-        { headers: BYPASS_CACHE },
+        { headers: PUBLIC_HEADERS },
         env,
         ctx
       );
@@ -476,7 +479,7 @@ describe("Versions API v1 - Error Handling", () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/versions/v1",
-        { headers: BYPASS_CACHE },
+        { headers: PUBLIC_HEADERS },
         env,
         ctx
       );
@@ -518,7 +521,7 @@ describe("Versions API v1 - Error Handling", () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/versions/v1",
-        { headers: BYPASS_CACHE },
+        { headers: PUBLIC_HEADERS },
         env,
         ctx
       );
@@ -561,7 +564,7 @@ describe("Versions API v1 - Error Handling", () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/versions/v1",
-        { headers: BYPASS_CACHE },
+        { headers: PUBLIC_HEADERS },
         env,
         ctx
       );
@@ -580,7 +583,7 @@ describe("Versions API v1 - Error Handling", () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/versions/v1/0.5.0",
-        { headers: BYPASS_CACHE },
+        { headers: PUBLIC_HEADERS },
         env,
         ctx
       );
@@ -601,7 +604,7 @@ describe("Versions API v1 - Error Handling", () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/versions/v1/0.5.0",
-        { headers: BYPASS_CACHE },
+        { headers: PUBLIC_HEADERS },
         env,
         ctx
       );
@@ -622,7 +625,7 @@ describe("Versions API v1 - Error Handling", () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/versions/v1/0.5.0",
-        { headers: BYPASS_CACHE },
+        { headers: PUBLIC_HEADERS },
         env,
         ctx
       );

@@ -1,3 +1,4 @@
+import { isolateEdgeCache } from "../utils/isolate-edge-cache";
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import {
   createExecutionContext,
@@ -6,10 +7,7 @@ import {
 import { env } from "cloudflare:workers";
 import app from "../../src/app/index";
 
-// Requests carrying an Authorization header bypass hono's cache middleware so
-// tests that assert KV writes or handler runs reach the live handler rather
-// than an edge-cached response from an earlier test. /update calls keep
-// their exact auth headers and are excluded.
+// Arbitrary credentials use the public cache; isolate entries between tests.
 const BYPASS_CACHE = { authorization: "test-bypass-cache" } as const;
 import { mockGitHubReleases, mockComposerJson } from "../mocks/github-releases";
 import { setupGitHubApiMock } from "../utils/mock-helpers";
@@ -40,6 +38,8 @@ import { request as ghRequest } from "@octokit/request";
 import { graphql } from "@octokit/graphql";
 import { resetUpdateTokenCache } from "../../src/services/versions/v1/index";
 
+const resetEdgeCache = isolateEdgeCache();
+
 describe("FOSSBilling API Worker - Full App Integration", () => {
   beforeAll(applyTestMigrations);
 
@@ -49,6 +49,7 @@ describe("FOSSBilling API Worker - Full App Integration", () => {
     await env.AUTH_KV.put("UPDATE_TOKEN", "test-update-token-12345");
 
     vi.clearAllMocks();
+    resetEdgeCache();
     setupGitHubApiMock(
       vi.mocked(ghRequest) as MockGitHubRequest,
       vi.mocked(graphql) as unknown as MockGitHubGraphQL,

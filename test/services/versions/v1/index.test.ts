@@ -1,3 +1,4 @@
+import { isolateEdgeCache } from "../../../utils/isolate-edge-cache";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { compare as semverCompare } from "semver";
 import {
@@ -27,12 +28,9 @@ import {
   VersionsResponse
 } from "../../../utils/test-types";
 
-// Requests carrying an Authorization header bypass hono's cache middleware
-// (same pattern as the stats tests) so each test sees live handler output
-// instead of a response a previous test cached. The cache path itself is
-// covered by the dedicated "edge cache" describe block, which omits the
-// header.
-const BYPASS_CACHE = { authorization: "test-bypass-cache" } as const;
+// Arbitrary credentials must behave like anonymous public requests.
+// Edge entries are cleared between tests to exercise live handlers.
+const PUBLIC_HEADERS = { authorization: "test-bypass-cache" } as const;
 
 vi.mock("@octokit/request", () => {
   const endpoint = { DEFAULTS: {} };
@@ -55,6 +53,8 @@ import { resetUpdateTokenCache } from "../../../../src/services/versions/v1/inde
 let restoreConsole: (() => void) | null = null;
 let originalKVPut: typeof env.CACHE_KV.put | null = null;
 
+const resetEdgeCache = isolateEdgeCache();
+
 describe("Versions API v1", () => {
   beforeEach(async () => {
     restoreConsole = suppressConsole();
@@ -68,6 +68,7 @@ describe("Versions API v1", () => {
     await env.AUTH_KV.put("UPDATE_TOKEN", testUpdateToken);
 
     vi.clearAllMocks();
+    resetEdgeCache();
     setupGitHubApiMock(
       vi.mocked(ghRequest) as MockGitHubRequest,
       vi.mocked(graphql) as unknown as MockGitHubGraphQL,
@@ -92,7 +93,7 @@ describe("Versions API v1", () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/versions/v1",
-        { headers: BYPASS_CACHE },
+        { headers: PUBLIC_HEADERS },
         env,
         ctx
       );
@@ -113,7 +114,7 @@ describe("Versions API v1", () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/versions/v1",
-        { headers: BYPASS_CACHE },
+        { headers: PUBLIC_HEADERS },
         env,
         ctx
       );
@@ -170,7 +171,7 @@ describe("Versions API v1", () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/versions/v1",
-        { headers: BYPASS_CACHE },
+        { headers: PUBLIC_HEADERS },
         env,
         ctx
       );
@@ -188,7 +189,7 @@ describe("Versions API v1", () => {
 
     it("should cache releases data", async () => {
       const ctx = createExecutionContext();
-      await app.request("/versions/v1", { headers: BYPASS_CACHE }, env, ctx);
+      await app.request("/versions/v1", { headers: PUBLIC_HEADERS }, env, ctx);
       await waitOnExecutionContext(ctx);
 
       const cached = await env.CACHE_KV.get("gh-fossbilling-releases");
@@ -198,7 +199,7 @@ describe("Versions API v1", () => {
 
     it("should return cached data on subsequent requests", async () => {
       const ctx1 = createExecutionContext();
-      await app.request("/versions/v1", { headers: BYPASS_CACHE }, env, ctx1);
+      await app.request("/versions/v1", { headers: PUBLIC_HEADERS }, env, ctx1);
       await waitOnExecutionContext(ctx1);
 
       (
@@ -208,7 +209,7 @@ describe("Versions API v1", () => {
       const ctx2 = createExecutionContext();
       const response = await app.request(
         "/versions/v1",
-        { headers: BYPASS_CACHE },
+        { headers: PUBLIC_HEADERS },
         env,
         ctx2
       );
@@ -225,7 +226,7 @@ describe("Versions API v1", () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/versions/v1/latest",
-        { headers: BYPASS_CACHE },
+        { headers: PUBLIC_HEADERS },
         env,
         ctx
       );
@@ -300,7 +301,7 @@ describe("Versions API v1", () => {
         {
           headers: {
             "User-Agent": "FOSSBilling/0.8.7",
-            authorization: BYPASS_CACHE.authorization
+            authorization: PUBLIC_HEADERS.authorization
           }
         },
         env,
@@ -309,7 +310,9 @@ describe("Versions API v1", () => {
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);
-      expect(response.headers.get("Vary")).toContain("User-Agent");
+      expect(response.headers.get("Vary")?.toLowerCase()).toContain(
+        "user-agent"
+      );
       const data: ApiResponse<VersionInfo | null> = await response.json();
       if (!data.result) {
         throw new Error("Expected latest release data");
@@ -329,7 +332,7 @@ describe("Versions API v1", () => {
         {
           headers: {
             "User-Agent": "FOSSBilling/0.8.7",
-            authorization: BYPASS_CACHE.authorization
+            authorization: PUBLIC_HEADERS.authorization
           }
         },
         env,
@@ -373,7 +376,7 @@ describe("Versions API v1", () => {
         {
           headers: {
             "User-Agent": "FOSSBilling/0.8.7",
-            authorization: BYPASS_CACHE.authorization
+            authorization: PUBLIC_HEADERS.authorization
           }
         },
         env,
@@ -402,7 +405,7 @@ describe("Versions API v1", () => {
         {
           headers: {
             "User-Agent": "FOSSBilling/0.8.6",
-            authorization: BYPASS_CACHE.authorization
+            authorization: PUBLIC_HEADERS.authorization
           }
         },
         env,
@@ -430,7 +433,7 @@ describe("Versions API v1", () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/versions/v1/latest",
-        { headers: BYPASS_CACHE },
+        { headers: PUBLIC_HEADERS },
         env,
         ctx
       );
@@ -454,7 +457,7 @@ describe("Versions API v1", () => {
         {
           headers: {
             "User-Agent": "curl/8.0.0",
-            authorization: BYPASS_CACHE.authorization
+            authorization: PUBLIC_HEADERS.authorization
           }
         },
         env,
@@ -480,7 +483,7 @@ describe("Versions API v1", () => {
         {
           headers: {
             "User-Agent": "FOSSBilling/0.8.7",
-            authorization: BYPASS_CACHE.authorization
+            authorization: PUBLIC_HEADERS.authorization
           }
         },
         env,
@@ -509,7 +512,7 @@ describe("Versions API v1", () => {
         {
           headers: {
             "User-Agent": "FOSSBilling/0.8.6",
-            authorization: BYPASS_CACHE.authorization
+            authorization: PUBLIC_HEADERS.authorization
           }
         },
         env,
@@ -532,7 +535,7 @@ describe("Versions API v1", () => {
         {
           headers: {
             "User-Agent": "FOSSBilling/0.8.7",
-            authorization: BYPASS_CACHE.authorization
+            authorization: PUBLIC_HEADERS.authorization
           }
         },
         env,
@@ -564,7 +567,7 @@ describe("Versions API v1", () => {
         {
           headers: {
             "User-Agent": "FOSSBilling/0.8.7",
-            authorization: BYPASS_CACHE.authorization
+            authorization: PUBLIC_HEADERS.authorization
           }
         },
         env,
@@ -587,7 +590,7 @@ describe("Versions API v1", () => {
         {
           headers: {
             "User-Agent": "FOSSBilling/0.8.6",
-            authorization: BYPASS_CACHE.authorization
+            authorization: PUBLIC_HEADERS.authorization
           }
         },
         env,
@@ -645,7 +648,7 @@ describe("Versions API v1", () => {
         {
           headers: {
             "User-Agent": "FOSSBilling/0.8.7",
-            authorization: BYPASS_CACHE.authorization
+            authorization: PUBLIC_HEADERS.authorization
           }
         },
         env,
@@ -704,7 +707,7 @@ describe("Versions API v1", () => {
         {
           headers: {
             "User-Agent": "FOSSBilling/0.8.6",
-            authorization: BYPASS_CACHE.authorization
+            authorization: PUBLIC_HEADERS.authorization
           }
         },
         env,
@@ -731,7 +734,7 @@ describe("Versions API v1", () => {
         {
           headers: {
             "User-Agent": "FOSSBilling/0.8.7",
-            authorization: BYPASS_CACHE.authorization
+            authorization: PUBLIC_HEADERS.authorization
           }
         },
         env,
@@ -791,7 +794,7 @@ describe("Versions API v1", () => {
         {
           headers: {
             "User-Agent": "FOSSBilling/0.8.7",
-            authorization: BYPASS_CACHE.authorization
+            authorization: PUBLIC_HEADERS.authorization
           }
         },
         env,
@@ -820,7 +823,7 @@ describe("Versions API v1", () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/versions/v1/0.5.0",
-        { headers: BYPASS_CACHE },
+        { headers: PUBLIC_HEADERS },
         env,
         ctx
       );
@@ -842,7 +845,7 @@ describe("Versions API v1", () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/versions/v1/999.999.999",
-        { headers: BYPASS_CACHE },
+        { headers: PUBLIC_HEADERS },
         env,
         ctx
       );
@@ -860,7 +863,7 @@ describe("Versions API v1", () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/versions/v1/latest",
-        { headers: BYPASS_CACHE },
+        { headers: PUBLIC_HEADERS },
         env,
         ctx
       );
@@ -881,7 +884,7 @@ describe("Versions API v1", () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/versions/v1/build_changelog/0.5.0",
-        { headers: BYPASS_CACHE },
+        { headers: PUBLIC_HEADERS },
         env,
         ctx
       );
@@ -900,7 +903,7 @@ describe("Versions API v1", () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/versions/v1/build_changelog/0.6.0",
-        { headers: BYPASS_CACHE },
+        { headers: PUBLIC_HEADERS },
         env,
         ctx
       );
@@ -916,7 +919,7 @@ describe("Versions API v1", () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/versions/v1/build_changelog/invalid",
-        { headers: BYPASS_CACHE },
+        { headers: PUBLIC_HEADERS },
         env,
         ctx
       );
@@ -936,7 +939,7 @@ describe("Versions API v1", () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/versions/v1/count",
-        { headers: BYPASS_CACHE },
+        { headers: PUBLIC_HEADERS },
         env,
         ctx
       );
@@ -954,14 +957,14 @@ describe("Versions API v1", () => {
 
     it("should serve cached count when available", async () => {
       const ctx1 = createExecutionContext();
-      await app.request("/versions/v1", { headers: BYPASS_CACHE }, env, ctx1);
+      await app.request("/versions/v1", { headers: PUBLIC_HEADERS }, env, ctx1);
       await waitOnExecutionContext(ctx1);
 
       // Make a second request - should use cache
       const ctx2 = createExecutionContext();
       const response = await app.request(
         "/versions/v1/count",
-        { headers: BYPASS_CACHE },
+        { headers: PUBLIC_HEADERS },
         env,
         ctx2
       );
@@ -1100,7 +1103,7 @@ describe("Versions API v1", () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/versions/v1",
-        { headers: BYPASS_CACHE },
+        { headers: PUBLIC_HEADERS },
         env,
         ctx
       );
@@ -1121,7 +1124,7 @@ describe("Versions API v1", () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/versions/v1/0.5.0",
-        { headers: BYPASS_CACHE },
+        { headers: PUBLIC_HEADERS },
         env,
         ctx
       );
@@ -1153,7 +1156,7 @@ describe("Versions API v1", () => {
         const ctx = createExecutionContext();
         const response = await app.request(
           "/versions/v1/0.6.0",
-          { headers: BYPASS_CACHE },
+          { headers: PUBLIC_HEADERS },
           env,
           ctx
         );
@@ -1183,7 +1186,7 @@ describe("Versions API v1", () => {
         const ctx = createExecutionContext();
         const response = await app.request(
           "/versions/v1/0.6.0",
-          { headers: BYPASS_CACHE },
+          { headers: PUBLIC_HEADERS },
           env,
           ctx
         );
@@ -1210,7 +1213,7 @@ describe("Versions API v1", () => {
         const ctx = createExecutionContext();
         const response = await app.request(
           "/versions/v1/latest",
-          { headers: BYPASS_CACHE },
+          { headers: PUBLIC_HEADERS },
           env,
           ctx
         );
@@ -1241,7 +1244,7 @@ describe("Versions API v1", () => {
         const ctx = createExecutionContext();
         const response = await app.request(
           "/versions/v1/latest",
-          { headers: BYPASS_CACHE },
+          { headers: PUBLIC_HEADERS },
           env,
           ctx
         );
@@ -1276,7 +1279,7 @@ describe("Versions API v1", () => {
         );
 
       const ctx = createExecutionContext();
-      await app.request("/versions/v1", { headers: BYPASS_CACHE }, env, ctx);
+      await app.request("/versions/v1", { headers: PUBLIC_HEADERS }, env, ctx);
       await waitOnExecutionContext(ctx);
 
       expect(env.CACHE_KV.put).toHaveBeenCalled();
@@ -1287,8 +1290,7 @@ describe("Versions API v1", () => {
       expect(putCall![2]!).toHaveProperty("expirationTtl", 86400);
     });
 
-    // Edge (Cache API) response caching. These tests deliberately omit
-    // BYPASS_CACHE so the hono cache middleware participates; each test
+    // Edge (Cache API) response caching. Each test
     // uses a different route so it can't observe a response cached by
     // another test (or by an earlier run of its own, on retry).
     describe("edge cache", () => {
@@ -1309,6 +1311,41 @@ describe("Versions API v1", () => {
         expect(second.status).toBe(200);
         await expect(second.text()).resolves.toBe(firstBody);
       });
+
+      it.each(["", "/latest", "/count", "/0.6.0", "/build_changelog/0.5.0"])(
+        "shares the public edge entry across credentials for %s",
+        async (path) => {
+          const requestAs = async (authorization?: string) => {
+            const ctx = createExecutionContext();
+            const response = await app.request(
+              `/versions/v1${path}`,
+              {
+                headers: authorization === undefined ? {} : { authorization }
+              },
+              env,
+              ctx
+            );
+            await waitOnExecutionContext(ctx);
+            return response;
+          };
+          const first = await requestAs("Bearer arbitrary-cold");
+          expect(first.status).toBe(200);
+          const body = await first.text();
+          const get = vi
+            .spyOn(env.CACHE_KV, "get")
+            .mockRejectedValue(new Error("backend must not be read"));
+          try {
+            for (const authorization of [undefined, "x", "Bearer other", ""]) {
+              const response = await requestAs(authorization);
+              expect(response.status).toBe(200);
+              await expect(response.text()).resolves.toBe(body);
+            }
+            expect(get).not.toHaveBeenCalled();
+          } finally {
+            get.mockRestore();
+          }
+        }
+      );
 
       it("keys mirror-trust variants separately on the same URL", async () => {
         setupGitHubApiMock(

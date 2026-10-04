@@ -67,3 +67,5 @@ The `type` field accepts: `success`, `info`, `warning`, `danger`
 ## Database
 
 Uses D1 database binding `DB_CENTRAL_ALERTS`. Initialize with the setup script in `src/services/central-alerts/v1/scripts/`.
+
+Public GET responses use the edge cache even when an unused Authorization header is supplied; these representations do not depend on credentials.
