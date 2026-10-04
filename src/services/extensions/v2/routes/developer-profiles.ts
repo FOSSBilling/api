@@ -186,7 +186,7 @@ export function registerDeveloperProfileRoutes(app: ExtensionsV2App): void {
         "Developer id already taken by someone else, or id was changed on an existing profile"
       ),
       429: errorResponse(
-        "The account exhausted its profile-creation allowance, or GitHub verification is temporarily rate limited"
+        "The account exhausted its profile creation or daily write allowance, or GitHub verification is temporarily rate limited"
       ),
       503: errorResponse("GitHub verification is temporarily unavailable"),
       422: errorResponse(
@@ -203,7 +203,7 @@ export function registerDeveloperProfileRoutes(app: ExtensionsV2App): void {
     const db = new DeveloperProfilesDatabase(
       getExtensionsDb(c.env.DB_EXTENSIONS)
     );
-    const { data, error } = await db.upsertOwn(
+    const { data, error, changed } = await db.upsertOwn(
       auth.userId,
       body,
       platform.getEnv("GITHUB_TOKEN"),
@@ -222,7 +222,8 @@ export function registerDeveloperProfileRoutes(app: ExtensionsV2App): void {
       const status =
         error?.code === "GITHUB_MISMATCH" || error?.code === "ACCOUNT_INACTIVE"
           ? 403
-          : error?.code === "PROFILE_CREATION_RATE_LIMITED"
+          : error?.code === "PROFILE_CREATION_RATE_LIMITED" ||
+              error?.code === "PROFILE_MUTATION_RATE_LIMITED"
             ? 429
             : error?.code === "CONFLICT" || error?.code === "DEVELOPER_ID_TAKEN"
               ? 409
@@ -234,11 +235,14 @@ export function registerDeveloperProfileRoutes(app: ExtensionsV2App): void {
       if (error?.code === "PROFILE_CREATION_RATE_LIMITED") {
         response.headers.set("Retry-After", "60");
       }
+      if (error?.code === "PROFILE_MUTATION_RATE_LIMITED") {
+        response.headers.set("Retry-After", "86400");
+      }
       return response;
     }
     // Profile edits apply immediately (no moderation staging) and change
     // catalogue-visible fields (developer name/URL), so purge here too.
-    revalidateCatalogue(c);
+    if (changed) revalidateCatalogue(c);
     return c.json({ result: data }, 200);
   });
 

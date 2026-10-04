@@ -82,6 +82,29 @@ async function delist(as: string): Promise<Response> {
 }
 
 describe("CDN cache revalidation on catalogue mutations", () => {
+  it("does not revalidate unchanged profile replays", async () => {
+    const fetcher = stubFrontend();
+    const headers = await authHeaders("noop-revalidate-owner");
+    const profile = sampleDeveloper({ id: "noop-revalidate-profile" });
+    expect(
+      (await put("/extensions/v2/developers/me", headers, profile)).status
+    ).toBe(200);
+    expect(fetcher.fetch).toHaveBeenCalledTimes(1);
+    expect(
+      (await put("/extensions/v2/developers/me", headers, profile)).status
+    ).toBe(200);
+    expect(fetcher.fetch).toHaveBeenCalledTimes(1);
+    expect(
+      (
+        await put("/extensions/v2/developers/me", headers, {
+          ...profile,
+          name: "Changed"
+        })
+      ).status
+    ).toBe(200);
+    expect(fetcher.fetch).toHaveBeenCalledTimes(2);
+  });
+
   it("purges the catalogue tags after a successful delist", async () => {
     await seedModAndExtension();
     const fetcher = stubFrontend();

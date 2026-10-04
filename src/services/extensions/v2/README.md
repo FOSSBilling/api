@@ -266,3 +266,15 @@ upstream failures, and cancellation do not refund attempts. Exhaustion returns
 Deploy migration `0024_claim_verification_budgets.sql` before the Worker update.
 The aggregate budget covers claims only and leaves shared GitHub capacity for
 other workflows; it is not a budget for every GitHub consumer.
+### Profile write budget
+
+`PUT /developers/me` permits 20 successful profile writes per account in a
+rolling 24-hour window, including creation. Exhaustion returns 429 with
+`PROFILE_MUTATION_RATE_LIMITED` and a conservative `Retry-After: 86400`.
+Unchanged submissions return the current profile without changing approval,
+revision, audit history, or revalidating the catalogue. All five editable fields
+participate in the comparison; omitted optional fields mean null. The budget is
+enforced atomically with the write using indexed, immutable history and survives
+profile deletion, recreation, and ownership transfer. Audit records remain
+append-only; this bounds growth per account per day rather than total retention.
+Apply migration `0024_profile_history_budget.sql` before deploying.

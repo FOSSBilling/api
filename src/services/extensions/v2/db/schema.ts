@@ -321,6 +321,10 @@ export const developerHistory = sqliteTable(
     index("idx_developer_history_developer_changed_at").on(
       table.developerId,
       table.changedAt
+    ),
+    index("idx_developer_history_account_changed_at").on(
+      table.changedBy,
+      table.changedAt
     )
   ]
 );
