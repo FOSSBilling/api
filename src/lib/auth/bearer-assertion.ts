@@ -113,13 +113,14 @@ function assertionVerifier(
         if (payload.exp <= payload.iat) continue;
         if (payload.exp - payload.iat > ASSERTION_TTL_SECONDS) continue;
 
-        return purpose === "identity-sync"
-          ? {
-              userId: payload.sub,
-              scope: "identity_sync",
-              bodySha256: payload.body_sha256!
-            }
-          : { userId: payload.sub, scope: "assertion" };
+        if (purpose === "identity-sync") {
+          // isAssertionPayload() verified body_sha256 above; re-check here
+          // so the type narrows without a non-null assertion.
+          const bodySha256 = payload.body_sha256;
+          if (typeof bodySha256 !== "string") continue;
+          return { userId: payload.sub, scope: "identity_sync", bodySha256 };
+        }
+        return { userId: payload.sub, scope: "assertion" };
       }
 
       // A consistent failure across every configured secret is the only
