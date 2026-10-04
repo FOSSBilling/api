@@ -78,6 +78,13 @@
       "when": 1791060505627,
       "tag": "0024_claim_verification_budgets",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "6",
+      "when": 1791143160901,
+      "tag": "0025_luxuriant_franklin_richards",
+      "breakpoints": true
     }
   ]
 }

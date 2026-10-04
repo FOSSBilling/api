@@ -82,10 +82,21 @@ export function requireIdentitySync(): MiddlewareHandler {
       }
       // Hash the exact bytes before JSON parsing. Hono caches this buffer so
       // validation and persistence consume the same authenticated body.
-      const digest = await crypto.subtle.digest(
-        "SHA-256",
-        await c.req.arrayBuffer()
-      );
+      let rawBody: ArrayBuffer;
+      try {
+        rawBody = await c.req.arrayBuffer();
+      } catch {
+        return c.json(
+          {
+            error: {
+              message: "Unable to read request body",
+              code: "BAD_REQUEST"
+            }
+          },
+          400
+        );
+      }
+      const digest = await crypto.subtle.digest("SHA-256", rawBody);
       const hex = Array.from(new Uint8Array(digest), (byte) =>
         byte.toString(16).padStart(2, "0")
       ).join("");

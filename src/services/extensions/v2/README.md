@@ -264,8 +264,10 @@ Claim verification is limited before contacting GitHub: 3 attempts per account
 and per normalized developer ID per 60 seconds, plus 300 aggregate claim
 verification attempts per hour. D1 reserves all budgets atomically. Mismatches,
 upstream failures, and cancellation do not refund attempts. Exhaustion returns
-429 (`RATE_LIMITED`); pending duplicates still return 409 without spending quota.
-Deploy migration `0024_claim_verification_budgets.sql` before the Worker update.
+429 (`RATE_LIMITED`); sequential replays of a pending claim short-circuit to
+409 before spending quota, but two requests racing each other can each spend
+one attempt before the unique index decides the winner. Deploy migration
+`0024_claim_verification_budgets.sql` before the Worker update.
 The aggregate budget covers claims only and leaves shared GitHub capacity for
 other workflows; it is not a budget for every GitHub consumer.
 
@@ -280,4 +282,4 @@ participate in the comparison; omitted optional fields mean null. The budget is
 enforced atomically with the write using indexed, immutable history and survives
 profile deletion, recreation, and ownership transfer. Audit records remain
 append-only; this bounds growth per account per day rather than total retention.
-Apply migration `0024_profile_history_budget.sql` before deploying.
+Apply migration `0025_luxuriant_franklin_richards.sql` before deploying.

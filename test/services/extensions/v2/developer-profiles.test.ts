@@ -85,7 +85,12 @@ describe("Extensions API v2", () => {
         )
       );
       expect(raced.filter((r) => r.status === 200)).toHaveLength(1);
-      expect(raced.filter((r) => r.status !== 200)).toHaveLength(1);
+      const losers = raced.filter((r) => r.status !== 200);
+      expect(losers).toHaveLength(1);
+      expect(losers[0].status).toBe(429);
+      expect(await losers[0].json()).toMatchObject({
+        error: { code: "PROFILE_MUTATION_RATE_LIMITED" }
+      });
       expect(await listDeveloperHistory(db)).toHaveLength(20);
       const current = await getDeveloper(db, profile.id);
       expect(

@@ -29,12 +29,15 @@ describe("public response cache", () => {
     const original = new Request("https://example.test/public", {
       headers: { Authorization: "x" }
     });
+    // Asserted after fetch: an expect thrown inside the handler would be
+    // routed to onError's 500, making the status assertion pass vacuously.
+    const observed: { raw?: unknown; authorization?: string | null } = {};
     app.get(
       "/public",
       publicResponseCache({ cacheName: crypto.randomUUID(), wait: true }),
       (c) => {
-        expect(c.req.raw).toBe(original);
-        expect(c.req.header("Authorization")).toBe("x");
+        observed.raw = c.req.raw;
+        observed.authorization = c.req.header("Authorization");
         throw new Error("handler failed");
       }
     );
@@ -43,6 +46,8 @@ describe("public response cache", () => {
       return c.text("failure", 500);
     });
     expect((await app.fetch(original)).status).toBe(500);
+    expect(observed.raw).toBe(original);
+    expect(observed.authorization).toBe("x");
   });
 
   it("restores the request when cache key generation fails", async () => {

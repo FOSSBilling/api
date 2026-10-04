@@ -87,6 +87,11 @@ function importedKeyFor(secret: string): Promise<CryptoKey> {
 function assertionVerifier(
   purpose: AssertionPayload["purpose"]
 ): TokenVerifier {
+  // The sibling purpose's verifier runs alongside this one (see
+  // requireIdentitySync): an assertion minted for it is expected traffic
+  // here, not a misconfiguration, so it must not trip the warning below.
+  const sibling: AssertionPayload["purpose"] =
+    purpose === "identity-sync" ? ASSERTION_PURPOSE : "identity-sync";
   return {
     async verify(token, platform): Promise<AuthPrincipal | null> {
       const secrets = [
@@ -95,6 +100,7 @@ function assertionVerifier(
       ].filter((secret): secret is string => Boolean(secret));
       if (secrets.length === 0) return null;
 
+      let sawSiblingPurpose = false;
       for (const secret of secrets) {
         let payload: unknown;
         try {
@@ -106,7 +112,10 @@ function assertionVerifier(
         } catch {
           continue;
         }
-        if (!isAssertionPayload(payload, purpose)) continue;
+        if (!isAssertionPayload(payload, purpose)) {
+          if (isAssertionPayload(payload, sibling)) sawSiblingPurpose = true;
+          continue;
+        }
 
         const now = Math.floor(Date.now() / 1000);
         if (payload.iat > now + CLOCK_SKEW_SECONDS) continue;
@@ -125,8 +134,9 @@ function assertionVerifier(
 
       // A consistent failure across every configured secret is the only
       // signal a misconfigured ASSERTION_SIGNING_SECRET produces.
+      // Sibling-purpose assertions are expected here, so they skip it.
       const now = Date.now();
-      if (now - lastAuthWarnAt >= WARN_INTERVAL_MS) {
+      if (!sawSiblingPurpose && now - lastAuthWarnAt >= WARN_INTERVAL_MS) {
         lastAuthWarnAt = now;
         logWarn("auth", "Bearer assertion failed verification", {
           secretsTried: secrets.length

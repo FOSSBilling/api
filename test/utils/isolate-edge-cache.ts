@@ -4,8 +4,8 @@ import { afterEach, vi } from "vitest";
 // while exercising the real Cache API, including waitUntil cache writes.
 export function isolateEdgeCache() {
   const open = caches.open.bind(caches);
-  let restore: () => void;
-  afterEach(() => restore());
+  let restore: (() => void) | undefined;
+  afterEach(() => restore?.());
   return () => {
     const suffix = crypto.randomUUID();
     const spy = vi

@@ -114,10 +114,15 @@ async function resolveMainPreview(
     return null;
   }
 
-  const artifactFields = await resolveArtifactFields(
-    previewGitHub(c),
-    object.commitSha
-  );
+  const artifactFields = await (object.commitSha
+    ? // Enrichment is keyed by commit: concurrent cold requests share one
+      // GitHub lookup (charged once to the shared budget) without mixing
+      // SHAs, and the R2 head above is already single-flighted so racing
+      // requests observe the same object.
+      singleFlight(`previews:main:enrich:${object.commitSha}`, () =>
+        resolveArtifactFields(previewGitHub(c), object.commitSha)
+      )
+    : resolveArtifactFields(previewGitHub(c), null));
 
   const result = buildMainPreview(object, artifactFields);
 

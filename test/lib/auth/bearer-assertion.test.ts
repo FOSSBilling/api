@@ -1,10 +1,17 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import {
   bearerAssertionVerifier,
   identitySyncAssertionVerifier
 } from "../../../src/lib/auth/bearer-assertion";
+import { logWarn } from "../../../src/lib/logger";
 import { PlatformContext } from "../../../src/lib/context";
 import { base64UrlEncodeString, signAssertion } from "./assertion-helper";
+
+vi.mock("../../../src/lib/logger", () => ({
+  logError: vi.fn(),
+  logWarn: vi.fn(),
+  logInfo: vi.fn()
+}));
 
 const SECRET = "test-secret";
 
@@ -286,5 +293,39 @@ describe("identitySyncAssertionVerifier", () => {
         platformWithSecret(SECRET)
       )
     ).toBeNull();
+  });
+});
+
+describe("verification warnings", () => {
+  beforeEach(() => {
+    // Push past the warn throttle so assertions below are meaningful
+    // rather than an artifact of earlier tests warning first.
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.now() + 61_000);
+    vi.mocked(logWarn).mockClear();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("does not warn for a sibling-purpose assertion", async () => {
+    const token = await signAssertion(SECRET, { sub: "user-42" });
+    expect(
+      await identitySyncAssertionVerifier.verify(
+        token,
+        platformWithSecret(SECRET)
+      )
+    ).toBeNull();
+    expect(logWarn).not.toHaveBeenCalled();
+  });
+
+  it("still warns for tokens valid for neither purpose", async () => {
+    expect(
+      await identitySyncAssertionVerifier.verify(
+        "not-a-jwt",
+        platformWithSecret(SECRET)
+      )
+    ).toBeNull();
+    expect(logWarn).toHaveBeenCalledTimes(1);
   });
 });

@@ -18,6 +18,19 @@ Unknown query parameters and equivalent pagination spellings reuse the same
 entry. This endpoint is public: Authorization does not affect its response or
 bypass its cache. Validation failures and database errors are not cached.
 
+When `limit` is usable the response adds a `pagination` object next to
+`alerts`:
+
+```json
+{
+  "result": {
+    "alerts": [],
+    "pagination": { "limit": 1, "offset": 0, "has_more": true }
+  },
+  "error": null
+}
+```
+
 **Response:**
 
 ```json
