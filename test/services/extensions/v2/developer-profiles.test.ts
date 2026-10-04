@@ -42,6 +42,159 @@ setupExtensionsV2Tests();
 
 describe("Extensions API v2", () => {
   describe("PUT /developers/me", () => {
+    it("coalesces identical and concurrent replays without changing approval or history", async () => {
+      const headers = await authHeaders("replay-owner");
+      const profile = sampleDeveloper({ id: "replay-profile" });
+      expect(
+        (await put("/extensions/v2/developers/me", headers, profile)).status
+      ).toBe(200);
+      await db
+        .prepare(
+          "UPDATE developers SET approved_at = CURRENT_TIMESTAMP, approved_revision = content_revision WHERE id = ?"
+        )
+        .bind(profile.id)
+        .run();
+      const before = await getDeveloper(db, profile.id);
+      const responses = await Promise.all(
+        Array.from({ length: 6 }, () =>
+          put("/extensions/v2/developers/me", headers, profile)
+        )
+      );
+      expect(responses.map((r) => r.status)).toEqual(Array(6).fill(200));
+      expect(await getDeveloper(db, profile.id)).toEqual(before);
+      expect(await listDeveloperHistory(db)).toHaveLength(1);
+    });
+
+    it("budgets real edits atomically and retains the account budget after deletion", async () => {
+      const headers = await authHeaders("budget-owner");
+      const profile = sampleDeveloper({ id: "budget-profile" });
+      expect(
+        (await put("/extensions/v2/developers/me", headers, profile)).status
+      ).toBe(200);
+      for (let i = 0; i < 18; i++) {
+        await db
+          .prepare(
+            "INSERT INTO developer_history (id, developer_id, type, name, changed_by) VALUES (?, ?, 'user', 'Budget', ?)"
+          )
+          .bind(`budget-${i}`, profile.id, "budget-owner")
+          .run();
+      }
+      const raced = await Promise.all(
+        ["Last A", "Last B"].map((name) =>
+          put("/extensions/v2/developers/me", headers, { ...profile, name })
+        )
+      );
+      expect(raced.filter((r) => r.status === 200)).toHaveLength(1);
+      const losers = raced.filter((r) => r.status !== 200);
+      expect(losers).toHaveLength(1);
+      expect(losers[0].status).toBe(429);
+      expect(await losers[0].json()).toMatchObject({
+        error: { code: "PROFILE_MUTATION_RATE_LIMITED" }
+      });
+      expect(await listDeveloperHistory(db)).toHaveLength(20);
+      const current = await getDeveloper(db, profile.id);
+      expect(
+        (
+          await put("/extensions/v2/developers/me", headers, {
+            ...profile,
+            name: current!.name
+          })
+        ).status
+      ).toBe(200);
+      const denied = await put("/extensions/v2/developers/me", headers, {
+        ...profile,
+        name: "Over quota"
+      });
+      expect(denied.status).toBe(429);
+      expect(denied.headers.get("Retry-After")).toBe("86400");
+      expect(await denied.json()).toMatchObject({
+        error: { code: "PROFILE_MUTATION_RATE_LIMITED" }
+      });
+      expect((await del("/extensions/v2/developers/me", headers)).status).toBe(
+        200
+      );
+      expect(
+        (await put("/extensions/v2/developers/me", headers, profile)).status
+      ).toBe(429);
+      expect(await listDeveloperHistory(db)).toHaveLength(20);
+      expect(
+        (
+          await put(
+            "/extensions/v2/developers/me",
+            await authHeaders("independent-owner"),
+            sampleDeveloper({ id: "independent-profile" })
+          )
+        ).status
+      ).toBe(200);
+    });
+
+    it("allows writes after old history leaves the window and audits all editable fields", async () => {
+      const headers = await authHeaders("expired-budget-owner");
+      let profile = sampleDeveloper({ id: "expired-profile" });
+      for (let i = 0; i < 20; i++) {
+        await db
+          .prepare(
+            "INSERT INTO developer_history (id, developer_id, type, name, changed_by, changed_at) VALUES (?, ?, 'user', 'Old', ?, datetime('now', '-2 days'))"
+          )
+          .bind(`old-${i}`, profile.id, "expired-budget-owner")
+          .run();
+      }
+      expect(
+        (await put("/extensions/v2/developers/me", headers, profile)).status
+      ).toBe(200);
+      for (const edit of [
+        { name: "New name" },
+        { type: "organization" as const },
+        { URL: "https://example.com/new" },
+        { avatar_url: "https://example.com/avatar.png" },
+        { contact_email: "new@example.com" }
+      ]) {
+        profile = { ...profile, ...edit };
+        expect(
+          (await put("/extensions/v2/developers/me", headers, profile)).status
+        ).toBe(200);
+      }
+      expect(await listDeveloperHistory(db)).toHaveLength(26);
+      expect((await getDeveloper(db, profile.id))?.content_revision).toBe(6);
+    });
+
+    it("treats omitted optional fields as null and audits clearing them once", async () => {
+      const headers = await authHeaders("null-profile-owner");
+      const profile = {
+        id: "null-profile",
+        type: "user",
+        name: "Null profile"
+      };
+      expect(
+        (await put("/extensions/v2/developers/me", headers, profile)).status
+      ).toBe(200);
+      expect(
+        (await put("/extensions/v2/developers/me", headers, profile)).status
+      ).toBe(200);
+      expect(await listDeveloperHistory(db)).toHaveLength(1);
+      expect(
+        (
+          await put("/extensions/v2/developers/me", headers, {
+            ...profile,
+            URL: "https://example.com",
+            avatar_url: "https://example.com/avatar",
+            contact_email: "owner@example.com"
+          })
+        ).status
+      ).toBe(200);
+      expect(
+        (await put("/extensions/v2/developers/me", headers, profile)).status
+      ).toBe(200);
+      expect(
+        (await put("/extensions/v2/developers/me", headers, profile)).status
+      ).toBe(200);
+      expect(await listDeveloperHistory(db)).toHaveLength(3);
+      const current = await getDeveloper(db, profile.id);
+      expect(current?.url).toBeNull();
+      expect(current?.avatar_url).toBeNull();
+      expect(current?.contact_email).toBeNull();
+    });
+
     it("limits creation attempts per account before GitHub and database writes", async () => {
       mockGithubEntity("Organization");
       const firstHeaders = await authHeaders("rate-limited-account");

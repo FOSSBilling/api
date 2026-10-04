@@ -8,7 +8,28 @@ The Central Alerts service provides targeted notifications to FOSSBilling instal
 
 ### GET `/list`
 
-Retrieve all alerts in the system.
+Retrieve all alerts in the system. Optional `limit` (integer 1–100) and
+`offset` enable pagination. An unusable limit keeps the full-list response;
+`offset` without a usable limit returns 422. An omitted or unusable offset
+with a usable limit defaults to zero.
+
+Successful responses are edge-cached for 60 seconds by the effective page.
+Unknown query parameters and equivalent pagination spellings reuse the same
+entry. This endpoint is public: Authorization does not affect its response or
+bypass its cache. Validation failures and database errors are not cached.
+
+When `limit` is usable the response adds a `pagination` object next to
+`alerts`:
+
+```json
+{
+  "result": {
+    "alerts": [],
+    "pagination": { "limit": 1, "offset": 0, "has_more": true }
+  },
+  "error": null
+}
+```
 
 **Response:**
 

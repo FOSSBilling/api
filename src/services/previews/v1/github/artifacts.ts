@@ -1,4 +1,4 @@
-import { request as ghRequest } from "@octokit/request";
+import { PreviewGitHub, previewRequest } from "./request";
 import {
   classifyGitHubError,
   GitHubError,
@@ -68,11 +68,12 @@ function unavailable<T>(
 }
 
 async function listArtifacts(
-  githubToken: string,
+  github: PreviewGitHub,
   name: string | undefined,
   page: number = 1
 ): Promise<RawArtifact[]> {
-  const result = await ghRequest(
+  const result = await previewRequest(
+    github,
     "GET /repos/{owner}/{repo}/actions/artifacts",
     {
       owner: REPO_OWNER,
@@ -80,7 +81,7 @@ async function listArtifacts(
       ...(name ? { name } : {}),
       per_page: 100,
       page,
-      headers: { Authorization: `Bearer ${githubToken}` }
+      headers: { Authorization: `Bearer ${github.token}` }
     }
   );
   return result.data.artifacts as RawArtifact[];
@@ -103,11 +104,11 @@ const MAX_FALLBACK_PAGES = 50;
 // through until GitHub returns a page short of per_page - the real "no
 // more results" signal - or a match is found, whichever happens first.
 async function findInFallbackPages(
-  githubToken: string,
+  github: PreviewGitHub,
   shaLower: string
 ): Promise<ArtifactMatch | null> {
   for (let page = 1; page <= MAX_FALLBACK_PAGES; page++) {
-    const artifacts = await listArtifacts(githubToken, undefined, page);
+    const artifacts = await listArtifacts(github, undefined, page);
     const match = matchArtifact(
       artifacts.filter((artifact) =>
         artifact.name?.startsWith(ARTIFACT_NAME_PREFIX)
@@ -127,17 +128,18 @@ async function findInFallbackPages(
 const MAX_RUN_ARTIFACT_LISTINGS = 50;
 
 async function listRunArtifacts(
-  githubToken: string,
+  github: PreviewGitHub,
   runId: number
 ): Promise<RawArtifact[]> {
-  const result = await ghRequest(
+  const result = await previewRequest(
+    github,
     "GET /repos/{owner}/{repo}/actions/runs/{run_id}/artifacts",
     {
       owner: REPO_OWNER,
       repo: REPO_NAME,
       run_id: runId,
       per_page: 100,
-      headers: { Authorization: `Bearer ${githubToken}` }
+      headers: { Authorization: `Bearer ${github.token}` }
     }
   );
   return result.data.artifacts as RawArtifact[];
@@ -153,20 +155,24 @@ async function listRunArtifacts(
 // workflow_run is synthesized from the run at hand when absent, so
 // matchArtifact can rely on it.
 async function findArtifactByRunHeadSha(
-  githubToken: string,
+  github: PreviewGitHub,
   shaLower: string
 ): Promise<ArtifactMatch | null> {
   let listingsLeft = MAX_RUN_ARTIFACT_LISTINGS;
 
   for (let page = 1; ; page++) {
-    const result = await ghRequest("GET /repos/{owner}/{repo}/actions/runs", {
-      owner: REPO_OWNER,
-      repo: REPO_NAME,
-      head_sha: shaLower,
-      per_page: 100,
-      page,
-      headers: { Authorization: `Bearer ${githubToken}` }
-    });
+    const result = await previewRequest(
+      github,
+      "GET /repos/{owner}/{repo}/actions/runs",
+      {
+        owner: REPO_OWNER,
+        repo: REPO_NAME,
+        head_sha: shaLower,
+        per_page: 100,
+        page,
+        headers: { Authorization: `Bearer ${github.token}` }
+      }
+    );
     const runs = (result.data.workflow_runs ?? []) as Array<{
       id: number;
       head_sha: string;
@@ -184,7 +190,7 @@ async function findArtifactByRunHeadSha(
           "workflow-run artifact scan exhausted its listing budget before matching"
         );
       }
-      const artifacts = await listRunArtifacts(githubToken, run.id);
+      const artifacts = await listRunArtifacts(github, run.id);
       const match = matchArtifact(
         artifacts
           .filter((artifact) => artifact.name?.startsWith(ARTIFACT_NAME_PREFIX))
@@ -264,23 +270,20 @@ function toPreviewArtifact(match: ArtifactMatch): PreviewArtifact {
 // size); short prefixes stay on the page scan (findInFallbackPages),
 // since the runs API can't be trusted to match on a partial SHA.
 export async function findPreviewArtifactByCommitSha(
-  githubToken: string,
+  github: PreviewGitHub,
   sha: string
 ): Promise<GithubLookupResult<PreviewArtifact>> {
   const shaLower = sha.toLowerCase();
   const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/actions/artifacts`;
   try {
-    const exact = await listArtifacts(
-      githubToken,
-      artifactNameForSha(shaLower)
-    );
+    const exact = await listArtifacts(github, artifactNameForSha(shaLower));
     let match = matchArtifact(exact, shaLower);
 
     if (!match) {
       match =
         shaLower.length === 40
-          ? await findArtifactByRunHeadSha(githubToken, shaLower)
-          : await findInFallbackPages(githubToken, shaLower);
+          ? await findArtifactByRunHeadSha(github, shaLower)
+          : await findInFallbackPages(github, shaLower);
     }
 
     if (!match) {
@@ -294,18 +297,19 @@ export async function findPreviewArtifactByCommitSha(
 }
 
 export async function resolvePullRequestHeadSha(
-  githubToken: string,
+  github: PreviewGitHub,
   prNumber: number
 ): Promise<GithubLookupResult<string>> {
   const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/pulls/${prNumber}`;
   try {
-    const result = await ghRequest(
+    const result = await previewRequest(
+      github,
       "GET /repos/{owner}/{repo}/pulls/{pull_number}",
       {
         owner: REPO_OWNER,
         repo: REPO_NAME,
         pull_number: prNumber,
-        headers: { Authorization: `Bearer ${githubToken}` }
+        headers: { Authorization: `Bearer ${github.token}` }
       }
     );
     return { status: "found", data: result.data.head.sha };
@@ -320,12 +324,13 @@ export async function resolvePullRequestHeadSha(
 // download-worker/src/preview.ts's getArtifactDownloadUrl - GitHub answers
 // with a 302 to a signed, temporary URL rather than the file itself.
 export async function getArtifactDownloadUrl(
-  githubToken: string,
+  github: PreviewGitHub,
   artifactId: number
 ): Promise<GithubLookupResult<string>> {
   const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/actions/artifacts/${artifactId}/zip`;
   try {
-    const result = await ghRequest(
+    const result = await previewRequest(
+      github,
       "GET /repos/{owner}/{repo}/actions/artifacts/{artifact_id}/{archive_format}",
       {
         owner: REPO_OWNER,
@@ -333,7 +338,7 @@ export async function getArtifactDownloadUrl(
         artifact_id: artifactId,
         archive_format: "zip",
         request: { redirect: "manual" },
-        headers: { Authorization: `Bearer ${githubToken}` }
+        headers: { Authorization: `Bearer ${github.token}` }
       }
     );
 

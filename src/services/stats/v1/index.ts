@@ -1,5 +1,4 @@
 import { Hono } from "hono";
-import { cache } from "hono/cache";
 import { cors } from "hono/cors";
 import { etag } from "hono/etag";
 import { prettyJSON } from "hono/pretty-json";
@@ -10,7 +9,7 @@ import { Releases } from "../../versions/v1/interfaces";
 import { StatsData, ReleasesPerYearData } from "./interfaces";
 import { getPlatform } from "../../../lib/middleware";
 import { ICache } from "../../../lib/interfaces";
-import { publicCacheKey } from "../../../lib/cache";
+import { publicCacheKey, publicResponseCache } from "../../../lib/cache";
 import { logError, logInfo } from "../../../lib/logger";
 import { GitHubError } from "../../../lib/github-errors";
 
@@ -37,7 +36,9 @@ function registerCachedRoute<P extends string>(
 ) {
   return statsV1.get(
     path,
-    cache({
+    // Honor conditional requests on cache hits; the inner etag stamps entries.
+    etag(),
+    publicResponseCache({
       cacheName: STATS_CACHE_NAME,
       cacheControl: STATS_CACHE_CONTROL,
       keyGenerator: publicCacheKey

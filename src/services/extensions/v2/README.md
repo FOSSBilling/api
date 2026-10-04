@@ -166,6 +166,23 @@ Requests carry a short-lived bearer assertion minted by the Extensions site and 
 
 Assertions use HS256 and include the exact issuer `fossbilling-extensions`, audience `fossbilling-api/extensions-v2`, purpose `user-authentication`, and protocol version `1`. They are valid for at most 60 seconds.
 
+`PUT /users/me/identity` instead requires purpose `identity-sync` with a
+`body_sha256` claim containing the lowercase hexadecimal SHA-256 digest of the
+exact UTF-8 JSON request bytes. Other claims and lifetime requirements stay the
+same. The site must derive the projection from trusted provider data, serialize
+once, hash those bytes, sign, and send the same bytes. Never mint identity proofs
+for browser-supplied projections or expose these proofs to clients.
+Ordinary user assertions and mismatched bodies receive 403 on this endpoint;
+missing or invalid credentials receive 401. Identity proofs cannot authorize
+other API routes. Schema validation remains 422 after proof verification.
+
+Deploy the site's new identity-sync signer with this API change; the previous
+unsigned-body sync protocol is intentionally rejected. Membership expiry is
+capped to one hour from synchronization and never extended past the supplied
+expiry. Invalid or stale evidence remains unavailable for automatic verification.
+Review historical identity projections and derived verification records if prior
+abuse is suspected; this ingress fix does not attest to previously stored data.
+
 ### Rotating the Shared Secret
 
 `ASSERTION_SIGNING_SECRET_PREVIOUS` is an optional second secret accepted only as a temporary rotation window. To rotate without interrupting requests:
@@ -240,3 +257,29 @@ Migration `0021` also drops any submission filed under a developer that no longe
 ## Code Layout
 
 See `AGENTS.md` for what belongs in `routes/`, `db/`, `schemas/`, `github/`, and `middleware.ts`. This service is the reference layout for larger services.
+
+### Claim verification budget
+
+Claim verification is limited before contacting GitHub: 3 attempts per account
+and per normalized developer ID per 60 seconds, plus 300 aggregate claim
+verification attempts per hour. D1 reserves all budgets atomically. Mismatches,
+upstream failures, and cancellation do not refund attempts. Exhaustion returns
+429 (`RATE_LIMITED`); sequential replays of a pending claim short-circuit to
+409 before spending quota, but two requests racing each other can each spend
+one attempt before the unique index decides the winner. Deploy migration
+`0024_claim_verification_budgets.sql` before the Worker update.
+The aggregate budget covers claims only and leaves shared GitHub capacity for
+other workflows; it is not a budget for every GitHub consumer.
+
+### Profile write budget
+
+`PUT /developers/me` permits 20 successful profile writes per account in a
+rolling 24-hour window, including creation. Exhaustion returns 429 with
+`PROFILE_MUTATION_RATE_LIMITED` and a conservative `Retry-After: 86400`.
+Unchanged submissions return the current profile without changing approval,
+revision, audit history, or revalidating the catalogue. All five editable fields
+participate in the comparison; omitted optional fields mean null. The budget is
+enforced atomically with the write using indexed, immutable history and survives
+profile deletion, recreation, and ownership transfer. Audit records remain
+append-only; this bounds growth per account per day rather than total retention.
+Apply migration `0025_luxuriant_franklin_richards.sql` before deploying.

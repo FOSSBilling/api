@@ -1,3 +1,4 @@
+import { isolateEdgeCache } from "../../../utils/isolate-edge-cache";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   env,
@@ -50,12 +51,11 @@ vi.mock("@octokit/graphql", () => ({
 
 let restoreConsole: (() => void) | null = null;
 
-// Requests carrying an Authorization header bypass the hono cache middleware
-// entirely, so tests that mock specific GitHub responses and assert on the
-// handler output are guaranteed to execute the handler rather than read an
-// entry a previous test cached. The cache path itself is covered by
-// "should cache statistics data", which deliberately omits the header.
-const NO_CACHE_HEADERS = { authorization: "test-bypass-cache" } as const;
+// Arbitrary credentials must behave like anonymous public requests.
+// Edge entries are cleared between tests to exercise live handlers.
+const PUBLIC_HEADERS = { authorization: "test-bypass-cache" } as const;
+
+const resetEdgeCache = isolateEdgeCache();
 
 describe("Stats API v1", () => {
   beforeEach(async () => {
@@ -68,6 +68,7 @@ describe("Stats API v1", () => {
     await env.AUTH_KV.put("UPDATE_TOKEN", testUpdateToken);
 
     vi.clearAllMocks();
+    resetEdgeCache();
     setupGitHubApiMock(
       vi.mocked(ghRequest) as MockGitHubRequest,
       vi.mocked(graphql) as unknown as MockGitHubGraphQL,
@@ -80,12 +81,47 @@ describe("Stats API v1", () => {
     if (restoreConsole) restoreConsole();
   });
 
+  it.each(["/stats/v1", "/stats/v1/data"])(
+    "shares the public edge entry across credentials for %s",
+    async (path) => {
+      const requestAs = async (authorization?: string) => {
+        const ctx = createExecutionContext();
+        const response = await app.request(
+          path,
+          {
+            headers: authorization === undefined ? {} : { authorization }
+          },
+          env,
+          ctx
+        );
+        await waitOnExecutionContext(ctx);
+        return response;
+      };
+      const first = await requestAs("Bearer arbitrary-cold");
+      expect(first.status).toBe(200);
+      const body = await first.text();
+      const get = vi
+        .spyOn(env.CACHE_KV, "get")
+        .mockRejectedValue(new Error("backend must not be read"));
+      try {
+        for (const authorization of [undefined, "x", "Bearer other", ""]) {
+          const response = await requestAs(authorization);
+          expect(response.status).toBe(200);
+          await expect(response.text()).resolves.toBe(body);
+        }
+        expect(get).not.toHaveBeenCalled();
+      } finally {
+        get.mockRestore();
+      }
+    }
+  );
+
   describe("GET /stats/v1/data", () => {
     it("should return aggregated statistics", async () => {
       const ctx = createExecutionContext();
       const response = await app.fetch(
         new Request("http://localhost/stats/v1/data", {
-          headers: NO_CACHE_HEADERS
+          headers: PUBLIC_HEADERS
         }),
         env,
         ctx
@@ -176,7 +212,7 @@ describe("Stats API v1", () => {
       const ctx = createExecutionContext();
       const response = await app.fetch(
         new Request("http://localhost/stats/v1/data", {
-          headers: NO_CACHE_HEADERS
+          headers: PUBLIC_HEADERS
         }),
         env,
         ctx
@@ -247,7 +283,7 @@ describe("Stats API v1", () => {
       const ctx = createExecutionContext();
       const response = await app.fetch(
         new Request("http://localhost/stats/v1/data", {
-          headers: NO_CACHE_HEADERS
+          headers: PUBLIC_HEADERS
         }),
         env,
         ctx
@@ -310,7 +346,7 @@ describe("Stats API v1", () => {
       const ctx = createExecutionContext();
       const response = await app.fetch(
         new Request("http://localhost/stats/v1/data", {
-          headers: NO_CACHE_HEADERS
+          headers: PUBLIC_HEADERS
         }),
         env,
         ctx

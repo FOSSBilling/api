@@ -23,7 +23,8 @@ interface AssertionPayload {
   exp: number;
   iss: typeof ASSERTION_ISSUER;
   aud: typeof ASSERTION_AUDIENCE;
-  purpose: typeof ASSERTION_PURPOSE;
+  purpose: typeof ASSERTION_PURPOSE | "identity-sync";
+  body_sha256?: string;
   ver: typeof ASSERTION_VERSION;
 }
 
@@ -31,7 +32,10 @@ function isInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value);
 }
 
-function isAssertionPayload(value: unknown): value is AssertionPayload {
+function isAssertionPayload(
+  value: unknown,
+  purpose: AssertionPayload["purpose"]
+): value is AssertionPayload {
   if (typeof value !== "object" || value === null) return false;
   const record = value as Record<string, unknown>;
   return (
@@ -41,7 +45,10 @@ function isAssertionPayload(value: unknown): value is AssertionPayload {
     isInteger(record.exp) &&
     record.iss === ASSERTION_ISSUER &&
     record.aud === ASSERTION_AUDIENCE &&
-    record.purpose === ASSERTION_PURPOSE &&
+    record.purpose === purpose &&
+    (purpose !== "identity-sync" ||
+      (typeof record.body_sha256 === "string" &&
+        /^[a-f0-9]{64}$/.test(record.body_sha256))) &&
     record.ver === ASSERTION_VERSION
   );
 }
@@ -77,44 +84,69 @@ function importedKeyFor(secret: string): Promise<CryptoKey> {
 // (header.payload.signature). Hono performs JWT parsing and signature
 // verification with the algorithm pinned by ASSERTION_VERIFY_OPTIONS; the
 // checks below are specific to this assertion profile.
-export const bearerAssertionVerifier: TokenVerifier = {
-  async verify(token, platform): Promise<AuthPrincipal | null> {
-    const secrets = [
-      platform.getEnv("ASSERTION_SIGNING_SECRET"),
-      platform.getEnv("ASSERTION_SIGNING_SECRET_PREVIOUS")
-    ].filter((secret): secret is string => Boolean(secret));
-    if (secrets.length === 0) return null;
+function assertionVerifier(
+  purpose: AssertionPayload["purpose"]
+): TokenVerifier {
+  // The sibling purpose's verifier runs alongside this one (see
+  // requireIdentitySync): an assertion minted for it is expected traffic
+  // here, not a misconfiguration, so it must not trip the warning below.
+  const sibling: AssertionPayload["purpose"] =
+    purpose === "identity-sync" ? ASSERTION_PURPOSE : "identity-sync";
+  return {
+    async verify(token, platform): Promise<AuthPrincipal | null> {
+      const secrets = [
+        platform.getEnv("ASSERTION_SIGNING_SECRET"),
+        platform.getEnv("ASSERTION_SIGNING_SECRET_PREVIOUS")
+      ].filter((secret): secret is string => Boolean(secret));
+      if (secrets.length === 0) return null;
 
-    for (const secret of secrets) {
-      let payload: unknown;
-      try {
-        payload = await verifyJwt(
-          token,
-          await importedKeyFor(secret),
-          ASSERTION_VERIFY_OPTIONS
-        );
-      } catch {
-        continue;
+      let sawSiblingPurpose = false;
+      for (const secret of secrets) {
+        let payload: unknown;
+        try {
+          payload = await verifyJwt(
+            token,
+            await importedKeyFor(secret),
+            ASSERTION_VERIFY_OPTIONS
+          );
+        } catch {
+          continue;
+        }
+        if (!isAssertionPayload(payload, purpose)) {
+          if (isAssertionPayload(payload, sibling)) sawSiblingPurpose = true;
+          continue;
+        }
+
+        const now = Math.floor(Date.now() / 1000);
+        if (payload.iat > now + CLOCK_SKEW_SECONDS) continue;
+        if (payload.exp <= payload.iat) continue;
+        if (payload.exp - payload.iat > ASSERTION_TTL_SECONDS) continue;
+
+        if (purpose === "identity-sync") {
+          // isAssertionPayload() verified body_sha256 above; re-check here
+          // so the type narrows without a non-null assertion.
+          const bodySha256 = payload.body_sha256;
+          if (typeof bodySha256 !== "string") continue;
+          return { userId: payload.sub, scope: "identity_sync", bodySha256 };
+        }
+        return { userId: payload.sub, scope: "assertion" };
       }
-      if (!isAssertionPayload(payload)) continue;
 
-      const now = Math.floor(Date.now() / 1000);
-      if (payload.iat > now + CLOCK_SKEW_SECONDS) continue;
-      if (payload.exp <= payload.iat) continue;
-      if (payload.exp - payload.iat > ASSERTION_TTL_SECONDS) continue;
-
-      return { userId: payload.sub, scope: "assertion" };
+      // A consistent failure across every configured secret is the only
+      // signal a misconfigured ASSERTION_SIGNING_SECRET produces.
+      // Sibling-purpose assertions are expected here, so they skip it.
+      const now = Date.now();
+      if (!sawSiblingPurpose && now - lastAuthWarnAt >= WARN_INTERVAL_MS) {
+        lastAuthWarnAt = now;
+        logWarn("auth", "Bearer assertion failed verification", {
+          secretsTried: secrets.length
+        });
+      }
+      return null;
     }
+  };
+}
 
-    // A consistent failure across every configured secret is the only
-    // signal a misconfigured ASSERTION_SIGNING_SECRET produces.
-    const now = Date.now();
-    if (now - lastAuthWarnAt >= WARN_INTERVAL_MS) {
-      lastAuthWarnAt = now;
-      logWarn("auth", "Bearer assertion failed verification", {
-        secretsTried: secrets.length
-      });
-    }
-    return null;
-  }
-};
+export const bearerAssertionVerifier = assertionVerifier(ASSERTION_PURPOSE);
+// Service proofs are not registered in the general bearer verifier list.
+export const identitySyncAssertionVerifier = assertionVerifier("identity-sync");

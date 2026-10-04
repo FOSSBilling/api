@@ -131,6 +131,7 @@ async function clearDeveloperHistory(db: D1Database): Promise<void> {
 }
 
 export async function resetExtensionsDb(db: D1Database): Promise<void> {
+  await db.prepare("DELETE FROM claim_verification_budgets").run();
   await clearDeveloperHistory(db);
   for (const table of [
     "extension_revisions",

@@ -321,6 +321,10 @@ export const developerHistory = sqliteTable(
     index("idx_developer_history_developer_changed_at").on(
       table.developerId,
       table.changedAt
+    ),
+    index("idx_developer_history_account_changed_at").on(
+      table.changedBy,
+      table.changedAt
     )
   ]
 );
@@ -392,5 +396,18 @@ export const developerClaims = sqliteTable(
       "developer_claims_github_org_verified_check",
       sql`${table.githubOrgVerified} IN (0, 1)`
     )
+  ]
+);
+
+// No identity foreign keys: deleting an account or claim must not reset quota.
+export const claimVerificationBudgets = sqliteTable(
+  "claim_verification_budgets",
+  {
+    key: text("key").primaryKey(),
+    attempts: integer("attempts").notNull(),
+    expiresAt: integer("expires_at").notNull()
+  },
+  (table) => [
+    index("idx_claim_verification_budgets_expiry").on(table.expiresAt)
   ]
 );

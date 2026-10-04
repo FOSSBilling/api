@@ -144,9 +144,16 @@ export class UsersDatabase {
       updatedAt: now,
       githubLogin: input.githubLogin,
       githubOrgs: hasFreshGithubOrgs ? JSON.stringify(input.githubOrgs) : null,
-      githubOrgsExpiresAt: hasFreshGithubOrgs
-        ? input.githubOrgsExpiresAt
-        : null,
+      // Bound even a trusted service's membership snapshot to one hour.
+      githubOrgsExpiresAt:
+        hasFreshGithubOrgs && typeof input.githubOrgsExpiresAt === "string"
+          ? new Date(
+              Math.min(
+                Date.parse(input.githubOrgsExpiresAt),
+                Date.parse(now) + 60 * 60 * 1000
+              )
+            ).toISOString()
+          : null,
       deletedAt: null
     };
 

@@ -1,7 +1,17 @@
-import { describe, it, expect } from "vitest";
-import { bearerAssertionVerifier } from "../../../src/lib/auth/bearer-assertion";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
+import {
+  bearerAssertionVerifier,
+  identitySyncAssertionVerifier
+} from "../../../src/lib/auth/bearer-assertion";
+import { logWarn } from "../../../src/lib/logger";
 import { PlatformContext } from "../../../src/lib/context";
 import { base64UrlEncodeString, signAssertion } from "./assertion-helper";
+
+vi.mock("../../../src/lib/logger", () => ({
+  logError: vi.fn(),
+  logWarn: vi.fn(),
+  logInfo: vi.fn()
+}));
 
 const SECRET = "test-secret";
 
@@ -205,5 +215,117 @@ describe("bearerAssertionVerifier", () => {
     );
 
     expect(principal).toBeNull();
+  });
+});
+
+describe("identitySyncAssertionVerifier", () => {
+  it("requires the dedicated purpose and a signed SHA-256 digest", async () => {
+    expect(
+      await identitySyncAssertionVerifier.verify(
+        await signAssertion(SECRET),
+        platformWithSecret(SECRET)
+      )
+    ).toBeNull();
+    const digest = "a".repeat(64);
+    const token = await signAssertion(SECRET, {
+      purpose: "identity-sync",
+      bodySha256: digest
+    });
+    expect(
+      await identitySyncAssertionVerifier.verify(
+        token,
+        platformWithSecret(SECRET)
+      )
+    ).toEqual({ userId: "user-1", scope: "identity_sync", bodySha256: digest });
+    expect(
+      await bearerAssertionVerifier.verify(token, platformWithSecret(SECRET))
+    ).toBeNull();
+  });
+  it.each([undefined, "", "A".repeat(64), "a".repeat(63), "z".repeat(64)])(
+    "rejects an invalid digest %s",
+    async (bodySha256) => {
+      const token = await signAssertion(SECRET, {
+        purpose: "identity-sync",
+        bodySha256
+      });
+      expect(
+        await identitySyncAssertionVerifier.verify(
+          token,
+          platformWithSecret(SECRET)
+        )
+      ).toBeNull();
+    }
+  );
+  it.each([
+    { iss: "wrong" },
+    { aud: "wrong" },
+    { ver: 2 },
+    { exp: Math.floor(Date.now() / 1000) - 1 },
+    { iat: Math.floor(Date.now() / 1000) + 10 },
+    { exp: Math.floor(Date.now() / 1000) + 120 }
+  ])("rejects invalid identity proof metadata %j", async (overrides) => {
+    const token = await signAssertion(SECRET, {
+      purpose: "identity-sync",
+      bodySha256: "a".repeat(64),
+      ...overrides
+    });
+    expect(
+      await identitySyncAssertionVerifier.verify(
+        token,
+        platformWithSecret(SECRET)
+      )
+    ).toBeNull();
+  });
+  it("preserves secret rotation for service proofs", async () => {
+    const token = await signAssertion("previous", {
+      purpose: "identity-sync",
+      bodySha256: "a".repeat(64)
+    });
+    expect(
+      await identitySyncAssertionVerifier.verify(
+        token,
+        platformWithSecret(SECRET, "previous")
+      )
+    ).not.toBeNull();
+    expect(
+      await identitySyncAssertionVerifier.verify(
+        token,
+        platformWithSecret(SECRET)
+      )
+    ).toBeNull();
+  });
+});
+
+describe("verification warnings", () => {
+  beforeEach(() => {
+    // Push past the warn throttle so assertions below are meaningful
+    // rather than an artifact of earlier tests warning first.
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.now() + 61_000);
+    vi.mocked(logWarn).mockClear();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("does not warn for a sibling-purpose assertion", async () => {
+    const token = await signAssertion(SECRET, { sub: "user-42" });
+    expect(
+      await identitySyncAssertionVerifier.verify(
+        token,
+        platformWithSecret(SECRET)
+      )
+    ).toBeNull();
+    expect(logWarn).not.toHaveBeenCalled();
+  });
+
+  it("still warns for tokens valid for neither purpose", async () => {
+    expect(
+      await identitySyncAssertionVerifier.verify(
+        "not-a-jwt",
+        platformWithSecret(SECRET)
+      )
+    ).toBeNull();
+    expect(logWarn).toHaveBeenCalledTimes(1);
   });
 });

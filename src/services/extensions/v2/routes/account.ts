@@ -53,6 +53,7 @@ export function registerAccountRoutes(app: ExtensionsV2App): void {
         },
         description: "Identity projection synchronized"
       },
+      400: errorResponse("Request body could not be read"),
       401: errorResponse("Missing or invalid bearer token"),
       403: {
         ...ActiveAccountRequiredResponse,
@@ -64,10 +65,8 @@ export function registerAccountRoutes(app: ExtensionsV2App): void {
   });
 
   app.openapi(syncIdentityRoute, async (c) => {
-    // requireIdentitySync has already verified the HMAC assertion minted by
-    // the trusted Extensions site. The projection fields below therefore
-    // represent the site's OIDC callback, while authorization state remains
-    // API-owned and is never accepted from the request body.
+    // requireIdentitySync verified a dedicated service assertion and the
+    // digest of the exact body validated here. Authorization stays API-owned.
     const auth = getAuth(c);
     const body = c.req.valid("json");
     const users = new UsersDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));

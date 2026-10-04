@@ -1,3 +1,4 @@
+import { isolateEdgeCache } from "../utils/isolate-edge-cache";
 /**
  * Tests for FOSSBilling API Worker - Main Application
  *
@@ -12,10 +13,7 @@ import {
 } from "cloudflare:test";
 import app from "../../src/app/index";
 
-// Requests carrying an Authorization header bypass hono's cache middleware so
-// tests that assert KV writes or handler runs reach the live handler rather
-// than an edge-cached response from an earlier test. /update calls keep
-// their exact auth headers and are excluded.
+// Arbitrary credentials use the public cache; isolate entries between tests.
 const BYPASS_CACHE = { authorization: "test-bypass-cache" } as const;
 import {
   ApiResponse,
@@ -72,6 +70,8 @@ const mockComposerJson = {
   }
 };
 
+const resetEdgeCache = isolateEdgeCache();
+
 describe("FOSSBilling API Worker - Main App", () => {
   beforeAll(applyTestMigrations);
 
@@ -86,6 +86,7 @@ describe("FOSSBilling API Worker - Main App", () => {
 
     // Reset all mocks
     vi.clearAllMocks();
+    resetEdgeCache();
 
     // Setup default GitHub API mock responses
     (vi.mocked(ghRequest) as MockGitHubRequest).mockImplementation(

@@ -1,4 +1,5 @@
-import type { Context } from "hono";
+import type { Context, MiddlewareHandler } from "hono";
+import { cache } from "hono/cache";
 
 export function normalizePublicCacheKey(url: string): string {
   const cacheUrl = new URL(url);
@@ -27,4 +28,31 @@ export function singleFlight<T>(
   const promise = resolve().finally(() => inflight.delete(key));
   inflight.set(key, promise);
   return promise;
+}
+
+// Only for public GET representations that never depend on credentials.
+// Keep Hono's key/Vary and response privacy safeguards, but prevent an
+// unused Authorization header from turning off backend-protective caching.
+// Downstream handlers always see the original request (including credentials).
+export function publicResponseCache(
+  options: Parameters<typeof cache>[0]
+): MiddlewareHandler {
+  const middleware = cache(options);
+  return async (c, next) => {
+    const original = c.req.raw;
+    if (c.req.method !== "GET" || !original.headers.has("Authorization")) {
+      return middleware(c, next);
+    }
+    const headers = new Headers(original.headers);
+    headers.delete("Authorization");
+    c.req.raw = new Request(original, { headers });
+    try {
+      return await middleware(c, async () => {
+        c.req.raw = original;
+        await next();
+      });
+    } finally {
+      c.req.raw = original;
+    }
+  };
 }

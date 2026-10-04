@@ -1,3 +1,4 @@
+import { isolateEdgeCache } from "../../utils/isolate-edge-cache";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
   createExecutionContext,
@@ -37,6 +38,8 @@ import { request as ghRequest } from "@octokit/request";
 import { graphql } from "@octokit/graphql";
 import { resetUpdateTokenCache } from "../../../src/services/versions/v1/index";
 
+const resetEdgeCache = isolateEdgeCache();
+
 describe("Versions API v1 - Integration Tests", () => {
   beforeEach(async () => {
     await env.CACHE_KV.delete("gh-fossbilling-releases");
@@ -44,6 +47,7 @@ describe("Versions API v1 - Integration Tests", () => {
     await env.AUTH_KV.put("UPDATE_TOKEN", "test-update-token-12345");
 
     vi.resetAllMocks();
+    resetEdgeCache();
     setupGitHubApiMock(
       vi.mocked(ghRequest) as MockGitHubRequest,
       vi.mocked(graphql) as unknown as MockGitHubGraphQL,

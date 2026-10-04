@@ -30,6 +30,27 @@ import { UsersDatabase } from "./users";
 
 const URL_CHECK_COOLDOWN_SECONDS = 60;
 
+// Audit history survives profile deletion, so the budget follows the account.
+const PROFILE_WRITES_PER_DAY = 20;
+function profileBudgetAvailable(userId: string) {
+  return sql`NOT EXISTS (
+    SELECT 1 FROM ${developerHistory}
+    WHERE ${developerHistory.changedBy} = ${userId}
+      AND ${developerHistory.changedAt} > datetime('now', '-1 day')
+    LIMIT 1 OFFSET ${PROFILE_WRITES_PER_DAY - 1}
+  )`;
+}
+
+function profileMatches(row: DeveloperRow, developer: Developer) {
+  return (
+    row.type === developer.type &&
+    row.name === developer.name &&
+    row.url === (developer.URL ?? null) &&
+    row.avatarUrl === (developer.avatar_url ?? null) &&
+    row.contactEmail === (developer.contact_email ?? null)
+  );
+}
+
 type DeveloperRow = typeof developers.$inferSelect;
 
 function parseDeveloperRow(row: DeveloperRow): DeveloperProfile {
@@ -144,7 +165,7 @@ export class DeveloperProfilesDatabase {
     developer: Developer,
     githubToken?: string,
     allowCreationAttempt: () => Promise<boolean> = async () => true
-  ): Promise<DatabaseResult<DeveloperProfile>> {
+  ): Promise<DatabaseResult<DeveloperProfile> & { changed?: boolean }> {
     try {
       // Independent lookups - "does this caller already own a profile" and
       // "is this id taken" - so they go out together rather than costing two
@@ -241,6 +262,11 @@ export class DeveloperProfilesDatabase {
                   SELECT 1 FROM users
                   WHERE id = ? AND deleted_at IS NULL
                 )
+                AND NOT EXISTS (
+                  SELECT 1 FROM developer_history
+                  WHERE changed_by = ? AND changed_at > datetime('now', '-1 day')
+                  LIMIT 1 OFFSET ?
+                )
                 ON CONFLICT DO NOTHING`,
           params: [
             developer.id,
@@ -254,7 +280,9 @@ export class DeveloperProfilesDatabase {
             githubVerificationNote,
             githubOrgVerified,
             githubUrlVerified,
-            userId
+            userId,
+            userId,
+            PROFILE_WRITES_PER_DAY - 1
           ]
         });
       } else {
@@ -268,19 +296,8 @@ export class DeveloperProfilesDatabase {
           };
         }
 
-        // approved_at is normally cleared here, even if nothing meaningful
-        // changed — the reviewed content just got overwritten, so the old
-        // approval no longer applies. Not worth diffing old vs. new field
-        // values for that. The one exception: a profile that's currently
-        // GitHub org/user verified keeps its approval across edits — that
-        // verification is an independently-computed identity signal (this
-        // write never touches githubOrgVerified, except when the id's type
-        // changes below) strong enough on its own that re-queuing for
-        // manual review on every edit isn't worth the moderator load.
-        // approvedRevision is bumped in lockstep with contentRevision in
-        // that branch so the existing approval keeps matching (see
-        // parseDeveloperRow) instead of silently going stale.
-        //
+        // Meaningful edits invalidate manual approval. GitHub identity
+        // verification keeps approval unless the profile type changes.
         // A type change invalidates the existing GitHub verification
         // outright — matchesClaimant() compares differently per type (org
         // membership vs. username), so a signal computed for the old type
@@ -323,6 +340,16 @@ export class DeveloperProfilesDatabase {
             and(
               eq(developers.id, developer.id),
               eq(developers.ownerUserId, userId),
+              // Pin approval/verification decisions to the version read above.
+              eq(developers.contentRevision, existingOwn.contentRevision),
+              profileBudgetAvailable(userId),
+              sql`NOT (
+                ${developers.type} IS ${developer.type} AND
+                ${developers.name} IS ${developer.name} AND
+                ${developers.url} IS ${developer.URL ?? null} AND
+                ${developers.avatarUrl} IS ${developer.avatar_url ?? null} AND
+                ${developers.contactEmail} IS ${developer.contact_email ?? null}
+              )`,
               sql`EXISTS (
                 SELECT 1 FROM ${users}
                 WHERE ${users.id} = ${userId} AND ${users.deletedAt} IS NULL
@@ -363,6 +390,26 @@ export class DeveloperProfilesDatabase {
       }
 
       if (!results[0]?.meta?.changes) {
+        // A replay is successful without writing, but only while this caller
+        // still owns the profile and has an active account.
+        const [unchanged] = await this.db
+          .select()
+          .from(developers)
+          .where(
+            and(
+              eq(developers.id, developer.id),
+              eq(developers.ownerUserId, userId),
+              sql`EXISTS (SELECT 1 FROM ${users} WHERE ${users.id} = ${userId}
+            AND ${users.deletedAt} IS NULL)`
+            )
+          );
+        if (!isCreating && unchanged && profileMatches(unchanged, developer)) {
+          return {
+            data: parseDeveloperRow(unchanged),
+            error: null,
+            changed: false
+          };
+        }
         return {
           data: null,
           error: await this.upsertBlockedError(userId, developer.id, isCreating)
@@ -387,7 +434,7 @@ export class DeveloperProfilesDatabase {
           }
         };
       }
-      return { data: parseDeveloperRow(current), error: null };
+      return { data: parseDeveloperRow(current), error: null, changed: true };
     } catch (error) {
       return databaseError("upsertOwn", error);
     }
@@ -436,6 +483,16 @@ export class DeveloperProfilesDatabase {
       }
     }
 
+    const [budget] = await this.db
+      .select({ available: profileBudgetAvailable(userId) })
+      .from(users)
+      .where(eq(users.id, userId));
+    if (budget && !budget.available) {
+      return {
+        message: "Profile write allowance exhausted; try again in 24 hours",
+        code: "PROFILE_MUTATION_RATE_LIMITED"
+      };
+    }
     return {
       message: "Developer ownership changed while updating the profile",
       code: "CONFLICT"

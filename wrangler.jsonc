@@ -67,6 +67,17 @@
       "service": "extensions"
     }
   ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "PREVIEW_GITHUB_BUDGET", "class_name": "PreviewGitHubBudget" }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "preview-github-budget-v1",
+      "new_sqlite_classes": ["PreviewGitHubBudget"]
+    }
+  ],
   "ratelimits": [
     {
       "name": "PROFILE_CREATION_RATE_LIMITER",

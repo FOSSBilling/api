@@ -1,3 +1,4 @@
+import { PreviewGitHub } from "./github/request";
 import { ArtifactPreview } from "./schemas/previews";
 import {
   findPreviewArtifactByCommitSha,
@@ -12,11 +13,11 @@ export type PreviewLookupResult = GithubLookupResult<ArtifactPreview>;
 // land; a specific commit's build does not, so that's the one stable link
 // to hand back regardless of which route resolved it.
 export async function resolveArtifactPreview(
-  githubToken: string,
+  github: PreviewGitHub,
   sha: string,
   prNumber: number | null
 ): Promise<PreviewLookupResult> {
-  const found = await findPreviewArtifactByCommitSha(githubToken, sha);
+  const found = await findPreviewArtifactByCommitSha(github, sha);
   if (found.status !== "found") return found;
 
   const { data } = found;

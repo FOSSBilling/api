@@ -1,6 +1,5 @@
 import { bearerAuth } from "hono/bearer-auth";
 import { Hono, type Context, type Handler } from "hono";
-import { cache } from "hono/cache";
 import { cors } from "hono/cors";
 import { etag } from "hono/etag";
 import { prettyJSON } from "hono/pretty-json";
@@ -17,7 +16,11 @@ import { Releases, ReleaseDetails, ResolvedReleaseDetails } from "./interfaces";
 import { getReleaseR2Object, ReleaseR2Object } from "./r2";
 import { getPlatform } from "../../../lib/middleware";
 import { ICache } from "../../../lib/interfaces";
-import { publicCacheKey, singleFlight } from "../../../lib/cache";
+import {
+  publicCacheKey,
+  publicResponseCache,
+  singleFlight
+} from "../../../lib/cache";
 import { logError, logWarn, logInfo } from "../../../lib/logger";
 import {
   GitHubError,
@@ -80,7 +83,7 @@ async function getUpdateToken(cache: ICache): Promise<string> {
 // auto-cache Worker responses regardless of Cache-Control, so without this
 // every request wakes the isolate and pays the KV read + parse + stringify
 // + etag hash for a payload that only changes when a release lands. The
-// middleware skips Authorization-bearing requests and caches only 200s.
+// middleware ignores unused Authorization headers and caches only 200s.
 const VERSIONS_CACHE_NAME = "versions-api-v1";
 
 // Transient failures must not be client-cached: FOSSBilling's Update.php
@@ -121,7 +124,9 @@ function registerCachedRoute<P extends string>(
 ) {
   return versionsV1.get(
     path,
-    cache({
+    // Honor conditional requests on cache hits; the inner etag stamps entries.
+    etag(),
+    publicResponseCache({
       cacheName: VERSIONS_CACHE_NAME,
       cacheControl: RELEASES_CACHE_CONTROL,
       keyGenerator,

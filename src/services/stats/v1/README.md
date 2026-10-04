@@ -24,3 +24,5 @@ Returns the aggregated statistics behind those charts as JSON.
 ## Caching
 
 Stats are cached with a 24-hour TTL and follow the same caching patterns as the versions service, including its graceful handling of GitHub API errors — a failed refresh serves the previous data rather than erroring.
+
+Public GET responses use the edge cache even when an unused Authorization header is supplied; these representations do not depend on credentials.

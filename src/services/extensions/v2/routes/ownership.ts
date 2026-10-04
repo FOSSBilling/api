@@ -67,7 +67,9 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
       409: errorResponse(
         "Profile is already owned, caller already owns a different profile, or already has a pending claim on this one"
       ),
-      429: errorResponse("GitHub verification is temporarily rate limited"),
+      429: errorResponse(
+        "Claim allowance exhausted or GitHub verification is temporarily rate limited"
+      ),
       503: errorResponse("GitHub verification is temporarily unavailable"),
       422: errorResponse(
         "The request failed validation, or the GitHub account type is unsupported"

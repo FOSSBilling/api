@@ -90,3 +90,24 @@ Endpoints are not listed here. The service publishes its own contract:
   `versions/v1`).
 - `DOWNLOAD_BUCKET` (R2 binding) backs `/main` - see `wrangler.jsonc` for the
   bucket this points at and why.
+
+### GitHub request budgets
+
+Every previews GitHub request reserves a token from the singleton
+`PREVIEW_GITHUB_BUDGET` Durable Object before contacting GitHub. This includes
+fallback pages, PR head lookups, live download redirects and main enrichment.
+Metadata cache hits and R2 downloads spend no tokens. All locations and lookup
+keys share a token bucket with a 60-call burst and a refill of 1000 calls/hour.
+Each client IP shares a second bucket with a 60-call burst and 120 calls/hour
+refill; only a SHA-256 digest of Cloudflare's connecting IP is stored. Missing
+addresses share one allowance. Idle client buckets expire after 30 minutes.
+
+Abbreviated SHAs and fork-PR resolution remain supported within these budgets.
+Exhaustion or budget-service failure stops before another GitHub request and
+returns the existing unavailable (503) response, without negative caching an
+incomplete lookup. Main enrichment remains optional. These caps bound preview
+consumption, rather than guaranteeing remaining quota when other token consumers
+are busy. Raising them requires reviewing the shared token's quota allocation.
+
+The binding and SQLite class migration in `wrangler.jsonc` are required when
+deploying this change; do not deploy only the application source.
