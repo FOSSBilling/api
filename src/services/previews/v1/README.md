@@ -33,8 +33,12 @@ Endpoints are not listed here. The service publishes its own contract:
 
 - `GET /main` and `GET /pr/{number}` are **pointers** - they always resolve
   to whatever is current.
-- `GET /commit/{sha}` is a **fixed point** - one commit, one build,
+- `GET /commit/{sha}` with a full SHA is a **fixed point** - one commit,
   permanently addressable (until GitHub's artifact retention expires it).
+  Abbreviated SHAs (7+ hex characters) are accepted only when a complete
+  artifact scan finds one distinct live preview commit. Multiple commits
+  return HTTP 409 (`AMBIGUOUS_COMMIT`); use the full SHA to disambiguate.
+  An incomplete scan returns 503, never a selected artifact or a 404.
 - `pr/{number}`'s handler resolves the PR to its head SHA
   (`GET /pulls/{number}`) and delegates to the same resolver `commit/{sha}`
   uses - one GitHub-facing code path, not two.
@@ -71,7 +75,7 @@ Endpoints are not listed here. The service publishes its own contract:
   metadata route already cached) and `GET /main` (`preview:main`) use the
   60s default, matching how often a moving pointer can realistically
   change.
-  `GET /commit/{sha}` (`preview:commit:{sha}`, likewise shared with
+  Full-SHA `GET /commit/{sha}` (`preview:commit:{sha}`, likewise shared with
   `/commit/{sha}/download`) uses 3600s instead - a commit's build never
   changes once it exists, so there's no correctness reason to re-check it
   every minute. That 3600s is capped at the artifact's own remaining
@@ -82,6 +86,10 @@ Endpoints are not listed here. The service publishes its own contract:
   minimum TTL, so those requests (and any more before the artifact expires
   or a request refreshes it) are just served live instead of cached - a
   short burst of extra GitHub calls right at the end, never stale data.
+- Abbreviated commit lookups bypass KV reads and writes, including legacy
+  prefix entries: a newly built colliding commit must be detected on the
+  next lookup. Concurrent prefix lookups share the in-flight scan, but its
+  result is never retained. Full-SHA cache behavior is unchanged.
 - `GET /pr/{number}/download` and `GET /commit/{sha}/download` always
   resolve GitHub's signed redirect URL live, never cached - it expires in
   about a minute, and Cloudflare KV's 60s minimum TTL leaves no safe margin

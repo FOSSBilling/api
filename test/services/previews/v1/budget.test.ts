@@ -102,7 +102,7 @@ describe("preview GitHub budget", () => {
     expect((await get("/previews/v1/commit/ccccccc", "192.0.2.2")).status).toBe(
       404
     );
-    expect(request).toHaveBeenCalledTimes(14);
+    expect(request).toHaveBeenCalledTimes(13);
   });
 
   it("bounds full-SHA run scans without negative caching", async () => {

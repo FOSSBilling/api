@@ -31,6 +31,7 @@ const SAMPLE_ARTIFACTS = {
   artifacts: [
     {
       id: 555,
+      name: `FOSSBilling-preview-${SHA.slice(0, 7)}.zip`,
       size_in_bytes: 12345,
       created_at: "2026-08-13T10:00:00Z",
       expires_at: FAR_FUTURE_EXPIRES_AT,
@@ -60,6 +61,7 @@ describe("Previews API v1 - GET /previews/v1/commit/:sha", () => {
       }
     );
     await env.CACHE_KV.delete(`preview:commit:${SHA.toLowerCase()}`);
+    await env.CACHE_KV.delete(`preview:commit:${SHA.slice(0, 7)}`);
     vi.clearAllMocks();
   });
 
@@ -123,6 +125,157 @@ describe("Previews API v1 - GET /previews/v1/commit/:sha", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { result: { commit_sha: string } };
     expect(body.result.commit_sha).toBe(SHA);
+  });
+
+  it.each(["", "/download"])(
+    "rejects colliding prefixes on %s even with a legacy cached selection",
+    async (suffix) => {
+      const prefix = SHA.slice(0, 7);
+      await env.CACHE_KV.put(
+        `preview:commit:${prefix}`,
+        JSON.stringify({
+          artifact_id: 666,
+          commit_sha: `${prefix}${"f".repeat(33)}`
+        })
+      );
+      const collision = {
+        ...SAMPLE_ARTIFACTS.artifacts[0],
+        id: 666,
+        created_at: "2026-08-14T10:00:00Z",
+        workflow_run: { id: 1000, head_sha: `${prefix}${"f".repeat(33)}` }
+      };
+      (vi.mocked(ghRequest) as MockGitHubRequest).mockImplementation(
+        async () => ({
+          data: { artifacts: [...SAMPLE_ARTIFACTS.artifacts, collision] }
+        })
+      );
+      const putSpy = vi.spyOn(env.CACHE_KV, "put");
+      const res = await get(
+        `/previews/v1/commit/${prefix.toUpperCase()}${suffix}`
+      );
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({
+        error: { code: "AMBIGUOUS_COMMIT" }
+      });
+      expect(res.headers.get("location")).toBeNull();
+      expect(putSpy).not.toHaveBeenCalled();
+      expect(ghRequest).toHaveBeenCalledTimes(1);
+      putSpy.mockRestore();
+    }
+  );
+
+  it("detects a fork-named collision on a later page", async () => {
+    const prefix = SHA.slice(0, 7);
+    const firstPage = Array.from({ length: 100 }, (_, i) => ({
+      ...SAMPLE_ARTIFACTS.artifacts[0],
+      id: 555 + i
+    }));
+    (vi.mocked(ghRequest) as MockGitHubRequest).mockImplementation(
+      async (_route: string, params?: { name?: string; page?: number }) => ({
+        data: {
+          artifacts:
+            params?.page === 2
+              ? [
+                  {
+                    ...SAMPLE_ARTIFACTS.artifacts[0],
+                    name: "FOSSBilling-preview-deadbee.zip",
+                    workflow_run: {
+                      id: 1000,
+                      head_sha: `${prefix}${"f".repeat(33)}`
+                    }
+                  }
+                ]
+              : firstPage
+        }
+      })
+    );
+    const res = await get(`/previews/v1/commit/${prefix}/download`);
+    expect(res.status).toBe(409);
+    expect(ghRequest).toHaveBeenCalledTimes(2);
+    expect(await env.CACHE_KV.get(`preview:commit:${prefix}`)).toBeNull();
+  });
+
+  it("does not retain prefix uniqueness after a new colliding build arrives", async () => {
+    const prefix = SHA.slice(0, 7);
+    const mock = vi.mocked(ghRequest) as MockGitHubRequest;
+    mock.mockImplementation(async () => ({ data: SAMPLE_ARTIFACTS }));
+    expect((await get(`/previews/v1/commit/${prefix}`)).status).toBe(200);
+    expect(await env.CACHE_KV.get(`preview:commit:${prefix}`)).toBeNull();
+    mock.mockImplementation(async () => ({
+      data: {
+        artifacts: [
+          ...SAMPLE_ARTIFACTS.artifacts,
+          {
+            ...SAMPLE_ARTIFACTS.artifacts[0],
+            workflow_run: { id: 1000, head_sha: `${prefix}${"f".repeat(33)}` }
+          }
+        ]
+      }
+    }));
+    expect((await get(`/previews/v1/commit/${prefix}`)).status).toBe(409);
+  });
+
+  it("accepts repeated builds of one commit but ignores expired and non-preview collisions", async () => {
+    (vi.mocked(ghRequest) as MockGitHubRequest).mockImplementation(
+      async () => ({
+        data: {
+          artifacts: [
+            ...SAMPLE_ARTIFACTS.artifacts,
+            {
+              ...SAMPLE_ARTIFACTS.artifacts[0],
+              id: 777,
+              created_at: "2026-08-14T10:00:00Z",
+              workflow_run: { id: 1000, head_sha: SHA.toUpperCase() }
+            },
+            {
+              ...SAMPLE_ARTIFACTS.artifacts[0],
+              expired: true,
+              workflow_run: {
+                id: 1001,
+                head_sha: `${SHA.slice(0, 7)}${"f".repeat(33)}`
+              }
+            },
+            {
+              ...SAMPLE_ARTIFACTS.artifacts[0],
+              name: "preview-build",
+              workflow_run: {
+                id: 1002,
+                head_sha: `${SHA.slice(0, 7)}${"e".repeat(33)}`
+              }
+            }
+          ]
+        }
+      })
+    );
+    const res = await get(`/previews/v1/commit/${SHA.slice(0, 7)}`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ result: { artifact_id: 777 } });
+  });
+
+  it("matches a full SHA exactly despite a newer prefix collision", async () => {
+    (vi.mocked(ghRequest) as MockGitHubRequest).mockImplementation(
+      async () => ({
+        data: {
+          artifacts: [
+            ...SAMPLE_ARTIFACTS.artifacts,
+            {
+              ...SAMPLE_ARTIFACTS.artifacts[0],
+              id: 666,
+              created_at: "2026-08-14T10:00:00Z",
+              workflow_run: {
+                id: 1000,
+                head_sha: `${SHA.slice(0, 7)}${"f".repeat(33)}`
+              }
+            }
+          ]
+        }
+      })
+    );
+    const res = await get(`/previews/v1/commit/${SHA}`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      result: { artifact_id: 555, commit_sha: SHA }
+    });
   });
 
   it("ignores expired artifacts", async () => {
@@ -377,7 +530,7 @@ describe("Previews API v1 - GET /previews/v1/commit/:sha", () => {
       expect.objectContaining({ head_sha: SHA })
     );
   });
-  it("pages through the short-SHA fallback scan past the old 5-page cap, then stops as soon as it finds a match", async () => {
+  it("pages through the short-SHA fallback scan past the old 5-page cap, then establishes uniqueness on the last page", async () => {
     // Regression check: an earlier version of the page-scan fallback
     // stopped after 5 pages (500 artifacts) as a hard cutoff, which would
     // have reported this commit not_found even though its artifact
@@ -437,10 +590,9 @@ describe("Previews API v1 - GET /previews/v1/commit/:sha", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { result: { artifact_id: number } };
     expect(body.result.artifact_id).toBe(9000);
-    // Exact-name miss + 6 fallback pages - stops on page 6 rather than
-    // continuing to page 7.
+    // Short lookups scan all pages without the name-filtered fast path.
     expect(fallbackCalls).toBe(6);
-    expect(ghRequest).toHaveBeenCalledTimes(7);
+    expect(ghRequest).toHaveBeenCalledTimes(6);
   });
 
   it("falls back to the default TTL ceiling when expires_at can't be parsed", async () => {

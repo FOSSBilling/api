@@ -59,6 +59,7 @@ export function registerPrRoutes(app: PreviewsV1App): void {
         },
         description: "The current preview build for that pull request"
       },
+      409: errorResponse("Commit prefix matches multiple preview commits"),
       404: errorResponse("No such pull request, or it has no preview build"),
       422: errorResponse("number param failed validation"),
       429: errorResponse("GitHub API rate limit exceeded"),
@@ -93,6 +94,7 @@ export function registerPrRoutes(app: PreviewsV1App): void {
     request: { params: PrNumberParamSchema },
     responses: {
       302: { description: "Redirect to GitHub's live artifact download URL" },
+      409: errorResponse("Commit prefix matches multiple preview commits"),
       404: errorResponse("No such pull request, or it has no preview build"),
       422: errorResponse("number param failed validation"),
       429: errorResponse("GitHub API rate limit exceeded"),

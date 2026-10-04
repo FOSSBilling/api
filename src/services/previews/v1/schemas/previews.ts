@@ -39,7 +39,7 @@ export const PrNumberParamSchema = z.object({
 
 // Full or abbreviated (7+ char) hex commit SHA - GitHub accepts either as a
 // git ref, and workflow_run.head_sha in the artifacts API is always the full
-// 40-char form, so a short SHA here is matched as a prefix by the resolver.
+// 40-char form. The resolver rejects prefixes matching multiple commits.
 export const CommitShaParamSchema = z.object({
   sha: z
     .string()

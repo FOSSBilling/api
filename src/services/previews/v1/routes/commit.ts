@@ -7,6 +7,7 @@ import {
   errorResponse
 } from "../schemas/previews";
 import { resolveArtifactPreview } from "../resolve";
+import { singleFlight } from "../../../../lib/cache";
 import { cachedLookup } from "../cache";
 import { respondWithDownloadRedirect, respondWithLookup } from "./respond";
 import { PreviewsV1App } from "./app";
@@ -70,6 +71,7 @@ export function registerCommitRoutes(app: PreviewsV1App): void {
         },
         description: "The preview build for that commit"
       },
+      409: errorResponse("Commit prefix matches multiple preview commits"),
       404: errorResponse("No preview artifact exists for that commit"),
       422: errorResponse("sha param failed validation"),
       429: errorResponse("GitHub API rate limit exceeded"),
@@ -82,13 +84,20 @@ export function registerCommitRoutes(app: PreviewsV1App): void {
     const { sha } = c.req.valid("param");
     const github = previewGitHub(c);
 
-    const result = await cachedLookup(
-      c.env.CACHE_KV,
-      cacheKeyForSha(sha),
-      () => resolveArtifactPreview(github, sha, null),
-      ttlForArtifact,
-      (p) => c.executionCtx.waitUntil(p)
-    );
+    // A prefix can become ambiguous as new builds arrive. Do not read old
+    // prefix cache entries or persist a uniqueness decision for later use.
+    const result =
+      sha.length < 40
+        ? await singleFlight(`previews:prefix:${sha.toLowerCase()}`, () =>
+            resolveArtifactPreview(github, sha, null)
+          )
+        : await cachedLookup(
+            c.env.CACHE_KV,
+            cacheKeyForSha(sha),
+            () => resolveArtifactPreview(github, sha, null),
+            ttlForArtifact,
+            (p) => c.executionCtx.waitUntil(p)
+          );
 
     return respondWithLookup(
       c,
@@ -105,6 +114,7 @@ export function registerCommitRoutes(app: PreviewsV1App): void {
     request: { params: CommitShaParamSchema },
     responses: {
       302: { description: "Redirect to GitHub's live artifact download URL" },
+      409: errorResponse("Commit prefix matches multiple preview commits"),
       404: errorResponse("No preview artifact exists for that commit"),
       422: errorResponse("sha param failed validation"),
       429: errorResponse("GitHub API rate limit exceeded"),
@@ -121,13 +131,18 @@ export function registerCommitRoutes(app: PreviewsV1App): void {
     // download - only the signed URL itself (resolved inside
     // respondWithDownloadRedirect, on its own short-lived cache) has to be
     // re-checked often, since that's the part that actually expires.
-    const artifact = await cachedLookup(
-      c.env.CACHE_KV,
-      cacheKeyForSha(sha),
-      () => resolveArtifactPreview(github, sha, null),
-      ttlForArtifact,
-      (p) => c.executionCtx.waitUntil(p)
-    );
+    const artifact =
+      sha.length < 40
+        ? await singleFlight(`previews:prefix:${sha.toLowerCase()}`, () =>
+            resolveArtifactPreview(github, sha, null)
+          )
+        : await cachedLookup(
+            c.env.CACHE_KV,
+            cacheKeyForSha(sha),
+            () => resolveArtifactPreview(github, sha, null),
+            ttlForArtifact,
+            (p) => c.executionCtx.waitUntil(p)
+          );
     return respondWithDownloadRedirect(
       c,
       github,
