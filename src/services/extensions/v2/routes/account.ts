@@ -53,6 +53,7 @@ export function registerAccountRoutes(app: ExtensionsV2App): void {
         },
         description: "Identity projection synchronized"
       },
+      400: errorResponse("Request body could not be read"),
       401: errorResponse("Missing or invalid bearer token"),
       403: {
         ...ActiveAccountRequiredResponse,
