@@ -115,7 +115,7 @@ describe("commit-time moderator authority", () => {
           : claimAction
             ? `/extensions/v2/developers/claims/review-claim/${action.split(" ")[1]}`
             : action === "delist"
-              ? "/extensions/v2/extensions/REVIEW-extension/delist"
+              ? "/extensions/v2/extensions/review-extension/delist"
               : "/extensions/v2/developers/review-developer/approve";
         const res = await post(path, headers, {
           ...(action.endsWith("reject")
