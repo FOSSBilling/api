@@ -735,7 +735,7 @@ describe("Bounded revision reads and maintenance", () => {
         .first("compacted_at")
     ).toBeTruthy();
   });
-  it("keeps frequent cleanup bounded and hourly inventory read-only", async () => {
+  it("runs bounded cleanup and inventory hourly, keeping inventory read-only", async () => {
     await owned();
     await insertHistory("old");
     const queries: string[] = [];
@@ -755,6 +755,11 @@ describe("Bounded revision reads and maintenance", () => {
         .first("compacted_at")
     ).toBeNull();
     expect(queries.some((query) => /SUM\(/i.test(query))).toBe(true);
+    expect(
+      queries.some((query) => /DELETE FROM extension_write_events/i.test(query))
+    ).toBe(true);
+    queries.length = 0;
+    await reportExtensionResources(getExtensionsDb(hooked), "compact");
     expect(
       queries.every((query) => !/\b(?:INSERT|UPDATE|DELETE)\b/i.test(query))
     ).toBe(true);

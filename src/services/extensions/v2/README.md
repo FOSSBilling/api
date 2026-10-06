@@ -368,7 +368,7 @@ collections cannot grow until usage is reduced.
 
 ### Maintenance and monitoring
 
-The Worker runs scheduled maintenance every **two minutes**, handling at most
+The Worker runs scheduled maintenance **hourly**, handling at most
 **20 bodies** and 500 expired ledger rows per invocation. Retention defaults to
 `dry-run`: it reports eligible bodies and reclaimable bytes without fetching or
 changing bodies. Only `EXTENSIONS_RETENTION_MODE=compact` enables compaction;
@@ -387,7 +387,7 @@ content. Accounting is updated in the same transaction. Repeated runs are
 idempotent. Expired write events and empty usage counters are cleaned in bounded
 batches.
 
-Full resource inventory runs hourly, separately from bounded maintenance.
+Full resource inventory is logged after each hourly maintenance run.
 Structured logs record revision-response bytes/duration, admission reason codes and maintenance/inventory totals:
 `retained_bytes`, `extensions`, `revisions`, `pending`,
 `oversized_legacy_revisions`, `cleanup_backlog`, `compacted`, and

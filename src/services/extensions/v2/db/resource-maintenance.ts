@@ -66,7 +66,7 @@ export async function maintainExtensionResources(
   });
 }
 
-// Full inventory runs hourly, independently of bounded cleanup.
+// Read-only inventory, reported after hourly cleanup.
 export async function reportExtensionResources(
   db: ExtensionsDb,
   retentionMode?: string

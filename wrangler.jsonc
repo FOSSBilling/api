@@ -79,7 +79,7 @@
       "new_sqlite_classes": ["PreviewGitHubBudget"]
     }
   ],
-  "triggers": { "crons": ["*/2 * * * *", "0 * * * *"] },
+  "triggers": { "crons": ["0 * * * *"] },
   "ratelimits": [
     {
       "name": "EXTENSION_WRITE_RATE_LIMITER",

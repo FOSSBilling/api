@@ -78,17 +78,14 @@ export default {
   fetch: app.fetch,
   request: app.request.bind(app),
   scheduled: async (
-    event: ScheduledController,
+    _event: ScheduledController,
     env: CloudflareBindings
   ): Promise<void> => {
     const db = getExtensionsDb(env.DB_EXTENSIONS);
-    if (event.cron === "0 * * * *") {
-      await reportExtensionResources(db, env.EXTENSIONS_RETENTION_MODE);
-      return;
-    }
     await maintainExtensionResources(db, {
       mode: env.EXTENSIONS_RETENTION_MODE
     });
+    await reportExtensionResources(db, env.EXTENSIONS_RETENTION_MODE);
   }
 };
 
