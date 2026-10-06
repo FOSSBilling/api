@@ -749,12 +749,20 @@
           "notNull": true,
           "autoincrement": false,
           "default": 1
+        },
+        "content_readable": {
+          "name": "content_readable",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
         }
       },
       "indexes": {
         "idx_extension_revisions_retention": {
           "name": "idx_extension_revisions_retention",
-          "columns": ["compacted_at", "status", "reviewed_at", "id"],
+          "columns": ["compacted_at", "reviewed_at", "id", "status"],
           "isUnique": false
         },
         "idx_extension_revisions_submitted_by": {

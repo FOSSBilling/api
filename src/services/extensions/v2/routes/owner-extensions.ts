@@ -42,9 +42,11 @@ async function revisionReadAccess(
 ): Promise<DatabaseResult<{ extensionId: string }>> {
   const db = getExtensionsDb(c.env.DB_EXTENSIONS);
   const auth = getAuth(c);
-  const ownership = await new ExtensionsDatabase(db).getOwnership(id);
+  const [ownership, access] = await Promise.all([
+    new ExtensionsDatabase(db).getOwnership(id),
+    new UsersDatabase(db).moderatorAccess(auth.userId)
+  ]);
   if (ownership.error || !ownership.data) return ownership;
-  const access = await new UsersDatabase(db).moderatorAccess(auth.userId);
   if (access.error) return { data: null, error: access.error };
   if (!access.data?.active)
     return {
@@ -358,7 +360,7 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
           }
         },
         description:
-          "Every version proposed for this extension, with its review outcome"
+          "One revision with its review outcome; content is null when compacted"
       },
       401: errorResponse("Missing or invalid bearer token"),
       403: {
@@ -366,7 +368,7 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
         description:
           "The account is inactive, or the caller neither owns this extension nor moderates"
       },
-      404: errorResponse("No extension with that id"),
+      404: errorResponse("No extension or revision with that id"),
       409: errorResponse(
         "Oversized legacy content requires administrative export or resubmission"
       ),

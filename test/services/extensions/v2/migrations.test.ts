@@ -734,6 +734,80 @@ describe("Extensions D1 migrations", () => {
 });
 
 describe("Resource-bound migration", () => {
+  it("ranks manual counter discrepancies before limiting the report", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      for (const name of migrationNames)
+        for (const statement of unstable_splitSqlQuery(migration(name)))
+          db.exec(statement);
+      const insert = db.prepare(
+        "INSERT INTO extension_resource_usage(scope,subject,bytes) VALUES('account',?,?)"
+      );
+      for (let i = 1; i <= 110; i++) insert.run(`subject-${i}`, i * 10);
+      const rows = db
+        .prepare(
+          readFileSync(
+            join(migrationsDirectory, "../resource-inventory.sql"),
+            "utf8"
+          )
+        )
+        .all() as Array<{ subject: string }>;
+      expect(rows).toHaveLength(100);
+      expect(rows[0].subject).toBe("subject-110");
+      expect(rows[99].subject).toBe("subject-11");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("backfills readability without treating unsafe or malformed legacy bodies as available", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      for (const name of migrationNames.filter(
+        (candidate) => candidate < "0026"
+      ))
+        db.exec(migration(name));
+      db.exec(
+        "INSERT INTO users(id,created_at,updated_at) VALUES('owner',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP); INSERT INTO developers(id,type,name,owner_user_id) VALUES('developer','user','Developer','owner'); INSERT INTO extensions(id,developer_id) VALUES('legacy','developer')"
+      );
+      const records = [
+        ["safe", JSON.stringify({ name: "Safe" }), 1],
+        ["malformed", "not JSON", 0],
+        ["not-object", "[]", 0],
+        [
+          "unsafe",
+          JSON.stringify({
+            releases: Array.from({ length: 101 }, () => ({ tag: "1.0.0" }))
+          }),
+          0
+        ],
+        [
+          "unicode",
+          JSON.stringify({ releases: [{ tag: "😀".repeat(100) }] }),
+          1
+        ]
+      ] as const;
+      for (const [id, content] of records)
+        db.prepare(
+          "INSERT INTO extension_revisions(id,extension_id,developer_id,submitted_by,status,content) VALUES(?,'legacy','developer','owner','rejected',?)"
+        ).run(id, content);
+      for (const statement of unstable_splitSqlQuery(
+        migration("0026_resource_bounds.sql")
+      ))
+        db.exec(statement);
+      for (const [id, content, content_readable] of records)
+        expect(
+          db
+            .prepare(
+              "SELECT content,content_readable FROM extension_revisions WHERE id=?"
+            )
+            .get(id)
+        ).toEqual({ content, content_readable });
+    } finally {
+      db.close();
+    }
+  });
+
   it("preserves oversized legacy content and reconciles accounting using Wrangler's SQL splitter", () => {
     const db = new DatabaseSync(":memory:");
     try {
@@ -790,6 +864,27 @@ describe("Resource-bound migration", () => {
           )
           .run(content)
       ).toThrow(/extension_content_size/);
+
+      const bounded = JSON.stringify({
+        readme: "x".repeat(
+          262144 - Buffer.byteLength(JSON.stringify({ readme: "" }))
+        )
+      });
+      expect(Buffer.byteLength(bounded)).toBe(262144);
+      db.prepare(
+        "INSERT INTO extension_revisions(id,extension_id,developer_id,submitted_by,status,content) VALUES('boundary','legacy','developer','owner','rejected',?)"
+      ).run(bounded);
+      expect(() =>
+        db
+          .prepare(
+            "UPDATE extension_revisions SET content=? WHERE id='boundary'"
+          )
+          .run(bounded.replace("xxx", "xxxx"))
+      ).toThrow(/extension_content_size/);
+      // Existing oversized bodies may shrink without a destructive migration.
+      db.prepare(
+        "UPDATE extension_revisions SET content=? WHERE id='legacy-revision'"
+      ).run(JSON.stringify({ name: "Legacy", readme: "😀".repeat(69999) }));
       db.exec("DELETE FROM extensions WHERE id='legacy'");
       expect(
         db

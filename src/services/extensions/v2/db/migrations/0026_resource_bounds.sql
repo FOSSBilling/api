@@ -20,7 +20,18 @@ ALTER TABLE extension_revisions ADD COLUMN compacted_at TEXT;
 ALTER TABLE extension_revisions ADD COLUMN summary_name TEXT;
 ALTER TABLE extension_revisions ADD COLUMN summary_version TEXT;
 ALTER TABLE extension_revisions ADD COLUMN summary_description TEXT;
-UPDATE extension_revisions SET summary_name = CASE WHEN content_bytes <= 262144 AND json_valid(content)
+ALTER TABLE extension_revisions ADD COLUMN content_readable INTEGER NOT NULL DEFAULT 0;
+UPDATE extension_revisions SET content_readable = CASE WHEN length(CAST(content AS BLOB)) <= 262144 AND json_valid(content) THEN
+      CASE WHEN json_type(content) != 'object' THEN 0
+        WHEN json_type(content, '$.releases') IS NULL OR json_type(content, '$.releases') = 'null' THEN 1
+        WHEN json_type(content, '$.releases') != 'array' THEN 0
+        WHEN json_array_length(content, '$.releases') > 100 THEN 0
+        ELSE NOT EXISTS (SELECT 1 FROM json_each(content, '$.releases') r
+          WHERE CASE WHEN r.type = 'object' THEN
+            json_type(r.value, '$.tag') IS NOT 'text' OR length(json_extract(r.value, '$.tag')) > 100
+            ELSE 1 END)
+      END ELSE 0 END,
+    summary_name = CASE WHEN content_bytes <= 262144 AND json_valid(content)
       THEN CASE WHEN json_type(content,'$.name')='text' THEN substr(json_extract(content,'$.name'),1,120) ELSE NULL END
       ELSE NULL END,
     summary_version = CASE WHEN content_bytes <= 262144 AND json_valid(content)
@@ -265,6 +276,11 @@ END;
 -- not refund allowance. CURRENT_TIMESTAMP is supplied by the server. The
 -- event uses created_at so historical fixture/import writes keep their age.
 CREATE TRIGGER extension_revision_admission BEFORE INSERT ON extension_revisions BEGIN
+  -- Cleanup scales with accepted writes; idle cleanup still runs hourly.
+  DELETE FROM extension_write_events WHERE id IN (
+    SELECT id FROM extension_write_events WHERE occurred_at <= unixepoch()-86400
+    ORDER BY occurred_at LIMIT 50
+  );
   SELECT CASE WHEN length(CAST(NEW.content AS BLOB)) > 262144
 
   THEN RAISE(ABORT,'extension_content_size') END;
@@ -284,6 +300,10 @@ END;
 CREATE TRIGGER extension_revision_content_bound BEFORE UPDATE OF content ON extension_revisions
 WHEN length(CAST(NEW.content AS BLOB)) > 262144 AND length(CAST(NEW.content AS BLOB)) > length(CAST(OLD.content AS BLOB))
 BEGIN SELECT RAISE(ABORT,'extension_content_size'); END;
+CREATE TRIGGER extension_revision_identity BEFORE UPDATE OF id,extension_id,developer_id,submitted_by ON extension_revisions
+WHEN NEW.id IS NOT OLD.id OR NEW.extension_id IS NOT OLD.extension_id
+  OR NEW.developer_id IS NOT OLD.developer_id OR NEW.submitted_by IS NOT OLD.submitted_by
+BEGIN SELECT RAISE(ABORT,'extension_resource_identity'); END;
 CREATE TRIGGER extension_resource_identity BEFORE UPDATE OF created_by,developer_id ON extensions
 WHEN NEW.created_by IS NOT OLD.created_by OR NEW.developer_id IS NOT OLD.developer_id
 BEGIN SELECT RAISE(ABORT,'extension_resource_identity'); END;
@@ -359,7 +379,17 @@ END;
 --> statement-breakpoint
 CREATE TRIGGER sync_revision_summary_insert AFTER INSERT ON extension_revisions
 WHEN NEW.compacted_at IS NULL BEGIN
-  UPDATE extension_revisions SET summary_name = CASE WHEN length(CAST(NEW.content AS BLOB)) <= 262144 AND json_valid(NEW.content)
+  UPDATE extension_revisions SET content_readable = CASE WHEN length(CAST(NEW.content AS BLOB)) <= 262144 AND json_valid(NEW.content) THEN
+      CASE WHEN json_type(NEW.content) != 'object' THEN 0
+        WHEN json_type(NEW.content, '$.releases') IS NULL OR json_type(NEW.content, '$.releases') = 'null' THEN 1
+        WHEN json_type(NEW.content, '$.releases') != 'array' THEN 0
+        WHEN json_array_length(NEW.content, '$.releases') > 100 THEN 0
+        ELSE NOT EXISTS (SELECT 1 FROM json_each(NEW.content, '$.releases') r
+          WHERE CASE WHEN r.type = 'object' THEN
+            json_type(r.value, '$.tag') IS NOT 'text' OR length(json_extract(r.value, '$.tag')) > 100
+            ELSE 1 END)
+      END ELSE 0 END,
+    summary_name = CASE WHEN length(CAST(NEW.content AS BLOB)) <= 262144 AND json_valid(NEW.content)
       THEN CASE WHEN json_type(NEW.content,'$.name')='text' THEN substr(json_extract(NEW.content,'$.name'),1,120) ELSE NULL END
       ELSE NULL END,
     summary_version = CASE WHEN length(CAST(NEW.content AS BLOB)) <= 262144 AND json_valid(NEW.content)
@@ -374,7 +404,17 @@ END;
 --> statement-breakpoint
 CREATE TRIGGER sync_revision_summary_update AFTER UPDATE OF content ON extension_revisions
 WHEN NEW.compacted_at IS NULL BEGIN
-  UPDATE extension_revisions SET summary_name = CASE WHEN length(CAST(NEW.content AS BLOB)) <= 262144 AND json_valid(NEW.content)
+  UPDATE extension_revisions SET content_readable = CASE WHEN length(CAST(NEW.content AS BLOB)) <= 262144 AND json_valid(NEW.content) THEN
+      CASE WHEN json_type(NEW.content) != 'object' THEN 0
+        WHEN json_type(NEW.content, '$.releases') IS NULL OR json_type(NEW.content, '$.releases') = 'null' THEN 1
+        WHEN json_type(NEW.content, '$.releases') != 'array' THEN 0
+        WHEN json_array_length(NEW.content, '$.releases') > 100 THEN 0
+        ELSE NOT EXISTS (SELECT 1 FROM json_each(NEW.content, '$.releases') r
+          WHERE CASE WHEN r.type = 'object' THEN
+            json_type(r.value, '$.tag') IS NOT 'text' OR length(json_extract(r.value, '$.tag')) > 100
+            ELSE 1 END)
+      END ELSE 0 END,
+    summary_name = CASE WHEN length(CAST(NEW.content AS BLOB)) <= 262144 AND json_valid(NEW.content)
       THEN CASE WHEN json_type(NEW.content,'$.name')='text' THEN substr(json_extract(NEW.content,'$.name'),1,120) ELSE NULL END
       ELSE NULL END,
     summary_version = CASE WHEN length(CAST(NEW.content AS BLOB)) <= 262144 AND json_valid(NEW.content)
@@ -389,4 +429,4 @@ END;
 --> statement-breakpoint
 CREATE INDEX idx_extensions_published_revision ON extensions(published_revision_id);
 --> statement-breakpoint
-CREATE INDEX idx_extension_revisions_retention ON extension_revisions(compacted_at,status,reviewed_at,id);
+CREATE INDEX idx_extension_revisions_retention ON extension_revisions(compacted_at,reviewed_at,id,status);

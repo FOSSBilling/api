@@ -291,8 +291,8 @@ correction) count the actual request stream before JSON parsing. The raw request
 limit is **512 KiB**, including whitespace, escapes, and unknown fields. An
 oversized stream is canceled and returns `413 BODY_TOO_LARGE`; `Content-Length`
 cannot bypass counting. The separate normalized JSON content limit remains
-**256 KiB**, with the existing field/release maxima. New slug IDs are at most
-200 characters; existing 120-character IDs remain supported.
+**256 KiB**, with the existing field/release maxima. New extension slug IDs are at most
+200 characters. Previously stored IDs had no length cap and remain supported.
 
 The `EXTENSION_WRITE_RATE_LIMITER` binding paces IP and authenticated-account
 attempts at 60/minute, including validation failures. This edge control is
@@ -326,6 +326,9 @@ Transferring a profile does not silently shift these charges to the recipient.
 The `created_by` attribution is immutable. Legacy unowned publications are
 charged to a synthetic `legacy` account bucket.
 
+Each accepted write also removes up to 50 expired ledger entries, so expiry
+cleanup scales with write traffic. The hourly job handles idle cleanup.
+
 The accepted-write ledger has no deletion-cascading foreign keys: review,
 withdrawal, profile replacement and account reactivation do not refund a
 rolling allowance. Minute/day exhaustion returns `429` with a domain
@@ -358,8 +361,16 @@ CONTENT_UNAVAILABLE`. An owner/moderator extension detail with an oversized
 published or pending body also returns this error. Oversized published legacy
 rows are excluded from public catalogue cards. Historical release collections
 are checked for safe count/tag bounds before version sorting; unsafe collections
-also return `CONTENT_UNAVAILABLE`. Moderator lists still expose
-the record for correction. Reject an oversized pending revision, then ask its
+also return `CONTENT_UNAVAILABLE`; their summaries report `content_available: false`.
+The stored readability flag is calculated alongside summary metadata, including
+the safe legacy release count and tag bounds (100 Unicode code points).
+Anonymous public extension detail reads also return `409 CONTENT_UNAVAILABLE`
+for oversized published bodies. Moderator lists still expose
+the published card for correction without reading its oversized body.
+Cards bound display fields and project license/repository metadata; oversized
+legacy URLs are null (or an omitted optional icon), rather than clipped links.
+Detail reads preserve the original fields when the body is safe to fetch.
+Reject an oversized pending revision, then ask its
 owner to resubmit under current bounds; use moderator correction for published
 content. Administrative export is required if the original oversized body must
 be recovered. The migration backfills byte counts/summaries in SQL without
@@ -395,5 +406,7 @@ Structured logs record revision-response bytes/duration, admission reason codes 
 oversized legacy bodies and an active
 compaction backlog of 300 or more bodies. Dry-run eligibility is informational.
 
-`db/resource-inventory.sql` reports at most 100 accounting discrepancies using
-stored scalar sizes, without returning content bodies.
+`db/resource-inventory.sql` is a manual, read-only reconciliation diagnostic,
+separate from the hourly usage report. It lists at most 100 accounting
+discrepancies using stored scalar sizes without returning content bodies,
+ordered by descending byte/count drift with stable scope/subject tie-breaks.

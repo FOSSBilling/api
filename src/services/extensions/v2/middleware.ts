@@ -141,7 +141,7 @@ export function boundContentRequest(): MiddlewareHandler {
   return async (c, next) => {
     const reader = c.req.raw.body?.getReader();
     if (reader) {
-      const body = new Uint8Array(MAX_RAW_BODY_BYTES);
+      let body = new Uint8Array(0);
       let size = 0;
       try {
         for (;;) {
@@ -149,7 +149,7 @@ export function boundContentRequest(): MiddlewareHandler {
           if (done) break;
           size += value.byteLength;
           if (size > MAX_RAW_BODY_BYTES) {
-            await reader.cancel();
+            await reader.cancel().catch(() => {});
             logInfo("extensions-v2", "Resource admission rejected", {
               reason: "raw_body_size"
             });
@@ -162,6 +162,16 @@ export function boundContentRequest(): MiddlewareHandler {
               },
               413
             );
+          }
+          if (size > body.byteLength) {
+            const grown = new Uint8Array(
+              Math.min(
+                MAX_RAW_BODY_BYTES,
+                Math.max(size, body.byteLength * 2, 1024)
+              )
+            );
+            grown.set(body);
+            body = grown;
           }
           body.set(value, size - value.byteLength);
         }

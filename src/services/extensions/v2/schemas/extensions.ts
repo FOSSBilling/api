@@ -102,8 +102,19 @@ export type ExtensionContent = z.infer<typeof ExtensionContentSchema>;
 // bounds are kept, since those still say something true about the shape.
 // Nothing is weakened for publication - approve() revalidates against the
 // strict schema before anything reaches the catalogue.
+// SQLite length() counts Unicode code points. Use the same bound for legacy
+// reads, with a 200-code-unit ceiling so supplementary characters still fit.
+const StoredReleaseSchema = ReleaseSchema.extend({
+  tag: z
+    .string()
+    .min(1)
+    .max(200)
+    .refine((tag) => Array.from(tag).length <= 100)
+    .describe("At most 100 Unicode code points in historical content")
+});
+
 export const StoredExtensionContentSchema = ExtensionContentSchema.extend({
-  releases: z.array(ReleaseSchema).max(100)
+  releases: z.array(StoredReleaseSchema).max(100)
 })
   .partial()
   .openapi("StoredExtensionContent");
@@ -127,7 +138,7 @@ function refineContentSize(content: unknown, ctx: z.RefinementCtx): void {
 // POST /extensions. The id is chosen once here and is immutable afterwards.
 // No developer field: a user owns at most one profile, so the server knows it.
 export const ExtensionCreateSchema = ExtensionContentSchema.extend({
-  id: lowercaseId("extension")
+  id: lowercaseId("extension").max(200)
 })
   .strict()
   .superRefine(refineContentSize)
@@ -151,17 +162,24 @@ export type Extension = z.infer<typeof ExtensionSchema>;
 // Catalogue cards do not need the potentially large README or every historic
 // release. Consumers can fetch those fields from GET /extensions/{id} when a
 // visitor opens an extension's detail page.
-export const ExtensionListItemSchema = ExtensionSchema.omit({
-  readme: true,
-  releases: true
-}).openapi("ExtensionListItem");
-
-export type ExtensionListItem = z.infer<typeof ExtensionListItemSchema>;
-
 const ExtensionCardContentSchema = ExtensionContentSchema.omit({
   readme: true,
   releases: true
+}).extend({
+  website: httpUrl()
+    .nullable()
+    .describe("Null when a legacy URL exceeds the card length bound"),
+  download_url: httpUrl()
+    .nullable()
+    .describe("Null when a legacy URL exceeds the card length bound")
 });
+
+export const ExtensionListItemSchema = ExtensionCardContentSchema.extend({
+  id: z.string(),
+  developer: PublicDeveloperSchema
+}).openapi("ExtensionListItem");
+
+export type ExtensionListItem = z.infer<typeof ExtensionListItemSchema>;
 
 // The published projection as its *owner* sees it. Identical to the
 // catalogue's, except releases may be empty: v1 constrained
@@ -171,7 +189,7 @@ const ExtensionCardContentSchema = ExtensionContentSchema.omit({
 // This can only ever describe a pre-v2 row - approve() requires a release
 // before anything reaches the catalogue through v2.
 const PublishedExtensionContentSchema = ExtensionContentSchema.extend({
-  releases: z.array(ReleaseSchema).max(100)
+  releases: z.array(StoredReleaseSchema).max(100)
 });
 
 // The most recent decision, kept alongside a later pending revision so the

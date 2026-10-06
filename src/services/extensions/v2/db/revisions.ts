@@ -64,6 +64,7 @@ interface RevisionRow {
   status: string;
   content: string | null;
   contentBytes: number;
+  contentReadable: number;
   name: string | null;
   version: string | null;
   description: string | null;
@@ -101,6 +102,7 @@ const REVISION_COLUMNS = {
   version: extensionRevisions.summaryVersion,
   description: extensionRevisions.summaryDescription,
   contentBytes: extensionRevisions.contentBytes,
+  contentReadable: extensionRevisions.contentReadable,
   contentHash: extensionRevisions.contentHash,
   compactedAt: extensionRevisions.compactedAt,
   reviewerId: extensionRevisions.reviewerId,
@@ -130,7 +132,9 @@ function parseSummaryRow(row: SummaryRow): ExtensionRevisionSummary {
     description: row.description,
     content_bytes: row.contentBytes,
     content_available:
-      !row.compactedAt && row.contentBytes <= MAX_CONTENT_BYTES,
+      !row.compactedAt &&
+      row.contentBytes <= MAX_CONTENT_BYTES &&
+      Boolean(row.contentReadable),
     content_hash: row.contentHash,
     compacted_at: row.compactedAt
   };
@@ -417,6 +421,7 @@ export class ExtensionRevisionsDatabase {
     }
 
     if (!row) return revisionNotFound(id);
+    if (!row.compactedAt && !row.contentReadable) return oversizedContent();
     if (row.contentBytes > MAX_CONTENT_BYTES)
       return {
         data: null,

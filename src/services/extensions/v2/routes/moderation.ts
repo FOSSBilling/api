@@ -405,6 +405,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
       409: errorResponse(
         "Extension is unpublished or delisted, or an edit is already awaiting review"
       ),
+      400: errorResponse("Unable to read request body"),
       413: errorResponse("Raw request exceeds 512 KiB"),
       429: errorResponse(
         "Extension write allowance exhausted; see Retry-After"

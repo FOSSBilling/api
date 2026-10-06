@@ -82,11 +82,11 @@ export const extensions = sqliteTable(
     delistReason: text("delist_reason")
   },
   (table) => [
+    index("idx_extensions_published_revision").on(table.publishedRevisionId),
     // Case-insensitive id uniqueness. The id is a lowercase slug by schema,
     // but adopted rows predate that, and this is what stops two developers
     // racing for ids that differ only in case — the job migration 0011's
     // extension_submissions.target_key index used to do from the other side.
-    index("idx_extensions_published_revision").on(table.publishedRevisionId),
     uniqueIndex("idx_extensions_id_nocase").on(sql`lower(${table.id})`),
     // Not partial, unlike the two below: this one serves both the public
     // developer_id filter and GET /extensions/mine, which pages every owned
@@ -236,6 +236,7 @@ export const extensionRevisions = sqliteTable(
     summaryName: text("summary_name"),
     summaryVersion: text("summary_version"),
     summaryDescription: text("summary_description"),
+    contentReadable: integer("content_readable").notNull().default(0),
     contentHash: text("content_hash"),
     compactedAt: text("compacted_at"),
     reviewerId: text("reviewer_id").references(() => users.id),
@@ -249,9 +250,9 @@ export const extensionRevisions = sqliteTable(
   (table) => [
     index("idx_extension_revisions_retention").on(
       table.compactedAt,
-      table.status,
       table.reviewedAt,
-      table.id
+      table.id,
+      table.status
     ),
     index("idx_extension_revisions_submitted_by").on(table.submittedBy),
     index("idx_extension_revisions_developer").on(table.developerId),

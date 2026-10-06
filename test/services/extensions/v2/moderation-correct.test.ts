@@ -51,6 +51,24 @@ async function seedPublished(): Promise<void> {
 }
 
 describe("POST /extensions/{id}/moderator-correct (api#251)", () => {
+  it("returns the canonical id without a fallible post-commit read", async () => {
+    await seedPublished();
+    env.DB_EXTENSIONS = wrapD1WithHook(db, (query) => {
+      if (/^select "id" from "extensions"/i.test(query))
+        throw new Error("canonical read failed");
+    });
+    const response = await post(
+      PATH.replace("live-ext", "LIVE-EXT"),
+      await authHeaders("mod-1"),
+      correctBody()
+    );
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      result: { id: "live-ext" }
+    });
+    expect(await countRevisions(db)).toBe(1);
+  });
+
   it("charges a first-time moderator exactly once and keeps totals reconciled", async () => {
     await seedPublished();
     const response = await post(
@@ -70,16 +88,26 @@ describe("POST /extensions/{id}/moderator-correct (api#251)", () => {
     ).toEqual({ bytes, revisions: 1, extensions: 0 });
     const expected = await db
       .prepare(
-        "SELECT (SELECT COALESCE(SUM(content_bytes),0) FROM extension_revisions)+(SELECT COALESCE(SUM(published_bytes),0) FROM extensions) AS bytes, (SELECT COUNT(*) FROM extension_revisions) AS revisions"
+        "SELECT (SELECT COALESCE(SUM(content_bytes),0) FROM extension_revisions)+(SELECT COALESCE(SUM(published_bytes),0) FROM extensions) AS bytes, (SELECT COUNT(*) FROM extension_revisions) AS revisions, (SELECT COUNT(*) FROM extensions) AS extensions"
       )
       .first();
     expect(
       await db
         .prepare(
-          "SELECT bytes,revisions FROM extension_resource_usage WHERE scope='global'"
+          "SELECT bytes,revisions,extensions FROM extension_resource_usage WHERE scope='global'"
         )
         .first()
     ).toEqual(expected);
+    for (const scope of ["account", "developer"]) {
+      expect(
+        await db
+          .prepare(
+            "SELECT SUM(bytes) AS bytes, SUM(revisions) AS revisions, SUM(extensions) AS extensions FROM extension_resource_usage WHERE scope=?"
+          )
+          .bind(scope)
+          .first()
+      ).toEqual(expected);
+    }
   });
   it("requires auth", async () => {
     const res = await post(

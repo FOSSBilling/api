@@ -45,40 +45,40 @@ const DEVELOPER_COLUMNS = {
 };
 
 const publishedBytes = extensions.publishedBytes;
+// Cards project small fields independently of the full body's size. In
+// particular an oversized legacy README must not turn a published row into
+// an apparent draft. JSON fields are projected rather than discarded.
 const CONTENT_COLUMNS = {
-  type: sql<
-    string | null
-  >`CASE WHEN ${publishedBytes} <= ${MAX_CONTENT_BYTES} THEN substr(${extensions.type}, 1, 100) ELSE NULL END`,
-  name: sql<
-    string | null
-  >`CASE WHEN ${publishedBytes} <= ${MAX_CONTENT_BYTES} THEN substr(${extensions.name}, 1, 120) ELSE NULL END`,
-  description: sql<
-    string | null
-  >`CASE WHEN ${publishedBytes} <= ${MAX_CONTENT_BYTES} THEN substr(${extensions.description}, 1, 4000) ELSE NULL END`,
-  releases: sql<
-    string | null
-  >`CASE WHEN ${publishedBytes} <= ${MAX_CONTENT_BYTES} THEN ${extensions.releases} ELSE NULL END`,
+  type: sql<string | null>`substr(${extensions.type}, 1, 100)`,
+  name: sql<string | null>`substr(${extensions.name}, 1, 120)`,
+  description: sql<string | null>`substr(${extensions.description}, 1, 4000)`,
+  releases: extensions.releases,
   website: sql<
     string | null
-  >`CASE WHEN ${publishedBytes} <= ${MAX_CONTENT_BYTES} THEN substr(${extensions.website}, 1, 2048) ELSE NULL END`,
+  >`CASE WHEN length(${extensions.website}) <= 2048 THEN ${extensions.website} ELSE NULL END`,
   license: sql<
     string | null
-  >`CASE WHEN ${publishedBytes} <= ${MAX_CONTENT_BYTES} AND length(CAST(${extensions.license} AS BLOB)) <= 4096 THEN ${extensions.license} ELSE NULL END`,
+  >`CASE WHEN length(CAST(${extensions.license} AS BLOB)) <= ${MAX_CONTENT_BYTES} AND json_valid(${extensions.license}) THEN
+    json_patch(json_object('name', substr(json_extract(${extensions.license}, '$.name'), 1, 100)),
+      json_patch(CASE WHEN json_type(${extensions.license}, '$.spdx_id') = 'text'
+        THEN json_object('spdx_id', substr(json_extract(${extensions.license}, '$.spdx_id'), 1, 100)) ELSE '{}' END,
+      CASE WHEN json_type(${extensions.license}, '$.URL') = 'text' AND length(json_extract(${extensions.license}, '$.URL')) <= 2048
+        THEN json_object('URL', json_extract(${extensions.license}, '$.URL')) ELSE '{}' END))
+    ELSE '{"name":"Unavailable"}' END`,
   iconUrl: sql<
     string | null
-  >`CASE WHEN ${publishedBytes} <= ${MAX_CONTENT_BYTES} THEN substr(${extensions.iconUrl}, 1, 2048) ELSE NULL END`,
-  readme: sql<
-    string | null
-  >`CASE WHEN ${publishedBytes} <= ${MAX_CONTENT_BYTES} THEN ${extensions.readme} ELSE NULL END`,
+  >`CASE WHEN length(${extensions.iconUrl}) <= 2048 THEN ${extensions.iconUrl} ELSE NULL END`,
+  readme: extensions.readme,
   source: sql<
     string | null
-  >`CASE WHEN ${publishedBytes} <= ${MAX_CONTENT_BYTES} AND length(CAST(${extensions.source} AS BLOB)) <= 4096 THEN ${extensions.source} ELSE NULL END`,
-  version: sql<
-    string | null
-  >`CASE WHEN ${publishedBytes} <= ${MAX_CONTENT_BYTES} THEN substr(${extensions.version}, 1, 100) ELSE NULL END`,
+  >`CASE WHEN length(CAST(${extensions.source} AS BLOB)) <= ${MAX_CONTENT_BYTES} AND json_valid(${extensions.source}) THEN
+    json_object('type', json_extract(${extensions.source}, '$.type'),
+      'repo', substr(json_extract(${extensions.source}, '$.repo'), 1, 500))
+    ELSE '{"type":"custom","repo":"Unavailable"}' END`,
+  version: sql<string | null>`substr(${extensions.version}, 1, 100)`,
   downloadUrl: sql<
     string | null
-  >`CASE WHEN ${publishedBytes} <= ${MAX_CONTENT_BYTES} THEN substr(${extensions.downloadUrl}, 1, 2048) ELSE NULL END`
+  >`CASE WHEN length(${extensions.downloadUrl}) <= 2048 THEN ${extensions.downloadUrl} ELSE NULL END`
 };
 
 // Detail preserves stored fields; the overall size guard prevents oversized reads.
@@ -254,7 +254,10 @@ interface PublishedRow extends DeveloperRow {
   publishedBytes: number;
 }
 
-type PublishedListRow = Omit<PublishedRow, "readme" | "releases">;
+type PublishedListRow = Omit<
+  PublishedRow,
+  "readme" | "releases" | "website" | "downloadUrl"
+> & { website: string | null; downloadUrl: string | null };
 
 export interface ExtensionListFilters {
   type?: string;
@@ -328,7 +331,7 @@ export class ExtensionsDatabase {
     const last = pageRows.at(-1);
     return {
       data: {
-        items: pageRows.map(parseListRow),
+        items: pageRows.map((row) => parseListRow(row)),
         hasMore,
         nextCursor: hasMore && last ? encodeCursor(last.id) : null
       },
@@ -1022,7 +1025,8 @@ export class ExtensionsDatabase {
                 AND EXISTS (
                   SELECT 1 FROM users u
                   WHERE u.id = ? AND u.deleted_at IS NULL AND u.is_moderator = 1
-                )`,
+                )
+              RETURNING extension_id`,
         params: [
           revisionId,
           moderatorId,
@@ -1068,21 +1072,11 @@ export class ExtensionsDatabase {
       return this.moderatorCorrectBlockedError(id, moderatorId);
     }
 
-    // Canonical id for the response (the path param may differ in case).
-    // Inside error handling like every other read here: the correction is
-    // already committed, so a failure must report a database error rather
-    // than throw past the route.
-    let row: { canonicalId: string } | undefined;
-    try {
-      [row] = await this.db
-        .select({ canonicalId: extensions.id })
-        .from(extensions)
-        .where(sql`LOWER(${extensions.id}) = LOWER(${id})`);
-    } catch (error) {
-      return contentAdmissionError("moderatorCorrect", error);
-    }
     return {
-      data: { id: row?.canonicalId ?? id, revisionId },
+      data: {
+        id: (results[0].results[0] as { extension_id: string }).extension_id,
+        revisionId
+      },
       error: null
     };
   }
@@ -1134,7 +1128,7 @@ export class ExtensionsDatabase {
         .from(extensions)
         .where(sql`LOWER(${extensions.id}) = LOWER(${id})`);
     } catch (error) {
-      return contentAdmissionError("moderatorCorrect", error);
+      return databaseError("moderatorCorrect", error);
     }
     if (!existing) return notFound(id);
     if (!existing.publishedAt) {
@@ -1177,7 +1171,7 @@ export class ExtensionsDatabase {
         };
       }
     } catch (error) {
-      return contentAdmissionError("moderatorCorrect", error);
+      return databaseError("moderatorCorrect", error);
     }
     return {
       data: null,
@@ -1255,18 +1249,48 @@ function parseDeveloper(row: DeveloperRow): PublicDeveloper {
 
 // Shared by both parsers so the catalogue card and the detail view can never
 // disagree about the embedded developer.
-function parseListRow(row: PublishedListRow): ExtensionListItem {
+function cardUrl(url: string | null): string | null {
+  return url && url.length <= 2048 ? url : null;
+}
+
+function cardLicense(stored: string | null): License {
+  const license = parseJSON<License>(stored ?? "", { name: "Unavailable" });
+  license.name =
+    typeof license.name === "string" && license.name
+      ? license.name.slice(0, 100)
+      : "Unavailable";
+  if (license.URL && license.URL.length > 2048) delete license.URL;
+  return license;
+}
+
+function cardSource(stored: string | null): Repository {
+  const source = parseJSON<Repository>(stored ?? "", {
+    type: "custom",
+    repo: "Unavailable"
+  });
+  source.repo =
+    typeof source.repo === "string" && source.repo
+      ? source.repo.slice(0, 500)
+      : "Unavailable";
+  return source;
+}
+
+function parseListRow(row: PublishedListRow, card = true): ExtensionListItem {
   return {
     id: row.id,
     type: row.type as ExtensionListItem["type"],
-    name: row.name,
-    description: row.description,
-    website: row.website,
-    license: parseJSON<License>(row.license, { name: "" }),
-    icon_url: row.iconUrl ?? undefined,
-    source: parseJSON<Repository>(row.source, { type: "custom", repo: "" }),
-    version: row.version,
-    download_url: row.downloadUrl,
+    name: card ? row.name.slice(0, 120) : row.name,
+    description: card ? row.description.slice(0, 4000) : row.description,
+    website: card ? cardUrl(row.website) : row.website,
+    license: card
+      ? cardLicense(row.license)
+      : parseJSON<License>(row.license, { name: "" }),
+    icon_url: (card ? cardUrl(row.iconUrl) : row.iconUrl) ?? undefined,
+    source: card
+      ? cardSource(row.source)
+      : parseJSON<Repository>(row.source, { type: "custom", repo: "" }),
+    version: card ? row.version.slice(0, 100) : row.version,
+    download_url: card ? cardUrl(row.downloadUrl) : row.downloadUrl,
     developer: parseDeveloper(row)
   };
 }
@@ -1275,7 +1299,9 @@ function parseListRow(row: PublishedListRow): ExtensionListItem {
 // catalogue query deliberately omits.
 function parseRow(row: PublishedRow): Extension {
   return {
-    ...parseListRow(row),
+    ...parseListRow(row, false),
+    website: row.website,
+    download_url: row.downloadUrl,
     readme: row.readme,
     releases: boundedReleases(parseJSON<Release[]>(row.releases, []))
   };
@@ -1284,21 +1310,30 @@ function parseRow(row: PublishedRow): Extension {
 // Only ever called for a row whose published_at is set, where
 // extensions_published_content_check guarantees each of these is present.
 function publishedContent(
-  row: OwnedListRow
-): Omit<ExtensionContent, "readme" | "releases"> {
+  row: OwnedListRow,
+  card = true
+): NonNullable<OwnedExtensionListItem["published"]> {
   return {
     type: row.type as ExtensionContent["type"],
-    name: row.name as string,
-    description: row.description as string,
-    website: row.website as string,
-    license: parseJSON<License>(row.license as string, { name: "" }),
-    icon_url: row.iconUrl ?? undefined,
-    source: parseJSON<Repository>(row.source as string, {
-      type: "custom",
-      repo: ""
-    }),
-    version: row.version as string,
-    download_url: row.downloadUrl as string
+    name: card ? (row.name as string).slice(0, 120) : (row.name as string),
+    description: card
+      ? (row.description as string).slice(0, 4000)
+      : (row.description as string),
+    website: card ? cardUrl(row.website) : row.website,
+    license: card
+      ? cardLicense(row.license)
+      : parseJSON<License>(row.license as string, { name: "" }),
+    icon_url: (card ? cardUrl(row.iconUrl) : row.iconUrl) ?? undefined,
+    source: card
+      ? cardSource(row.source)
+      : parseJSON<Repository>(row.source as string, {
+          type: "custom",
+          repo: ""
+        }),
+    version: card
+      ? (row.version as string).slice(0, 100)
+      : (row.version as string),
+    download_url: card ? cardUrl(row.downloadUrl) : row.downloadUrl
   };
 }
 
@@ -1306,7 +1341,7 @@ function parseOwnedListRow(row: OwnedListRow): OwnedExtensionListItem {
   return {
     id: row.id,
     developer: parseDeveloper(row),
-    published: row.publishedAt && row.type ? publishedContent(row) : null,
+    published: row.publishedAt ? publishedContent(row) : null,
     pending_revision:
       row.pendingId && row.pendingCreatedAt
         ? { id: row.pendingId, created_at: row.pendingCreatedAt }
@@ -1334,7 +1369,9 @@ function parseOwnedRow(row: OwnedRow): OwnedExtension {
     ...parseOwnedListRow(row),
     published: row.publishedAt
       ? {
-          ...publishedContent(row),
+          ...publishedContent(row, false),
+          website: row.website as string,
+          download_url: row.downloadUrl as string,
           readme: row.readme as string,
           releases: boundedReleases(
             parseJSON<Release[]>(row.releases as string, [])
@@ -1375,7 +1412,7 @@ function boundedReleases(value: unknown): Release[] {
         !release ||
         typeof release !== "object" ||
         typeof release.tag !== "string" ||
-        release.tag.length > 100
+        Array.from(release.tag).length > 100
     )
   )
     throw new LegacyContentError(

@@ -1,4 +1,6 @@
-// Durable policy lives in migration 0026; change applied limits with a new migration.
+// The content and retained-byte quotas also live in migration 0026;
+// change those durable ceilings with a new migration. Request and
+// maintenance bounds below are enforced in the Worker.
 export const MAX_RAW_BODY_BYTES = 512 * 1024;
 export const MAX_CONTENT_BYTES = 256 * 1024;
 export const RETENTION_DAYS = 180;

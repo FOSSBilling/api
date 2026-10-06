@@ -11,7 +11,11 @@ import {
   reportExtensionResources,
   inventoryExtensionRetention
 } from "../../../../src/services/extensions/v2/db/resource-maintenance";
-import { ExtensionUpdateSchema } from "../../../../src/services/extensions/v2/schemas/extensions";
+import {
+  ExtensionListItemSchema,
+  ExtensionUpdateSchema,
+  OwnedExtensionListItemSchema
+} from "../../../../src/services/extensions/v2/schemas/extensions";
 import {
   MAX_ACCOUNT_BYTES,
   MAX_CONTENT_BYTES,
@@ -85,6 +89,254 @@ async function insertHistory(id: string, status = "rejected") {
 }
 
 describe("Extension resource admission", () => {
+  it("retires expired events with accepted writes across unrelated accounts", async () => {
+    await owned();
+    await db.batch(
+      Array.from({ length: 120 }, (_, i) =>
+        db
+          .prepare(
+            "INSERT INTO extension_write_events VALUES (?, ?, ?, unixepoch()-86401)"
+          )
+          .bind(`expired-${i}`, `other-${i}`, `dev-${i}`)
+      )
+    );
+    await db
+      .prepare(
+        "INSERT INTO extension_write_events VALUES ('live-event','other','other',unixepoch()-120)"
+      )
+      .run();
+    for (const id of ["one", "two", "three"]) {
+      expect((await create(id)).status).toBe(201);
+    }
+    expect(
+      await db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM extension_write_events WHERE occurred_at<=unixepoch()-86400"
+        )
+        .first("n")
+    ).toBe(0);
+    expect(
+      await db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM extension_write_events WHERE id='live-event'"
+        )
+        .first("n")
+    ).toBe(1);
+  });
+  it("uses retention ordering without a temporary sort", async () => {
+    const plan = await db
+      .prepare(
+        "EXPLAIN QUERY PLAN SELECT r.id FROM extension_revisions r WHERE r.compacted_at IS NULL AND r.status IN ('approved','rejected') AND r.reviewed_at < datetime('now','-180 days') ORDER BY r.reviewed_at,r.id LIMIT 20"
+      )
+      .all<{ detail: string }>();
+    expect(
+      plan.results.some((row) =>
+        row.detail.includes("idx_extension_revisions_retention")
+      )
+    ).toBe(true);
+    expect(plan.results.some((row) => row.detail.includes("TEMP B-TREE"))).toBe(
+      false
+    );
+  });
+  it("keeps oversized published extensions visible as published cards", async () => {
+    await owned();
+    await db
+      .prepare("UPDATE extensions SET readme=? WHERE id='live'")
+      .bind("x".repeat(MAX_CONTENT_BYTES + 1))
+      .run();
+    const extensions = new ExtensionsDatabase(getExtensionsDb(db));
+    const list = await extensions.listOwned({ developerId: "developer" });
+    expect(list.error).toBeNull();
+    expect(list.data?.items[0].published).not.toBeNull();
+    expect(
+      OwnedExtensionListItemSchema.safeParse(list.data?.items[0]).success
+    ).toBe(true);
+    expect((await extensions.getOwned("live")).error?.code).toBe(
+      "CONTENT_UNAVAILABLE"
+    );
+  });
+
+  it("prevents revision attribution changes from moving retained quota charges", async () => {
+    await owned();
+    await insertHistory("fixed-attribution");
+    await insertUser(db, { id: "other" });
+    await seedDeveloper("other-developer", "other");
+    for (const column of [
+      "submitted_by",
+      "developer_id",
+      "extension_id",
+      "id"
+    ]) {
+      const value = column === "developer_id" ? "other-developer" : "other";
+      await expect(
+        db
+          .prepare(
+            `UPDATE extension_revisions SET ${column}=? WHERE id='fixed-attribution'`
+          )
+          .bind(value)
+          .run()
+      ).rejects.toThrow(/extension_resource_identity/);
+    }
+    expect(
+      await db
+        .prepare(
+          "SELECT submitted_by,developer_id,extension_id,id FROM extension_revisions WHERE id='fixed-attribution'"
+        )
+        .first()
+    ).toEqual({
+      submitted_by: "owner",
+      developer_id: "developer",
+      extension_id: "live",
+      id: "fixed-attribution"
+    });
+  });
+  it("reconciles every charged published column against independent UTF-8 byte counts", async () => {
+    await owned();
+    const columns = [
+      "type",
+      "name",
+      "description",
+      "releases",
+      "website",
+      "license",
+      "icon_url",
+      "readme",
+      "source",
+      "version",
+      "download_url"
+    ];
+    async function reconcile() {
+      const rows = await db
+        .prepare("SELECT * FROM extensions")
+        .all<Record<string, string | null>>();
+      const revisions = await db
+        .prepare("SELECT content FROM extension_revisions")
+        .all<{ content: string }>();
+      const bytes =
+        rows.results.reduce(
+          (sum, row) =>
+            sum +
+            columns.reduce(
+              (n, column) =>
+                n + new TextEncoder().encode(row[column] ?? "").byteLength,
+              0
+            ),
+          0
+        ) +
+        revisions.results.reduce(
+          (sum, row) => sum + new TextEncoder().encode(row.content).byteLength,
+          0
+        );
+      expect(
+        await db
+          .prepare(
+            "SELECT bytes FROM extension_resource_usage WHERE scope='global'"
+          )
+          .first("bytes")
+      ).toBe(bytes);
+      for (const scope of ["account", "developer"])
+        expect(
+          await db
+            .prepare(
+              "SELECT COALESCE(SUM(bytes),0) AS n FROM extension_resource_usage WHERE scope=?"
+            )
+            .bind(scope)
+            .first("n")
+        ).toBe(bytes);
+    }
+    await reconcile();
+    const content = sampleContent();
+    const values = [
+      content.type,
+      "😀 Name",
+      "Résumé 🧪",
+      JSON.stringify(content.releases),
+      "https://example.test/é",
+      JSON.stringify({ name: "Lïcence" }),
+      "https://example.test/😀.png",
+      "読んでください",
+      JSON.stringify({ type: "custom", repo: "café/😀" }),
+      "1.0.0",
+      "https://example.test/é.zip"
+    ];
+    for (let i = 0; i < columns.length; i++) {
+      await db
+        .prepare(`UPDATE extensions SET ${columns[i]}=? WHERE id='live'`)
+        .bind(values[i])
+        .run();
+      await reconcile();
+    }
+    await insertHistory("charged-revision");
+    await reconcile();
+    await db
+      .prepare(
+        "UPDATE extension_revisions SET content=? WHERE id='charged-revision'"
+      )
+      .bind(JSON.stringify({ ...content, readme: "😀" }))
+      .run();
+    await reconcile();
+    await db.prepare("DELETE FROM extensions WHERE id='live'").run();
+    await reconcile();
+  });
+  it("preserves overflow status when stream cancellation rejects", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(MAX_RAW_BODY_BYTES + 1));
+      },
+      cancel() {
+        throw new Error("cancel failed");
+      }
+    });
+    const response = await app.request(
+      "/extensions/v2/extensions",
+      { method: "POST", headers: await authHeaders("owner"), body: stream },
+      env
+    );
+    expect(response.status).toBe(413);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "BODY_TOO_LARGE" }
+    });
+  });
+  it("accepts a valid JSON body delivered in small chunks", async () => {
+    await owned();
+    const bytes = new TextEncoder().encode(
+      JSON.stringify({ ...sampleCreate(), id: "chunked" })
+    );
+    let position = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (position === bytes.length) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(bytes.subarray(position, position + 73));
+        position = Math.min(position + 73, bytes.length);
+      }
+    });
+    const response = await app.request(
+      "/extensions/v2/extensions",
+      { method: "POST", headers: await authHeaders("owner"), body: stream },
+      env
+    );
+    expect(response.status).toBe(201);
+  });
+
+  it("bounds new extension IDs while preserving reads and edits of longer legacy IDs", async () => {
+    await owned();
+    const id = "e".repeat(201);
+    expect((await create(id)).status).toBe(422);
+    await insertExtension(db, { id, developer_id: "developer" });
+    expect((await get(`/extensions/v2/extensions/${id}`, {})).status).toBe(200);
+    expect(
+      (
+        await put(
+          `/extensions/v2/extensions/${id}`,
+          await authHeaders("owner"),
+          sampleContent()
+        )
+      ).status
+    ).toBe(202);
+  });
   it("logs safe backend diagnostics without SQL or submitted content", () => {
     const error = Object.assign(
       new Error("SQLITE_BUSY: SELECT secret_content FROM private_table"),
@@ -519,7 +771,10 @@ describe("Bounded revision reads and maintenance", () => {
     for (const [id, releases] of [
       ["too-many", Array.from({ length: 101 }, () => ({ tag: "1.0.0" }))],
       ["bad-shape", [null]],
-      ["huge-tag", [{ tag: "x".repeat(101) }]]
+      ["huge-tag", [{ tag: "x".repeat(101) }]],
+      ["huge-unicode-tag", [{ tag: "😀".repeat(101) }]],
+      ["bad-tag", [{ tag: 1 }]],
+      ["bad-array", "oops"]
     ] as const) {
       await insertRevision(db, {
         id,
@@ -538,7 +793,38 @@ describe("Bounded revision reads and maintenance", () => {
       await expect(detail.json()).resolves.toMatchObject({
         error: { code: "CONTENT_UNAVAILABLE" }
       });
+      const list = await get(
+        "/extensions/v2/extensions/live/revisions",
+        await authHeaders("owner")
+      );
+      const body = (await list.json()) as {
+        result: Array<{ id: string; content_available: boolean }>;
+      };
+      expect(
+        body.result.find((revision) => revision.id === id)?.content_available
+      ).toBe(false);
     }
+  });
+  it("keeps Unicode legacy tag availability consistent with detail reads", async () => {
+    await owned();
+    await insertRevision(db, {
+      id: "unicode-tag",
+      extension_id: "live",
+      developer_id: "developer",
+      submitted_by: "owner",
+      content: JSON.stringify({
+        releases: [{ ...sampleContent().releases[0], tag: "😀".repeat(100) }]
+      }),
+      status: "rejected"
+    });
+    const detail = await get(
+      "/extensions/v2/extensions/live/revisions/unicode-tag",
+      await authHeaders("owner")
+    );
+    expect(detail.status).toBe(200);
+    await expect(detail.json()).resolves.toMatchObject({
+      result: { content_available: true }
+    });
   });
   it("compacts only old reviewed bodies, preserves published/pending records and remains idempotent", async () => {
     await owned();
@@ -776,6 +1062,16 @@ describe("Bounded revision reads and maintenance", () => {
       .bind(website, JSON.stringify(license), JSON.stringify(source))
       .run();
     const extensions = new ExtensionsDatabase(getExtensionsDb(db));
+    const cards = await extensions.list({});
+    expect(cards.error).toBeNull();
+    expect(
+      ExtensionListItemSchema.safeParse(cards.data?.items[0]).success
+    ).toBe(true);
+    expect(cards.data?.items[0]).toMatchObject({
+      website: null,
+      license: { name: "L".repeat(100) },
+      source: { type: "custom", repo: "R".repeat(500) }
+    });
     const publicDetail = await extensions.getById("live");
     expect(publicDetail.error).toBeNull();
     expect(publicDetail.data).toMatchObject({ website, license, source });
