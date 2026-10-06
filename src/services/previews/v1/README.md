@@ -38,7 +38,8 @@ Endpoints are not listed here. The service publishes its own contract:
   Abbreviated SHAs (7+ hex characters) are accepted only when a complete
   artifact scan finds one distinct live preview commit. Multiple commits
   return HTTP 409 (`AMBIGUOUS_COMMIT`); use the full SHA to disambiguate.
-  An incomplete scan returns 503, never a selected artifact or a 404.
+  Budget or page-cap exhaustion returns 503; GitHub rate limits return 429.
+  An incomplete scan never returns a selected artifact or a 404.
 - `pr/{number}`'s handler resolves the PR to its head SHA
   (`GET /pulls/{number}`) and delegates to the same resolver `commit/{sha}`
   uses - one GitHub-facing code path, not two.
