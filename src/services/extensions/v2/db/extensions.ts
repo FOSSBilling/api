@@ -72,7 +72,8 @@ const CONTENT_COLUMNS = {
   source: sql<
     string | null
   >`CASE WHEN length(CAST(${extensions.source} AS BLOB)) <= ${MAX_CONTENT_BYTES} AND json_valid(${extensions.source}) THEN
-    json_object('type', json_extract(${extensions.source}, '$.type'),
+    json_object('type', CASE WHEN json_extract(${extensions.source}, '$.type') IN ('github', 'gitlab', 'custom')
+      THEN json_extract(${extensions.source}, '$.type') ELSE 'custom' END,
       'repo', substr(json_extract(${extensions.source}, '$.repo'), 1, 500))
     ELSE '{"type":"custom","repo":"Unavailable"}' END`,
   version: sql<string | null>`substr(${extensions.version}, 1, 100)`,

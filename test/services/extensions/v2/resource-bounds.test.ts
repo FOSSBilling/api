@@ -1050,6 +1050,43 @@ describe("Bounded revision reads and maintenance", () => {
       queries.every((query) => !/\b(?:INSERT|UPDATE|DELETE)\b/i.test(query))
     ).toBe(true);
   });
+  it.each([
+    [{ repo: "example/repo" }, "custom"],
+    [{ type: "bitbucket", repo: "example/repo" }, "custom"],
+    [{ type: null, repo: "example/repo" }, "custom"],
+    [{ type: 42, repo: "example/repo" }, "custom"],
+    [{ type: "github", repo: "example/repo" }, "github"],
+    [{ type: "gitlab", repo: "example/repo" }, "gitlab"],
+    [{ type: "custom", repo: "example/repo" }, "custom"]
+  ])(
+    "normalizes legacy source %j to %s in public and owner cards",
+    async (source, type) => {
+      await owned();
+      await db
+        .prepare("UPDATE extensions SET source=? WHERE id='live'")
+        .bind(JSON.stringify(source))
+        .run();
+      const extensions = new ExtensionsDatabase(getExtensionsDb(db));
+      const publicCards = await extensions.list({});
+      expect(publicCards.error).toBeNull();
+      const publicCard = publicCards.data?.items[0];
+      expect(publicCard?.source).toEqual({ type, repo: "example/repo" });
+      expect(ExtensionListItemSchema.safeParse(publicCard).success).toBe(true);
+      const ownerCards = await extensions.listOwned({
+        developerId: "developer"
+      });
+      expect(ownerCards.error).toBeNull();
+      const ownerCard = ownerCards.data?.items[0];
+      expect(ownerCard?.published?.source).toEqual({
+        type,
+        repo: "example/repo"
+      });
+      expect(OwnedExtensionListItemSchema.safeParse(ownerCard).success).toBe(
+        true
+      );
+      expect((await extensions.getById("live")).data?.source).toEqual(source);
+    }
+  );
   it("preserves under-limit legacy fields in public and owner details", async () => {
     await owned();
     const website = "https://example.test/" + "x".repeat(3000);
