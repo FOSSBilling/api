@@ -1,23 +1,34 @@
+import { MAX_CONTENT_BYTES } from "../resource-limits";
 import { and, asc, desc, eq, gt, lt, or, sql, SQL } from "drizzle-orm";
 import { DatabaseError, DatabaseResult } from "../../../../lib/interfaces";
 import { ExtensionsDb } from "../../../../lib/db";
 import { extensionRevisions, developers, extensions, users } from "./schema";
 import {
   databaseError,
+  contentAdmissionError,
   inactiveActorError,
   moderatorActorError
 } from "./errors";
 import { toD1Statement } from "./batch";
 import { encodeCursor as encode, decodeCursor as decode } from "./cursor";
-import { MAX_PENDING_REVISIONS_PER_USER, parseContent } from "./extensions";
+import {
+  MAX_PENDING_REVISIONS_PER_USER,
+  parseContent,
+  LegacyContentError,
+  oversizedContent
+} from "./extensions";
 import {
   ExtensionContent,
   ExtensionContentSchema
 } from "../schemas/extensions";
-import { ExtensionRevision, RevisionStatus } from "../schemas/revisions";
+import {
+  ExtensionRevision,
+  ExtensionRevisionSummary,
+  RevisionStatus
+} from "../schemas/revisions";
 
 export interface RevisionPage {
-  items: ExtensionRevision[];
+  items: ExtensionRevisionSummary[];
   nextCursor: string | null;
   hasMore: boolean;
 }
@@ -51,7 +62,14 @@ interface RevisionRow {
   developerId: string;
   submittedBy: string;
   status: string;
-  content: string;
+  content: string | null;
+  contentBytes: number;
+  contentReadable: number;
+  name: string | null;
+  version: string | null;
+  description: string | null;
+  contentHash: string | null;
+  compactedAt: string | null;
   reviewerId: string | null;
   reviewNote: string | null;
   createdAt: string;
@@ -61,16 +79,8 @@ interface RevisionRow {
 
 function parseRevisionRow(row: RevisionRow): StoredRevision {
   const revision = {
-    id: row.id,
-    extension_id: row.extensionId,
-    developer_id: row.developerId,
-    submitted_by: row.submittedBy,
-    status: row.status as RevisionStatus,
-    content: parseContent(row.content),
-    reviewer_id: row.reviewerId,
-    review_note: row.reviewNote,
-    created_at: row.createdAt,
-    reviewed_at: row.reviewedAt
+    ...parseSummaryRow(row),
+    content: row.compactedAt ? null : parseContent(row.content)
   } as StoredRevision;
   Object.defineProperty(revision, "ownershipEpoch", {
     value: Number(row.ownershipEpoch ?? 1),
@@ -85,13 +95,50 @@ const REVISION_COLUMNS = {
   developerId: extensionRevisions.developerId,
   submittedBy: extensionRevisions.submittedBy,
   status: extensionRevisions.status,
-  content: extensionRevisions.content,
+  content: sql<
+    string | null
+  >`CASE WHEN length(CAST(${extensionRevisions.content} AS BLOB)) <= ${MAX_CONTENT_BYTES} THEN ${extensionRevisions.content} ELSE NULL END`,
+  name: extensionRevisions.summaryName,
+  version: extensionRevisions.summaryVersion,
+  description: extensionRevisions.summaryDescription,
+  contentBytes: extensionRevisions.contentBytes,
+  contentReadable: extensionRevisions.contentReadable,
+  contentHash: extensionRevisions.contentHash,
+  compactedAt: extensionRevisions.compactedAt,
   reviewerId: extensionRevisions.reviewerId,
-  reviewNote: extensionRevisions.reviewNote,
+  reviewNote: sql<
+    string | null
+  >`substr(${extensionRevisions.reviewNote}, 1, 2000)`,
   createdAt: extensionRevisions.createdAt,
   reviewedAt: extensionRevisions.reviewedAt,
   ownershipEpoch: extensionRevisions.ownershipEpoch
 };
+
+const { content: _content, ...SUMMARY_COLUMNS } = REVISION_COLUMNS;
+type SummaryRow = Omit<RevisionRow, "content">;
+function parseSummaryRow(row: SummaryRow): ExtensionRevisionSummary {
+  return {
+    id: row.id,
+    extension_id: row.extensionId,
+    developer_id: row.developerId,
+    submitted_by: row.submittedBy,
+    status: row.status as RevisionStatus,
+    reviewer_id: row.reviewerId,
+    review_note: row.reviewNote,
+    created_at: row.createdAt,
+    reviewed_at: row.reviewedAt,
+    name: row.name,
+    version: row.version,
+    description: row.description,
+    content_bytes: row.contentBytes,
+    content_available:
+      !row.compactedAt &&
+      row.contentBytes <= MAX_CONTENT_BYTES &&
+      Boolean(row.contentReadable),
+    content_hash: row.contentHash,
+    compacted_at: row.compactedAt
+  };
+}
 
 export class ExtensionRevisionsDatabase {
   constructor(private db: ExtensionsDb) {}
@@ -128,14 +175,14 @@ export class ExtensionRevisionsDatabase {
         ON CONFLICT DO NOTHING
       `);
     } catch (error) {
-      return databaseError("propose", error);
+      return contentAdmissionError("propose", error);
     }
 
     if (!result.meta?.changes) {
       try {
         return { data: null, error: await this.proposeBlockedError(input) };
       } catch (error) {
-        return databaseError("propose", error);
+        return contentAdmissionError("propose", error);
       }
     }
 
@@ -202,7 +249,9 @@ export class ExtensionRevisionsDatabase {
     baseCondition: SQL,
     direction: "asc" | "desc",
     limit: number,
-    cursor?: string
+    cursor?: string,
+    readerId?: string,
+    extensionId?: string
   ): Promise<DatabaseResult<RevisionPage>> {
     const decoded = cursor ? decodeCursor(cursor) : null;
     if (cursor && !decoded) {
@@ -215,9 +264,17 @@ export class ExtensionRevisionsDatabase {
     const [beyond, order] =
       direction === "desc" ? [lt, desc] : ([gt, asc] as const);
 
-    let rows: RevisionRow[];
+    let rows: SummaryRow[];
     try {
       const conditions = [baseCondition];
+      if (readerId)
+        conditions.push(sql`EXISTS (
+        SELECT 1 FROM users u WHERE u.id=${readerId} AND u.deleted_at IS NULL
+          AND (u.is_moderator=1 OR (${extensionId ?? null} IS NOT NULL AND EXISTS (
+            SELECT 1 FROM extensions e JOIN developers d ON d.id=e.developer_id
+            WHERE e.id=${extensionId ?? null} AND d.owner_user_id=${readerId}
+          )))
+      )`);
       if (decoded) {
         const { createdAt, id: cursorId } = decoded;
         conditions.push(
@@ -231,7 +288,7 @@ export class ExtensionRevisionsDatabase {
         );
       }
       rows = await this.db
-        .select(REVISION_COLUMNS)
+        .select(SUMMARY_COLUMNS)
         .from(extensionRevisions)
         .where(and(...conditions))
         .orderBy(
@@ -244,7 +301,7 @@ export class ExtensionRevisionsDatabase {
     }
 
     const hasMore = rows.length > limit;
-    const items = rows.slice(0, limit).map(parseRevisionRow);
+    const items = rows.slice(0, limit).map(parseSummaryRow);
     const last = items.at(-1);
     return {
       data: {
@@ -264,6 +321,7 @@ export class ExtensionRevisionsDatabase {
   // narrows both modes.
   async listScoped(filters: {
     extensionId?: string;
+    readerId?: string;
     status?: RevisionStatus;
     sort?: "newest" | "oldest";
     limit?: number;
@@ -289,7 +347,15 @@ export class ExtensionRevisionsDatabase {
       conditions.length > 1
         ? and(...conditions)!
         : (conditions[0] ?? sql`1 = 1`);
-    return this.page("listScoped", base, direction, limit, filters.cursor);
+    return this.page(
+      "listScoped",
+      base,
+      direction,
+      limit,
+      filters.cursor,
+      filters.readerId,
+      filters.extensionId
+    );
   }
 
   // Queue totals for the admin tabs: one GROUP BY rather than a COUNT per
@@ -327,7 +393,8 @@ export class ExtensionRevisionsDatabase {
 
   async getById(
     extensionId: string,
-    id: string
+    id: string,
+    readerId?: string
   ): Promise<DatabaseResult<StoredRevision>> {
     let row: RevisionRow | undefined;
     try {
@@ -337,7 +404,16 @@ export class ExtensionRevisionsDatabase {
         .where(
           and(
             eq(extensionRevisions.id, id),
-            sql`LOWER(${extensionRevisions.extensionId}) = LOWER(${extensionId})`
+            sql`LOWER(${extensionRevisions.extensionId}) = LOWER(${extensionId})`,
+            readerId
+              ? sql`EXISTS (
+              SELECT 1 FROM users u WHERE u.id=${readerId} AND u.deleted_at IS NULL
+                AND (u.is_moderator=1 OR EXISTS (
+                  SELECT 1 FROM extensions e JOIN developers d ON d.id=e.developer_id
+                  WHERE e.id=extension_revisions.extension_id AND d.owner_user_id=${readerId}
+                ))
+            )`
+              : undefined
           )
         );
     } catch (error) {
@@ -345,7 +421,22 @@ export class ExtensionRevisionsDatabase {
     }
 
     if (!row) return revisionNotFound(id);
-    return { data: parseRevisionRow(row), error: null };
+    if (!row.compactedAt && !row.contentReadable) return oversizedContent();
+    if (row.contentBytes > MAX_CONTENT_BYTES)
+      return {
+        data: null,
+        error: {
+          code: "CONTENT_UNAVAILABLE",
+          message:
+            "Legacy revision exceeds the content limit; resubmit or export it administratively"
+        }
+      };
+    try {
+      return { data: parseRevisionRow(row), error: null };
+    } catch (error) {
+      if (error instanceof LegacyContentError) return oversizedContent();
+      return databaseError("getById", error);
+    }
   }
 
   // Notes what happened to an id-scoped write that didn't affect any rows:

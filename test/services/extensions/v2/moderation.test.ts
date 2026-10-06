@@ -564,27 +564,25 @@ describe("Extensions API v2", () => {
 
       // But it is still readable as history, with the empty releases intact.
       const history = await get(
-        "/extensions/v2/extensions/legacy-ext/revisions",
+        "/extensions/v2/extensions/legacy-ext/revisions/legacy-revision",
         await authHeaders("user-1")
       );
       expect(history.status).toBe(200);
       const body = (await history.json()) as {
-        result: Array<{ content: Record<string, unknown> }>;
+        result: { content: Record<string, unknown> };
       };
       // Served as stored, with the fields it never had simply absent.
-      expect(body.result[0].content).toMatchObject({
+      expect(body.result.content).toMatchObject({
         type: "mod",
         name: "Legacy"
       });
-      expect(body.result[0].content.description).toBeUndefined();
+      expect(body.result.content.description).toBeUndefined();
 
       // The advertised contract has to accept what is actually served. Hono
       // does not validate responses at runtime, so nothing else catches a
       // response schema that disagrees with the data - the generated client
       // would be the first to find out.
-      expect(ExtensionRevisionSchema.safeParse(body.result[0]).success).toBe(
-        true
-      );
+      expect(ExtensionRevisionSchema.safeParse(body.result).success).toBe(true);
     });
 
     // reviewed_at is only second-granular, so two reviews can share one and

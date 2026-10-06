@@ -70,6 +70,9 @@ export function setupExtensionsV2Tests(): void {
   beforeEach(async () => {
     db = env.DB_EXTENSIONS;
     await resetExtensionsDb(db);
+    env.EXTENSION_WRITE_RATE_LIMITER = {
+      limit: async () => ({ success: true })
+    };
     env.PROFILE_CREATION_RATE_LIMITER = freshProfileCreationRateLimiter();
     vi.clearAllMocks();
     mockGithubEntityNotFound();

@@ -1,3 +1,8 @@
+import { getExtensionsDb } from "../lib/db";
+import {
+  maintainExtensionResources,
+  reportExtensionResources
+} from "../services/extensions/v2/db/resource-maintenance";
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import centralAlertsV1 from "../services/central-alerts/v1";
@@ -69,6 +74,19 @@ app.all("/*", (c) => {
   );
 });
 
-export default app;
+export default {
+  fetch: app.fetch,
+  request: app.request.bind(app),
+  scheduled: async (
+    _event: ScheduledController,
+    env: CloudflareBindings
+  ): Promise<void> => {
+    const db = getExtensionsDb(env.DB_EXTENSIONS);
+    await maintainExtensionResources(db, {
+      mode: env.EXTENSIONS_RETENTION_MODE
+    });
+    await reportExtensionResources(db, env.EXTENSIONS_RETENTION_MODE);
+  }
+};
 
 export { PreviewGitHubBudget } from "../lib/adapters/cloudflare/preview-github-budget";

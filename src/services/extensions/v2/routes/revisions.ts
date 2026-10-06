@@ -1,3 +1,4 @@
+import { getAuth } from "../../../../lib/auth";
 import { getExtensionsDb } from "../../../../lib/db";
 import { createRoute, z } from "@hono/zod-openapi";
 import { errorBody } from "./errors";
@@ -7,7 +8,7 @@ import {
   errorResponse
 } from "../schemas/common";
 import {
-  ExtensionRevisionSchema,
+  ExtensionRevisionSummarySchema,
   RevisionQueueQuerySchema
 } from "../schemas/revisions";
 import { ExtensionRevisionsDatabase } from "../db/revisions";
@@ -28,7 +29,7 @@ export function registerRevisionRoutes(app: ExtensionsV2App): void {
         content: {
           "application/json": {
             schema: z.object({
-              result: z.array(ExtensionRevisionSchema),
+              result: z.array(ExtensionRevisionSummarySchema),
               pagination: PaginationSchema
             })
           }
@@ -55,6 +56,7 @@ export function registerRevisionRoutes(app: ExtensionsV2App): void {
     );
     const { data, error } = await db.listScoped({
       status: status ?? "pending",
+      readerId: getAuth(c).userId,
       sort: "oldest",
       limit,
       cursor
