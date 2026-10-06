@@ -2,7 +2,18 @@ import { GitHubError, RateLimitError } from "../../../../lib/github-errors";
 
 // A GitHub outage/rate-limit is a 503 (retry later); anything else
 // unexpected from classifyGitHubError is a 500.
-export function statusFromGithubError(error: GitHubError): 429 | 503 | 500 {
+export function statusFromGithubError(
+  error: GitHubError
+): 409 | 429 | 503 | 500;
+export function statusFromGithubError(
+  error: GitHubError,
+  includeAmbiguous: false
+): 429 | 503 | 500;
+export function statusFromGithubError(
+  error: GitHubError,
+  includeAmbiguous = true
+): 409 | 429 | 503 | 500 {
+  if (includeAmbiguous && error.errorCode === "AMBIGUOUS_COMMIT") return 409;
   if (error instanceof RateLimitError) return 429;
   if (error.httpStatus !== undefined && error.httpStatus >= 500) return 503;
   return 500;

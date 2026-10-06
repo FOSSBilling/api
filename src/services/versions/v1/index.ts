@@ -1,5 +1,5 @@
 import { bearerAuth } from "hono/bearer-auth";
-import { Hono, type Context, type Handler } from "hono";
+import { Hono, type Context, type Handler, type MiddlewareHandler } from "hono";
 import { cors } from "hono/cors";
 import { etag } from "hono/etag";
 import { prettyJSON } from "hono/pretty-json";
@@ -111,27 +111,53 @@ interface CachedRouteOptions {
   // Cache-key overrides forwarded to hono's cache middleware; default is
   // the normalized URL.
   keyGenerator?: (c: Context<VersionsEnv>) => string;
-  // Response headers the body varies on. Declaring them lets hono fold the
-  // request's header value into the cache key instead of refusing to store
-  // the response at all.
-  vary?: string[];
+  varyByMirrorTrust?: boolean;
 }
 
 function registerCachedRoute<P extends string>(
   path: P,
   handler: Handler<VersionsEnv, P>,
-  { keyGenerator = publicCacheKey, vary }: CachedRouteOptions = {}
+  {
+    keyGenerator = publicCacheKey,
+    varyByMirrorTrust = false
+  }: CachedRouteOptions = {}
 ) {
+  const responseCache = publicResponseCache({
+    cacheName: VERSIONS_CACHE_NAME,
+    cacheControl: RELEASES_CACHE_CONTROL,
+    keyGenerator,
+    ...(varyByMirrorTrust ? { vary: ["User-Agent"] } : {})
+  });
+  const boundedCache: MiddlewareHandler<VersionsEnv> = async (c, next) => {
+    if (!varyByMirrorTrust) return responseCache(c, next);
+
+    // Hono folds raw Vary header values into its key. Give it only the two
+    // semantic classes, while handlers and downstream caches retain the
+    // original User-Agent and the public Vary: User-Agent contract.
+    const original = c.req.raw;
+    const headers = new Headers(original.headers);
+    headers.set(
+      "User-Agent",
+      clientTrustsMirror(headers.get("User-Agent"))
+        ? `FOSSBilling/${MIRROR_TRUST_MIN_VERSION}`
+        : ""
+    );
+    c.req.raw = new Request(original, { headers });
+    try {
+      return await responseCache(c, async () => {
+        c.req.raw = original;
+        await next();
+      });
+    } finally {
+      c.req.raw = original;
+    }
+  };
+
   return versionsV1.get(
     path,
     // Honor conditional requests on cache hits; the inner etag stamps entries.
     etag(),
-    publicResponseCache({
-      cacheName: VERSIONS_CACHE_NAME,
-      cacheControl: RELEASES_CACHE_CONTROL,
-      keyGenerator,
-      ...(vary ? { vary } : {})
-    }),
+    boundedCache,
     stampCacheHeaders,
     etag(),
     prettyJSON(),
@@ -270,8 +296,7 @@ registerCachedRoute(
       c.header("Vary", "*");
     } else {
       // The body varies by mirror trust (derived from the UA); declaring it
-      // also lets hono's cache middleware key entries per UA instead of
-      // refusing to store the response.
+      // keeps downstream caches from mixing the two response classes.
       c.header("Vary", "User-Agent");
     }
 
@@ -285,7 +310,7 @@ registerCachedRoute(
 
     return c.json(buildSuccessResponse(resolvedReleases, result.source));
   },
-  { vary: ["User-Agent"] }
+  { varyByMirrorTrust: true }
 );
 
 versionsV1.get(
@@ -455,8 +480,7 @@ registerCachedRoute(
     }
 
     // The body varies by mirror trust (derived from the UA); declaring it
-    // also lets hono's cache middleware key entries per UA instead of
-    // refusing to store the response.
+    // keeps downstream caches from mixing the two response classes.
     c.header("Vary", "User-Agent");
     const userAgent = c.req.header("User-Agent");
 
@@ -486,7 +510,7 @@ registerCachedRoute(
       message: `FOSSBilling version ${version} does not appear to exist.`
     });
   },
-  { vary: ["User-Agent"] }
+  { varyByMirrorTrust: true }
 );
 
 export default versionsV1;

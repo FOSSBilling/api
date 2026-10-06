@@ -5,6 +5,7 @@ import { encodeCursor as encode, decodeCursor as decode } from "./cursor";
 import { developerClaims, developers, users } from "./schema";
 import {
   databaseError,
+  moderatorActorError,
   isDeveloperOwnerConflict,
   isOwnershipEpochRollback
 } from "./errors";
@@ -430,8 +431,12 @@ export class DeveloperClaimsDatabase {
   }
 
   private async explainClaimApprovalNoOp(
-    claim: DeveloperClaim
+    claim: DeveloperClaim,
+    reviewerId: string
   ): Promise<DatabaseResult<DeveloperProfile>> {
+    const actorError = await moderatorActorError(this.db, reviewerId);
+    if (actorError) return { data: null, error: actorError };
+
     const latestClaim = await this.getClaimById(claim.id);
     if (latestClaim.error || latestClaim.data?.status !== "pending") {
       return {
@@ -524,7 +529,7 @@ export class DeveloperClaimsDatabase {
                 )
                 AND EXISTS (
                   SELECT 1 FROM users
-                  WHERE users.id = ? AND users.deleted_at IS NULL
+                  WHERE users.id = ? AND users.deleted_at IS NULL AND users.is_moderator = 1
                 )`,
         params: [reviewerId, claimId, reviewerId]
       });
@@ -575,7 +580,7 @@ export class DeveloperClaimsDatabase {
     } catch (error) {
       if (isOwnershipEpochRollback(error)) {
         return this.claimApprovalOutcome(
-          await this.explainClaimApprovalNoOp(claim),
+          await this.explainClaimApprovalNoOp(claim, reviewerId),
           claim
         );
       }
@@ -596,7 +601,7 @@ export class DeveloperClaimsDatabase {
       // Diagnose only after the guarded transaction. These reads improve the
       // response without participating in (or weakening) its race safety.
       return this.claimApprovalOutcome(
-        await this.explainClaimApprovalNoOp(claim),
+        await this.explainClaimApprovalNoOp(claim, reviewerId),
         claim
       );
     }
@@ -644,6 +649,7 @@ export class DeveloperClaimsDatabase {
             sql`EXISTS (
               SELECT 1 FROM ${users}
               WHERE ${users.id} = ${reviewerId} AND ${users.deletedAt} IS NULL
+                AND ${users.isModerator} = 1
             )`
           )
         );
@@ -652,6 +658,9 @@ export class DeveloperClaimsDatabase {
     }
 
     if (!result.meta?.changes) {
+      const actorError = await moderatorActorError(this.db, reviewerId);
+      if (actorError) return { data: null, error: actorError };
+
       return {
         data: null,
         error: {

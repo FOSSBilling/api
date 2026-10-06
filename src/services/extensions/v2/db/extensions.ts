@@ -5,7 +5,11 @@ import { ExtensionsDb } from "../../../../lib/db";
 import { sortReleasesDescending } from "../../../../lib/releases";
 import { parseJSON } from "../../../../lib/json";
 import { extensions, extensionRevisions, developers, users } from "./schema";
-import { databaseError, inactiveActorError } from "./errors";
+import {
+  databaseError,
+  inactiveActorError,
+  moderatorActorError
+} from "./errors";
 import { UsersDatabase } from "./users";
 import { toD1Statement } from "./batch";
 import { encodeCursor as encode, decodeCursor as decode } from "./cursor";
@@ -706,6 +710,7 @@ export class ExtensionsDatabase {
             sql`EXISTS (
               SELECT 1 FROM ${users}
               WHERE ${users.id} = ${moderatorId} AND ${users.deletedAt} IS NULL
+                AND ${users.isModerator} = 1
             )`
           )
         );
@@ -726,8 +731,8 @@ export class ExtensionsDatabase {
     id: string,
     moderatorId: string
   ): Promise<DatabaseResult<never>> {
-    const inactive = await inactiveActorError(this.db, moderatorId);
-    if (inactive) return { data: null, error: inactive };
+    const actorError = await moderatorActorError(this.db, moderatorId);
+    if (actorError) return { data: null, error: actorError };
 
     let existing:
       { publishedAt: string | null; delistedAt: string | null } | undefined;

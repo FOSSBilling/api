@@ -87,38 +87,47 @@ async function listArtifacts(
   return result.data.artifacts as RawArtifact[];
 }
 
-// A circuit breaker, not a correctness bound. This fallback is only used
-// for short (prefix) SHAs these days - the runs-API path below handles
-// full SHAs - but a short-SHA caller still deserves termination
-// guarantees. Every GitHub Actions artifact expires after 14 days
-// regardless of type, so a repo's total artifact count is inherently
-// finite even for very active repos; this exists only to guarantee
-// termination if the API ever doesn't behave as expected (e.g. never
-// returns a short page), not because 5,000 artifacts is a realistic
-// amount to actually page through.
+// Short identifiers require a complete scan: a second matching commit may
+// have a different artifact name (fork PRs use the merge SHA), or appear on
+// a later page. Never turn an incomplete scan into a match or a cached miss.
 const MAX_FALLBACK_PAGES = 50;
 
-// The short-SHA fallback can't filter server-side by name, so a repo with
-// more than one page of live preview artifacts would silently miss a
-// genuine match sitting on page 2+ with a single unpaginated call. Pages
-// through until GitHub returns a page short of per_page - the real "no
-// more results" signal - or a match is found, whichever happens first.
 async function findInFallbackPages(
   github: PreviewGitHub,
   shaLower: string
 ): Promise<ArtifactMatch | null> {
+  let match: ArtifactMatch | null = null;
   for (let page = 1; page <= MAX_FALLBACK_PAGES; page++) {
     const artifacts = await listArtifacts(github, undefined, page);
-    const match = matchArtifact(
-      artifacts.filter((artifact) =>
-        artifact.name?.startsWith(ARTIFACT_NAME_PREFIX)
-      ),
-      shaLower
-    );
-    if (match) return match;
-    if (artifacts.length < 100) break; // last page
+    for (const artifact of artifacts) {
+      if (!artifact.name?.startsWith(ARTIFACT_NAME_PREFIX)) continue;
+      const candidate = matchArtifact([artifact], shaLower);
+      if (!candidate) continue;
+      if (
+        match &&
+        candidate.headSha.toLowerCase() !== match.headSha.toLowerCase()
+      ) {
+        throw new GitHubError(
+          "Commit prefix matches multiple preview commits; use a full SHA",
+          409,
+          "AMBIGUOUS_COMMIT"
+        );
+      }
+      if (
+        !match ||
+        (candidate.artifact.created_at ?? "") >
+          (match.artifact.created_at ?? "")
+      ) {
+        match = candidate;
+      }
+    }
+    if (artifacts.length < 100) return match;
   }
-  return null;
+  throw new GitHubError(
+    "Commit prefix scan exhausted its page budget before establishing uniqueness",
+    503,
+    "preview_scan_incomplete"
+  );
 }
 
 // Circuit-breaker budget on run-artifact listings, not a correctness
@@ -264,11 +273,8 @@ function toPreviewArtifact(match: ArtifactMatch): PreviewArtifact {
 // so preview-build-pr names its artifact after a SHA this service never
 // asks about - only the run's own head_sha metadata (populated by GitHub
 // independently of what the job saw as $GITHUB_SHA) still says which
-// commit it actually is. Which fallback runs depends on the SHA:
-// full-length SHAs go through the runs API (findArtifactByRunHeadSha,
-// server-side head_sha filter - a handful of calls regardless of repo
-// size); short prefixes stay on the page scan (findInFallbackPages),
-// since the runs API can't be trusted to match on a partial SHA.
+// commit it actually is. Full-length SHAs use the runs API fallback;
+// short prefixes always scan all artifact pages to establish uniqueness.
 export async function findPreviewArtifactByCommitSha(
   github: PreviewGitHub,
   sha: string
@@ -276,14 +282,13 @@ export async function findPreviewArtifactByCommitSha(
   const shaLower = sha.toLowerCase();
   const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/actions/artifacts`;
   try {
-    const exact = await listArtifacts(github, artifactNameForSha(shaLower));
-    let match = matchArtifact(exact, shaLower);
-
-    if (!match) {
-      match =
-        shaLower.length === 40
-          ? await findArtifactByRunHeadSha(github, shaLower)
-          : await findInFallbackPages(github, shaLower);
+    let match: ArtifactMatch | null;
+    if (shaLower.length === 40) {
+      const exact = await listArtifacts(github, artifactNameForSha(shaLower));
+      match = matchArtifact(exact, shaLower);
+      if (!match) match = await findArtifactByRunHeadSha(github, shaLower);
+    } else {
+      match = await findInFallbackPages(github, shaLower);
     }
 
     if (!match) {

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   createExecutionContext,
+  runInDurableObject,
   waitOnExecutionContext
 } from "cloudflare:test";
 import { env } from "cloudflare:workers";
@@ -22,6 +23,7 @@ const SAMPLE_ARTIFACTS = {
   artifacts: [
     {
       id: 555,
+      name: `FOSSBilling-preview-${COMMIT_SHA.slice(0, 7)}.zip`,
       size_in_bytes: 12345,
       created_at: "2026-08-13T10:00:00Z",
       expires_at: "2026-08-27T10:00:00Z",
@@ -44,6 +46,12 @@ let restoreConsole: (() => void) | null = null;
 describe("Previews API v1 - GET /previews/v1/main", () => {
   beforeEach(async () => {
     restoreConsole = suppressConsole();
+    await runInDurableObject(
+      env.PREVIEW_GITHUB_BUDGET.getByName("previews"),
+      (_instance, state) => {
+        state.storage.sql.exec("DELETE FROM buckets");
+      }
+    );
     await env.CACHE_KV.delete("preview:main");
     await env.DOWNLOAD_BUCKET.delete(MAIN_PREVIEW_KEY);
     vi.clearAllMocks();
@@ -199,11 +207,9 @@ describe("Previews API v1 - GET /previews/v1/main", () => {
       result: { commit_sha: string };
     };
     expect(secondBody.result.commit_sha).toBe("111");
-    // 2, not 1: findPreviewArtifactByCommitSha's exact-name query misses
-    // (no artifact was mocked), so it falls back to a second, broader
-    // query before giving up - both happen on the first /main request
-    // only, since the second is served entirely from cache.
-    expect(ghRequest).toHaveBeenCalledTimes(2);
+    // Prefix enrichment scans the artifact list once. The second main
+    // response is served entirely from its R2-backed response cache.
+    expect(ghRequest).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to R2 instead of erroring on a corrupt cache entry", async () => {
@@ -222,6 +228,12 @@ describe("Previews API v1 - GET /previews/v1/main", () => {
 describe("Previews API v1 - GET /previews/v1/main/download", () => {
   beforeEach(async () => {
     restoreConsole = suppressConsole();
+    await runInDurableObject(
+      env.PREVIEW_GITHUB_BUDGET.getByName("previews"),
+      (_instance, state) => {
+        state.storage.sql.exec("DELETE FROM buckets");
+      }
+    );
     await env.CACHE_KV.delete("preview:main");
     await env.DOWNLOAD_BUCKET.delete(MAIN_PREVIEW_KEY);
     vi.clearAllMocks();

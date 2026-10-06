@@ -2,7 +2,11 @@ import { and, asc, desc, eq, gt, lt, or, sql, SQL } from "drizzle-orm";
 import { DatabaseError, DatabaseResult } from "../../../../lib/interfaces";
 import { ExtensionsDb } from "../../../../lib/db";
 import { extensionRevisions, developers, extensions, users } from "./schema";
-import { databaseError, inactiveActorError } from "./errors";
+import {
+  databaseError,
+  inactiveActorError,
+  moderatorActorError
+} from "./errors";
 import { toD1Statement } from "./batch";
 import { encodeCursor as encode, decodeCursor as decode } from "./cursor";
 import { MAX_PENDING_REVISIONS_PER_USER, parseContent } from "./extensions";
@@ -351,8 +355,8 @@ export class ExtensionRevisionsDatabase {
     id: string,
     reviewerId: string
   ): Promise<DatabaseResult<never>> {
-    const inactive = await inactiveActorError(this.db, reviewerId);
-    if (inactive) return { data: null, error: inactive };
+    const actorError = await moderatorActorError(this.db, reviewerId);
+    if (actorError) return { data: null, error: actorError };
 
     const existing = await this.getById(extensionId, id);
     if (existing.error || !existing.data) {
@@ -393,6 +397,7 @@ export class ExtensionRevisionsDatabase {
             sql`EXISTS (
               SELECT 1 FROM ${users}
               WHERE ${users.id} = ${reviewerId} AND ${users.deletedAt} IS NULL
+                AND ${users.isModerator} = 1
             )`
           )
         );
@@ -475,7 +480,7 @@ export class ExtensionRevisionsDatabase {
                 )
                 AND EXISTS (
                   SELECT 1 FROM users u
-                  WHERE u.id = ? AND u.deleted_at IS NULL
+                  WHERE u.id = ? AND u.deleted_at IS NULL AND u.is_moderator = 1
                 )`,
         params: [
           reviewerId,
@@ -521,10 +526,10 @@ export class ExtensionRevisionsDatabase {
     }
 
     if (!results[0]?.meta?.changes) {
-      const inactive = await inactiveActorError(this.db, reviewerId);
+      const actorError = await moderatorActorError(this.db, reviewerId);
       return {
         data: null,
-        error: inactive ?? {
+        error: actorError ?? {
           message:
             "Revision is not pending, or ownership changed since it was proposed",
           code: "CONFLICT"

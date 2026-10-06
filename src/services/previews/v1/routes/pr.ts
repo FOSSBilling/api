@@ -82,7 +82,7 @@ export function registerPrRoutes(app: PreviewsV1App): void {
       (p) => c.executionCtx.waitUntil(p)
     );
 
-    return respondWithLookup(c, result, notFoundMessage(number));
+    return respondWithLookup(c, result, notFoundMessage(number), false);
   });
 
   const prDownloadRoute = createRoute({
@@ -123,7 +123,8 @@ export function registerPrRoutes(app: PreviewsV1App): void {
       c,
       github,
       artifact,
-      notFoundMessage(number)
+      notFoundMessage(number),
+      false
     );
   });
 }

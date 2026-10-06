@@ -3,11 +3,7 @@ import { getExtensionsDb } from "../../../../lib/db";
 import { getPlatform } from "../../../../lib/middleware";
 import { getAuth } from "../../../../lib/auth";
 import { createRoute, z } from "@hono/zod-openapi";
-import {
-  errorBody,
-  statusFromErrorCode,
-  statusFromWriteErrorCode
-} from "./errors";
+import { errorBody, statusFromWriteErrorCode } from "./errors";
 import {
   ActiveAccountRequiredResponse,
   CursorPaginationQuerySchema,
@@ -494,10 +490,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
       auth.userId
     );
     if (error || !data) {
-      const status =
-        error?.code === "ACCOUNT_INACTIVE"
-          ? 403
-          : statusFromErrorCode(error?.code);
+      const status = statusFromWriteErrorCode(error?.code);
       return c.json(errorBody(error, "Unable to approve developer"), status);
     }
     revalidateCatalogue(c);

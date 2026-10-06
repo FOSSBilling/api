@@ -86,3 +86,19 @@ export async function inactiveActorError(
     ? null
     : { message: "Active account required", code: "ACCOUNT_INACTIVE" };
 }
+
+// Diagnose a failed commit-time moderator guard before workflow conflicts.
+// Activity takes precedence so deactivation retains ACCOUNT_INACTIVE.
+export async function moderatorActorError(
+  db: ExtensionsDb,
+  userId: string
+): Promise<DatabaseError | null> {
+  const { data, error } = await new UsersDatabase(db).moderatorAccess(userId);
+  if (error) return error;
+  if (!data?.active) {
+    return { message: "Active account required", code: "ACCOUNT_INACTIVE" };
+  }
+  return data.moderator
+    ? null
+    : { message: "Moderator access required", code: "FORBIDDEN" };
+}
