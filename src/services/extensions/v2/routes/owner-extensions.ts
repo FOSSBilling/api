@@ -1,9 +1,13 @@
+import type { Context } from "hono";
+import type { DatabaseResult } from "../../../../lib/interfaces";
 import {
   errorBody,
-  statusFromErrorCode,
+  setContentRetryAfter,
+  statusFromContentCreateError,
+  statusFromContentWriteError,
   statusFromWriteErrorCode
 } from "./errors";
-import { requireActiveAuth } from "../middleware";
+import { paceContentAccount, requireActiveAuth } from "../middleware";
 import { getExtensionsDb } from "../../../../lib/db";
 import { getAuth } from "../../../../lib/auth";
 import { createRoute, z } from "@hono/zod-openapi";
@@ -19,6 +23,8 @@ import {
 } from "../schemas/extensions";
 import {
   ExtensionRevisionSchema,
+  ExtensionRevisionSummarySchema,
+  RevisionIdParamSchema,
   RevisionHistoryQuerySchema
 } from "../schemas/revisions";
 import { DeveloperProfilesDatabase } from "../db/developer-profiles";
@@ -27,6 +33,31 @@ import { ExtensionRevisionsDatabase } from "../db/revisions";
 import { UsersDatabase } from "../db/users";
 import { revalidateCatalogue } from "../revalidate";
 import { ExtensionsV2App } from "./app";
+
+// Both history and detail authorize against current account/profile state;
+// their actual data queries repeat this guard to contain mid-request changes.
+async function revisionReadAccess(
+  c: Context<{ Bindings: CloudflareBindings }>,
+  id: string
+): Promise<DatabaseResult<{ extensionId: string }>> {
+  const db = getExtensionsDb(c.env.DB_EXTENSIONS);
+  const auth = getAuth(c);
+  const ownership = await new ExtensionsDatabase(db).getOwnership(id);
+  if (ownership.error || !ownership.data) return ownership;
+  const access = await new UsersDatabase(db).moderatorAccess(auth.userId);
+  if (access.error) return { data: null, error: access.error };
+  if (!access.data?.active)
+    return {
+      data: null,
+      error: { code: "ACCOUNT_INACTIVE", message: "Active account required" }
+    };
+  if (ownership.data.ownerUserId !== auth.userId && !access.data.moderator)
+    return {
+      data: null,
+      error: { code: "FORBIDDEN", message: "You do not own this extension" }
+    };
+  return { data: { extensionId: ownership.data.extensionId }, error: null };
+}
 
 const AcceptedRevisionSchema = z.object({
   result: z.object({
@@ -43,7 +74,7 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
     tags: ["Extensions"],
     summary: "Create an extension and submit its first version for review",
     security: [{ Bearer: [] }],
-    middleware: [requireActiveAuth()] as const,
+    middleware: [requireActiveAuth(), paceContentAccount()] as const,
     request: {
       body: {
         content: { "application/json": { schema: ExtensionCreateSchema } }
@@ -64,6 +95,11 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
       409: errorResponse(
         "The id is taken, ownership changed, or the pending-revision limit was reached"
       ),
+      413: errorResponse("Raw request exceeds 512 KiB"),
+      429: errorResponse(
+        "Extension write allowance exhausted; see Retry-After"
+      ),
+      503: errorResponse("Write admission unavailable"),
       422: errorResponse("Body failed validation"),
       500: errorResponse("Database error")
     }
@@ -101,9 +137,10 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
       content
     });
     if (error || !data) {
+      setContentRetryAfter(c, error?.code);
       return c.json(
         errorBody(error, "Unable to create extension"),
-        statusFromWriteErrorCode(error?.code, false)
+        statusFromContentCreateError(error?.code)
       );
     }
     return c.json(
@@ -124,7 +161,7 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
     tags: ["Extensions"],
     summary: "Submit an edit to an extension the caller owns",
     security: [{ Bearer: [] }],
-    middleware: [requireActiveAuth()] as const,
+    middleware: [requireActiveAuth(), paceContentAccount()] as const,
     request: {
       params: IdParamSchema,
       body: {
@@ -147,6 +184,11 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
       409: errorResponse(
         "An edit is already awaiting review, or the pending-revision limit was reached"
       ),
+      413: errorResponse("Raw request exceeds 512 KiB"),
+      429: errorResponse(
+        "Extension write allowance exhausted; see Retry-After"
+      ),
+      503: errorResponse("Write admission unavailable"),
       422: errorResponse("Body failed validation"),
       500: errorResponse("Database error")
     }
@@ -165,9 +207,10 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
       content
     });
     if (error || !data) {
+      setContentRetryAfter(c, error?.code);
       return c.json(
         errorBody(error, "Unable to submit edit"),
-        statusFromWriteErrorCode(error?.code)
+        statusFromContentWriteError(error?.code)
       );
     }
     return c.json(
@@ -235,7 +278,7 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
         content: {
           "application/json": {
             schema: z.object({
-              result: z.array(ExtensionRevisionSchema),
+              result: z.array(ExtensionRevisionSummarySchema),
               pagination: PaginationSchema
             })
           }
@@ -259,75 +302,24 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
     const auth = getAuth(c);
     const { id } = c.req.valid("param");
     const { limit, cursor } = c.req.valid("query");
-    const extensionsDb = new ExtensionsDatabase(
-      getExtensionsDb(c.env.DB_EXTENSIONS)
-    );
-    // Light probe instead of the full owner view: authorising the caller
-    // needs only the owner id and the canonical extension id, and the full
-    // view would ship up to 256 KiB of readme/pendingContent per read.
-    const ownership = await extensionsDb.getOwnership(id);
-    if (ownership.error || !ownership.data) {
+    const access = await revisionReadAccess(c, id);
+    if (access.error || !access.data)
       return c.json(
-        errorBody(ownership.error, "Extension not found"),
-        statusFromErrorCode(ownership.error?.code, false)
+        errorBody(access.error, "Unable to read revisions"),
+        access.error?.code === "NOT_FOUND"
+          ? 404
+          : access.error?.code === "FORBIDDEN" ||
+              access.error?.code === "ACCOUNT_INACTIVE"
+            ? 403
+            : 500
       );
-    }
-
-    if (ownership.data.ownerUserId !== auth.userId) {
-      const users = new UsersDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
-      const moderator = await users.moderatorAccess(auth.userId);
-      if (moderator.error) {
-        return c.json(
-          errorBody(moderator.error, "Unable to check moderator access"),
-          500
-        );
-      }
-      if (!moderator.data?.active) {
-        return c.json(
-          {
-            error: {
-              message: "Active account required",
-              code: "ACCOUNT_INACTIVE"
-            }
-          },
-          403
-        );
-      }
-      if (!moderator.data.moderator) {
-        return c.json(
-          {
-            error: {
-              message: "You do not own this extension",
-              code: "FORBIDDEN"
-            }
-          },
-          403
-        );
-      }
-    } else {
-      const users = new UsersDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
-      const active = await users.isActive(auth.userId);
-      if (active.error) {
-        return c.json(errorBody(active.error, "Unable to check account"), 500);
-      }
-      if (!active.data) {
-        return c.json(
-          {
-            error: {
-              message: "Active account required",
-              code: "ACCOUNT_INACTIVE"
-            }
-          },
-          403
-        );
-      }
-    }
 
     const db = new ExtensionRevisionsDatabase(
       getExtensionsDb(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.listScoped({
-      extensionId: ownership.data.extensionId,
+      extensionId: access.data.extensionId,
+      readerId: auth.userId,
       sort: "newest",
       limit,
       cursor
@@ -342,6 +334,83 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
       {
         result: data.items,
         pagination: { next_cursor: data.nextCursor, has_more: data.hasMore }
+      },
+      200
+    );
+    res.headers.set("Vary", "Authorization");
+    return res;
+  });
+  const revisionDetailRoute = createRoute({
+    method: "get",
+    path: "/extensions/{id}/revisions/{revisionId}",
+    tags: ["Extensions"],
+    summary: "Read one revision; compacted content is null",
+    security: [{ Bearer: [] }],
+    middleware: [requireActiveAuth()] as const,
+    request: { params: RevisionIdParamSchema },
+    responses: {
+      200: {
+        content: {
+          "application/json": {
+            schema: z.object({
+              result: ExtensionRevisionSchema
+            })
+          }
+        },
+        description:
+          "Every version proposed for this extension, with its review outcome"
+      },
+      401: errorResponse("Missing or invalid bearer token"),
+      403: {
+        ...ActiveAccountRequiredResponse,
+        description:
+          "The account is inactive, or the caller neither owns this extension nor moderates"
+      },
+      404: errorResponse("No extension with that id"),
+      409: errorResponse(
+        "Oversized legacy content requires administrative export or resubmission"
+      ),
+      422: errorResponse("Path failed validation"),
+      500: errorResponse("Database error")
+    }
+  });
+
+  app.openapi(revisionDetailRoute, async (c) => {
+    const auth = getAuth(c);
+    const { id, revisionId } = c.req.valid("param");
+    const access = await revisionReadAccess(c, id);
+    if (access.error || !access.data)
+      return c.json(
+        errorBody(access.error, "Unable to read revisions"),
+        access.error?.code === "NOT_FOUND"
+          ? 404
+          : access.error?.code === "FORBIDDEN" ||
+              access.error?.code === "ACCOUNT_INACTIVE"
+            ? 403
+            : 500
+      );
+
+    const db = new ExtensionRevisionsDatabase(
+      getExtensionsDb(c.env.DB_EXTENSIONS)
+    );
+    const { data, error } = await db.getById(
+      access.data.extensionId,
+      revisionId,
+      auth.userId
+    );
+    if (error || !data) {
+      return c.json(
+        errorBody(error, "Unable to load revisions"),
+        error?.code === "NOT_FOUND"
+          ? 404
+          : error?.code === "CONTENT_UNAVAILABLE"
+            ? 409
+            : 500
+      );
+    }
+    const res = c.json(
+      {
+        result: data
       },
       200
     );

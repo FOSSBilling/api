@@ -2,14 +2,9 @@ import { DatabaseError } from "../../../../lib/interfaces";
 import { ExtensionsDb } from "../../../../lib/db";
 import { UsersDatabase } from "./users";
 import { DatabaseResult } from "../../../../lib/interfaces";
-import { logError } from "../../../../lib/logger";
+import { logInfo, logError } from "../../../../lib/logger";
 
-// Drizzle wraps the real D1 driver error in a DrizzleError whose own
-// .message is a generic "Failed to run the query '<sql>'" - the actual
-// SQLite/D1 message (e.g. "UNIQUE constraint failed: ...") lives in
-// .cause, not .message. Regex-matching driver error text (see
-// the ownership/id conflict classifiers need the whole chain, not just the
-// outermost message.
+// Drizzle wraps driver errors; constraint classifiers inspect the cause chain.
 export function errorMessageChain(error: unknown): string {
   const parts: string[] = [];
   let current: unknown = error;
@@ -55,19 +50,82 @@ export const isOwnershipEpochRollback = (error: unknown) =>
 // pre-flight check instead of exposing it as a generic database error.
 export const isDeveloperIdConflict = uniqueConstraintMatcher(/developers\.id/);
 
-// Logs the real error server-side and returns a generic message to the
-// caller — DB exception text can leak schema/backend details otherwise.
+// Log safe driver diagnostics; exception messages can contain SQL and content.
 export function databaseError(
   context: string,
   error: unknown
 ): DatabaseResult<never> {
+  let cause = error;
+  while (cause instanceof Error && cause.cause instanceof Error)
+    cause = cause.cause;
+  const message = cause instanceof Error ? cause.message : "";
+  const policy = [
+    [
+      "extension_write_rate_minute",
+      "WRITE_RATE_MINUTE",
+      "Five proposals per rolling minute allowed"
+    ],
+    [
+      "extension_write_rate_day",
+      "WRITE_RATE_DAY",
+      "Fifty proposals per rolling day allowed"
+    ],
+    [
+      "extension_resource_quota",
+      "RESOURCE_QUOTA",
+      "The retained extension resource quota is exhausted"
+    ],
+    [
+      "extension_content_size",
+      "CONFLICT",
+      "Extension content must not exceed 256 KiB"
+    ]
+  ].find(([marker]) => message.includes(marker));
+  if (policy) {
+    logInfo("extensions-v2", "Resource admission rejected", {
+      reason: policy[1]
+    });
+    return { data: null, error: { code: policy[1], message: policy[2] } };
+  }
+  const driverCode =
+    cause instanceof Error && "code" in cause ? cause.code : undefined;
+  const backendCode =
+    typeof driverCode === "number"
+      ? driverCode
+      : typeof driverCode === "string" &&
+          /^[A-Z][A-Z0-9_]{0,63}$/.test(driverCode)
+        ? driverCode
+        : message.match(/\b(?:SQLITE|D1)_[A-Z_]+\b/)?.[0];
   logError("extensions-v2", context, {
-    error: error instanceof Error ? errorMessageChain(error) : String(error)
+    reason: "backend_failure",
+    error_type:
+      cause instanceof Error && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(cause.name)
+        ? cause.name
+        : "UnknownError",
+    backend_code: backendCode
   });
   return {
     data: null,
     error: { message: "A database error occurred", code: "DATABASE_ERROR" }
   };
+}
+
+// Content insertion and its durable budget share one transaction. A backend
+// failure means admission is unavailable; policy rejections retain their code.
+export function contentAdmissionError(
+  context: string,
+  error: unknown
+): DatabaseResult<never> {
+  const result = databaseError(context, error);
+  return result.error?.code === "DATABASE_ERROR"
+    ? {
+        data: null,
+        error: {
+          code: "ADMISSION_UNAVAILABLE",
+          message: "Write admission unavailable"
+        }
+      }
+    : result;
 }
 
 // Every guarded write in this service repeats an active-account check inside

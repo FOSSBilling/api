@@ -1,3 +1,8 @@
+import {
+  boundContentRequest,
+  paceContentIp,
+  observeResourceResponses
+} from "./middleware";
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { Scalar } from "@scalar/hono-api-reference";
 import { cors } from "hono/cors";
@@ -33,6 +38,28 @@ const extensionsV2 = new OpenAPIHono<{ Bindings: CloudflareBindings }>({
 // it to schedule their retry.
 extensionsV2.use("/*", cors({ origin: "*", exposeHeaders: ["Retry-After"] }));
 extensionsV2.use("/*", trimTrailingSlash());
+extensionsV2.on(
+  "GET",
+  [
+    "/revisions",
+    "/extensions/:id/revisions",
+    "/extensions/:id/revisions/:revisionId"
+  ],
+  observeResourceResponses()
+);
+// Run before authentication and JSON validation, including invalid bodies.
+extensionsV2.on(
+  "POST",
+  ["/extensions", "/extensions/:id/moderator-correct"],
+  paceContentIp(),
+  boundContentRequest()
+);
+extensionsV2.on(
+  "PUT",
+  "/extensions/:id",
+  paceContentIp(),
+  boundContentRequest()
+);
 extensionsV2.openAPIRegistry.registerComponent("securitySchemes", "Bearer", {
   type: "http",
   scheme: "bearer"

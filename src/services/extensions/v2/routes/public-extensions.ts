@@ -1,6 +1,6 @@
 import { getExtensionsDb } from "../../../../lib/db";
 import { createRoute } from "@hono/zod-openapi";
-import { errorBody, statusFromErrorCode } from "./errors";
+import { errorBody, statusFromContentReadError } from "./errors";
 import { IdParamSchema, errorResponse } from "../schemas/common";
 import {
   UnifiedExtensionListQuerySchema,
@@ -254,6 +254,7 @@ export function registerPublicExtensionsRoutes(app: ExtensionsV2App): void {
       },
       401: errorResponse("Invalid bearer token"),
       404: errorResponse("No extension with that id"),
+      409: errorResponse("Oversized legacy content requires resubmission"),
       422: errorResponse("id param failed validation"),
       500: errorResponse("Database error")
     }
@@ -299,7 +300,7 @@ export function registerPublicExtensionsRoutes(app: ExtensionsV2App): void {
               owned.data.ownerUserId !== auth.userId
             ) {
               if (owned.error && owned.error.code !== "NOT_FOUND") {
-                const status = statusFromErrorCode(owned.error.code, false);
+                const status = statusFromContentReadError(owned.error.code);
                 return c.json(
                   errorBody(owned.error, "Extension not found"),
                   status
@@ -321,7 +322,7 @@ export function registerPublicExtensionsRoutes(app: ExtensionsV2App): void {
           if (access.data?.moderator) {
             const owned = await db.getOwned(id);
             if (owned.error || !owned.data) {
-              const status = statusFromErrorCode(owned.error?.code, false);
+              const status = statusFromContentReadError(owned.error?.code);
               return c.json(
                 errorBody(owned.error, "Extension not found"),
                 status
@@ -339,7 +340,7 @@ export function registerPublicExtensionsRoutes(app: ExtensionsV2App): void {
 
     const { data, error } = await db.getById(id);
     if (error || !data) {
-      const status = statusFromErrorCode(error?.code, false);
+      const status = statusFromContentReadError(error?.code);
       return c.json(errorBody(error, "Extension not found"), status);
     }
     const res = c.json({ result: data }, 200);

@@ -1,3 +1,4 @@
+import { MAX_CONTENT_BYTES } from "../resource-limits";
 import { z } from "@hono/zod-openapi";
 import SPDX_LICENSE_IDS from "spdx-license-ids/index.json";
 import { httpUrl, lowercaseId, PaginationSchema } from "./common";
@@ -110,8 +111,6 @@ export const StoredExtensionContentSchema = ExtensionContentSchema.extend({
 export type StoredExtensionContent = z.infer<
   typeof StoredExtensionContentSchema
 >;
-
-const MAX_CONTENT_BYTES = 256 * 1024;
 
 // Applied to both the create and the edit body. The stored revision is this
 // object verbatim, so bounding it here bounds the row.

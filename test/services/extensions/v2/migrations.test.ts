@@ -3,6 +3,7 @@ import { dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { unstable_splitSqlQuery } from "wrangler";
 
 const migrationsDirectory = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -726,6 +727,81 @@ describe("Extensions D1 migrations", () => {
           .prepare("UPDATE extensions SET published_at = ? WHERE id = ?")
           .run(now, "not-yet-approved")
       ).toThrow(/extensions_published_content_check/);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+describe("Resource-bound migration", () => {
+  it("preserves oversized legacy content and reconciles accounting using Wrangler's SQL splitter", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      db.exec("PRAGMA foreign_keys=ON");
+      for (const name of migrationNames.filter(
+        (candidate) => candidate < "0026"
+      ))
+        db.exec(migration(name));
+      db.exec(
+        "INSERT INTO users(id,created_at,updated_at) VALUES('owner',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP); INSERT INTO developers(id,type,name,owner_user_id) VALUES('developer','user','Developer','owner'); INSERT INTO extensions(id,developer_id) VALUES('legacy','developer')"
+      );
+      const content = JSON.stringify({
+        name: "Legacy",
+        readme: "😀".repeat(70000)
+      });
+      db.prepare(
+        "INSERT INTO extension_revisions(id,extension_id,developer_id,submitted_by,status,content,reviewed_at) VALUES('legacy-revision','legacy','developer','owner','rejected',?,'2000-01-01')"
+      ).run(content);
+      db.exec("BEGIN");
+      for (const statement of unstable_splitSqlQuery(
+        migration("0026_resource_bounds.sql")
+      ))
+        db.exec(statement);
+      db.exec("COMMIT");
+      expect(
+        db
+          .prepare(
+            "SELECT content,content_bytes,summary_name,compacted_at FROM extension_revisions"
+          )
+          .get()
+      ).toEqual({
+        content,
+        content_bytes: Buffer.byteLength(content),
+        summary_name: null,
+        compacted_at: null
+      });
+      expect(db.prepare("SELECT created_by FROM extensions").get()).toEqual({
+        created_by: "owner"
+      });
+      expect(
+        db
+          .prepare(
+            readFileSync(
+              join(migrationsDirectory, "../resource-inventory.sql"),
+              "utf8"
+            )
+          )
+          .all()
+      ).toEqual([]);
+      expect(() =>
+        db
+          .prepare(
+            "INSERT INTO extension_revisions(id,extension_id,developer_id,submitted_by,status,content) VALUES('new','legacy','developer','owner','rejected',?)"
+          )
+          .run(content)
+      ).toThrow(/extension_content_size/);
+      db.exec("DELETE FROM extensions WHERE id='legacy'");
+      expect(
+        db
+          .prepare(
+            readFileSync(
+              join(migrationsDirectory, "../resource-inventory.sql"),
+              "utf8"
+            )
+          )
+          .all()
+      ).toEqual([]);
+      expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
     } finally {
       db.close();
     }

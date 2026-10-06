@@ -45,6 +45,8 @@ export const extensions = sqliteTable(
     developerId: text("developer_id")
       .notNull()
       .references(() => developers.id),
+    createdBy: text("created_by"),
+    publishedBytes: integer("published_bytes").notNull().default(0),
     publishedAt: text("published_at"),
     // Which revision produced the current published content. Deliberately not
     // a FK: extension_revisions.extension_id already points the other way, and
@@ -84,6 +86,7 @@ export const extensions = sqliteTable(
     // but adopted rows predate that, and this is what stops two developers
     // racing for ids that differ only in case — the job migration 0011's
     // extension_submissions.target_key index used to do from the other side.
+    index("idx_extensions_published_revision").on(table.publishedRevisionId),
     uniqueIndex("idx_extensions_id_nocase").on(sql`lower(${table.id})`),
     // Not partial, unlike the two below: this one serves both the public
     // developer_id filter and GET /extensions/mine, which pages every owned
@@ -229,6 +232,12 @@ export const extensionRevisions = sqliteTable(
       .references(() => users.id),
     status: text("status").notNull().default("pending"),
     content: text("content").notNull(),
+    contentBytes: integer("content_bytes").notNull().default(0),
+    summaryName: text("summary_name"),
+    summaryVersion: text("summary_version"),
+    summaryDescription: text("summary_description"),
+    contentHash: text("content_hash"),
+    compactedAt: text("compacted_at"),
     reviewerId: text("reviewer_id").references(() => users.id),
     reviewNote: text("review_note"),
     createdAt: text("created_at")
@@ -238,6 +247,12 @@ export const extensionRevisions = sqliteTable(
     ownershipEpoch: integer("ownership_epoch").notNull().default(1)
   },
   (table) => [
+    index("idx_extension_revisions_retention").on(
+      table.compactedAt,
+      table.status,
+      table.reviewedAt,
+      table.id
+    ),
     index("idx_extension_revisions_submitted_by").on(table.submittedBy),
     index("idx_extension_revisions_developer").on(table.developerId),
     // At most one unreviewed revision per extension. This replaces migration
@@ -409,5 +424,46 @@ export const claimVerificationBudgets = sqliteTable(
   },
   (table) => [
     index("idx_claim_verification_budgets_expiry").on(table.expiresAt)
+  ]
+);
+
+// Derived usage is maintained by 0026's transactional triggers. Account
+// charges stay with the original creator/submitter across ownership changes.
+export const extensionResourceUsage = sqliteTable(
+  "extension_resource_usage",
+  {
+    scope: text("scope").notNull(),
+    subject: text("subject").notNull(),
+    bytes: integer("bytes").notNull().default(0),
+    extensions: integer("extensions").notNull().default(0),
+    revisions: integer("revisions").notNull().default(0)
+  },
+  (table) => [
+    uniqueIndex("idx_extension_resource_usage_subject").on(
+      table.scope,
+      table.subject
+    )
+  ]
+);
+
+// No foreign keys: deleting content or a profile cannot reset write pacing.
+export const extensionWriteEvents = sqliteTable(
+  "extension_write_events",
+  {
+    id: text("id").primaryKey(),
+    accountId: text("account_id").notNull(),
+    developerId: text("developer_id").notNull(),
+    occurredAt: integer("occurred_at").notNull()
+  },
+  (table) => [
+    index("idx_extension_write_events_account").on(
+      table.accountId,
+      table.occurredAt
+    ),
+    index("idx_extension_write_events_developer").on(
+      table.developerId,
+      table.occurredAt
+    ),
+    index("idx_extension_write_events_time").on(table.occurredAt)
   ]
 );

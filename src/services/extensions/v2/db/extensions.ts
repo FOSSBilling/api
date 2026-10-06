@@ -1,3 +1,4 @@
+import { MAX_CONTENT_BYTES } from "../resource-limits";
 import { and, asc, eq, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import { DatabaseError, DatabaseResult } from "../../../../lib/interfaces";
@@ -7,6 +8,7 @@ import { parseJSON } from "../../../../lib/json";
 import { extensions, extensionRevisions, developers, users } from "./schema";
 import {
   databaseError,
+  contentAdmissionError,
   inactiveActorError,
   moderatorActorError
 } from "./errors";
@@ -42,33 +44,99 @@ const DEVELOPER_COLUMNS = {
   developerOwnerUserId: developers.ownerUserId
 };
 
+const publishedBytes = extensions.publishedBytes;
 const CONTENT_COLUMNS = {
-  type: extensions.type,
-  name: extensions.name,
-  description: extensions.description,
-  releases: extensions.releases,
-  website: extensions.website,
-  license: extensions.license,
-  iconUrl: extensions.iconUrl,
-  readme: extensions.readme,
-  source: extensions.source,
-  version: extensions.version,
-  downloadUrl: extensions.downloadUrl
+  type: sql<
+    string | null
+  >`CASE WHEN ${publishedBytes} <= ${MAX_CONTENT_BYTES} THEN substr(${extensions.type}, 1, 100) ELSE NULL END`,
+  name: sql<
+    string | null
+  >`CASE WHEN ${publishedBytes} <= ${MAX_CONTENT_BYTES} THEN substr(${extensions.name}, 1, 120) ELSE NULL END`,
+  description: sql<
+    string | null
+  >`CASE WHEN ${publishedBytes} <= ${MAX_CONTENT_BYTES} THEN substr(${extensions.description}, 1, 4000) ELSE NULL END`,
+  releases: sql<
+    string | null
+  >`CASE WHEN ${publishedBytes} <= ${MAX_CONTENT_BYTES} THEN ${extensions.releases} ELSE NULL END`,
+  website: sql<
+    string | null
+  >`CASE WHEN ${publishedBytes} <= ${MAX_CONTENT_BYTES} THEN substr(${extensions.website}, 1, 2048) ELSE NULL END`,
+  license: sql<
+    string | null
+  >`CASE WHEN ${publishedBytes} <= ${MAX_CONTENT_BYTES} AND length(CAST(${extensions.license} AS BLOB)) <= 4096 THEN ${extensions.license} ELSE NULL END`,
+  iconUrl: sql<
+    string | null
+  >`CASE WHEN ${publishedBytes} <= ${MAX_CONTENT_BYTES} THEN substr(${extensions.iconUrl}, 1, 2048) ELSE NULL END`,
+  readme: sql<
+    string | null
+  >`CASE WHEN ${publishedBytes} <= ${MAX_CONTENT_BYTES} THEN ${extensions.readme} ELSE NULL END`,
+  source: sql<
+    string | null
+  >`CASE WHEN ${publishedBytes} <= ${MAX_CONTENT_BYTES} AND length(CAST(${extensions.source} AS BLOB)) <= 4096 THEN ${extensions.source} ELSE NULL END`,
+  version: sql<
+    string | null
+  >`CASE WHEN ${publishedBytes} <= ${MAX_CONTENT_BYTES} THEN substr(${extensions.version}, 1, 100) ELSE NULL END`,
+  downloadUrl: sql<
+    string | null
+  >`CASE WHEN ${publishedBytes} <= ${MAX_CONTENT_BYTES} THEN substr(${extensions.downloadUrl}, 1, 2048) ELSE NULL END`
 };
 
-const EXTENSION_COLUMNS = {
-  id: extensions.id,
-  ...CONTENT_COLUMNS,
-  ...DEVELOPER_COLUMNS
+// Detail preserves stored fields; the overall size guard prevents oversized reads.
+const DETAIL_CONTENT_COLUMNS = {
+  type: sql<
+    string | null
+  >`CASE WHEN ${publishedBytes} <= ${MAX_CONTENT_BYTES} THEN ${extensions.type} ELSE NULL END`,
+  name: sql<
+    string | null
+  >`CASE WHEN ${publishedBytes} <= ${MAX_CONTENT_BYTES} THEN ${extensions.name} ELSE NULL END`,
+  description: sql<
+    string | null
+  >`CASE WHEN ${publishedBytes} <= ${MAX_CONTENT_BYTES} THEN ${extensions.description} ELSE NULL END`,
+  releases: sql<
+    string | null
+  >`CASE WHEN ${publishedBytes} <= ${MAX_CONTENT_BYTES} THEN ${extensions.releases} ELSE NULL END`,
+  website: sql<
+    string | null
+  >`CASE WHEN ${publishedBytes} <= ${MAX_CONTENT_BYTES} THEN ${extensions.website} ELSE NULL END`,
+  license: sql<
+    string | null
+  >`CASE WHEN ${publishedBytes} <= ${MAX_CONTENT_BYTES} THEN ${extensions.license} ELSE NULL END`,
+  iconUrl: sql<
+    string | null
+  >`CASE WHEN ${publishedBytes} <= ${MAX_CONTENT_BYTES} THEN ${extensions.iconUrl} ELSE NULL END`,
+  readme: sql<
+    string | null
+  >`CASE WHEN ${publishedBytes} <= ${MAX_CONTENT_BYTES} THEN ${extensions.readme} ELSE NULL END`,
+  source: sql<
+    string | null
+  >`CASE WHEN ${publishedBytes} <= ${MAX_CONTENT_BYTES} THEN ${extensions.source} ELSE NULL END`,
+  version: sql<
+    string | null
+  >`CASE WHEN ${publishedBytes} <= ${MAX_CONTENT_BYTES} THEN ${extensions.version} ELSE NULL END`,
+  downloadUrl: sql<
+    string | null
+  >`CASE WHEN ${publishedBytes} <= ${MAX_CONTENT_BYTES} THEN ${extensions.downloadUrl} ELSE NULL END`
 };
 
-// Derived by subtraction so a column added to CONTENT_COLUMNS cannot be
-// forgotten here: catalogue cards omit only the two large fields.
 const {
   readme: _readme,
   releases: _releases,
-  ...EXTENSION_LIST_COLUMNS
-} = EXTENSION_COLUMNS;
+  ...CARD_CONTENT_COLUMNS
+} = CONTENT_COLUMNS;
+
+const EXTENSION_COLUMNS = {
+  id: extensions.id,
+  ...DETAIL_CONTENT_COLUMNS,
+  publishedBytes,
+  ...DEVELOPER_COLUMNS
+};
+
+const EXTENSION_LIST_COLUMNS = {
+  id: extensions.id,
+  ...CARD_CONTENT_COLUMNS,
+  publishedBytes,
+  ...DEVELOPER_COLUMNS
+};
 
 // The owner view joins extension_revisions twice: once for the unreviewed
 // edit (at most one - idx_extension_revisions_pending), once for the most
@@ -104,15 +172,9 @@ const REVIEW_COLUMNS = {
   pendingCreatedAt: PENDING.createdAt,
   reviewedId: REVIEWED.id,
   reviewedStatus: REVIEWED.status,
-  reviewedNote: REVIEWED.reviewNote,
+  reviewedNote: sql<string | null>`substr(${REVIEWED.reviewNote}, 1, 2000)`,
   reviewedAt: REVIEWED.reviewedAt
 };
-
-const {
-  readme: _ownedReadme,
-  releases: _ownedReleases,
-  ...CARD_CONTENT_COLUMNS
-} = CONTENT_COLUMNS;
 
 // The owner list drops the same two large published fields the catalogue does,
 // and the pending revision's stored content (up to 256 KiB per row) with it.
@@ -120,7 +182,7 @@ const OWNED_LIST_COLUMNS = {
   id: extensions.id,
   publishedAt: extensions.publishedAt,
   delistedAt: extensions.delistedAt,
-  delistReason: extensions.delistReason,
+  delistReason: sql<string | null>`substr(${extensions.delistReason}, 1, 2000)`,
   createdAt: extensions.createdAt,
   updatedAt: extensions.updatedAt,
   ...CARD_CONTENT_COLUMNS,
@@ -130,9 +192,12 @@ const OWNED_LIST_COLUMNS = {
 
 const OWNED_COLUMNS = {
   ...OWNED_LIST_COLUMNS,
-  readme: extensions.readme,
-  releases: extensions.releases,
-  pendingContent: PENDING.content
+  ...DETAIL_CONTENT_COLUMNS,
+  pendingContent: sql<
+    string | null
+  >`CASE WHEN length(CAST(${PENDING.content} AS BLOB)) <= ${MAX_CONTENT_BYTES} THEN ${PENDING.content} ELSE NULL END`,
+  pendingBytes: sql<number>`COALESCE(length(CAST(${PENDING.content} AS BLOB)),0)`,
+  publishedBytes
 };
 
 // Repeated rather than factored out: drizzle's builder types are keyed on the
@@ -186,6 +251,7 @@ interface PublishedRow extends DeveloperRow {
   source: string;
   version: string;
   downloadUrl: string;
+  publishedBytes: number;
 }
 
 type PublishedListRow = Omit<PublishedRow, "readme" | "releases">;
@@ -231,6 +297,7 @@ export class ExtensionsDatabase {
     const limit = filters.limit ?? 50;
     const conditions = [
       isNotNull(extensions.publishedAt),
+      sql`${extensions.publishedBytes} <= ${MAX_CONTENT_BYTES}`,
       isNull(extensions.delistedAt)
     ];
     if (filters.type) conditions.push(eq(extensions.type, filters.type));
@@ -289,7 +356,13 @@ export class ExtensionsDatabase {
 
     const row = rows[0];
     if (!row) return notFound(id);
-    return { data: parseRow(row), error: null };
+    if (row.publishedBytes > MAX_CONTENT_BYTES) return oversizedContent();
+    try {
+      return { data: parseRow(row), error: null };
+    } catch (error) {
+      if (error instanceof LegacyContentError) return oversizedContent();
+      return databaseError("getById", error);
+    }
   }
 
   async listOwned(filters: {
@@ -501,13 +574,23 @@ export class ExtensionsDatabase {
 
     const row = rows[0];
     if (!row) return notFound(id);
-    return {
-      data: {
-        extension: parseOwnedRow(row),
-        ownerUserId: row.developerOwnerUserId
-      },
-      error: null
-    };
+    if (
+      row.publishedBytes > MAX_CONTENT_BYTES ||
+      row.pendingBytes > MAX_CONTENT_BYTES
+    )
+      return oversizedContent();
+    try {
+      return {
+        data: {
+          extension: parseOwnedRow(row),
+          ownerUserId: row.developerOwnerUserId
+        },
+        error: null
+      };
+    } catch (error) {
+      if (error instanceof LegacyContentError) return oversizedContent();
+      return databaseError("getOwned", error);
+    }
   }
 
   // Creates the extension record and its first pending revision as one
@@ -523,8 +606,8 @@ export class ExtensionsDatabase {
     let results;
     try {
       const extensionStmt = toD1Statement(this.db.$client, {
-        sql: `INSERT INTO extensions (id, developer_id, created_at, updated_at)
-              SELECT ?, d.id, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        sql: `INSERT INTO extensions (id, developer_id, created_by, created_at, updated_at)
+              SELECT ?, d.id, d.owner_user_id, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
               FROM developers d
               WHERE d.id = ? AND d.owner_user_id = ? AND d.ownership_epoch = ?
                 AND EXISTS (
@@ -563,14 +646,14 @@ export class ExtensionsDatabase {
 
       results = await this.db.$client.batch([extensionStmt, revisionStmt]);
     } catch (error) {
-      return databaseError("create", error);
+      return contentAdmissionError("create", error);
     }
 
     if (!results[0]?.meta?.changes) {
       try {
         return { data: null, error: await this.createBlockedError(input) };
       } catch (error) {
-        return databaseError("create", error);
+        return contentAdmissionError("create", error);
       }
     }
 
@@ -978,7 +1061,7 @@ export class ExtensionsDatabase {
 
       results = await this.db.$client.batch([correctStmt, publishStmt]);
     } catch (error) {
-      return databaseError("moderatorCorrect", error);
+      return contentAdmissionError("moderatorCorrect", error);
     }
 
     if (!results[0]?.meta?.changes) {
@@ -996,7 +1079,7 @@ export class ExtensionsDatabase {
         .from(extensions)
         .where(sql`LOWER(${extensions.id}) = LOWER(${id})`);
     } catch (error) {
-      return databaseError("moderatorCorrect", error);
+      return contentAdmissionError("moderatorCorrect", error);
     }
     return {
       data: { id: row?.canonicalId ?? id, revisionId },
@@ -1051,7 +1134,7 @@ export class ExtensionsDatabase {
         .from(extensions)
         .where(sql`LOWER(${extensions.id}) = LOWER(${id})`);
     } catch (error) {
-      return databaseError("moderatorCorrect", error);
+      return contentAdmissionError("moderatorCorrect", error);
     }
     if (!existing) return notFound(id);
     if (!existing.publishedAt) {
@@ -1094,7 +1177,7 @@ export class ExtensionsDatabase {
         };
       }
     } catch (error) {
-      return databaseError("moderatorCorrect", error);
+      return contentAdmissionError("moderatorCorrect", error);
     }
     return {
       data: null,
@@ -1194,7 +1277,7 @@ function parseRow(row: PublishedRow): Extension {
   return {
     ...parseListRow(row),
     readme: row.readme,
-    releases: sortReleasesDescending(parseJSON<Release[]>(row.releases, []))
+    releases: boundedReleases(parseJSON<Release[]>(row.releases, []))
   };
 }
 
@@ -1223,7 +1306,7 @@ function parseOwnedListRow(row: OwnedListRow): OwnedExtensionListItem {
   return {
     id: row.id,
     developer: parseDeveloper(row),
-    published: row.publishedAt ? publishedContent(row) : null,
+    published: row.publishedAt && row.type ? publishedContent(row) : null,
     pending_revision:
       row.pendingId && row.pendingCreatedAt
         ? { id: row.pendingId, created_at: row.pendingCreatedAt }
@@ -1253,7 +1336,7 @@ function parseOwnedRow(row: OwnedRow): OwnedExtension {
       ? {
           ...publishedContent(row),
           readme: row.readme as string,
-          releases: sortReleasesDescending(
+          releases: boundedReleases(
             parseJSON<Release[]>(row.releases as string, [])
           )
         }
@@ -1275,6 +1358,39 @@ export function parseContent(stored: string | null): StoredExtensionContent {
   const content = parseJSON<StoredExtensionContent>(stored ?? "", {});
   return {
     ...content,
-    releases: sortReleasesDescending(content.releases ?? [])
+    releases: boundedReleases(content.releases ?? [])
+  };
+}
+
+export class LegacyContentError extends Error {}
+
+// Legacy bodies bypassed today's schema. Bound the collection and tag work
+// before semver sorting, while retaining support for partial historical content.
+function boundedReleases(value: unknown): Release[] {
+  if (
+    !Array.isArray(value) ||
+    value.length > 100 ||
+    value.some(
+      (release) =>
+        !release ||
+        typeof release !== "object" ||
+        typeof release.tag !== "string" ||
+        release.tag.length > 100
+    )
+  )
+    throw new LegacyContentError(
+      "Legacy release collection exceeds safe read bounds"
+    );
+  return sortReleasesDescending(value as Release[]);
+}
+
+export function oversizedContent(): DatabaseResult<never> {
+  return {
+    data: null,
+    error: {
+      code: "CONTENT_UNAVAILABLE",
+      message:
+        "Legacy content exceeds safe read bounds; resubmit or export it administratively"
+    }
   };
 }

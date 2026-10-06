@@ -14,13 +14,27 @@ export const ExtensionRevisionSchema = z
     developer_id: z.string(),
     submitted_by: z.string(),
     status: RevisionStatusSchema,
-    content: StoredExtensionContentSchema,
+    content: StoredExtensionContentSchema.nullable(),
+    name: z.string().max(120).nullable(),
+    version: z.string().max(100).nullable(),
+    description: z.string().max(4000).nullable(),
+    content_bytes: z.number().int().nonnegative(),
+    content_available: z.boolean(),
+    content_hash: z.string().nullable(),
+    compacted_at: z.string().nullable(),
     reviewer_id: z.string().nullable(),
     review_note: z.string().nullable(),
     created_at: z.string(),
     reviewed_at: z.string().nullable()
   })
   .openapi("ExtensionRevision");
+
+export const ExtensionRevisionSummarySchema = ExtensionRevisionSchema.omit({
+  content: true
+}).openapi("ExtensionRevisionSummary");
+export type ExtensionRevisionSummary = z.infer<
+  typeof ExtensionRevisionSummarySchema
+>;
 
 export type ExtensionRevision = z.infer<typeof ExtensionRevisionSchema>;
 

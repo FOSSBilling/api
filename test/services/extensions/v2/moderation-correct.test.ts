@@ -51,6 +51,36 @@ async function seedPublished(): Promise<void> {
 }
 
 describe("POST /extensions/{id}/moderator-correct (api#251)", () => {
+  it("charges a first-time moderator exactly once and keeps totals reconciled", async () => {
+    await seedPublished();
+    const response = await post(
+      PATH,
+      await authHeaders("mod-1"),
+      correctBody()
+    );
+    expect(response.status).toBe(200);
+    const { correction_note: _note, ...content } = correctBody();
+    const bytes = new TextEncoder().encode(JSON.stringify(content)).byteLength;
+    expect(
+      await db
+        .prepare(
+          "SELECT bytes,revisions,extensions FROM extension_resource_usage WHERE scope='account' AND subject='mod-1'"
+        )
+        .first()
+    ).toEqual({ bytes, revisions: 1, extensions: 0 });
+    const expected = await db
+      .prepare(
+        "SELECT (SELECT COALESCE(SUM(content_bytes),0) FROM extension_revisions)+(SELECT COALESCE(SUM(published_bytes),0) FROM extensions) AS bytes, (SELECT COUNT(*) FROM extension_revisions) AS revisions"
+      )
+      .first();
+    expect(
+      await db
+        .prepare(
+          "SELECT bytes,revisions FROM extension_resource_usage WHERE scope='global'"
+        )
+        .first()
+    ).toEqual(expected);
+  });
   it("requires auth", async () => {
     const res = await post(
       PATH,

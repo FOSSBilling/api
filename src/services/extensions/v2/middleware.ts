@@ -1,3 +1,5 @@
+import { logInfo, logError } from "../../../lib/logger";
+import { MAX_RAW_BODY_BYTES } from "./resource-limits";
 import { type Context, type MiddlewareHandler } from "hono";
 import {
   bearerAssertionVerifier,
@@ -132,4 +134,124 @@ export function requireModerator(): MiddlewareHandler {
         403
       );
   });
+}
+
+// Registered before JSON validators on the three content-write routes.
+export function boundContentRequest(): MiddlewareHandler {
+  return async (c, next) => {
+    const reader = c.req.raw.body?.getReader();
+    if (reader) {
+      const body = new Uint8Array(MAX_RAW_BODY_BYTES);
+      let size = 0;
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          size += value.byteLength;
+          if (size > MAX_RAW_BODY_BYTES) {
+            await reader.cancel();
+            logInfo("extensions-v2", "Resource admission rejected", {
+              reason: "raw_body_size"
+            });
+            return c.json(
+              {
+                error: {
+                  message: "Request body must not exceed 512 KiB",
+                  code: "BODY_TOO_LARGE"
+                }
+              },
+              413
+            );
+          }
+          body.set(value, size - value.byteLength);
+        }
+      } catch {
+        return c.json(
+          {
+            error: {
+              message: "Unable to read request body",
+              code: "BAD_REQUEST"
+            }
+          },
+          400
+        );
+      } finally {
+        reader.releaseLock();
+      }
+      c.req.raw = new Request(c.req.raw, { body: body.subarray(0, size) });
+    }
+    await next();
+  };
+}
+
+function paceContentAttempts(identity: "ip" | "account"): MiddlewareHandler {
+  return async (c, next) => {
+    const subject =
+      identity === "ip"
+        ? (c.req.header("CF-Connecting-IP") ?? "unknown")
+        : getAuth(c).userId;
+    try {
+      const { success } = await c.env.EXTENSION_WRITE_RATE_LIMITER.limit({
+        key: `${identity}:${subject}`
+      });
+      if (!success) {
+        c.header("Retry-After", "60");
+        logInfo("extensions-v2", "Resource admission rejected", {
+          reason: identity === "ip" ? "attempt_rate" : "account_attempt_rate"
+        });
+        return c.json(
+          {
+            error: {
+              message: "Too many extension write attempts",
+              code: "RATE_LIMITED"
+            }
+          },
+          429
+        );
+      }
+    } catch {
+      logError("extensions-v2", "Attempt limiter unavailable", { identity });
+      c.header("Retry-After", "60");
+      return c.json(
+        {
+          error: {
+            message: "Write admission unavailable",
+            code: "ADMISSION_UNAVAILABLE"
+          }
+        },
+        503
+      );
+    }
+    await next();
+  };
+}
+
+export const paceContentIp = () => paceContentAttempts("ip");
+export const paceContentAccount = () => paceContentAttempts("account");
+
+// Count streamed response bytes without buffering or copying response bodies.
+export function observeResourceResponses(): MiddlewareHandler {
+  return async (c, next) => {
+    const started = performance.now();
+    await next();
+    if (!c.res.body) return;
+    const status = c.res.status;
+    let bytes = 0;
+    const body = c.res.body.pipeThrough(
+      new TransformStream<Uint8Array, Uint8Array>({
+        transform(chunk, controller) {
+          bytes += chunk.byteLength;
+          controller.enqueue(chunk);
+        },
+        flush() {
+          logInfo("extensions-v2", "Revision response", {
+            status,
+            response_bytes: bytes,
+            duration_ms: Math.round(performance.now() - started)
+          });
+        }
+      })
+    );
+    c.res = new Response(body, c.res);
+  };
 }

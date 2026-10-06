@@ -1,9 +1,14 @@
-import { requireModerator } from "../middleware";
+import { paceContentAccount, requireModerator } from "../middleware";
 import { getExtensionsDb } from "../../../../lib/db";
 import { getPlatform } from "../../../../lib/middleware";
 import { getAuth } from "../../../../lib/auth";
 import { createRoute, z } from "@hono/zod-openapi";
-import { errorBody, statusFromWriteErrorCode } from "./errors";
+import {
+  errorBody,
+  setContentRetryAfter,
+  statusFromContentWriteError,
+  statusFromWriteErrorCode
+} from "./errors";
 import {
   ActiveAccountRequiredResponse,
   CursorPaginationQuerySchema,
@@ -360,7 +365,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
     tags: ["Moderation"],
     summary: "Correct a published extension's live content as a moderator",
     security: [{ Bearer: [] }],
-    middleware: [requireModerator()] as const,
+    middleware: [requireModerator(), paceContentAccount()] as const,
     request: {
       params: IdParamSchema,
       body: {
@@ -400,6 +405,11 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
       409: errorResponse(
         "Extension is unpublished or delisted, or an edit is already awaiting review"
       ),
+      413: errorResponse("Raw request exceeds 512 KiB"),
+      429: errorResponse(
+        "Extension write allowance exhausted; see Retry-After"
+      ),
+      503: errorResponse("Write admission unavailable"),
       422: errorResponse(
         "Path params, content, or correction_note failed validation"
       ),
@@ -420,7 +430,8 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
       correction_note
     );
     if (error || !data) {
-      const status = statusFromWriteErrorCode(error?.code);
+      setContentRetryAfter(c, error?.code);
+      const status = statusFromContentWriteError(error?.code);
       return c.json(errorBody(error, "Unable to correct extension"), status);
     }
     revalidateCatalogue(c);

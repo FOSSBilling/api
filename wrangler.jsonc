@@ -19,6 +19,7 @@
   "preview_urls": true,
   "keep_vars": true,
   "vars": {
+    "EXTENSIONS_RETENTION_MODE": "dry-run",
     "EXTENSIONS_V2_EMAIL_PROVIDER": "mxroute",
     "EXTENSIONS_V2_MXROUTE_SERVER": "wednesday.mxrouting.net",
     "EXTENSIONS_V2_MXROUTE_USERNAME": "extensions@fossbilling.org"
@@ -78,7 +79,13 @@
       "new_sqlite_classes": ["PreviewGitHubBudget"]
     }
   ],
+  "triggers": { "crons": ["*/2 * * * *", "0 * * * *"] },
   "ratelimits": [
+    {
+      "name": "EXTENSION_WRITE_RATE_LIMITER",
+      "namespace_id": "1002",
+      "simple": { "limit": 60, "period": 60 }
+    },
     {
       "name": "PROFILE_CREATION_RATE_LIMITER",
       "namespace_id": "1001",

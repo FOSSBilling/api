@@ -344,6 +344,13 @@ describe("Extensions API v2 writes", () => {
           extensionId: `new-ext-${index}`
         });
         expect(result.status).toBe(201);
+        // Age the traffic ledger while retaining all pending work. This
+        // test exercises pending admission independently of write pacing.
+        await db
+          .prepare(
+            "UPDATE extension_write_events SET occurred_at = unixepoch()-120"
+          )
+          .run();
       }
 
       const overLimit = await createExtension("user-1", {

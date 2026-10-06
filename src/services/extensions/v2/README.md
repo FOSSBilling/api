@@ -283,3 +283,117 @@ enforced atomically with the write using indexed, immutable history and survives
 profile deletion, recreation, and ownership transfer. Audit records remain
 append-only; this bounds growth per account per day rather than total retention.
 Apply migration `0025_luxuriant_franklin_richards.sql` before deploying.
+
+## Extension resource admission and retention
+
+Content writes (`POST /extensions`, `PUT /extensions/{id}`, and moderator
+correction) count the actual request stream before JSON parsing. The raw request
+limit is **512 KiB**, including whitespace, escapes, and unknown fields. An
+oversized stream is canceled and returns `413 BODY_TOO_LARGE`; `Content-Length`
+cannot bypass counting. The separate normalized JSON content limit remains
+**256 KiB**, with the existing field/release maxima. New slug IDs are at most
+200 characters; existing 120-character IDs remain supported.
+
+The `EXTENSION_WRITE_RATE_LIMITER` binding paces IP and authenticated-account
+attempts at 60/minute, including validation failures. This edge control is
+approximate and must not be used as the durable quota. Missing/unavailable
+attempt pacing fails closed with `503 ADMISSION_UNAVAILABLE`. Unavailable durable
+write admission returns the same response with `Retry-After: 60`.
+
+Migration `0026_resource_bounds.sql` enforces the following accepted-write and
+retained-resource limits **inside the write transaction**, including moderator
+corrections. Its trigger guards and accounting are shared by create, edit,
+approval, correction, withdrawal and retention; a failed batch leaves neither
+an extension nor an accepted-write charge behind.
+
+| Resource                              | Account | Developer |
+| ------------------------------------- | ------- | --------- |
+| Accepted revisions per rolling minute | 5       | 5         |
+| Accepted revisions per rolling day    | 50      | 50        |
+| Retained content bytes                | 25 MiB  | 25 MiB    |
+| Extension records                     | 100     | 100       |
+| Revision metadata records             | 1,000   | 1,000     |
+
+Aggregate storage and record counts are measured for visibility; they do not
+impose a whole-system admission limit.
+
+The pending budget remains ten revisions per submitter and one per extension.
+The byte quota includes retained revision JSON **and** published content
+columns. It counts UTF-8 bytes, not JavaScript string length. Original creators
+are charged for extension records and published projections; revision bodies
+and metadata remain charged to their submitters and original developer IDs.
+Transferring a profile does not silently shift these charges to the recipient.
+The `created_by` attribution is immutable. Legacy unowned publications are
+charged to a synthetic `legacy` account bucket.
+
+The accepted-write ledger has no deletion-cascading foreign keys: review,
+withdrawal, profile replacement and account reactivation do not refund a
+rolling allowance. Minute/day exhaustion returns `429` with a domain
+code (`WRITE_RATE_MINUTE`, `WRITE_RATE_DAY`) and a conservative
+`Retry-After` of 60 or 86400 seconds respectively. Retained quota exhaustion
+returns `409 RESOURCE_QUOTA`. Withdrawing an unpublished extension releases its
+stored bytes and record counts, but not its accepted-write allowance.
+
+`resource-limits.ts` mirrors the policy values used by middleware and maintenance.
+
+### Revision list/detail contract
+
+`GET /revisions` and `GET /extensions/{id}/revisions` now return
+`ExtensionRevisionSummary` pages. They select stored, bounded summary fields
+(`name`, `version`, `description`), decision metadata, `content_bytes`,
+`content_available`, `content_hash` and `compacted_at`. They do **not** select,
+transfer or parse content JSON, including the pagination lookahead row.
+Timestamp/ID keyset ordering, limit 1–100 and default 50 are unchanged.
+
+Fetch `GET /extensions/{id}/revisions/{revisionId}` for full content on demand.
+The caller must be the current owner or an active moderator, and authorization
+is repeated in the actual data query. A compacted revision returns `content:
+null`, `content_available: false`, a SHA-256 hash of the original stored bytes,
+and its compaction timestamp. `content_bytes` measures the currently retained
+body (the two-byte `{}` placeholder after compaction), not the historical body.
+
+Oversized legacy content remains stored and counted, but is never fetched or
+parsed by list or detail handlers. Its revision detail returns `409
+CONTENT_UNAVAILABLE`. An owner/moderator extension detail with an oversized
+published or pending body also returns this error. Oversized published legacy
+rows are excluded from public catalogue cards. Historical release collections
+are checked for safe count/tag bounds before version sorting; unsafe collections
+also return `CONTENT_UNAVAILABLE`. Moderator lists still expose
+the record for correction. Reject an oversized pending revision, then ask its
+owner to resubmit under current bounds; use moderator correction for published
+content. Administrative export is required if the original oversized body must
+be recovered. The migration backfills byte counts/summaries in SQL without
+loading old bodies into a Worker or discarding any rows. Existing over-quota
+collections cannot grow until usage is reduced.
+
+### Maintenance and monitoring
+
+The Worker runs scheduled maintenance every **two minutes**, handling at most
+**20 bodies** and 500 expired ledger rows per invocation. Retention defaults to
+`dry-run`: it reports eligible bodies and reclaimable bytes without fetching or
+changing bodies. Only `EXTENSIONS_RETENTION_MODE=compact` enables compaction;
+missing or invalid mode values keep retention non-destructive. Expired admission
+ledger entries and empty usage counters are cleaned in either mode. Reviewed revision
+bodies older than **180 days** are compacted to `{}` while retaining their
+bounded summaries, review note, reviewer, dates, status and original content
+hash. Pending bodies and the currently published revision are always protected.
+Oversized legacy bodies are left for administrative handling. Metadata is
+retained under the count quota; reaching that quota needs deliberate export
+and administrative cleanup rather than silent deletion of decisions.
+
+Compaction rechecks age, status, body equality and the published pointer in the
+UPDATE, so concurrent review/publication changes cannot discard protected
+content. Accounting is updated in the same transaction. Repeated runs are
+idempotent. Expired write events and empty usage counters are cleaned in bounded
+batches.
+
+Full resource inventory runs hourly, separately from bounded maintenance.
+Structured logs record revision-response bytes/duration, admission reason codes and maintenance/inventory totals:
+`retained_bytes`, `extensions`, `revisions`, `pending`,
+`oversized_legacy_revisions`, `cleanup_backlog`, `compacted`, and
+`expired_events`. They contain no revision bodies or user identifiers. Warning-level signals flag
+oversized legacy bodies and an active
+compaction backlog of 300 or more bodies. Dry-run eligibility is informational.
+
+`db/resource-inventory.sql` reports at most 100 accounting discrepancies using
+stored scalar sizes, without returning content bodies.
