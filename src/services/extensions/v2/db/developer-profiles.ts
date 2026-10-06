@@ -9,7 +9,7 @@ import {
   extensions,
   users
 } from "./schema";
-import { databaseError } from "./errors";
+import { databaseError, moderatorActorError } from "./errors";
 import { toD1Statement } from "./batch";
 import { optionalBool } from "./columns";
 import {
@@ -833,6 +833,7 @@ export class DeveloperProfilesDatabase {
             sql`EXISTS (
               SELECT 1 FROM ${users}
               WHERE ${users.id} = ${reviewerId} AND ${users.deletedAt} IS NULL
+                AND ${users.isModerator} = 1
             )`
           )
         );
@@ -841,24 +842,8 @@ export class DeveloperProfilesDatabase {
     }
 
     if (!result.meta?.changes) {
-      let reviewer: { deletedAt: string | null } | undefined;
-      try {
-        [reviewer] = await this.db
-          .select({ deletedAt: users.deletedAt })
-          .from(users)
-          .where(eq(users.id, reviewerId));
-      } catch (error) {
-        return databaseError("approve", error);
-      }
-      if (!reviewer || reviewer.deletedAt !== null) {
-        return {
-          data: null,
-          error: {
-            code: "ACCOUNT_INACTIVE",
-            message: "Active account required"
-          }
-        };
-      }
+      const actorError = await moderatorActorError(this.db, reviewerId);
+      if (actorError) return { data: null, error: actorError };
 
       const existing = await this.getById(id);
       if (existing.error) {

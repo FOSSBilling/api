@@ -325,7 +325,7 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
     if (error || !data) {
       return c.json(
         errorBody(error, "Unable to approve claim"),
-        statusFromErrorCode(error?.code)
+        statusFromWriteErrorCode(error?.code)
       );
     }
     revalidateCatalogue(c);
@@ -399,7 +399,10 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
     const db = new DeveloperClaimsDatabase(extDb);
     const { data, error } = await db.rejectClaim(id, auth.userId, review_note);
     if (error || !data) {
-      const status = statusFromErrorCode(error?.code, false);
+      const status =
+        error?.code === "FORBIDDEN" || error?.code === "ACCOUNT_INACTIVE"
+          ? 403
+          : statusFromErrorCode(error?.code, false);
       return c.json(errorBody(error, "Unable to reject claim"), status);
     }
     revalidateCatalogue(c);
