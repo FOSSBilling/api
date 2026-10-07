@@ -32,9 +32,7 @@
       "indexes": {
         "idx_claim_verification_budgets_expiry": {
           "name": "idx_claim_verification_budgets_expiry",
-          "columns": [
-            "expires_at"
-          ],
+          "columns": ["expires_at"],
           "isUnique": false
         }
       },
@@ -129,32 +127,23 @@
       "indexes": {
         "idx_developer_claims_developer": {
           "name": "idx_developer_claims_developer",
-          "columns": [
-            "developer_id"
-          ],
+          "columns": ["developer_id"],
           "isUnique": false
         },
         "idx_developer_claims_claimant": {
           "name": "idx_developer_claims_claimant",
-          "columns": [
-            "claimant_id"
-          ],
+          "columns": ["claimant_id"],
           "isUnique": false
         },
         "idx_developer_claims_pending_unique": {
           "name": "idx_developer_claims_pending_unique",
-          "columns": [
-            "developer_id",
-            "claimant_id"
-          ],
+          "columns": ["developer_id", "claimant_id"],
           "isUnique": true,
           "where": "\"developer_claims\".\"status\" = 'pending'"
         },
         "idx_developer_claims_pending_queue": {
           "name": "idx_developer_claims_pending_queue",
-          "columns": [
-            "created_at"
-          ],
+          "columns": ["created_at"],
           "isUnique": false,
           "where": "\"developer_claims\".\"status\" = 'pending'"
         }
@@ -164,12 +153,8 @@
           "name": "developer_claims_developer_id_developers_id_fk",
           "tableFrom": "developer_claims",
           "tableTo": "developers",
-          "columnsFrom": [
-            "developer_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["developer_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -177,12 +162,8 @@
           "name": "developer_claims_claimant_id_users_id_fk",
           "tableFrom": "developer_claims",
           "tableTo": "users",
-          "columnsFrom": [
-            "claimant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["claimant_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -190,12 +171,8 @@
           "name": "developer_claims_reviewer_id_users_id_fk",
           "tableFrom": "developer_claims",
           "tableTo": "users",
-          "columnsFrom": [
-            "reviewer_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["reviewer_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -270,18 +247,12 @@
       "indexes": {
         "idx_developer_history_developer_changed_at": {
           "name": "idx_developer_history_developer_changed_at",
-          "columns": [
-            "developer_id",
-            "changed_at"
-          ],
+          "columns": ["developer_id", "changed_at"],
           "isUnique": false
         },
         "idx_developer_history_account_changed_at": {
           "name": "idx_developer_history_account_changed_at",
-          "columns": [
-            "changed_by",
-            "changed_at"
-          ],
+          "columns": ["changed_by", "changed_at"],
           "isUnique": false
         }
       },
@@ -290,12 +261,8 @@
           "name": "developer_history_changed_by_users_id_fk",
           "tableFrom": "developer_history",
           "tableTo": "users",
-          "columnsFrom": [
-            "changed_by"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["changed_by"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -375,16 +342,12 @@
       "indexes": {
         "idx_developer_transfers_token": {
           "name": "idx_developer_transfers_token",
-          "columns": [
-            "token_hash"
-          ],
+          "columns": ["token_hash"],
           "isUnique": true
         },
         "idx_developer_transfers_pending": {
           "name": "idx_developer_transfers_pending",
-          "columns": [
-            "developer_id"
-          ],
+          "columns": ["developer_id"],
           "isUnique": true,
           "where": "\"developer_transfers\".\"accepted_at\" IS NULL AND \"developer_transfers\".\"revoked_at\" IS NULL"
         }
@@ -394,12 +357,8 @@
           "name": "developer_transfers_developer_id_developers_id_fk",
           "tableFrom": "developer_transfers",
           "tableTo": "developers",
-          "columnsFrom": [
-            "developer_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["developer_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -407,12 +366,8 @@
           "name": "developer_transfers_created_by_users_id_fk",
           "tableFrom": "developer_transfers",
           "tableTo": "users",
-          "columnsFrom": [
-            "created_by"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["created_by"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -420,12 +375,8 @@
           "name": "developer_transfers_accepted_by_users_id_fk",
           "tableFrom": "developer_transfers",
           "tableTo": "users",
-          "columnsFrom": [
-            "accepted_by"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["accepted_by"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -578,16 +529,12 @@
       "indexes": {
         "idx_developers_owner_unique": {
           "name": "idx_developers_owner_unique",
-          "columns": [
-            "owner_user_id"
-          ],
+          "columns": ["owner_user_id"],
           "isUnique": true
         },
         "idx_developers_approved": {
           "name": "idx_developers_approved",
-          "columns": [
-            "approved_at"
-          ],
+          "columns": ["approved_at"],
           "isUnique": false
         }
       },
@@ -596,12 +543,8 @@
           "name": "developers_owner_user_id_users_id_fk",
           "tableFrom": "developers",
           "tableTo": "users",
-          "columnsFrom": [
-            "owner_user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["owner_user_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -714,67 +657,44 @@
       "indexes": {
         "idx_extension_revisions_submitted_by": {
           "name": "idx_extension_revisions_submitted_by",
-          "columns": [
-            "submitted_by"
-          ],
+          "columns": ["submitted_by"],
           "isUnique": false
         },
         "idx_extension_revisions_developer": {
           "name": "idx_extension_revisions_developer",
-          "columns": [
-            "developer_id"
-          ],
+          "columns": ["developer_id"],
           "isUnique": false
         },
         "idx_extension_revisions_pending": {
           "name": "idx_extension_revisions_pending",
-          "columns": [
-            "extension_id"
-          ],
+          "columns": ["extension_id"],
           "isUnique": true,
           "where": "\"extension_revisions\".\"status\" = 'pending'"
         },
         "idx_extension_revisions_extension_page": {
           "name": "idx_extension_revisions_extension_page",
-          "columns": [
-            "extension_id",
-            "\"created_at\" desc",
-            "\"id\" desc"
-          ],
+          "columns": ["extension_id", "\"created_at\" desc", "\"id\" desc"],
           "isUnique": false
         },
         "idx_extension_revisions_submitter_page": {
           "name": "idx_extension_revisions_submitter_page",
-          "columns": [
-            "submitted_by",
-            "\"created_at\" desc",
-            "\"id\" desc"
-          ],
+          "columns": ["submitted_by", "\"created_at\" desc", "\"id\" desc"],
           "isUnique": false
         },
         "idx_extension_revisions_queue_page": {
           "name": "idx_extension_revisions_queue_page",
-          "columns": [
-            "status",
-            "created_at",
-            "id"
-          ],
+          "columns": ["status", "created_at", "id"],
           "isUnique": false
         },
         "idx_extension_revisions_reviewed": {
           "name": "idx_extension_revisions_reviewed",
-          "columns": [
-            "extension_id",
-            "reviewed_at"
-          ],
+          "columns": ["extension_id", "reviewed_at"],
           "isUnique": false,
           "where": "\"extension_revisions\".\"status\" IN ('approved', 'rejected')"
         },
         "idx_extension_revisions_submitter_pending": {
           "name": "idx_extension_revisions_submitter_pending",
-          "columns": [
-            "submitted_by"
-          ],
+          "columns": ["submitted_by"],
           "isUnique": false,
           "where": "\"extension_revisions\".\"status\" = 'pending'"
         }
@@ -784,12 +704,8 @@
           "name": "extension_revisions_extension_id_extensions_id_fk",
           "tableFrom": "extension_revisions",
           "tableTo": "extensions",
-          "columnsFrom": [
-            "extension_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["extension_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -797,12 +713,8 @@
           "name": "extension_revisions_submitted_by_users_id_fk",
           "tableFrom": "extension_revisions",
           "tableTo": "users",
-          "columnsFrom": [
-            "submitted_by"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["submitted_by"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -810,12 +722,8 @@
           "name": "extension_revisions_reviewer_id_users_id_fk",
           "tableFrom": "extension_revisions",
           "tableTo": "users",
-          "columnsFrom": [
-            "reviewer_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["reviewer_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -975,36 +883,23 @@
       "indexes": {
         "idx_extensions_id_nocase": {
           "name": "idx_extensions_id_nocase",
-          "columns": [
-            "lower(\"id\")"
-          ],
+          "columns": ["lower(\"id\")"],
           "isUnique": true
         },
         "idx_extensions_developer_order": {
           "name": "idx_extensions_developer_order",
-          "columns": [
-            "developer_id",
-            "lower(\"id\")",
-            "id"
-          ],
+          "columns": ["developer_id", "lower(\"id\")", "id"],
           "isUnique": false
         },
         "idx_extensions_catalogue_order": {
           "name": "idx_extensions_catalogue_order",
-          "columns": [
-            "lower(\"id\")",
-            "id"
-          ],
+          "columns": ["lower(\"id\")", "id"],
           "isUnique": false,
           "where": "\"extensions\".\"published_at\" IS NOT NULL AND \"extensions\".\"delisted_at\" IS NULL"
         },
         "idx_extensions_type_catalogue_order": {
           "name": "idx_extensions_type_catalogue_order",
-          "columns": [
-            "type",
-            "lower(\"id\")",
-            "id"
-          ],
+          "columns": ["type", "lower(\"id\")", "id"],
           "isUnique": false,
           "where": "\"extensions\".\"published_at\" IS NOT NULL AND \"extensions\".\"delisted_at\" IS NULL"
         }
@@ -1014,12 +909,8 @@
           "name": "extensions_developer_id_developers_id_fk",
           "tableFrom": "extensions",
           "tableTo": "developers",
-          "columnsFrom": [
-            "developer_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["developer_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
