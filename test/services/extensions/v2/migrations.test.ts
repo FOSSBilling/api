@@ -785,6 +785,18 @@ describe("Developer profile generation migration", () => {
       expect(replacement.profile_generation).not.toBe(
         rows[0].profile_generation
       );
+      db.prepare("DELETE FROM developers WHERE id = 'first'").run();
+      db.prepare(
+        "INSERT INTO developers(id, type, name, profile_generation) VALUES ('first', 'user', 'Copied generation', ?)"
+      ).run(rows[0].profile_generation as string);
+      const copied = db
+        .prepare("SELECT profile_generation FROM developers WHERE id = 'first'")
+        .get()!;
+      expect(copied.profile_generation).toMatch(/^[0-9a-f]{32}$/);
+      expect(copied.profile_generation).not.toBe(rows[0].profile_generation);
+      expect(copied.profile_generation).not.toBe(
+        replacement.profile_generation
+      );
     } finally {
       db.close();
     }

@@ -11,7 +11,6 @@ SET profile_generation = lower(hex(randomblob(16))),
 -- Generate tokens here so API creation and raw imports use the same path.
 CREATE TRIGGER developers_generate_profile_instance
 AFTER INSERT ON developers
-WHEN NEW.profile_generation = ''
 BEGIN
   UPDATE developers SET profile_generation = lower(hex(randomblob(16)))
   WHERE id = NEW.id;
