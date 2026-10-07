@@ -31,6 +31,8 @@ export const DeveloperSchema = z
 
 export type Developer = z.infer<typeof DeveloperSchema>;
 
+const ProfileGenerationSchema = z.string().regex(/^[0-9a-f]{32}$/);
+
 // The PUT /developers/me request body. Separate from DeveloperSchema because
 // that one is also allOf/0 of the DeveloperProfile response, and strictness
 // propagates through extend/pick/omit - an additionalProperties:false branch
@@ -43,6 +45,7 @@ export const DeveloperInputSchema =
 export const DeveloperProfileSchema = DeveloperSchema.extend({
   approved: z.boolean(),
   content_revision: z.int().positive(),
+  profile_generation: ProfileGenerationSchema,
   // Server-computed — see verifyGithubOwnership() (at
   // claim/creation time) and reverifyOwn() (opportunistic re-check on
   // login, or the owner's own "Re-verify" action). Never part of the
@@ -78,7 +81,7 @@ export const DeveloperProfileSchema = DeveloperSchema.extend({
 export type DeveloperProfile = z.infer<typeof DeveloperProfileSchema>;
 
 // The publicly-readable view of a developer profile: everything in
-// DeveloperProfile except contact_email/content_revision (moderator/owner
+// DeveloperProfile except contact_email and review tokens (moderator/owner
 // only), the GitHub verification signal (a moderator-review aid, not meant
 // for public consumption), and the owner's identity (only ever an
 // `unclaimed` boolean is public). The Extensions site consumes this
@@ -86,6 +89,7 @@ export type DeveloperProfile = z.infer<typeof DeveloperProfileSchema>;
 export const PublicDeveloperSchema = DeveloperProfileSchema.omit({
   contact_email: true,
   content_revision: true,
+  profile_generation: true,
   github_org_verified: true,
   github_verification_note: true,
   github_verified_at: true,
@@ -136,7 +140,10 @@ export const DeveloperHistoryEntrySchema = z
 export type DeveloperHistoryEntry = z.infer<typeof DeveloperHistoryEntrySchema>;
 
 export const DeveloperApprovalSchema = z
-  .object({ expected_revision: z.number().int().positive() })
+  .object({
+    expected_revision: z.number().int().positive(),
+    expected_generation: ProfileGenerationSchema
+  })
   .strict()
   .openapi("DeveloperApproval");
 

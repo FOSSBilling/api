@@ -17,6 +17,7 @@ export interface DeveloperRow {
   contact_email: string | null;
   ownership_epoch: number;
   content_revision: number;
+  profile_generation: string;
   approved_revision: number | null;
   approved_by: string | null;
   github_org_verified: number | null;
@@ -237,7 +238,11 @@ export async function insertDeveloper(
       row.contact_email ?? null,
       row.ownership_epoch ?? 1,
       row.content_revision ?? 1,
-      row.approved_revision ?? null,
+      row.approved_revision !== undefined
+        ? row.approved_revision
+        : row.approved_at
+          ? (row.content_revision ?? 1)
+          : null,
       row.approved_by ?? null,
       row.github_org_verified ?? null,
       row.github_verification_note ?? null,

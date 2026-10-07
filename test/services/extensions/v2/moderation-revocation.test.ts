@@ -122,7 +122,12 @@ describe("commit-time moderator authority", () => {
             ? { review_note: "Review decision" }
             : {}),
           ...(action === "delist" ? { reason: "Upstream removed" } : {}),
-          ...(action === "developer approve" ? { expected_revision: 1 } : {})
+          ...(action === "developer approve"
+            ? {
+                expected_revision: 1,
+                expected_generation: before.developer!.profile_generation
+              }
+            : {})
         });
         expect(reachedWrite).toBe(true);
         if (actorState !== "moderator") {

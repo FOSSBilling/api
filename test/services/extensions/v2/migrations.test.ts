@@ -733,6 +733,64 @@ describe("Extensions D1 migrations", () => {
   });
 });
 
+describe("Developer profile generation migration", () => {
+  it("backfills instances, revokes old approvals, and gives recreated ids fresh tokens", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      db.exec("PRAGMA foreign_keys = ON");
+      for (const name of migrationNames.filter(
+        (candidate) => candidate < "0027"
+      )) {
+        for (const statement of unstable_splitSqlQuery(migration(name)))
+          db.exec(statement);
+      }
+      db.prepare(
+        "INSERT INTO users(id, created_at, updated_at) VALUES (?, ?, ?)"
+      ).run("reviewer", "2026-10-07", "2026-10-07");
+      for (const id of ["first", "second"]) {
+        db.prepare(
+          "INSERT INTO developers(id, type, name, approved_at, approved_revision, approved_by, github_org_verified) VALUES (?, 'user', ?, '2026-10-07', 1, 'reviewer', 1)"
+        ).run(id, id);
+      }
+      db.exec("BEGIN");
+      for (const statement of unstable_splitSqlQuery(
+        migration("0027_bind_developer_profile_generation.sql")
+      ))
+        db.exec(statement);
+      db.exec("COMMIT");
+      const rows = db
+        .prepare("SELECT * FROM developers ORDER BY id")
+        .all() as Array<Record<string, unknown>>;
+      expect(rows).toHaveLength(2);
+      for (const row of rows) {
+        expect(row).toMatchObject({
+          approved_at: null,
+          approved_revision: null,
+          approved_by: null,
+          github_org_verified: 1,
+          content_revision: 1
+        });
+        expect(row.profile_generation).toMatch(/^[0-9a-f]{32}$/);
+      }
+      expect(rows[0].profile_generation).not.toBe(rows[1].profile_generation);
+      db.prepare("DELETE FROM developers WHERE id = 'first'").run();
+      // Raw imports/older creation code omit the column and still get a token.
+      db.prepare(
+        "INSERT INTO developers(id, type, name) VALUES ('first', 'user', 'Replacement')"
+      ).run();
+      const replacement = db
+        .prepare("SELECT profile_generation FROM developers WHERE id = 'first'")
+        .get()!;
+      expect(replacement.profile_generation).toMatch(/^[0-9a-f]{32}$/);
+      expect(replacement.profile_generation).not.toBe(
+        rows[0].profile_generation
+      );
+    } finally {
+      db.close();
+    }
+  });
+});
+
 describe("Resource-bound migration", () => {
   it("ranks manual counter discrepancies before limiting the report", () => {
     const db = new DatabaseSync(":memory:");

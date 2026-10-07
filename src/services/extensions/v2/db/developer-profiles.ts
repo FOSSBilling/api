@@ -13,6 +13,10 @@ import { databaseError, moderatorActorError } from "./errors";
 import { toD1Statement } from "./batch";
 import { optionalBool } from "./columns";
 import {
+  developerIsApproved,
+  developerApprovalPredicate
+} from "./developer-approval";
+import {
   checkGithubEntity,
   matchesClaimant,
   urlMatchesGithubBlog
@@ -61,11 +65,9 @@ function parseDeveloperRow(row: DeveloperRow): DeveloperProfile {
     URL: row.url ?? undefined,
     avatar_url: row.avatarUrl ?? undefined,
     contact_email: row.contactEmail ?? undefined,
-    approved:
-      row.approvedAt != null &&
-      (row.approvedRevision == null ||
-        Number(row.approvedRevision) === Number(row.contentRevision ?? 1)),
+    approved: developerIsApproved(row),
     content_revision: Number(row.contentRevision ?? 1),
+    profile_generation: row.profileGeneration,
     github_org_verified: optionalBool(row.githubOrgVerified),
     github_verification_note: row.githubVerificationNote ?? undefined,
     github_verified_at: row.githubVerifiedAt ?? undefined,
@@ -296,8 +298,7 @@ export class DeveloperProfilesDatabase {
           };
         }
 
-        // Meaningful edits invalidate manual approval. GitHub identity
-        // verification keeps approval unless the profile type changes.
+        // Every meaningful edit invalidates manual content approval.
         // A type change invalidates the existing GitHub verification
         // outright — matchesClaimant() compares differently per type (org
         // membership vs. username), so a signal computed for the old type
@@ -309,9 +310,6 @@ export class DeveloperProfilesDatabase {
         // on-file website, so a stale URL can't still be "verified" once
         // it's no longer the URL being served.
         const urlChanged = (developer.URL ?? null) !== existingOwn.url;
-        const keepsApproval =
-          !typeChanged && existingOwn.githubOrgVerified === 1;
-
         const updateStmt = this.db
           .update(developers)
           .set({
@@ -321,9 +319,9 @@ export class DeveloperProfilesDatabase {
             avatarUrl: developer.avatar_url ?? null,
             contactEmail: developer.contact_email ?? null,
             contentRevision: sql`content_revision + 1`,
-            ...(keepsApproval
-              ? { approvedRevision: sql`content_revision + 1` }
-              : { approvedAt: null, approvedRevision: null, approvedBy: null }),
+            approvedAt: null,
+            approvedRevision: null,
+            approvedBy: null,
             ...(typeChanged
               ? {
                   githubOrgVerified: null,
@@ -342,6 +340,7 @@ export class DeveloperProfilesDatabase {
               eq(developers.ownerUserId, userId),
               // Pin approval/verification decisions to the version read above.
               eq(developers.contentRevision, existingOwn.contentRevision),
+              eq(developers.profileGeneration, existingOwn.profileGeneration),
               profileBudgetAvailable(userId),
               sql`NOT (
                 ${developers.type} IS ${developer.type} AND
@@ -741,7 +740,7 @@ export class DeveloperProfilesDatabase {
     const conditions: SQL[] = [];
     let orderBy;
     if (scope === "unapproved") {
-      conditions.push(isNull(developers.approvedAt));
+      conditions.push(sql`NOT (${developerApprovalPredicate()})`);
       if (decoded) {
         conditions.push(
           or(
@@ -815,6 +814,7 @@ export class DeveloperProfilesDatabase {
   async approve(
     id: string,
     expectedRevision: number,
+    expectedGeneration: string,
     reviewerId: string
   ): Promise<DatabaseResult<{ id: string; approved: true }>> {
     let result;
@@ -830,6 +830,7 @@ export class DeveloperProfilesDatabase {
           and(
             eq(developers.id, id),
             eq(developers.contentRevision, expectedRevision),
+            eq(developers.profileGeneration, expectedGeneration),
             sql`EXISTS (
               SELECT 1 FROM ${users}
               WHERE ${users.id} = ${reviewerId} AND ${users.deletedAt} IS NULL

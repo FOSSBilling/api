@@ -5,6 +5,7 @@ import { MockGitHubRequest } from "../../../utils/test-types";
 import { wrapD1WithHook } from "./db-interceptor";
 import {
   setupExtensionsV2Tests,
+  developerApproval,
   db,
   authHeaders,
   post,
@@ -846,7 +847,7 @@ describe("Extensions API v2", () => {
       const approved = await post(
         "/extensions/v2/developers/dev-developer/approve",
         await authHeaders("mod-1"),
-        { expected_revision: 1 }
+        await developerApproval("dev-developer", 1)
       );
       expect(approved.status).toBe(200);
       const approvedBody = (await approved.json()) as {
@@ -865,7 +866,7 @@ describe("Extensions API v2", () => {
       expect(data.result.approved).toBe(false);
     });
 
-    it("keeps approval when a GitHub-verified profile is edited", async () => {
+    it("clears manual approval but keeps GitHub identity verification on edits", async () => {
       mockGithubEntity("User");
       await insertUser(db, {
         id: "user-1",
@@ -886,7 +887,7 @@ describe("Extensions API v2", () => {
       const approved = await post(
         "/extensions/v2/developers/dev-developer/approve",
         await authHeaders("mod-1"),
-        { expected_revision: 1 }
+        await developerApproval("dev-developer", 1)
       );
       expect(approved.status).toBe(200);
 
@@ -900,7 +901,7 @@ describe("Extensions API v2", () => {
       const data = (await res.json()) as {
         result: { approved: boolean; github_org_verified?: boolean };
       };
-      expect(data.result.approved).toBe(true);
+      expect(data.result.approved).toBe(false);
       expect(data.result.github_org_verified).toBe(true);
     });
 
@@ -925,7 +926,7 @@ describe("Extensions API v2", () => {
       await post(
         "/extensions/v2/developers/dev-developer/approve",
         await authHeaders("mod-1"),
-        { expected_revision: 1 }
+        await developerApproval("dev-developer", 1)
       );
 
       const res = await put(

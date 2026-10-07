@@ -162,6 +162,9 @@ export const developers = sqliteTable(
     contactEmail: text("contact_email"),
     ownershipEpoch: integer("ownership_epoch").notNull().default(1),
     contentRevision: integer("content_revision").notNull().default(1),
+    // Migration 0027 backfills existing rows; its INSERT trigger replaces the
+    // constant default with a fresh token for every new profile.
+    profileGeneration: text("profile_generation").notNull().default(""),
     approvedRevision: integer("approved_revision"),
     approvedBy: text("approved_by"),
     githubOrgVerified: integer("github_org_verified"),
