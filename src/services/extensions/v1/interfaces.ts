@@ -21,7 +21,10 @@ export type Extension = {
     name: string;
     URL?: string;
   };
-  icon_url?: string;
+  // Always present ("" when unknown): legacy FOSSBilling templates render
+  // with strict_variables, where a missing key throws on old installs that
+  // can no longer receive template fixes.
+  icon_url: string;
   readme: string;
   source: Repository;
   version: string;
@@ -39,14 +42,18 @@ export type Organization = {
   type: "organization";
   name: string;
   id: Lowercase<string>;
-  URL?: string;
+  // Always present ("" when unknown) for the same legacy strict_variables
+  // reason as Extension.icon_url.
+  URL: string;
 };
 
 export type User = {
   type: "user";
   name: string;
   id: Lowercase<string>;
-  URL?: string;
+  // Always present ("" when unknown) for the same legacy strict_variables
+  // reason as Extension.icon_url.
+  URL: string;
 };
 
 export type Release = {
