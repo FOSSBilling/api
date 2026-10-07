@@ -13,6 +13,7 @@ import {
   resetExtensionsDb,
   ensureUser,
   insertDeveloper,
+  getDeveloper,
   insertExtension
 } from "./db-fixtures";
 
@@ -230,6 +231,15 @@ export async function post(
   );
   await waitOnExecutionContext(ctx);
   return res;
+}
+
+export async function developerApproval(id: string, expectedRevision: number) {
+  const profile = await getDeveloper(db, id);
+  if (!profile) throw new Error(`Missing developer fixture: ${id}`);
+  return {
+    expected_revision: expectedRevision,
+    expected_generation: profile.profile_generation
+  };
 }
 
 export async function get(path: string, headers: Record<string, string>) {

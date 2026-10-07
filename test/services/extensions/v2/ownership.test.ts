@@ -4,6 +4,7 @@ import { request as ghRequest } from "@octokit/request";
 import { wrapD1WithHook } from "./db-interceptor";
 import {
   setupExtensionsV2Tests,
+  developerApproval,
   db,
   authHeaders,
   post,
@@ -87,7 +88,7 @@ describe("Extensions API v2", () => {
       await post(
         "/extensions/v2/developers/dev-developer/approve",
         await authHeaders("mod-1"),
-        { expected_revision: 1 }
+        await developerApproval("dev-developer", 1)
       );
 
       const initiate = await post(

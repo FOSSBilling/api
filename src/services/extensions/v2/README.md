@@ -271,6 +271,27 @@ one attempt before the unique index decides the winner. Deploy migration
 The aggregate budget covers claims only and leaves shared GitHub capacity for
 other workflows; it is not a budget for every GitHub consumer.
 
+### Developer profile approval
+
+Every meaningful profile edit clears manual approval, including edits by
+GitHub-verified owners. Identical submissions preserve it. GitHub identity and
+website verification remain separate signals. Profile reads, embedded extension
+developers, and the review queue require an approval for the current revision.
+
+Owner and moderator reads include `profile_generation` (a 32-character lowercase
+hexadecimal token) and `content_revision`; anonymous reads omit both.
+`POST /developers/{id}/approve` requires
+`{ "expected_generation": "<profile_generation>", "expected_revision": 1 }`.
+Send both values from the profile actually reviewed. Changed or recreated
+profiles return 409; missing or invalid tokens return 422. Each creation gets a
+fresh generation token, including reused developer ids.
+
+Apply migration `0027_bind_developer_profile_generation.sql` and deploy the API
+and updated moderation client before resuming moderation. Older approval requests
+are rejected. The migration clears existing manual approvals for fresh review
+because the previous rules could preserve them across unreviewed edits. GitHub
+verification is retained.
+
 ### Profile write budget
 
 `PUT /developers/me` permits 20 successful profile writes per account in a

@@ -4,6 +4,7 @@ import { wrapD1WithHook } from "./db-interceptor";
 import { ExtensionRevisionSchema } from "../../../../src/services/extensions/v2/schemas/revisions";
 import {
   setupExtensionsV2Tests,
+  developerApproval,
   db,
   authHeaders,
   post,
@@ -1209,14 +1210,14 @@ describe("Extensions API v2", () => {
       const stale = await post(
         "/extensions/v2/developers/dev-developer/approve",
         await authHeaders("mod-1"),
-        { expected_revision: 1 }
+        await developerApproval("dev-developer", 1)
       );
       expect(stale.status).toBe(409);
 
       const current = await post(
         "/extensions/v2/developers/dev-developer/approve",
         await authHeaders("mod-1"),
-        { expected_revision: 2 }
+        await developerApproval("dev-developer", 2)
       );
       expect(current.status).toBe(200);
     });
@@ -1238,7 +1239,7 @@ describe("Extensions API v2", () => {
       const res = await post(
         "/extensions/v2/developers/dev-developer/approve",
         await authHeaders("mod-1"),
-        { expected_revision: 999 }
+        await developerApproval("dev-developer", 999)
       );
       env.DB_EXTENSIONS = db;
 
@@ -1274,7 +1275,7 @@ describe("Extensions API v2", () => {
       const res = await post(
         "/extensions/v2/developers/dev-developer/approve",
         await authHeaders("mod-1"),
-        { expected_revision: 1 }
+        await developerApproval("dev-developer", 1)
       );
       env.DB_EXTENSIONS = db;
 
@@ -1297,7 +1298,7 @@ describe("Extensions API v2", () => {
       const approve = await post(
         "/extensions/v2/developers/dev-developer/approve",
         await authHeaders("mod-1"),
-        { expected_revision: 1 }
+        await developerApproval("dev-developer", 1)
       );
       expect(approve.status).toBe(200);
       const approveBody = (await approve.json()) as {
@@ -1328,7 +1329,7 @@ describe("Extensions API v2", () => {
       const res = await post(
         "/extensions/v2/developers/no-such-developer/approve",
         await authHeaders("mod-1"),
-        { expected_revision: 1 }
+        { expected_revision: 1, expected_generation: "0".repeat(32) }
       );
       expect(res.status).toBe(404);
     });
@@ -1356,7 +1357,7 @@ describe("Extensions API v2", () => {
       await post(
         "/extensions/v2/developers/dev-developer/approve",
         await authHeaders("mod-1"),
-        { expected_revision: 1 }
+        await developerApproval("dev-developer", 1)
       );
 
       const res = await get(
@@ -1469,7 +1470,7 @@ describe("Extensions API v2", () => {
       const res = await post(
         "/extensions/v2/developers/dev-developer/approve",
         await authHeaders("user-1"),
-        { expected_revision: 1 }
+        await developerApproval("dev-developer", 1)
       );
       expect(res.status).toBe(403);
     });

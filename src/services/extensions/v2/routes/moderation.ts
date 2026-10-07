@@ -484,7 +484,9 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
       },
       404: errorResponse("No developer with that id"),
       409: errorResponse("Profile changed after the reviewed revision"),
-      422: errorResponse("id param or notify query failed validation"),
+      422: errorResponse(
+        "id param, approval body, or notify query failed validation"
+      ),
       500: errorResponse("Database error")
     }
   });
@@ -492,13 +494,14 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
   app.openapi(approveDeveloperRoute, async (c) => {
     const auth = getAuth(c);
     const { id } = c.req.valid("param");
-    const { expected_revision } = c.req.valid("json");
+    const { expected_revision, expected_generation } = c.req.valid("json");
     const query = c.req.valid("query");
     const extDb = getExtensionsDb(c.env.DB_EXTENSIONS);
     const db = new DeveloperProfilesDatabase(extDb);
     const { data, error } = await db.approve(
       id,
       expected_revision,
+      expected_generation,
       auth.userId
     );
     if (error || !data) {

@@ -14,6 +14,7 @@ import {
 } from "./errors";
 import { UsersDatabase } from "./users";
 import { toD1Statement } from "./batch";
+import { developerIsApproved } from "./developer-approval";
 import { encodeCursor as encode, decodeCursor as decode } from "./cursor";
 import {
   Extension,
@@ -41,6 +42,8 @@ const DEVELOPER_COLUMNS = {
   developerUrl: developers.url,
   developerAvatarUrl: developers.avatarUrl,
   developerApprovedAt: developers.approvedAt,
+  developerApprovedRevision: developers.approvedRevision,
+  developerContentRevision: developers.contentRevision,
   developerOwnerUserId: developers.ownerUserId
 };
 
@@ -231,6 +234,8 @@ interface DeveloperRow {
   developerUrl: string | null;
   developerAvatarUrl: string | null;
   developerApprovedAt: string | null;
+  developerApprovedRevision: number | null;
+  developerContentRevision: number;
   developerOwnerUserId: string | null;
 }
 
@@ -1243,7 +1248,11 @@ function parseDeveloper(row: DeveloperRow): PublicDeveloper {
     name: row.developerName,
     URL: row.developerUrl ?? undefined,
     avatar_url: row.developerAvatarUrl ?? undefined,
-    approved: row.developerApprovedAt !== null,
+    approved: developerIsApproved({
+      approvedAt: row.developerApprovedAt,
+      approvedRevision: row.developerApprovedRevision,
+      contentRevision: row.developerContentRevision
+    }),
     unclaimed: row.developerOwnerUserId === null
   };
 }
