@@ -1,0 +1,22 @@
+name: Production smoke check
+
+# The October 2026 catalogue outage was worker code deployed without its D1
+# migration: every public list read returned 500 DATABASE_ERROR. Deploys run
+# through Workers Builds, so no repo-side step can gate them — this hits the
+# exact read path hourly so a recurrence is caught quickly either way.
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  catalogue:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Public extension list returns rows
+        run: |
+          body=$(curl -sS --fail-with-body "https://api.fossbilling.net/extensions/v2/extensions?limit=1" -H "Accept: application/json")
+          echo "$body" | jq -e '.result | type == "array"' > /dev/null
