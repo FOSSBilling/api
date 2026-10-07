@@ -217,12 +217,16 @@ function parseExtensionRow(row: ExtensionRow): Extension {
       type: row.authorType as "organization" | "user",
       name: row.authorName,
       id: row.developerId as Lowercase<string>,
-      URL: row.authorUrl ?? undefined
+      // Legacy FOSSBilling templates render with strict_variables, where a
+      // missing key throws (e.g. `{% if extension.icon_url %}` on 0.8.x).
+      // Always emit the key with a blank value so old installs fall into
+      // their existing fallback branches instead of crashing.
+      URL: row.authorUrl ?? ""
     } as Author,
     releases: sortReleasesDescending(releases),
     website: row.website,
     license: parseJSON(row.license, { name: "" }),
-    icon_url: row.iconUrl ?? undefined,
+    icon_url: row.iconUrl ?? "",
     readme: row.readme,
     source: parseJSON<Repository>(row.source, { type: "custom", repo: "" }),
     version: row.version,

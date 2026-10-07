@@ -281,6 +281,50 @@ describe("Extensions API v1", () => {
       expect(example).toBeTruthy();
       expect(example!.releases[0].tag).toBe("0.0.5");
     });
+
+    // Legacy FOSSBilling installs (0.8.x) render the catalogue with
+    // strict_variables, where a missing key throws and crashes the whole
+    // Extensions page (issue FOSSBilling/FOSSBilling#4486). The keys must
+    // always be present ("" when unknown) so old templates fall into their
+    // fallback branches. Assert on the raw body: JSON.stringify silently
+    // drops undefined values, which is the exact mechanism that omitted
+    // the keys.
+    it("should always include icon_url and author URL keys", async () => {
+      const db = getExtensionsDb(env.DB_EXTENSIONS);
+      await db.insert(developers).values({
+        id: "nourl",
+        type: "user",
+        name: "No URL",
+        url: null
+      });
+      await db.insert(extensions).values({
+        ...testExtensionRows[1],
+        id: "NoIcon",
+        developerId: "nourl",
+        iconUrl: null,
+        publishedAt: "2026-01-01T00:00:00.000Z"
+      });
+
+      const ctx = createExecutionContext();
+      const res = await app.request("/extensions/v1/list", {}, env, ctx);
+      await waitOnExecutionContext(ctx);
+
+      expect(res.status).toBe(200);
+      const body = await res.text();
+      const data = JSON.parse(body) as {
+        result: Array<{
+          id: string;
+          icon_url: string;
+          author: { URL: string };
+        }>;
+      };
+      const entry = data.result.find((e) => e.id === "NoIcon");
+      expect(entry).toBeTruthy();
+      expect("icon_url" in entry!).toBe(true);
+      expect(entry!.icon_url).toBe("");
+      expect("URL" in entry!.author).toBe(true);
+      expect(entry!.author.URL).toBe("");
+    });
   });
 
   describe("GET /:id", () => {
