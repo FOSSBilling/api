@@ -17,18 +17,12 @@ import {
   CentralAlertsResponse,
   MockGitHubGraphQL,
   MockGitHubRequest,
-  VersionsResponse
+  VersionInfo
 } from "../utils/test-types";
 
-vi.mock("@octokit/request", () => {
-  const endpoint = { DEFAULTS: {} };
-  const derivedFn = Object.assign(vi.fn(), { defaults: vi.fn(), endpoint });
-  const request = Object.assign(vi.fn(), {
-    defaults: vi.fn().mockReturnValue(derivedFn),
-    endpoint
-  });
-  return { request };
-});
+vi.mock("@octokit/request", async () =>
+  (await import("../mocks/octokit")).octokitRequestMock()
+);
 
 vi.mock("@octokit/graphql", () => ({
   graphql: vi.fn()
@@ -91,12 +85,30 @@ describe("FOSSBilling API Worker - Full App Integration", () => {
       expect(alertsResponse.status).toBe(200);
       expect(statsResponse.status).toBe(200);
 
-      const versionsData = (await versionsResponse.json()) as VersionsResponse;
+      const versionsData = (await versionsResponse.json()) as ApiResponse<
+        Record<string, VersionInfo>
+      >;
       const alertsData = (await alertsResponse.json()) as CentralAlertsResponse;
 
       expect(versionsData).toHaveProperty("result");
       expect(versionsData).toHaveProperty("error_code", 0);
       expect(alertsData).toHaveProperty("result");
+      expect(alertsData.result.alerts.length).toBeGreaterThan(0);
+    });
+
+    it("resolves the latest release through the full middleware stack", async () => {
+      const ctx = createExecutionContext();
+      const response = await app.request(
+        "/versions/v1/latest",
+        { headers: BYPASS_CACHE },
+        env,
+        ctx
+      );
+      await waitOnExecutionContext(ctx);
+
+      expect(response.status).toBe(200);
+      const data = (await response.json()) as ApiResponse<VersionInfo | null>;
+      expect(data.result?.version).toBe("0.6.0");
     });
 
     it("should return 404 for unknown routes", async () => {

@@ -18,19 +18,12 @@ import {
   MockGitHubGraphQL,
   MockGitHubRequest,
   ApiResponse,
-  VersionsResponse,
-  VersionResponse
+  VersionInfo
 } from "../../../utils/test-types";
 
-vi.mock("@octokit/request", () => {
-  const endpoint = { DEFAULTS: {} };
-  const derivedFn = Object.assign(vi.fn(), { defaults: vi.fn(), endpoint });
-  const request = Object.assign(vi.fn(), {
-    defaults: vi.fn().mockReturnValue(derivedFn),
-    endpoint
-  });
-  return { request };
-});
+vi.mock("@octokit/request", async () =>
+  (await import("../../../mocks/octokit")).octokitRequestMock()
+);
 
 vi.mock("@octokit/graphql", () => ({
   graphql: vi.fn()
@@ -282,7 +275,9 @@ describe("Versions API v1 - Error Handling", () => {
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);
-      const data = (await response.json()) as VersionsResponse;
+      const data = (await response.json()) as ApiResponse<
+        Record<string, VersionInfo>
+      >;
       expect(data.error_code).toBe(0);
       expect(data.result["1.0.0"]).toBeDefined();
       expect(data.stale).toBe(false);
@@ -486,7 +481,9 @@ describe("Versions API v1 - Error Handling", () => {
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);
-      const data = (await response.json()) as VersionsResponse;
+      const data = (await response.json()) as ApiResponse<
+        Record<string, VersionInfo>
+      >;
       expect(data.result["not-a-version"]).toBeUndefined();
     });
   });
@@ -528,7 +525,9 @@ describe("Versions API v1 - Error Handling", () => {
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);
-      const data = (await response.json()) as VersionsResponse;
+      const data = (await response.json()) as ApiResponse<
+        Record<string, VersionInfo>
+      >;
       if (data.result["1.0.0"]) {
         expect(data.result["1.0.0"].changelog).toBe("");
       }
@@ -590,7 +589,7 @@ describe("Versions API v1 - Error Handling", () => {
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);
-      const data = (await response.json()) as VersionResponse;
+      const data = (await response.json()) as ApiResponse<VersionInfo>;
       if (data.result) {
         expect(data.result.minimum_php_version).toBe("");
       }
@@ -611,7 +610,7 @@ describe("Versions API v1 - Error Handling", () => {
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);
-      const data = (await response.json()) as VersionResponse;
+      const data = (await response.json()) as ApiResponse<VersionInfo>;
       if (data.result) {
         expect(data.result.minimum_php_version).toBe("");
       }
@@ -632,7 +631,7 @@ describe("Versions API v1 - Error Handling", () => {
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);
-      const data = (await response.json()) as VersionResponse;
+      const data = (await response.json()) as ApiResponse<VersionInfo>;
       if (data.result) {
         expect(data.result.minimum_php_version).toBe("");
       }

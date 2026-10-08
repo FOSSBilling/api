@@ -25,54 +25,6 @@ export interface CentralAlertsResponse {
   error: null;
 }
 
-export interface VersionsResponse {
-  result: Record<string, VersionInfo>;
-  error_code: number;
-  message: string | null;
-  details?: {
-    http_status?: number;
-    error_code?: string;
-  };
-  stale?: boolean;
-  warning?: string | null;
-}
-
-export interface VersionResponse {
-  result: VersionInfo;
-  error_code: number;
-  message: string | null;
-  details?: {
-    http_status?: number;
-    error_code?: string;
-  };
-  stale?: boolean;
-  warning?: string | null;
-}
-
-export interface ChangelogResponse {
-  result: string;
-  error_code: number;
-  message: string | null;
-  details?: {
-    http_status?: number;
-    error_code?: string;
-  };
-  stale?: boolean;
-  warning?: string | null;
-}
-
-export interface UpdateResponse {
-  result: string;
-  error_code: number;
-  message: string | null;
-  details?: {
-    http_status?: number;
-    error_code?: string;
-  };
-  stale?: boolean;
-  warning?: string | null;
-}
-
 // Version and Release Types
 export interface VersionInfo {
   version: string;

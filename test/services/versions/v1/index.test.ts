@@ -20,27 +20,18 @@ import {
 } from "../../../utils/mock-helpers";
 import {
   ApiResponse,
-  ChangelogResponse,
   MockGitHubGraphQL,
   MockGitHubRequest,
-  UpdateResponse,
-  VersionInfo,
-  VersionsResponse
+  VersionInfo
 } from "../../../utils/test-types";
 
 // Arbitrary credentials must behave like anonymous public requests.
 // Edge entries are cleared between tests to exercise live handlers.
 const PUBLIC_HEADERS = { authorization: "test-bypass-cache" } as const;
 
-vi.mock("@octokit/request", () => {
-  const endpoint = { DEFAULTS: {} };
-  const derivedFn = Object.assign(vi.fn(), { defaults: vi.fn(), endpoint });
-  const request = Object.assign(vi.fn(), {
-    defaults: vi.fn().mockReturnValue(derivedFn),
-    endpoint
-  });
-  return { request };
-});
+vi.mock("@octokit/request", async () =>
+  (await import("../../../mocks/octokit")).octokitRequestMock()
+);
 
 vi.mock("@octokit/graphql", () => ({
   graphql: vi.fn()
@@ -100,7 +91,8 @@ describe("Versions API v1", () => {
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);
-      const data: VersionsResponse = await response.json();
+      const data: ApiResponse<Record<string, VersionInfo>> =
+        await response.json();
 
       expect(data).toHaveProperty("result");
       expect(data).toHaveProperty("error_code", 0);
@@ -121,7 +113,8 @@ describe("Versions API v1", () => {
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);
-      const data: VersionsResponse = await response.json();
+      const data: ApiResponse<Record<string, VersionInfo>> =
+        await response.json();
 
       const versionKeys = Object.keys(data.result);
       expect(versionKeys.length).toBeGreaterThan(1);
@@ -178,7 +171,8 @@ describe("Versions API v1", () => {
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);
-      const data: VersionsResponse = await response.json();
+      const data: ApiResponse<Record<string, VersionInfo>> =
+        await response.json();
       expect(data.result["0.8.0"]).toMatchObject({
         version: "0.8.0",
         download_url:
@@ -216,7 +210,8 @@ describe("Versions API v1", () => {
       await waitOnExecutionContext(ctx2);
 
       expect(response.status).toBe(200);
-      const data: VersionsResponse = await response.json();
+      const data: ApiResponse<Record<string, VersionInfo>> =
+        await response.json();
       expect(Object.keys(data.result)).toContain("0.5.0");
     });
   });
@@ -891,7 +886,7 @@ describe("Versions API v1", () => {
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);
-      const data: ChangelogResponse = await response.json();
+      const data: ApiResponse<string> = await response.json();
 
       expect(data).toHaveProperty("result");
       expect(data).toHaveProperty("error_code", 0);
@@ -910,7 +905,7 @@ describe("Versions API v1", () => {
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);
-      const data: ChangelogResponse = await response.json();
+      const data: ApiResponse<string> = await response.json();
 
       expect(data.result).toBe("");
     });
@@ -926,7 +921,7 @@ describe("Versions API v1", () => {
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(400);
-      const data: ChangelogResponse = await response.json();
+      const data: ApiResponse<string> = await response.json();
 
       expect(data).toHaveProperty("result", null);
       expect(data).toHaveProperty("error_code", 400);
@@ -992,7 +987,7 @@ describe("Versions API v1", () => {
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);
-      const data: UpdateResponse = await response.json();
+      const data: ApiResponse<string> = await response.json();
 
       expect(data).toHaveProperty("result");
       expect(data.result).toContain("Releases cache updated successfully");
@@ -1110,7 +1105,8 @@ describe("Versions API v1", () => {
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(503);
-      const data: VersionsResponse = await response.json();
+      const data: ApiResponse<Record<string, VersionInfo>> =
+        await response.json();
       expect(data.error_code).toBe(503);
       expect(data.message).toContain("Unable to fetch releases");
     });

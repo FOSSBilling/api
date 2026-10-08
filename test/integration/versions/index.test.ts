@@ -16,19 +16,13 @@ import { setupGitHubApiMock } from "../../utils/mock-helpers";
 import {
   MockGitHubGraphQL,
   MockGitHubRequest,
-  VersionsResponse,
-  ApiResponse
+  ApiResponse,
+  VersionInfo
 } from "../../utils/test-types";
 
-vi.mock("@octokit/request", () => {
-  const endpoint = { DEFAULTS: {} };
-  const derivedFn = Object.assign(vi.fn(), { defaults: vi.fn(), endpoint });
-  const request = Object.assign(vi.fn(), {
-    defaults: vi.fn().mockReturnValue(derivedFn),
-    endpoint
-  });
-  return { request };
-});
+vi.mock("@octokit/request", async () =>
+  (await import("../../mocks/octokit")).octokitRequestMock()
+);
 
 vi.mock("@octokit/graphql", () => ({
   graphql: vi.fn()
@@ -68,7 +62,8 @@ describe("Versions API v1 - Integration Tests", () => {
       await waitOnExecutionContext(ctx1);
 
       expect(response1.status).toBe(200);
-      const data1: VersionsResponse = await response1.json();
+      const data1: ApiResponse<Record<string, VersionInfo>> =
+        await response1.json();
       expect(Object.keys(data1.result).length).toBeGreaterThan(0);
 
       const cached = await env.CACHE_KV.get("gh-fossbilling-releases");
@@ -84,7 +79,8 @@ describe("Versions API v1 - Integration Tests", () => {
       await waitOnExecutionContext(ctx2);
 
       expect(response2.status).toBe(200);
-      const data2: VersionsResponse = await response2.json();
+      const data2: ApiResponse<Record<string, VersionInfo>> =
+        await response2.json();
       expect(data1).toEqual(data2);
     });
 
@@ -133,7 +129,8 @@ describe("Versions API v1 - Integration Tests", () => {
         ctx1
       );
       await waitOnExecutionContext(ctx1);
-      const allVersions: VersionsResponse = await response1.json();
+      const allVersions: ApiResponse<Record<string, VersionInfo>> =
+        await response1.json();
 
       const ctx2 = createExecutionContext();
       const response2 = await app.request(
@@ -143,7 +140,9 @@ describe("Versions API v1 - Integration Tests", () => {
         ctx2
       );
       await waitOnExecutionContext(ctx2);
-      const latest = (await response2.json()) as VersionsResponse;
+      const latest = (await response2.json()) as ApiResponse<
+        Record<string, VersionInfo>
+      >;
 
       const ctx3 = createExecutionContext();
       const response3 = await app.request(
@@ -153,7 +152,9 @@ describe("Versions API v1 - Integration Tests", () => {
         ctx3
       );
       await waitOnExecutionContext(ctx3);
-      const specific = (await response3.json()) as VersionsResponse;
+      const specific = (await response3.json()) as ApiResponse<
+        Record<string, VersionInfo>
+      >;
 
       expect(latest.result).toEqual(allVersions.result["0.6.0"]);
       expect(specific.result).toEqual(allVersions.result["0.6.0"]);
@@ -292,7 +293,8 @@ describe("Versions API v1 - Integration Tests", () => {
       await waitOnExecutionContext(ctx2);
 
       expect(response2.status).toBe(200);
-      const data: VersionsResponse = await response2.json();
+      const data: ApiResponse<Record<string, VersionInfo>> =
+        await response2.json();
       expect(Object.keys(data.result).length).toBeGreaterThan(0);
     });
 
@@ -343,7 +345,8 @@ describe("Versions API v1 - Integration Tests", () => {
       expect(response.status).toBe(200);
       expect(response.headers.get("Access-Control-Allow-Origin")).toBe("*");
 
-      const data: VersionsResponse = await response.json();
+      const data: ApiResponse<Record<string, VersionInfo>> =
+        await response.json();
       expect(data).toHaveProperty("result");
       expect(data).toHaveProperty("error_code", 0);
       expect(data).toHaveProperty("message", null);

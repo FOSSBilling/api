@@ -23,27 +23,11 @@ import type { StatsData } from "../../../../src/services/stats/v1/interfaces";
 
 import { request as ghRequest } from "@octokit/request";
 import { graphql } from "@octokit/graphql";
+import { ApiResponse } from "../../../utils/test-types";
 
-interface StatsApiResponse {
-  result: StatsData | null;
-  error_code: number;
-  message: string | null;
-  stale?: boolean;
-  details?: {
-    http_status?: number;
-    error_code?: string;
-  };
-}
-
-vi.mock("@octokit/request", () => {
-  const endpoint = { DEFAULTS: {} };
-  const derivedFn = Object.assign(vi.fn(), { defaults: vi.fn(), endpoint });
-  const request = Object.assign(vi.fn(), {
-    defaults: vi.fn().mockReturnValue(derivedFn),
-    endpoint
-  });
-  return { request };
-});
+vi.mock("@octokit/request", async () =>
+  (await import("../../../mocks/octokit")).octokitRequestMock()
+);
 
 vi.mock("@octokit/graphql", () => ({
   graphql: vi.fn()
@@ -129,7 +113,7 @@ describe("Stats API v1", () => {
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);
-      const data = (await response.json()) as StatsApiResponse;
+      const data = (await response.json()) as ApiResponse<StatsData | null>;
 
       expect(data).toHaveProperty("result");
       expect(data).toHaveProperty("error_code", 0);
@@ -184,7 +168,7 @@ describe("Stats API v1", () => {
       await waitOnExecutionContext(ctx1);
 
       expect(response1.status).toBe(200);
-      const data1 = (await response1.json()) as StatsApiResponse;
+      const data1 = (await response1.json()) as ApiResponse<StatsData | null>;
 
       const ctx2 = createExecutionContext();
       const response2 = await app.fetch(
@@ -195,7 +179,7 @@ describe("Stats API v1", () => {
       await waitOnExecutionContext(ctx2);
 
       expect(response2.status).toBe(200);
-      const data2 = (await response2.json()) as StatsApiResponse;
+      const data2 = (await response2.json()) as ApiResponse<StatsData | null>;
 
       expect(data1.result).toEqual(data2.result);
       expect(data2.stale).toBe(false);
@@ -220,7 +204,7 @@ describe("Stats API v1", () => {
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);
-      const data = (await response.json()) as StatsApiResponse;
+      const data = (await response.json()) as ApiResponse<StatsData | null>;
 
       expect(data.result).not.toBeNull();
       expect(data.result).toEqual(
@@ -291,7 +275,7 @@ describe("Stats API v1", () => {
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);
-      const data = (await response.json()) as StatsApiResponse;
+      const data = (await response.json()) as ApiResponse<StatsData | null>;
 
       expect(data.result).not.toBeNull();
       if (!data.result) {
