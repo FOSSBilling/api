@@ -52,6 +52,30 @@ export const ActiveAccountRequiredResponse = errorResponse(
   "The bearer is valid but the account is inactive"
 );
 
+// The 403 wording shared by the moderator routes: the same middleware check,
+// but the answer distinguishes a deactivated account from a non-moderator.
+export const ModeratorForbiddenResponse = errorResponse(
+  "The account is inactive or the caller is not a moderator"
+);
+
+// The bearer-auth error entries shared by every authenticated route:
+// `401` is constant, `403` is the active-account shape with a per-route
+// description. Spread into a route's responses map:
+//   ...authErrorResponses(ModeratorForbiddenResponse)
+//
+// The plain return is deliberate — do NOT add `as const`. zod-openapi
+// derives a handler's permitted statuses from the literal numeric keys of
+// the responses map; `as const` widens those keys to string literals and
+// silently drops 401/403 from the handler's typed response union.
+export function authErrorResponses(
+  forbidden: ReturnType<typeof errorResponse> = ActiveAccountRequiredResponse
+) {
+  return {
+    401: errorResponse("Missing or invalid bearer token"),
+    403: forbidden
+  };
+}
+
 export const IdParamSchema = z.object({
   id: z.string().openapi({
     param: { name: "id", in: "path" },

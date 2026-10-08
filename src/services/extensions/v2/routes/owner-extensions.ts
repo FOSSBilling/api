@@ -17,6 +17,7 @@ import {
   ActiveAccountRequiredResponse,
   IdParamSchema,
   PaginationSchema,
+  authErrorResponses,
   errorResponse
 } from "../schemas/common";
 import {
@@ -90,7 +91,7 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
         description:
           "Extension created. It holds the id immediately but stays out of the public catalogue until a moderator approves the revision."
       },
-      401: errorResponse("Missing or invalid bearer token"),
+      ...authErrorResponses(),
       403: {
         ...ActiveAccountRequiredResponse,
         description:
@@ -178,7 +179,7 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
         description:
           "Edit accepted as a pending revision. The published content is unchanged until a moderator approves it."
       },
-      401: errorResponse("Missing or invalid bearer token"),
+      ...authErrorResponses(),
       403: {
         ...ActiveAccountRequiredResponse,
         description:
@@ -242,7 +243,7 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
         },
         description: "Extension and its revisions deleted, and the id released"
       },
-      401: errorResponse("Missing or invalid bearer token"),
+      ...authErrorResponses(),
       403: {
         ...ActiveAccountRequiredResponse,
         description:
@@ -290,7 +291,7 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
         description:
           "Every version proposed for this extension, with its review outcome"
       },
-      401: errorResponse("Missing or invalid bearer token"),
+      ...authErrorResponses(),
       403: {
         ...ActiveAccountRequiredResponse,
         description:
@@ -358,7 +359,7 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
         description:
           "One revision with its review outcome; content is null when compacted"
       },
-      401: errorResponse("Missing or invalid bearer token"),
+      ...authErrorResponses(),
       403: {
         ...ActiveAccountRequiredResponse,
         description:

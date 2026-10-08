@@ -11,10 +11,11 @@ import {
   statusFromWriteErrorCode
 } from "./errors";
 import {
-  ActiveAccountRequiredResponse,
+  authErrorResponses,
   CursorPaginationQuerySchema,
   DelistReasonSchema,
   IdParamSchema,
+  ModeratorForbiddenResponse,
   NotifiedSchema,
   NotifyQuerySchema,
   PaginationSchema,
@@ -70,11 +71,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
         description:
           "Revision approved and published as the extension's live content"
       },
-      401: errorResponse("Missing or invalid bearer token"),
-      403: {
-        ...ActiveAccountRequiredResponse,
-        description: "The account is inactive or the caller is not a moderator"
-      },
+      ...authErrorResponses(ModeratorForbiddenResponse),
       404: errorResponse("No such revision on that extension"),
       409: errorResponse(
         "Revision is not pending, or ownership has changed since it was proposed"
@@ -143,11 +140,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
         description:
           "Revision rejected. The extension's published content is unchanged."
       },
-      401: errorResponse("Missing or invalid bearer token"),
-      403: {
-        ...ActiveAccountRequiredResponse,
-        description: "The account is inactive or the caller is not a moderator"
-      },
+      ...authErrorResponses(ModeratorForbiddenResponse),
       404: errorResponse("No such revision on that extension"),
       409: errorResponse("Revision is not pending"),
       422: errorResponse("review_note body or notify query failed validation"),
@@ -215,11 +208,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
           "Extension removed from the public catalogue. Its content and " +
           "history are kept, and its owner can still see and edit it."
       },
-      401: errorResponse("Missing or invalid bearer token"),
-      403: {
-        ...ActiveAccountRequiredResponse,
-        description: "The account is inactive or the caller is not a moderator"
-      },
+      ...authErrorResponses(ModeratorForbiddenResponse),
       404: errorResponse("No such extension"),
       409: errorResponse("Extension is not published, or is already delisted"),
       422: errorResponse(
@@ -282,11 +271,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
         description:
           "Extension restored to the public catalogue. Content and history unchanged."
       },
-      401: errorResponse("Missing or invalid bearer token"),
-      403: {
-        ...ActiveAccountRequiredResponse,
-        description: "The account is inactive or the caller is not a moderator"
-      },
+      ...authErrorResponses(ModeratorForbiddenResponse),
       404: errorResponse("No such extension"),
       409: errorResponse("Extension is not delisted, or was never published"),
       422: errorResponse(
@@ -361,11 +346,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
         description:
           "Content corrected and published. Recorded as an approved moderator revision; no author email is sent."
       },
-      401: errorResponse("Missing or invalid bearer token"),
-      403: {
-        ...ActiveAccountRequiredResponse,
-        description: "The account is inactive or the caller is not a moderator"
-      },
+      ...authErrorResponses(ModeratorForbiddenResponse),
       404: errorResponse("No such extension"),
       409: errorResponse(
         "Extension is unpublished or delisted, or an edit is already awaiting review"
@@ -442,11 +423,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
         },
         description: "Developer profile marked approved"
       },
-      401: errorResponse("Missing or invalid bearer token"),
-      403: {
-        ...ActiveAccountRequiredResponse,
-        description: "The account is inactive or the caller is not a moderator"
-      },
+      ...authErrorResponses(ModeratorForbiddenResponse),
       404: errorResponse("No developer with that id"),
       409: errorResponse("Profile changed after the reviewed revision"),
       422: errorResponse(
@@ -500,11 +477,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
         },
         description: "Snapshots of the profile, newest first"
       },
-      401: errorResponse("Missing or invalid bearer token"),
-      403: {
-        ...ActiveAccountRequiredResponse,
-        description: "The account is inactive or the caller is not a moderator"
-      },
+      ...authErrorResponses(ModeratorForbiddenResponse),
       422: errorResponse("id param, limit, or cursor query failed validation"),
       500: errorResponse("Database error")
     }
@@ -559,11 +532,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
         },
         description: "Pending/decided totals per queue"
       },
-      401: errorResponse("Missing or invalid bearer token"),
-      403: {
-        ...ActiveAccountRequiredResponse,
-        description: "The account is inactive or the caller is not a moderator"
-      },
+      ...authErrorResponses(ModeratorForbiddenResponse),
       500: errorResponse("Database error")
     }
   });

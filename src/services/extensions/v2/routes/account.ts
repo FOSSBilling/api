@@ -5,6 +5,7 @@ import { createRoute, z } from "@hono/zod-openapi";
 import { errorBody, statusFromErrorCode } from "./errors";
 import {
   ActiveAccountRequiredResponse,
+  authErrorResponses,
   errorResponse
 } from "../schemas/common";
 import {
@@ -50,7 +51,7 @@ export function registerAccountRoutes(app: ExtensionsV2App): void {
         description: "Identity projection synchronized"
       },
       400: errorResponse("Request body could not be read"),
-      401: errorResponse("Missing or invalid bearer token"),
+      ...authErrorResponses(),
       403: {
         ...ActiveAccountRequiredResponse,
         description: "Identity synchronization requires a trusted assertion"
@@ -144,8 +145,7 @@ export function registerAccountRoutes(app: ExtensionsV2App): void {
         },
         description: "Profile updated (full account projection)"
       },
-      401: errorResponse("Missing or invalid bearer token"),
-      403: ActiveAccountRequiredResponse,
+      ...authErrorResponses(),
       404: errorResponse("Account does not exist or has been deleted"),
       500: errorResponse("Database error")
     }

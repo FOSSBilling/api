@@ -14,10 +14,12 @@ import {
 import {
   ActiveAccountRequiredResponse,
   IdParamSchema,
+  ModeratorForbiddenResponse,
   NotifiedSchema,
   NotifyQuerySchema,
   PaginationSchema,
   ReviewNoteRequiredSchema,
+  authErrorResponses,
   errorResponse
 } from "../schemas/common";
 import { DeveloperProfileSchema } from "../schemas/developers";
@@ -58,7 +60,7 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
         },
         description: "Claim created and pending moderator review"
       },
-      401: errorResponse("Missing or invalid bearer token"),
+      ...authErrorResponses(),
       404: errorResponse("No developer with that id"),
       403: {
         ...ActiveAccountRequiredResponse,
@@ -126,8 +128,7 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
         },
         description: "Claim withdrawn"
       },
-      401: errorResponse("Missing or invalid bearer token"),
-      403: ActiveAccountRequiredResponse,
+      ...authErrorResponses(),
       404: errorResponse("No pending claim with that id owned by the caller"),
       422: errorResponse("id param failed validation"),
       500: errorResponse("Database error")
@@ -170,8 +171,7 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
         description:
           "Enriched claims with developer and claimant names in both scopes"
       },
-      401: errorResponse("Missing or invalid bearer token"),
-      403: ActiveAccountRequiredResponse,
+      ...authErrorResponses(),
       422: errorResponse(
         "scope, status, limit, or cursor query failed validation"
       ),
@@ -280,11 +280,7 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
         description:
           "Claim approved; profile ownership transferred to the claimant"
       },
-      401: errorResponse("Missing or invalid bearer token"),
-      403: {
-        ...ActiveAccountRequiredResponse,
-        description: "The account is inactive or the caller is not a moderator"
-      },
+      ...authErrorResponses(ModeratorForbiddenResponse),
       404: errorResponse("No claim or developer with that id"),
       409: errorResponse(
         "Claim is no longer pending, profile is no longer unowned, or the claimant now owns a different profile"
@@ -347,11 +343,7 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
         },
         description: "Claim rejected"
       },
-      401: errorResponse("Missing or invalid bearer token"),
-      403: {
-        ...ActiveAccountRequiredResponse,
-        description: "The account is inactive or the caller is not a moderator"
-      },
+      ...authErrorResponses(ModeratorForbiddenResponse),
       404: errorResponse("No pending claim with that id"),
       422: errorResponse(
         "id param, review_note body, or notify query failed validation"
@@ -404,7 +396,7 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
         description:
           "Transfer token created; share it out-of-band with the recipient"
       },
-      401: errorResponse("Missing or invalid bearer token"),
+      ...authErrorResponses(),
       403: {
         ...ActiveAccountRequiredResponse,
         description:
@@ -452,7 +444,7 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
         },
         description: "Any pending transfer for this profile is revoked"
       },
-      401: errorResponse("Missing or invalid bearer token"),
+      ...authErrorResponses(),
       403: {
         ...ActiveAccountRequiredResponse,
         description:
@@ -502,8 +494,7 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
         },
         description: "Profile is now owned by the caller"
       },
-      401: errorResponse("Missing or invalid bearer token"),
-      403: ActiveAccountRequiredResponse,
+      ...authErrorResponses(),
       404: errorResponse("Transfer link is invalid, already used, or expired"),
       409: errorResponse("Caller already owns a different developer profile"),
       422: errorResponse("token body failed validation"),

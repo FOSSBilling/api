@@ -18,7 +18,9 @@ import {
 import {
   ActiveAccountRequiredResponse,
   IdParamSchema,
+  ModeratorForbiddenResponse,
   PaginationSchema,
+  authErrorResponses,
   errorResponse
 } from "../schemas/common";
 import {
@@ -57,11 +59,7 @@ export function registerDeveloperProfileRoutes(app: ExtensionsV2App): void {
         },
         description: "Developer profiles matching the scope filter"
       },
-      401: errorResponse("Missing or invalid bearer token"),
-      403: {
-        ...ActiveAccountRequiredResponse,
-        description: "The account is inactive or the caller is not a moderator"
-      },
+      ...authErrorResponses(ModeratorForbiddenResponse),
       422: errorResponse(
         "scope, status, limit, or cursor query failed validation"
       ),
@@ -116,8 +114,7 @@ export function registerDeveloperProfileRoutes(app: ExtensionsV2App): void {
         },
         description: "The caller's profile, or null when none exists"
       },
-      401: errorResponse("Missing or invalid bearer token"),
-      403: ActiveAccountRequiredResponse,
+      ...authErrorResponses(),
       500: errorResponse("Database error")
     }
   });
@@ -167,7 +164,7 @@ export function registerDeveloperProfileRoutes(app: ExtensionsV2App): void {
         description:
           "Developer profile created or updated and usable immediately"
       },
-      401: errorResponse("Missing or invalid bearer token"),
+      ...authErrorResponses(),
       403: {
         ...ActiveAccountRequiredResponse,
         description:
@@ -255,8 +252,7 @@ export function registerDeveloperProfileRoutes(app: ExtensionsV2App): void {
         },
         description: "Profile deleted"
       },
-      401: errorResponse("Missing or invalid bearer token"),
-      403: ActiveAccountRequiredResponse,
+      ...authErrorResponses(),
       404: errorResponse("Caller has no developer profile"),
       409: errorResponse(
         "Profile still has extensions attached, published or not"
@@ -305,8 +301,7 @@ export function registerDeveloperProfileRoutes(app: ExtensionsV2App): void {
         },
         description: "Verification re-checked (result may be verified or not)"
       },
-      401: errorResponse("Missing or invalid bearer token"),
-      403: ActiveAccountRequiredResponse,
+      ...authErrorResponses(),
       404: errorResponse("Caller has no developer profile"),
       409: errorResponse("Developer ownership changed while re-verifying"),
       429: errorResponse(
