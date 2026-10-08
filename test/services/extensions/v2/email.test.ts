@@ -303,10 +303,15 @@ describe("default fetch binding", () => {
       const viaFactory = createEmailSender(reader(MXROUTE_VARS));
       await expect(viaFactory.send(message)).resolves.toEqual({ ok: true });
 
-      // Each sender hits its own endpoint; send order is not a contract.
-      expect(urls).toContain("https://smtpapi.mxroute.com/");
-      expect(urls).toContain("https://api.resend.com/emails");
-      expect(urls).toHaveLength(3);
+      // Two MXroute sends and one Resend send; order is not a contract,
+      // the per-provider distribution is.
+      expect([...urls].sort()).toEqual(
+        [
+          "https://smtpapi.mxroute.com/",
+          "https://api.resend.com/emails",
+          "https://smtpapi.mxroute.com/"
+        ].sort()
+      );
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -356,7 +361,7 @@ describe("moderation templates", () => {
     expect(message.text).toContain(
       "\u201cSm\u00f6k\u00e9 \u2014 Test\u201d (paygate)"
     );
-    expect(message.html).toMatch(/^[\u0020-\u007E]*$/);
+    expect(message.html).toContain("Sm&#246;k&#233; &#8212; Test");
     expect(message.html).not.toContain("Sm\u00f6k\u00e9");
   });
 
@@ -370,7 +375,9 @@ describe("moderation templates", () => {
     });
     expect(message.subject).toContain("tokyo-dev");
     expect(message.text).toContain("\u201c\u6771\u4eac Dev\u201d (tokyo-dev)");
-    expect(message.html).toMatch(/^[\u0020-\u007E]*$/);
+    expect(message.html).toContain(
+      "&#8220;&#26481;&#20140; Dev&#8221; (tokyo-dev)"
+    );
     expect(message.html).not.toContain("\u6771\u4eac");
   });
 
@@ -383,6 +390,7 @@ describe("moderation templates", () => {
       reason: "Ownership “unverified” — see notes"
     });
     expect(message.html).toMatch(/^[\u0020-\u007E]*$/);
+    expect(message.html).toContain("&#8220;unverified&#8221; &#8212;");
     // The plain-text part (used by Resend, which is UTF-8 clean) keeps
     // readable unicode.
     expect(message.text).toContain("“unverified” — see notes");

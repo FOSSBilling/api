@@ -128,12 +128,24 @@ async function getStats(
   source: "cache" | "fresh" | "stale";
   error?: GitHubError;
 }> {
-  // Only the stats value is pre-read here; getReleases does its own read of
-  // the shared releases blob. (An earlier version parallelized the two reads
-  // and threaded the result through a getReleases parameter; that coupling
-  // was removed - the cost is one extra serialized KV round trip on the rare
-  // cold-cold path only.)
-  const cachedStats = await cache.get(STATS_CACHE_KEY);
+  // Kick off the stats read before getReleases so the two KV reads
+  // (stats value + the shared releases blob getReleases consumes) overlap
+  // on the cold path instead of serializing. A failed stats read degrades
+  // to a cache miss - getReleases' own read is untouched by it.
+  const cachedStatsPromise = cache.get(STATS_CACHE_KEY).catch(() => undefined);
+
+  // getReleases shares its cache with the versions service (same
+  // RELEASE_CACHE_KEY), so a fresh fetch here must still resolve R2
+  // download_url/digest - otherwise a stats-triggered refresh would
+  // overwrite that cache with GitHub-only URLs for up to a day.
+  const result = await getReleases(
+    cache,
+    githubToken,
+    downloadBucket,
+    false,
+    waitUntil
+  );
+  const cachedStats = await cachedStatsPromise;
 
   if (cachedStats) {
     try {
@@ -155,18 +167,6 @@ async function getStats(
       });
     }
   }
-
-  // getReleases shares its cache with the versions service (same
-  // RELEASE_CACHE_KEY), so a fresh fetch here must still resolve R2
-  // download_url/digest - otherwise a stats-triggered refresh would
-  // overwrite that cache with GitHub-only URLs for up to a day.
-  const result = await getReleases(
-    cache,
-    githubToken,
-    downloadBucket,
-    false,
-    waitUntil
-  );
 
   if (hasNoReleases(result.releases) && result.error) {
     return {

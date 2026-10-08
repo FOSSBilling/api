@@ -3,10 +3,11 @@ import { createMemoryCache, createFileCache } from "./cache";
 import { NodeEnvironmentAdapter } from "./environment";
 
 // No database entry here - Drizzle only wraps the real D1 bindings (see
-// src/lib/db.ts). The Node path is the standing proof that IPlatformBindings
-// is implementable off-Cloudflare: the project keeps a portability seam so
-// the API can be lifted onto another serverless platform without rewriting
-// service code. It has no production consumer today by design.
+// src/lib/db.ts). The Node path is the standing proof that the
+// IPlatformBindings seam (KV-shaped caches + string environment) is
+// implementable off-Cloudflare; handlers still reach for platform services
+// (D1, R2, Durable Objects, typed env) directly, so a full port needs
+// service-level changes too. It has no production consumer today by design.
 export function createNodeBindings(cacheDbPath?: string): IPlatformBindings {
   const cacheKv = cacheDbPath
     ? createFileCache(`${normalizePath(cacheDbPath)}.kv`)

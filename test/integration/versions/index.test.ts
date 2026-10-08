@@ -112,9 +112,7 @@ describe("Versions API v1 - Integration Tests", () => {
       ctx2
     );
     await waitOnExecutionContext(ctx2);
-    const latest = (await response2.json()) as ApiResponse<
-      Record<string, VersionInfo>
-    >;
+    const latest = (await response2.json()) as ApiResponse<VersionInfo | null>;
 
     const ctx3 = createExecutionContext();
     const response3 = await app.request(
@@ -124,9 +122,8 @@ describe("Versions API v1 - Integration Tests", () => {
       ctx3
     );
     await waitOnExecutionContext(ctx3);
-    const specific = (await response3.json()) as ApiResponse<
-      Record<string, VersionInfo>
-    >;
+    const specific =
+      (await response3.json()) as ApiResponse<VersionInfo | null>;
 
     expect(latest.result).toEqual(allVersions.result["0.6.0"]);
     expect(specific.result).toEqual(allVersions.result["0.6.0"]);

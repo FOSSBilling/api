@@ -39,8 +39,9 @@ import {
 
 const REPO_OWNER = "FOSSBilling";
 const REPO_NAME = "FOSSBilling";
-// Shared with stats/v1, which reads the same blob and threads its own read
-// into getReleases - exported so that contract stays defined in one place.
+// Shared with stats/v1, which serves the same blob through getReleases and
+// reads its own stats value from the same CACHE_KV - exported so the key is
+// defined in one place.
 export const RELEASE_CACHE_KEY = "gh-fossbilling-releases";
 // Client-side caching of these endpoints is immaterial (the real consumers
 // re-request per update check and don't cache), so this TTL is sized for the

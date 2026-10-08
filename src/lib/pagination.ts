@@ -17,11 +17,16 @@ export function parseLegacyPagination(query: {
     Number.isInteger(limitParam) && limitParam >= 1 && limitParam <= 100;
   if (query.offset !== undefined && !hasValidLimit) return "invalid";
   const offsetParam = query.offset === undefined ? 0 : Number(query.offset);
+  // isSafeInteger, not isInteger: 1e100 is an integer but SQLite rejects an
+  // out-of-range OFFSET, which would surface as a 500. Unusable offsets
+  // follow the documented zero fallback instead.
   return hasValidLimit
     ? {
         limit: limitParam,
         offset:
-          Number.isInteger(offsetParam) && offsetParam >= 0 ? offsetParam : 0
+          Number.isSafeInteger(offsetParam) && offsetParam >= 0
+            ? offsetParam
+            : 0
       }
     : undefined;
 }

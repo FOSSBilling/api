@@ -1,11 +1,17 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { logError, logWarn, logInfo } from "../../src/lib/logger";
 
-// console[level]("[SERVICE]", message, json?) - the context is a structured
-// trailing argument so Workers observability keeps it filterable; join the
-// args so assertions read like the emitted line.
+// console[level] receives one structured object ({ service, message,
+// context? }) - the shape Workers Logs serializes to filterable JSON.
+// Helpers here pull the logged entry back out of the spy.
+function loggedEntries(spy: {
+  mock: { calls: unknown[][] };
+}): Record<string, unknown>[] {
+  return spy.mock.calls.map((call) => call[0] as Record<string, unknown>);
+}
+
 function logged(spy: { mock: { calls: unknown[][] } }): string {
-  return spy.mock.calls.at(-1)!.map(String).join(" ");
+  return JSON.stringify(loggedEntries(spy).at(-1));
 }
 
 describe("Logger", () => {
@@ -28,13 +34,15 @@ describe("Logger", () => {
   describe("routing and format", () => {
     // One routing case per console method; the negative cross-assertions
     // only re-prove console dispatch.
-    it("logError goes to console.error with service prefix", () => {
+    it("logError goes to console.error as a structured entry", () => {
       logError("TEST_SERVICE", "Error occurred");
 
       expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
-      expect(logged(consoleErrorSpy)).toContain(
-        "[TEST_SERVICE] Error occurred"
-      );
+      const entry = loggedEntries(consoleErrorSpy)[0];
+      expect(entry).toEqual({
+        service: "TEST_SERVICE",
+        message: "Error occurred"
+      });
     });
 
     it("logWarn and logInfo go to their own console methods", () => {
@@ -46,21 +54,26 @@ describe("Logger", () => {
       expect(consoleErrorSpy).not.toHaveBeenCalled();
     });
 
-    it("passes the context as a structured trailing argument", () => {
+    it("carries the redacted context as a structured field", () => {
       const context = { userId: 123, action: "test" };
       logError("TEST_SERVICE", "Error occurred", context);
 
-      const call = consoleErrorSpy.mock.calls[0] as unknown[];
-      expect(call[0]).toBe("[TEST_SERVICE]");
-      expect(call[1]).toBe("Error occurred");
-      expect(call[2]).toBe(JSON.stringify(context));
+      const entry = loggedEntries(consoleErrorSpy)[0];
+      expect(entry).toEqual({
+        service: "TEST_SERVICE",
+        message: "Error occurred",
+        context
+      });
     });
 
-    it("omits the context argument when not provided", () => {
+    it("omits the context field when not provided", () => {
       logError("TEST_SERVICE", "Error occurred");
 
-      const call = consoleErrorSpy.mock.calls[0] as unknown[];
-      expect(call).toHaveLength(2);
+      const entry = loggedEntries(consoleErrorSpy)[0];
+      expect(entry).toEqual({
+        service: "TEST_SERVICE",
+        message: "Error occurred"
+      });
     });
   });
 

@@ -204,6 +204,28 @@ describe("FOSSBilling API Worker - Full App Integration", () => {
   // Method-level behavior is Hono routing, already exercised by every
   // request in this suite; the surviving assertions are the cross-service
   // headers the wiring owns.
+  // The preflight answer is wiring (hono/cors): an OPTIONS request must be
+  // answered 204 with the open CORS policy before it reaches any service.
+  it("answers OPTIONS preflight requests with 204 and the open CORS policy", async () => {
+    const ctx = createExecutionContext();
+    const response = await app.request(
+      "/versions/v1",
+      {
+        method: "OPTIONS",
+        headers: {
+          Origin: "https://example.org",
+          "Access-Control-Request-Method": "GET"
+        }
+      },
+      env,
+      ctx
+    );
+    await waitOnExecutionContext(ctx);
+
+    expect(response.status).toBe(204);
+    expect(response.headers.get("Access-Control-Allow-Origin")).toBe("*");
+  });
+
   describe("Headers and Middleware", () => {
     it("should include CORS headers on all responses", async () => {
       const endpoints = [

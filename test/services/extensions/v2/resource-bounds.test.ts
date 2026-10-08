@@ -338,12 +338,12 @@ describe("Extension resource admission", () => {
       );
       expect(log).toHaveBeenCalledOnce();
       // The redaction property is the contract (exception messages can
-      // carry SQL and submitted content); the console argument layout is
-      // the logger's own business.
-      const logged = log.mock.calls[0].map(String).join(" ");
-      expect(logged).toContain("SqliteError");
-      expect(logged).toContain("SQLITE_BUSY");
-      expect(logged).not.toMatch(
+      // carry SQL and submitted content); the log entry must carry only
+      // the classified metadata.
+      const entry = JSON.stringify(log.mock.calls[0][0]);
+      expect(entry).toContain("SqliteError");
+      expect(entry).toContain("SQLITE_BUSY");
+      expect(entry).not.toMatch(
         /SELECT|INSERT|secret_content|submitted payload/
       );
     } finally {
@@ -1011,6 +1011,18 @@ describe("Bounded revision reads and maintenance", () => {
   it("runs bounded cleanup and inventory hourly, keeping inventory read-only", async () => {
     await owned();
     await insertHistory("old");
+    // Seed one prunable and one live write event so the run's pruning
+    // behavior is observed on rows, not on captured SQL text.
+    await db
+      .prepare(
+        "INSERT INTO extension_write_events VALUES ('expired','a','a',unixepoch()-86401)"
+      )
+      .run();
+    await db
+      .prepare(
+        "INSERT INTO extension_write_events VALUES ('fresh','a','a',unixepoch()-120)"
+      )
+      .run();
     const queries: string[] = [];
     const hooked = wrapD1WithHook(db, (query) => {
       queries.push(query);
@@ -1027,14 +1039,30 @@ describe("Bounded revision reads and maintenance", () => {
         .prepare("SELECT compacted_at FROM extension_revisions WHERE id='old'")
         .first("compacted_at")
     ).toBeNull();
+    // Expired write events are pruned; live ones survive.
+    expect(
+      await db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM extension_write_events WHERE id='expired'"
+        )
+        .first("n")
+    ).toBe(0);
+    expect(
+      await db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM extension_write_events WHERE id='fresh'"
+        )
+        .first("n")
+    ).toBe(1);
     queries.length = 0;
+    const rowsBefore = await db
+      .prepare("SELECT id, compacted_at FROM extension_revisions ORDER BY id")
+      .all<{ id: string; compacted_at: string | null }>();
     await reportExtensionResources(getExtensionsDb(hooked), "compact");
     const rowsAfter = await db
       .prepare("SELECT id, compacted_at FROM extension_revisions ORDER BY id")
       .all<{ id: string; compacted_at: string | null }>();
-    const rowsBefore = await db
-      .prepare("SELECT id, compacted_at FROM extension_revisions ORDER BY id")
-      .all<{ id: string; compacted_at: string | null }>();
+    // Reporting must be observational: no revision row may change.
     expect(rowsAfter.results).toEqual(rowsBefore.results);
   });
   it.each([
@@ -1170,10 +1198,13 @@ describe("Bounded revision reads and maintenance", () => {
       });
       await reportExtensionResources(getExtensionsDb(db), "compact");
       expect(warn).toHaveBeenCalledTimes(1);
-      const context = String(warn.mock.calls[0][2]);
-      expect(context).toContain('"reason":"legacy_content_present"');
-      expect(String(warn.mock.calls[0])).not.toContain("owner");
-      expect(String(warn.mock.calls[0])).not.toContain(sampleContent().name);
+      const entry = warn.mock.calls[0][0] as {
+        context: { reason: string };
+      };
+      expect(entry.context.reason).toBe("legacy_content_present");
+      const logged = JSON.stringify(warn.mock.calls[0]);
+      expect(logged).not.toContain("owner");
+      expect(logged).not.toContain(sampleContent().name);
     } finally {
       warn.mockRestore();
     }

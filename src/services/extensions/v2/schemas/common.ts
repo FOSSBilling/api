@@ -63,10 +63,10 @@ export const ModeratorForbiddenResponse = errorResponse(
 // description. Spread into a route's responses map:
 //   ...authErrorResponses(ModeratorForbiddenResponse)
 //
-// The plain return is deliberate — do NOT add `as const`. zod-openapi
-// derives a handler's permitted statuses from the literal numeric keys of
-// the responses map; `as const` widens those keys to string literals and
-// silently drops 401/403 from the handler's typed response union.
+// Keep the plain return: adding `as const` here compiles for the helper but
+// breaks handler response typing on every route that spreads it (the
+// per-status response union zod-openapi derives from the responses map
+// collapses; verified empirically). If you touch this, re-run tsc.
 export function authErrorResponses(
   forbidden: ReturnType<typeof errorResponse> = ActiveAccountRequiredResponse
 ) {

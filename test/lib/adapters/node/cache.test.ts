@@ -1,7 +1,11 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   SQLiteCacheAdapter,
-  createMemoryCache
+  createMemoryCache,
+  createFileCache
 } from "../../../../src/lib/adapters/node/cache";
 
 describe("SQLiteCacheAdapter - Memory", () => {
@@ -70,5 +74,35 @@ describe("SQLiteCacheAdapter - Memory", () => {
     await cache.put("key1", "value1");
     cache.clearExpired();
     expect(await cache.get("key1")).toBe("value1");
+  });
+
+  // createNodeBindings uses createFileCache in production-shaped flows, so
+  // file-backed caches must survive reopening - the durable behavior the
+  // memory cache above deliberately does not have.
+  describe("SQLiteCacheAdapter - File", () => {
+    it("persists values across reopen", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "fb-node-cache-"));
+      const dbPath = join(dir, "cache.db");
+      try {
+        const writer = createFileCache(dbPath);
+        await writer.put("key1", "value1");
+        writer.close();
+
+        const reopened = createFileCache(dbPath);
+        try {
+          await expect(reopened.get("key1")).resolves.toBe("value1");
+        } finally {
+          reopened.close();
+        }
+      } finally {
+        // The first handle is already closed; removal is best-effort and
+        // temp-scoped either way.
+        try {
+          rmSync(dir, { recursive: true, force: true });
+        } catch {
+          // Ignore - under the OS temp dir.
+        }
+      }
+    });
   });
 });

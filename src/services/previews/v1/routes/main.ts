@@ -127,8 +127,9 @@ async function resolveMainDownloadUrl(
     c.env.CACHE_KV,
     MAIN_CACHE_KEY
   );
-  if (read === null) return null; // authoritative negative
-  if (read !== "miss" && read.download_url) return read.download_url;
+  if (read.status === "negative") return null; // authoritative negative
+  if (read.status === "hit" && read.value.download_url)
+    return read.value.download_url;
 
   // No write of any kind here, by design: /main owns the shared entry, and
   // an unenriched (or negative) body written from this route would silently

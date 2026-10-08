@@ -1225,9 +1225,11 @@ describe("Versions API v1", () => {
         (args) => args[0] === "gh-fossbilling-releases"
       );
       expect(putCall).toBeTruthy();
-      // A bounded TTL is the contract; the exact value is a policy constant
-      // in src and would only make this test churn when it is tuned.
-      expect(putCall![2]).toHaveProperty("expirationTtl");
+      // Bounded is the contract: a positive TTL that cannot stretch into a
+      // long stale-data window. The exact value is a policy constant in src.
+      const ttl = putCall![2]!.expirationTtl;
+      expect(ttl).toBeGreaterThan(0);
+      expect(ttl).toBeLessThanOrEqual(86400);
     });
 
     // Edge (Cache API) response caching. Each test
@@ -1287,9 +1289,13 @@ describe("Versions API v1", () => {
       // One path x both warm orders pins the variant logic; the other
       // registered routes share the same handler wrapper, and the vary
       // mechanics themselves are lib-level (test/lib/cache.test.ts).
+      // /latest is kept because it rides the separate /:version cache
+      // registration - a dropped varyByMirrorTrust there must fail here.
       it.each([
         ["", false],
-        ["", true]
+        ["", true],
+        ["/latest", false],
+        ["/latest", true]
       ] as const)(
         "bounds mirror-trust cache variants for %s (mirror first: %s)",
         async (path, mirrorFirst) => {

@@ -106,11 +106,50 @@ describe("bearerAssertionVerifier", () => {
     expect(principal).toBeNull();
   });
 
-  // The minter structurally cannot emit the states the removed tests pinned
-  // (fractional NumericDates, non-60s lifetimes, tokens without contextual
-  // claims): it emits integer seconds and a fixed 60s lifetime. The src
-  // guards for those remain as defense against a broken minter, and a
-  // minter regression surfaces as the wrong iss/aud/ver shapes above.
+  // The minter emits integer seconds and a fixed 60s lifetime, so these
+  // states are unreachable from a healthy minter - but the verifier's
+  // integer and lifetime checks are this repo's own defense against a
+  // misbehaving or rolled-back minter, and signAssertion can construct
+  // exactly those tokens. Keep them pinned so the guards cannot silently
+  // weaken (the assertion replay window depends on both).
+  it.each(["iat", "exp"])(
+    "rejects fractional %s NumericDate values",
+    async (claim) => {
+      const now = Math.floor(Date.now() / 1000);
+      const overrides =
+        claim === "iat"
+          ? { iat: now + 0.5, exp: now + 60 }
+          : { iat: now, exp: now + 59.5 };
+      const token = await signAssertion(SECRET, {
+        iat: overrides.iat,
+        exp: overrides.exp
+      });
+      const principal = await bearerAssertionVerifier.verify(
+        token,
+        platformWithSecret(SECRET)
+      );
+
+      expect(principal).toBeNull();
+    }
+  );
+
+  it.each([
+    ["zero", 0],
+    ["negative", -1],
+    ["overlong", 61]
+  ])("rejects a token with a %s lifetime", async (_name, lifetime) => {
+    const now = Math.floor(Date.now() / 1000);
+    const token = await signAssertion(SECRET, {
+      iat: now,
+      exp: now + lifetime
+    });
+    const principal = await bearerAssertionVerifier.verify(
+      token,
+      platformWithSecret(SECRET)
+    );
+
+    expect(principal).toBeNull();
+  });
 
   it("rejects a token issued too far in the future", async () => {
     const now = Math.floor(Date.now() / 1000);
@@ -199,8 +238,12 @@ describe("identitySyncAssertionVerifier", () => {
       await bearerAssertionVerifier.verify(token, platformWithSecret(SECRET))
     ).toBeNull();
   });
-  it.each([undefined, ""])(
-    "rejects a missing digest %s",
+  // The verifier requires a 64-char lowercase hex digest; the minter can
+  // only ever emit that, but the check is this repo's own validation and
+  // signAssertion can construct every wrong shape - pin it so the format
+  // requirement cannot silently loosen.
+  it.each([undefined, "", "A".repeat(64), "a".repeat(63), "z".repeat(64)])(
+    "rejects an invalid digest %s",
     async (bodySha256) => {
       const token = await signAssertion(SECRET, {
         purpose: "identity-sync",
