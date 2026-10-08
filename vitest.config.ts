@@ -86,7 +86,7 @@ export default defineConfig({
         functions: 80,
         lines: 80
       },
-      include: ["src/**"],
+      include: ["src/**/*.ts"],
       // The node adapter is exercised by vitest.node.config.ts against
       // runtime shims rather than the Workers pool, so instrumenting it here
       // would report meaningless numbers.
