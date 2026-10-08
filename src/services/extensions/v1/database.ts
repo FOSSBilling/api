@@ -2,14 +2,9 @@ import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import { ExtensionsDb } from "../../../lib/db";
 import { extensions, developers } from "../v2/db/schema";
 import { DatabaseResult } from "../../../lib/interfaces";
-import {
-  Extension,
-  Release,
-  Author,
-  Repository,
-  sortReleasesDescending,
-  parseJSON
-} from "./interfaces";
+import { sortReleasesDescending } from "../../../lib/releases";
+import { parseJSON } from "../../../lib/json";
+import { Extension, Release, Author, Repository } from "./interfaces";
 
 const EXTENSION_COLUMNS = {
   id: extensions.id,

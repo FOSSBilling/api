@@ -65,7 +65,7 @@ export const DeveloperProfileSchema = DeveloperSchema.extend({
   // GitHub-API-free by design).
   github_url_verified: z.boolean().optional(),
   // Only populated by the moderator listing (see
-  // DeveloperProfilesDatabase.listWithOwnerPaged) — other DeveloperProfile
+  // DeveloperProfilesDatabase.listScoped) — other DeveloperProfile
   // producers (getById, create/update/claim/transfer results) don't join
   // for it, so it's absent rather than null there. `unclaimed` is the
   // authoritative "has an owner" signal (owner_user_id IS NULL) — don't

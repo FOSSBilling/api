@@ -13,8 +13,7 @@ describe("createPlatformContext", () => {
       }
     },
     environment: {
-      get: (key) => (key === "TEST_VAR" ? "test-value" : undefined),
-      has: (key) => key === "TEST_VAR"
+      get: (key) => (key === "TEST_VAR" ? "test-value" : undefined)
     }
   };
 

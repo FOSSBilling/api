@@ -1,9 +1,4 @@
-import { gt } from "semver";
-import { sortReleasesDescending } from "../../../lib/releases";
-import { parseJSON } from "../../../lib/json";
 import { EXTENSION_TYPES } from "../v2/schemas/extensions";
-
-export { sortReleasesDescending, parseJSON };
 
 export type Extension = {
   id: string;
@@ -63,23 +58,3 @@ export type Release = {
   changelog_url?: string;
   min_fossbilling_version: string;
 };
-
-export function getLatestRelease(extension: Extension): Release | undefined {
-  if (extension.releases.length === 0) {
-    return undefined;
-  }
-
-  let latestRelease = extension.releases[0];
-  for (let i = 1; i < extension.releases.length; i++) {
-    const release = extension.releases[i];
-    try {
-      if (gt(release.tag, latestRelease.tag)) {
-        latestRelease = release;
-      }
-    } catch {
-      // Ignore invalid semver tags
-    }
-  }
-
-  return latestRelease;
-}

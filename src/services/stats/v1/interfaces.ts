@@ -26,17 +26,3 @@ export interface ReleasesPerYearData {
   year: string;
   release_count: number;
 }
-
-export interface ChartDataset {
-  label: string;
-  data: number[];
-  borderColor?: string;
-  backgroundColor?: string;
-  fill?: boolean;
-  tension?: number;
-}
-
-export interface ChartData {
-  labels: string[];
-  datasets: ChartDataset[];
-}

@@ -19,7 +19,6 @@ export interface ICache {
 
 export interface IEnvironment {
   get(key: string): string | undefined;
-  has(key: string): boolean;
 }
 
 export interface IPlatformBindings {
