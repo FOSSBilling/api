@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "cf-typegen": "wrangler types --env-interface CloudflareBindings",
-    "cf-deploy": "wrangler deploy --minify",
+    "cf-deploy": "npm run db:migrate:all:remote && wrangler deploy --minify",
     "dev": "wrangler dev",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -14,6 +14,8 @@
     "db:migrate:extensions-v2:remote": "wrangler d1 migrations apply DB_EXTENSIONS --remote",
     "db:migrate:central-alerts:local": "wrangler d1 migrations apply DB_CENTRAL_ALERTS --local",
     "db:migrate:central-alerts:remote": "wrangler d1 migrations apply DB_CENTRAL_ALERTS --remote",
+    "db:migrate:all:local": "npm run db:migrate:extensions-v2:local && npm run db:migrate:central-alerts:local",
+    "db:migrate:all:remote": "npm run db:migrate:extensions-v2:remote && npm run db:migrate:central-alerts:remote",
     "lint": "eslint",
     "lint:fix": "eslint --fix",
     "test": "vitest run",
