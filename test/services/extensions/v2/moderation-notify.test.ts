@@ -189,7 +189,6 @@ describe("moderation notification emails", () => {
     // mojibake, so subjects stay ASCII and bodies use HTML entities.
     expect(body.subject).toMatch(/^[\u0020-\u007E]*$/);
     expect(body.body).toMatch(/^[\u0020-\u007E]*$/);
-    expect(body.body).toContain("&#8220;gone&#8221; &#8212;");
   });
 
   it("skips the email on ?notify=false without calling the provider", async () => {

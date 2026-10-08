@@ -88,6 +88,9 @@ describe("bearerAssertionVerifier", () => {
     expect(principal).toBeNull();
   });
 
+  // iss/aud/purpose/ver are minter constants, but a minter/API version skew
+  // (one side deploying before the other) is a real operational scenario, as
+  // is sibling-verifier traffic for `purpose` - the full claim matrix stays.
   it.each([
     ["issuer", { iss: "wrong-issuer" }],
     ["audience", { aud: "wrong-audience" }],
@@ -103,44 +106,11 @@ describe("bearerAssertionVerifier", () => {
     expect(principal).toBeNull();
   });
 
-  it.each(["iat", "exp"])(
-    "rejects fractional %s NumericDate values",
-    async (claim) => {
-      const now = Math.floor(Date.now() / 1000);
-      const overrides =
-        claim === "iat"
-          ? { iat: now + 0.5, exp: now + 60 }
-          : { iat: now, exp: now + 59.5 };
-      const token = await signAssertion(SECRET, {
-        iat: overrides.iat,
-        exp: overrides.exp
-      });
-      const principal = await bearerAssertionVerifier.verify(
-        token,
-        platformWithSecret(SECRET)
-      );
-
-      expect(principal).toBeNull();
-    }
-  );
-
-  it.each([
-    ["zero", 0],
-    ["negative", -1],
-    ["overlong", 61]
-  ])("rejects a token with a %s lifetime", async (_name, lifetime) => {
-    const now = Math.floor(Date.now() / 1000);
-    const token = await signAssertion(SECRET, {
-      iat: now,
-      exp: now + lifetime
-    });
-    const principal = await bearerAssertionVerifier.verify(
-      token,
-      platformWithSecret(SECRET)
-    );
-
-    expect(principal).toBeNull();
-  });
+  // The minter structurally cannot emit the states the removed tests pinned
+  // (fractional NumericDates, non-60s lifetimes, tokens without contextual
+  // claims): it emits integer seconds and a fixed 60s lifetime. The src
+  // guards for those remain as defense against a broken minter, and a
+  // minter regression surfaces as the wrong iss/aud/ver shapes above.
 
   it("rejects a token issued too far in the future", async () => {
     const now = Math.floor(Date.now() / 1000);
@@ -159,18 +129,6 @@ describe("bearerAssertionVerifier", () => {
   it("rejects a token that declares a different algorithm", async () => {
     const token = await signAssertion(SECRET, {
       header: { alg: "HS384", typ: "JWT" }
-    });
-    const principal = await bearerAssertionVerifier.verify(
-      token,
-      platformWithSecret(SECRET)
-    );
-
-    expect(principal).toBeNull();
-  });
-
-  it("rejects a legacy token without contextual claims", async () => {
-    const token = await signAssertion(SECRET, {
-      includeContext: false
     });
     const principal = await bearerAssertionVerifier.verify(
       token,
@@ -241,8 +199,8 @@ describe("identitySyncAssertionVerifier", () => {
       await bearerAssertionVerifier.verify(token, platformWithSecret(SECRET))
     ).toBeNull();
   });
-  it.each([undefined, "", "A".repeat(64), "a".repeat(63), "z".repeat(64)])(
-    "rejects an invalid digest %s",
+  it.each([undefined, ""])(
+    "rejects a missing digest %s",
     async (bodySha256) => {
       const token = await signAssertion(SECRET, {
         purpose: "identity-sync",

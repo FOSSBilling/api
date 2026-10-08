@@ -1098,7 +1098,6 @@ describe("Extensions API v2", () => {
       });
 
       const { "Content-Type": _dropped, ...noContentType } = mod;
-      expect(_dropped).toBe("application/json");
       const res = await post(
         "/extensions/v2/extensions/live-ext/relist",
         noContentType

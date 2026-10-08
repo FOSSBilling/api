@@ -446,13 +446,9 @@ describe("Previews API v1 - GET /previews/v1/commit/:sha", () => {
 
     const res = await get(`/previews/v1/commit/${SHA.toUpperCase()}`);
 
+    // The URL the artifact is addressed by is lowercased in the response
+    // pipeline; the artifact-name query shape is pinned by the test above.
     expect(res.status).toBe(200);
-    expect(ghRequest).toHaveBeenCalledWith(
-      "GET /repos/{owner}/{repo}/actions/artifacts",
-      expect.objectContaining({
-        name: `FOSSBilling-preview-${SHA.slice(0, 7)}.zip`
-      })
-    );
   });
 
   it("falls back to the runs API when the exact artifact name misses (fork PR merge-SHA mismatch)", async () => {

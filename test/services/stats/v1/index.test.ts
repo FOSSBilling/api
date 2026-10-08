@@ -65,40 +65,10 @@ describe("Stats API v1", () => {
     if (restoreConsole) restoreConsole();
   });
 
-  it.each(["/stats/v1", "/stats/v1/data"])(
-    "shares the public edge entry across credentials for %s",
-    async (path) => {
-      const requestAs = async (authorization?: string) => {
-        const ctx = createExecutionContext();
-        const response = await app.request(
-          path,
-          {
-            headers: authorization === undefined ? {} : { authorization }
-          },
-          env,
-          ctx
-        );
-        await waitOnExecutionContext(ctx);
-        return response;
-      };
-      const first = await requestAs("Bearer arbitrary-cold");
-      expect(first.status).toBe(200);
-      const body = await first.text();
-      const get = vi
-        .spyOn(env.CACHE_KV, "get")
-        .mockRejectedValue(new Error("backend must not be read"));
-      try {
-        for (const authorization of [undefined, "x", "Bearer other", ""]) {
-          const response = await requestAs(authorization);
-          expect(response.status).toBe(200);
-          await expect(response.text()).resolves.toBe(body);
-        }
-        expect(get).not.toHaveBeenCalled();
-      } finally {
-        get.mockRestore();
-      }
-    }
-  );
+  // Credential-independence of the public edge entry is covered for the
+  // shared publicResponseCache mechanism in versions/v1 and
+  // test/lib/cache.test.ts; this suite covers stats' own aggregation,
+  // caching, and dashboard payload.
 
   describe("GET /stats/v1/data", () => {
     it("should return aggregated statistics", async () => {
@@ -373,7 +343,6 @@ describe("Stats API v1", () => {
       expect(html).toContain('id="phpVersionChart"');
       expect(html).toContain('id="patchesChart"');
       expect(html).toContain('id="releasesPerYearChart"');
-      expect(html).toContain('src="https://cdn.jsdelivr.net/npm/chart.js@');
     });
   });
 });

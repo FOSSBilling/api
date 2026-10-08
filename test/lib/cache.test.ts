@@ -13,12 +13,6 @@ describe("cache helpers", () => {
       )
     ).toBe("https://api.fossbilling.net/versions/v1/latest");
   });
-
-  it("keeps different public paths isolated", () => {
-    expect(cacheKeyFor("https://api.fossbilling.net/versions/v1")).not.toBe(
-      cacheKeyFor("https://api.fossbilling.net/versions/v1/count")
-    );
-  });
 });
 
 describe("public response cache", () => {

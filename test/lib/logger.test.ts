@@ -26,7 +26,9 @@ describe("Logger", () => {
   });
 
   describe("routing and format", () => {
-    it("logError goes to console.error with service and level prefix", () => {
+    // One routing case per console method; the negative cross-assertions
+    // only re-prove console dispatch.
+    it("logError goes to console.error with service prefix", () => {
       logError("TEST_SERVICE", "Error occurred");
 
       expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
@@ -35,22 +37,13 @@ describe("Logger", () => {
       );
     });
 
-    it("logWarn goes to console.warn", () => {
+    it("logWarn and logInfo go to their own console methods", () => {
       logWarn("TEST_SERVICE", "Warning message");
-
-      expect(consoleWarnSpy).toHaveBeenCalledTimes(1);
-      expect(logged(consoleWarnSpy)).toContain("Warning message");
-      expect(consoleErrorSpy).not.toHaveBeenCalled();
-      expect(consoleInfoSpy).not.toHaveBeenCalled();
-    });
-
-    it("logInfo goes to console.info", () => {
       logInfo("TEST_SERVICE", "Info message");
 
+      expect(consoleWarnSpy).toHaveBeenCalledTimes(1);
       expect(consoleInfoSpy).toHaveBeenCalledTimes(1);
-      expect(logged(consoleInfoSpy)).toContain("Info message");
       expect(consoleErrorSpy).not.toHaveBeenCalled();
-      expect(consoleWarnSpy).not.toHaveBeenCalled();
     });
 
     it("passes the context as a structured trailing argument", () => {
@@ -80,90 +73,35 @@ describe("Logger", () => {
       expect(logged(consoleErrorSpy)).not.toContain("secret-token-12345");
     });
 
-    it("redacts 'token' keys in context", () => {
-      const context = { api_token: "secret", other: "value" };
-      logInfo("TEST_SERVICE", "Message", context);
-
-      expect(logged(consoleInfoSpy)).toContain('"api_token":"[REDACTED]"');
-      expect(logged(consoleInfoSpy)).toContain('"other":"value"');
-    });
-
-    it("redacts 'key' keys in context", () => {
-      const context = { secret_key: "secret", public_key: "public" };
-      logInfo("TEST_SERVICE", "Message", context);
-
-      expect(logged(consoleInfoSpy)).toContain('"secret_key":"[REDACTED]"');
-      expect(logged(consoleInfoSpy)).toContain('"public_key":"[REDACTED]"');
-    });
-
-    it("redacts 'secret' keys in context", () => {
-      const context = { my_secret: "secret", visible: "value" };
-      logInfo("TEST_SERVICE", "Message", context);
-
-      expect(logged(consoleInfoSpy)).toContain('"my_secret":"[REDACTED]"');
-    });
-
-    it("redacts 'password' keys in context", () => {
-      const context = { password: "secret123", username: "user" };
-      logInfo("TEST_SERVICE", "Message", context);
-
-      expect(logged(consoleInfoSpy)).toContain('"password":"[REDACTED]"');
-    });
-
-    it("redacts keys case-insensitively", () => {
+    it("redacts token/key/secret/password keys case-insensitively", () => {
       const context = {
+        api_token: "secret",
         API_KEY: "secret",
         SecretKey: "secret2",
-        PASSWORD: "secret3"
+        password: "secret3",
+        visible: "value"
       };
       logInfo("TEST_SERVICE", "Message", context);
 
       expect(logged(consoleInfoSpy)).not.toContain("secret");
       expect(logged(consoleInfoSpy)).toContain("[REDACTED]");
+      expect(logged(consoleInfoSpy)).toContain('"visible":"value"');
     });
 
-    it("redacts nested sensitive data", () => {
+    it("redacts nested and array-sensitive data", () => {
       const context = {
         user: { password: "secret123", name: "John" },
-        config: { api_key: "key456" }
+        items: [{ token: "secret1" }, { name: "safe" }],
+        headers: { authorization: "Bearer token123" }
       };
       logInfo("TEST_SERVICE", "Message", context);
 
       expect(logged(consoleInfoSpy)).not.toContain("secret123");
-      expect(logged(consoleInfoSpy)).not.toContain("key456");
-      expect(logged(consoleInfoSpy)).toContain('"name":"John"');
-    });
-
-    it("redacts sensitive data in arrays", () => {
-      const context = {
-        items: [{ token: "secret1" }, { token: "secret2" }, { name: "safe" }]
-      };
-      logInfo("TEST_SERVICE", "Message", context);
-
       expect(logged(consoleInfoSpy)).not.toContain("secret1");
-      expect(logged(consoleInfoSpy)).not.toContain("secret2");
-      expect(logged(consoleInfoSpy)).toContain('"name":"safe"');
-    });
-
-    it("handles nested strings with Bearer tokens", () => {
-      const context = { headers: { authorization: "Bearer token123" } };
-      logInfo("TEST_SERVICE", "Message", context);
-
-      expect(logged(consoleInfoSpy)).toContain("Bearer [REDACTED]");
       expect(logged(consoleInfoSpy)).not.toContain("token123");
-    });
-
-    it("preserves non-sensitive data", () => {
-      const context = {
-        user_id: 123,
-        name: "Test User",
-        action: "login",
-        timestamp: "2023-01-01"
-      };
-      logInfo("TEST_SERVICE", "Message", context);
-
-      expect(logged(consoleInfoSpy)).toContain('"user_id":123');
-      expect(logged(consoleInfoSpy)).toContain('"name":"Test User"');
+      expect(logged(consoleInfoSpy)).toContain('"name":"John"');
+      expect(logged(consoleInfoSpy)).toContain('"name":"safe"');
+      expect(logged(consoleInfoSpy)).toContain("Bearer [REDACTED]");
     });
   });
 });

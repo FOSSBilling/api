@@ -21,7 +21,6 @@ export interface AssertionOverrides {
   purpose?: string;
   ver?: number;
   header?: Record<string, string>;
-  includeContext?: boolean;
 }
 
 /** Mints a compact HS256 assertion matching what bearer-assertion.ts verifies. */
@@ -33,16 +32,12 @@ export async function signAssertion(
   const payload: Record<string, string | number> = {
     sub: overrides.sub ?? "user-1",
     iat,
-    exp: overrides.exp ?? iat + 60
+    exp: overrides.exp ?? iat + 60,
+    iss: overrides.iss ?? "fossbilling-extensions",
+    aud: overrides.aud ?? "fossbilling-api/extensions-v2",
+    purpose: overrides.purpose ?? "user-authentication",
+    ver: overrides.ver ?? 1
   };
-  if (overrides.includeContext !== false) {
-    Object.assign(payload, {
-      iss: overrides.iss ?? "fossbilling-extensions",
-      aud: overrides.aud ?? "fossbilling-api/extensions-v2",
-      purpose: overrides.purpose ?? "user-authentication",
-      ver: overrides.ver ?? 1
-    });
-  }
 
   if (overrides.bodySha256 !== undefined)
     payload.body_sha256 = overrides.bodySha256;

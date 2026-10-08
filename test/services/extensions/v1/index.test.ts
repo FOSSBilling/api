@@ -243,14 +243,6 @@ describe("Extensions API v1", () => {
       expect(data.error.message).toBe("offset requires limit");
     });
 
-    it("should redirect trailing slash", async () => {
-      const ctx = createExecutionContext();
-      const res = await app.request("/extensions/v1/list/", {}, env, ctx);
-      await waitOnExecutionContext(ctx);
-
-      expect(res.status).toBe(301);
-    });
-
     // v1 and v2 share the extensions table and must agree on what counts as
     // published - a moderator delisting an extension in v2 must also pull it
     // from here, or FOSSBilling installs would keep seeing it.

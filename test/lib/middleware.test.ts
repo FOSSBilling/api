@@ -3,9 +3,9 @@ import { Context } from "hono";
 import { getPlatform } from "../../src/lib/middleware";
 
 // platformMiddleware's happy path is exercised end-to-end by every suite that
-// boots the real app (test/app, test/integration, versions/v1); these tests
-// would only re-prove Hono's middleware dispatch. The failure contract,
-// however, is this module's own.
+// boots the real app (test/integration, versions/v1); these tests would only
+// re-prove Hono's middleware dispatch. The failure contract, however, is
+// this module's own.
 describe("getPlatform", () => {
   it("should throw error when platform context not found", () => {
     const mockHonoContext = {

@@ -3,9 +3,7 @@ import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-plugin";
 import { defineConfig } from "vitest/config";
 
 // Read migrations at config time (Node) so they can be applied inside the
-// Workers runtime by test/apply-migrations.ts (a setupFiles script) -
-// Miniflare provisions the D1 bindings declared in wrangler.jsonc but
-// doesn't run their migrations_dir automatically. Top-level await (Vite
+// Workers runtime by test/utils/apply-migrations.ts. Top-level await (Vite
 // config files are ESM) avoids fighting defineConfig's overload typing for
 // an async factory function.
 const extensionsMigrations = await readD1Migrations(

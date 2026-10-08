@@ -102,8 +102,6 @@ describe("Versions API v1 - response headers", () => {
     await waitOnExecutionContext(ctx);
 
     expect(response.status).toBe(200);
-    expect(response.headers.get("Cache-Control")).toMatch(
-      /no-store|no-cache/i
-    );
+    expect(response.headers.get("Cache-Control")).toMatch(/no-store|no-cache/i);
   });
 });
