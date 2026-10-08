@@ -2,13 +2,16 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "api",
   "main": "src/app/index.ts",
-  "compatibility_date": "2026-06-24",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": [],
   "observability": {
     "logs": {
       "enabled": true
     },
     "traces": {
+      "enabled": true
+    },
+    "issues": {
       "enabled": true
     }
   },
@@ -19,6 +22,7 @@
   "preview_urls": true,
   "keep_vars": true,
   "vars": {
+    "ENVIRONMENT": "production",
     "EXTENSIONS_RETENTION_MODE": "dry-run",
     "EXTENSIONS_V2_EMAIL_PROVIDER": "mxroute",
     "EXTENSIONS_V2_MXROUTE_SERVER": "wednesday.mxrouting.net",
