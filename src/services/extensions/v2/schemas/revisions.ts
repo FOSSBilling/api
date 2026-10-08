@@ -1,4 +1,5 @@
 import { z } from "@hono/zod-openapi";
+import { cursorPaginationFields } from "./common";
 import { StoredExtensionContentSchema } from "./extensions";
 
 export const RevisionStatusSchema = z.enum(["pending", "approved", "rejected"]);
@@ -53,26 +54,7 @@ export const RevisionQueueQuerySchema = z.object({
   status: RevisionStatusSchema.optional().openapi({
     param: { name: "status", in: "query" }
   }),
-  limit: z.coerce
-    .number()
-    .int()
-    .min(1)
-    .max(100)
-    .default(50)
-    .openapi({
-      param: { name: "limit", in: "query" }
-    }),
-  // min(1) matches ExtensionListQuerySchema: without it `?cursor=` arrives as
-  // an empty string, which the page helper treats as "no cursor" and silently
-  // restarts pagination instead of reporting the malformed value.
-  cursor: z
-    .string()
-    .min(1)
-    .max(1000)
-    .optional()
-    .openapi({
-      param: { name: "cursor", in: "query" }
-    })
+  ...cursorPaginationFields
 });
 
 // History query for GET /extensions/{id}/revisions: newest-first pages of

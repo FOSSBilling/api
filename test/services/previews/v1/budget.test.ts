@@ -182,33 +182,20 @@ describe("preview GitHub budget", () => {
 
   it.each([
     ["2001:db8:1234:5678::1", "2001:0DB8:1234:5678:abcd:0:0:2"],
-    ["192.0.2.1", "::ffff:192.0.2.1"]
-  ])(
-    "limits distinct addresses independently: %s vs %s",
-    async (first, second) => {
-      vi.mocked(request).mockRejectedValue(
-        Object.assign(new Error("Not found"), { status: 404 })
-      );
-      for (let i = 1; i <= 12; i++)
-        expect((await get(`/previews/v1/pr/${i}`, first)).status).toBe(404);
-      // IPv6 addresses are bucketed per address, not per /64, and IPv4-mapped
-      // forms do not share the native IPv4 bucket - the edge-supplied header
-      // is the bucket key verbatim.
-      expect((await get("/previews/v1/pr/13", second)).status).toBe(404);
-      expect(request).toHaveBeenCalledTimes(13);
-    }
-  );
-
-  it("shares one conservative bucket when the edge header is absent", async () => {
+    ["192.0.2.1", "::ffff:192.0.2.1"],
+    ["::ffff:c000:201", "0:0:0:0:0:ffff:c000:201"],
+    ["invalid", "also-invalid"]
+  ])("shares a client allowance for %s and %s", async (first, second) => {
     vi.mocked(request).mockRejectedValue(
       Object.assign(new Error("Not found"), { status: 404 })
     );
     for (let i = 1; i <= 12; i++)
-      expect((await get(`/previews/v1/pr/${i}`, "192.0.2.1")).status).toBe(404);
+      expect((await get(`/previews/v1/pr/${i}`, first)).status).toBe(404);
+    expect((await get("/previews/v1/pr/13", second)).status).toBe(503);
     expect(request).toHaveBeenCalledTimes(12);
-    // No CF-Connecting-IP (off-edge callers, tests) falls into the shared
-    // "unknown" bucket and is denied once it is exhausted.
-    expect((await get("/previews/v1/pr/13")).status).toBe(503);
+    expect(
+      (await get("/previews/v1/pr/14", "2001:db8:1234:5679::1")).status
+    ).toBe(404);
   });
 
   it("caps concurrent subrequests before awaiting reservations", async () => {

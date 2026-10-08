@@ -155,7 +155,7 @@ export function registerPublicExtensionsRoutes(app: ExtensionsV2App): void {
       }
       if (!owner.data) {
         const res = c.json(
-          { result: [], pagination: { next_cursor: null, has_more: false } },
+          listPayload({ items: [], nextCursor: null, hasMore: false }),
           200
         );
         res.headers.set("Vary", "Authorization");

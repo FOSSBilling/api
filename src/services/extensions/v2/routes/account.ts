@@ -1,8 +1,7 @@
 import { requireActiveAuth, requireIdentitySync } from "../middleware";
-import { requireAuth } from "../../../../lib/auth";
+import { getAuth, requireAuth } from "../../../../lib/auth";
 import { getExtensionsDb } from "../../../../lib/db";
 import { createRoute, z } from "@hono/zod-openapi";
-import { getAuth } from "../../../../lib/auth";
 import { errorBody, statusFromErrorCode } from "./errors";
 import {
   ActiveAccountRequiredResponse,

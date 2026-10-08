@@ -8,10 +8,14 @@ import {
 } from "../email/notify";
 import { revalidateCatalogue } from "../revalidate";
 
-// The shared tail of every mutating moderation route: purge the CDN-cached
+// Shared tail of every mutating moderation route: purge the CDN-cached
 // catalogue pages, then — unless ?notify=false opted out — dispatch the
 // author notification off the response path. Returns the `notified` flag the
 // routes report in their response bodies.
+//
+// A shared route-layer helper rather than a register*Routes module, like
+// routes/errors.ts; it touches the Hono context and revalidateCatalogue, so
+// it deliberately lives beside its call sites rather than in email/.
 export async function notifyAuthor(
   c: Context,
   extDb: ExtensionsDb,

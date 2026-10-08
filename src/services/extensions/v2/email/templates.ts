@@ -121,15 +121,19 @@ function displayLabel(
 export function buildModerationEmail(
   input: ModerationEmailInput
 ): EmailMessage {
+  // The subject uses the same label composition as the body; subjectLabel
+  // then folds it to SMTP-safe ASCII.displayLabel's newline flattening is
+  // idempotent under subjectLabel's own flattening, so composing the two is
+  // safe and keeps the subject/body formats from drifting.
   const extLabel = subjectLabel(
-    input.extensionName && input.extensionId
-      ? `“${stripSurroundingQuotes(input.extensionName)}” (${input.extensionId})`
-      : (input.extensionId ?? input.extensionName ?? "your extension")
+    displayLabel(input.extensionName, input.extensionId, "your extension")
   );
   const devLabel = subjectLabel(
-    input.developerName && input.developerId
-      ? `“${stripSurroundingQuotes(input.developerName)}” (${input.developerId})`
-      : (input.developerId ?? input.developerName ?? "your developer profile")
+    displayLabel(
+      input.developerName,
+      input.developerId,
+      "your developer profile"
+    )
   );
   const extDisplay = displayLabel(
     input.extensionName,

@@ -8,13 +8,13 @@
 // param that returns the full list.
 export type LegacyPage = { limit: number; offset: number };
 
-export function parseLegacyPagination(
-  query: { limit?: string; offset?: string },
-  maxLimit = 100
-): LegacyPage | "invalid" | undefined {
+export function parseLegacyPagination(query: {
+  limit?: string;
+  offset?: string;
+}): LegacyPage | "invalid" | undefined {
   const limitParam = Number(query.limit);
   const hasValidLimit =
-    Number.isInteger(limitParam) && limitParam >= 1 && limitParam <= maxLimit;
+    Number.isInteger(limitParam) && limitParam >= 1 && limitParam <= 100;
   if (query.offset !== undefined && !hasValidLimit) return "invalid";
   const offsetParam = query.offset === undefined ? 0 : Number(query.offset);
   return hasValidLimit

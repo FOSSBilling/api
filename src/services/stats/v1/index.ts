@@ -128,6 +128,11 @@ async function getStats(
   source: "cache" | "fresh" | "stale";
   error?: GitHubError;
 }> {
+  // Only the stats value is pre-read here; getReleases does its own read of
+  // the shared releases blob. (An earlier version parallelized the two reads
+  // and threaded the result through a getReleases parameter; that coupling
+  // was removed - the cost is one extra serialized KV round trip on the rare
+  // cold-cold path only.)
   const cachedStats = await cache.get(STATS_CACHE_KEY);
 
   if (cachedStats) {

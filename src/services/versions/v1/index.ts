@@ -114,24 +114,18 @@ async function stampCacheHeaders(
 }
 
 interface CachedRouteOptions {
-  // Cache-key overrides forwarded to hono's cache middleware; default is
-  // the normalized URL.
-  keyGenerator?: (c: Context<VersionsEnv>) => string;
   varyByMirrorTrust?: boolean;
 }
 
 function registerCachedRoute<P extends string>(
   path: P,
   handler: Handler<VersionsEnv, P>,
-  {
-    keyGenerator = publicCacheKey,
-    varyByMirrorTrust = false
-  }: CachedRouteOptions = {}
+  { varyByMirrorTrust = false }: CachedRouteOptions = {}
 ) {
   const responseCache = publicResponseCache({
     cacheName: VERSIONS_CACHE_NAME,
     cacheControl: RELEASES_CACHE_CONTROL,
-    keyGenerator,
+    keyGenerator: publicCacheKey,
     ...(varyByMirrorTrust ? { vary: ["User-Agent"] } : {})
   });
   const boundedCache: MiddlewareHandler<VersionsEnv> = async (c, next) => {
@@ -690,10 +684,9 @@ export async function getReleases(
         )
       );
 
-      const sortedReleases = Object.fromEntries(
+      const releases = Object.fromEntries(
         releaseEntries.sort((a, b) => semverCompare(b[0], a[0]))
       );
-      const releases = sortedReleases;
 
       if (Object.keys(releases).length > 0) {
         // The write is deliberately outside the GitHub try/catch: a KV

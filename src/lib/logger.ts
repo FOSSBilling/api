@@ -34,10 +34,11 @@ function redactSensitiveData(data: unknown): unknown {
 }
 
 // console[level] with a `[service] message` prefix and the redacted context
-// as a structured argument: Workers observability already attaches timestamp
-// and severity metadata to every console line, and keeping the context as a
-// JSON argument (rather than interpolating it into the string) preserves
-// field-based filtering in the dashboard and Logpush.
+// as a separate trailing argument: Workers observability already attaches
+// timestamp and severity metadata to every console line, so the old
+// hand-rolled [timestamp] [level] prefixes duplicated it. (Workers Logs
+// serializes the arguments into the message text; the split just keeps the
+// prefix and payload distinct at the source.)
 function log(
   level: LogLevel,
   service: string,

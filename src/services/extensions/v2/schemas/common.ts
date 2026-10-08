@@ -123,7 +123,12 @@ export const NotifiedSchema = z
 // Strict: unknown query params (notably the retired `offset`) are rejected
 // with 422 rather than silently stripped, so a caller paginating the old
 // way gets an error instead of page one on repeat.
-export const CursorPaginationQuerySchema = z.strictObject({
+
+// The limit/cursor query fields every paginated listing shares. Spread into
+// each query schema's z.object rather than extended from
+// CursorPaginationQuerySchema, which is strictObject - extending would
+// silently tighten the other routes' unknown-param handling.
+export const cursorPaginationFields = {
   limit: z.coerce
     .number()
     .int()
@@ -131,9 +136,9 @@ export const CursorPaginationQuerySchema = z.strictObject({
     .max(100)
     .default(50)
     .openapi({ param: { name: "limit", in: "query" } }),
-  // min(1) matches ExtensionListQuerySchema: without it `?cursor=` arrives
-  // as an empty string, which the page helper would treat as "no cursor"
-  // and silently restart pagination instead of reporting the malformed value.
+  // min(1): without it `?cursor=` arrives as an empty string, which the page
+  // helper treats as "no cursor" and silently restarts pagination instead of
+  // reporting the malformed value.
   cursor: z
     .string()
     .min(1)
@@ -143,4 +148,8 @@ export const CursorPaginationQuerySchema = z.strictObject({
       param: { name: "cursor", in: "query" },
       description: "Opaque cursor returned by the previous page"
     })
+};
+
+export const CursorPaginationQuerySchema = z.strictObject({
+  ...cursorPaginationFields
 });
