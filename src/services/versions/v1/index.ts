@@ -14,6 +14,13 @@ import {
 } from "semver";
 import { Releases, ReleaseDetails, ResolvedReleaseDetails } from "./interfaces";
 import { getReleaseR2Object, ReleaseR2Object } from "./r2";
+import {
+  buildSuccessResponse,
+  buildUnavailableResponse,
+  githubErrorDetails,
+  hasNoReleases,
+  ReleaseSource
+} from "./responses";
 import { getPlatform } from "../../../lib/middleware";
 import { ICache } from "../../../lib/interfaces";
 import {
@@ -27,8 +34,7 @@ import {
   AuthError,
   RateLimitError,
   ValidationError,
-  classifyGitHubError,
-  getMostCriticalError
+  classifyGitHubError
 } from "../../../lib/github-errors";
 
 const REPO_OWNER = "FOSSBilling";
@@ -179,34 +185,6 @@ async function loadReleases(
   );
 }
 
-function hasNoReleases(releases: Releases): boolean {
-  return Object.keys(releases).length === 0;
-}
-
-function buildUnavailableResponse(error: GitHubError) {
-  return {
-    result: null,
-    error_code: 503,
-    message: "Unable to fetch releases and no cached data available",
-    details: {
-      http_status: error.httpStatus,
-      error_code: error.errorCode
-    }
-  };
-}
-
-function buildSuccessResponse<T>(
-  result: T,
-  source: GetReleasesResult["source"]
-) {
-  return {
-    result,
-    error_code: 0,
-    message: null,
-    stale: source === "stale"
-  };
-}
-
 // FOSSBilling's own Update.php sends this on every request already (src/di.php,
 // added in 0.8.4), so no client change is needed to gate the R2 mirror by version.
 // Anything we can't confidently read a trusted version out of - no header at all
@@ -345,10 +323,7 @@ versionsV1.get(
           result: null,
           error_code: 500,
           message: `Failed to fetch releases: ${result.error.message}`,
-          details: {
-            http_status: result.error.httpStatus,
-            error_code: result.error.errorCode
-          },
+          details: githubErrorDetails(result.error),
           stale: result.source === "stale"
         },
         500
@@ -361,10 +336,7 @@ versionsV1.get(
         error_code: 0,
         message: result.error.message,
         warning: result.error.message,
-        details: {
-          http_status: result.error.httpStatus,
-          error_code: result.error.errorCode
-        },
+        details: githubErrorDetails(result.error),
         stale: result.source === "stale"
       });
     }
@@ -439,17 +411,9 @@ registerCachedRoute("/count", async (c) => {
 registerCachedRoute(
   "/:version",
   async (c) => {
+    // A required :version param cannot be empty or the route would not match.
     const version = c.req.param("version");
     let result = await loadReleases(c);
-
-    if (!version) {
-      c.status(400);
-      return c.json({
-        result: null,
-        error_code: 400,
-        message: "Version parameter is required."
-      });
-    }
 
     let releases = result.releases;
 
@@ -485,11 +449,9 @@ registerCachedRoute(
     const userAgent = c.req.header("User-Agent");
 
     if (version === "latest") {
-      const sortedKeys = Object.keys(releases).sort(semverCompare);
-      const lastKey = sortedKeys.at(-1);
-      const resolved = lastKey
-        ? resolveReleaseForClient(releases[lastKey], userAgent)
-        : null;
+      // hasNoReleases was excluded above, so the newest key always exists.
+      const lastKey = Object.keys(releases).sort(semverCompare).at(-1)!;
+      const resolved = resolveReleaseForClient(releases[lastKey], userAgent);
 
       return c.json(buildSuccessResponse(resolved, result.source));
     }
@@ -517,7 +479,7 @@ export default versionsV1;
 
 interface GetReleasesResult {
   releases: Releases;
-  source: "cache" | "fresh" | "stale";
+  source: ReleaseSource;
   error?: GitHubError;
 }
 
@@ -530,17 +492,9 @@ export async function getReleases(
   githubToken: string,
   downloadBucket: R2Bucket,
   updateCache: boolean = false,
-  waitUntil?: (promise: Promise<unknown>) => void,
-  // Lets a caller that already read RELEASE_CACHE_KEY (stats' parallel
-  // cold-path read) thread the value through instead of forcing a second
-  // identical KV round trip. `null` means "known empty", distinct from
-  // undefined (no pre-read; fetch it).
-  preReadReleases?: string | null
+  waitUntil?: (promise: Promise<unknown>) => void
 ): Promise<GetReleasesResult> {
-  const cachedReleases =
-    preReadReleases !== undefined
-      ? preReadReleases
-      : await cache.get(RELEASE_CACHE_KEY);
+  const cachedReleases = await cache.get(RELEASE_CACHE_KEY);
 
   // Parsed once and reused for the serve-from-cache short circuit below,
   // the PHP-version reuse, and the stale fallback - re-parsing the full
@@ -767,15 +721,14 @@ export async function getReleases(
         else await writeCache;
       }
 
-      const mostCriticalError = getMostCriticalError(errors) || undefined;
-
+      // Only non-validation errors are worth reporting upstream: a malformed
+      // composer blob skips that version but the rebuild itself succeeded.
+      // First match wins - the batch produces at most one non-validation
+      // failure in practice (a rate limit or network outage aborts the scan).
       return {
         releases,
         source: "fresh",
-        error:
-          mostCriticalError instanceof ValidationError
-            ? undefined
-            : mostCriticalError
+        error: errors.find((e) => !(e instanceof ValidationError))
       };
     } catch (error) {
       const githubError = classifyGitHubError(error, RELEASES_URL);
@@ -829,30 +782,23 @@ export async function getReleases(
   });
 }
 
-// Parsing the full changelog-bearing blob is measurable on this route and
-// the blob is byte-identical across requests until a rebuild refreshes KV,
-// so memoize the parse keyed by the raw string rather than by time: a
-// refreshed value simply misses the memo, and nothing can serve a stale
-// parse of a changed blob. Tiny cap bounds memory; FIFO eviction is fine
-// since at most two blobs (old + new) exist at any moment in practice.
-const RELEASES_PARSE_MEMO_LIMIT = 4;
-const releasesParseMemo = new Map<string, Releases>();
+// Parsing the full changelog-bearing blob is measurable and the blob is
+// byte-identical across sequential requests on a warm isolate until a
+// rebuild refreshes KV, so keep exactly the last parse: a refreshed value
+// simply misses and re-parses. A single slot covers the real workload - the
+// old and new blob around one rebuild.
+let lastRawReleases: string | null = null;
+let lastParsedReleases: Releases | null = null;
 
 function parseCachedReleasesMemoized(
   cachedReleases: string,
   logMessage: string
 ): Releases | null {
-  const memoized = releasesParseMemo.get(cachedReleases);
-  if (memoized) return memoized;
+  if (cachedReleases === lastRawReleases) return lastParsedReleases;
 
   const parsed = parseCachedReleases(cachedReleases, logMessage);
-  if (parsed) {
-    if (releasesParseMemo.size >= RELEASES_PARSE_MEMO_LIMIT) {
-      const oldest = releasesParseMemo.keys().next().value;
-      if (oldest !== undefined) releasesParseMemo.delete(oldest);
-    }
-    releasesParseMemo.set(cachedReleases, parsed);
-  }
+  lastRawReleases = cachedReleases;
+  lastParsedReleases = parsed;
   return parsed;
 }
 

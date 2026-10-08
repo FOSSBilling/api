@@ -349,9 +349,11 @@ describe("Extension resource admission", () => {
         new Error("INSERT submitted payload", { cause: error })
       );
       expect(log).toHaveBeenCalledOnce();
-      expect(log.mock.calls[0][0]).toContain('"error_type":"SqliteError"');
-      expect(log.mock.calls[0][0]).toContain('"backend_code":"SQLITE_BUSY"');
-      expect(log.mock.calls[0][0]).not.toMatch(
+      // The structured context is the trailing console argument.
+      const context = String(log.mock.calls[0][2]);
+      expect(context).toContain('"error_type":"SqliteError"');
+      expect(context).toContain('"backend_code":"SQLITE_BUSY"');
+      expect(String(log.mock.calls[0])).not.toMatch(
         /SELECT|INSERT|secret_content|submitted payload/
       );
     } finally {
@@ -1183,11 +1185,10 @@ describe("Bounded revision reads and maintenance", () => {
       });
       await reportExtensionResources(getExtensionsDb(db), "compact");
       expect(warn).toHaveBeenCalledTimes(1);
-      expect(warn.mock.calls[0][0]).toContain(
-        '"reason":"legacy_content_present"'
-      );
-      expect(warn.mock.calls[0][0]).not.toContain("owner");
-      expect(warn.mock.calls[0][0]).not.toContain(sampleContent().name);
+      const context = String(warn.mock.calls[0][2]);
+      expect(context).toContain('"reason":"legacy_content_present"');
+      expect(String(warn.mock.calls[0])).not.toContain("owner");
+      expect(String(warn.mock.calls[0])).not.toContain(sampleContent().name);
     } finally {
       warn.mockRestore();
     }

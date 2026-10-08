@@ -9,17 +9,19 @@ import {
 import { getMainPreviewObject, MainPreviewObject } from "../r2";
 import { findPreviewArtifactByCommitSha } from "../github/artifacts";
 import { singleFlight } from "../../../../lib/cache";
+import { cachedLookup, readCachedValue } from "../cache";
 import { notFoundBody } from "./errors";
 import { PreviewsV1App } from "./app";
 
+// One shared cache entry for both routes: /main stores the enriched body,
+// and /main/download stores the same shape with enrichment left null (the
+// fields are optional and enrichment is best-effort by contract). Two
+// differently-shaped or independently-negative entries could disagree -
+// one route 404ing or serving a stale URL while the other resolves fine -
+// which a single shared entry rules out by construction. cachedLookup()'s
+// shared negative sentinel and TTL apply (see cache.ts).
 const MAIN_CACHE_KEY = "preview:main";
 const MAIN_CACHE_TTL_SECONDS = 60;
-// Both routes 404 while no main preview has been published - cache that
-// state briefly so the 404 path costs a KV read instead of an R2 head per
-// request. An R2 miss is a stable signal (the object only exists once CI
-// uploads it), so a 60s window is safe.
-const MAIN_NEGATIVE_CACHE_TTL_SECONDS = 60;
-const MAIN_NEGATIVE_CACHE_VALUE = "__main_preview_missing__";
 
 // Enrichment only - run_id/artifact_id/created_at/expires_at come from
 // that commit's GitHub Actions artifact when resolvable. A miss for any
@@ -89,90 +91,53 @@ function buildMainPreview(
 async function resolveMainPreview(
   c: Context<{ Bindings: CloudflareBindings }>
 ): Promise<MainPreview | null> {
-  const waitUntil = (p: Promise<unknown>) => c.executionCtx.waitUntil(p);
-
-  const cached = await c.env.CACHE_KV.get(MAIN_CACHE_KEY);
-  if (cached === MAIN_NEGATIVE_CACHE_VALUE) {
-    return null;
-  }
-  if (cached) {
-    try {
-      return JSON.parse(cached) as MainPreview;
-    } catch {
-      // Corrupt cache entry - fall through to a fresh R2 lookup, matching
-      // cachedLookup()'s handling of the same situation.
-    }
-  }
-
-  const object = await resolveMainObject(c);
-  if (!object) {
-    waitUntil(
-      c.env.CACHE_KV.put(MAIN_CACHE_KEY, MAIN_NEGATIVE_CACHE_VALUE, {
-        expirationTtl: MAIN_NEGATIVE_CACHE_TTL_SECONDS
-      })
-    );
-    return null;
-  }
-
-  const artifactFields = await (object.commitSha
-    ? // Enrichment is keyed by commit: concurrent cold requests share one
-      // GitHub lookup (charged once to the shared budget) without mixing
-      // SHAs, and the R2 head above is already single-flighted so racing
-      // requests observe the same object.
-      singleFlight(`previews:main:enrich:${object.commitSha}`, () =>
-        resolveArtifactFields(previewGitHub(c), object.commitSha)
-      )
-    : resolveArtifactFields(previewGitHub(c), null));
-
-  const result = buildMainPreview(object, artifactFields);
-
-  waitUntil(
-    c.env.CACHE_KV.put(MAIN_CACHE_KEY, JSON.stringify(result), {
-      expirationTtl: MAIN_CACHE_TTL_SECONDS
-    })
+  const result = await cachedLookup<MainPreview>(
+    c.env.CACHE_KV,
+    MAIN_CACHE_KEY,
+    async () => {
+      const object = await resolveMainObject(c);
+      if (!object) {
+        return { status: "not_found" as const };
+      }
+      const artifactFields = await (object.commitSha
+        ? // Enrichment is keyed by commit: concurrent cold requests share one
+          // GitHub lookup (charged once to the shared budget) without mixing
+          // SHAs, and the R2 head above is already single-flighted so racing
+          // requests observe the same object.
+          singleFlight(`previews:main:enrich:${object.commitSha}`, () =>
+            resolveArtifactFields(previewGitHub(c), object.commitSha)
+          )
+        : resolveArtifactFields(previewGitHub(c), null));
+      return {
+        status: "found" as const,
+        data: buildMainPreview(object, artifactFields)
+      };
+    },
+    MAIN_CACHE_TTL_SECONDS,
+    (p) => c.executionCtx.waitUntil(p)
   );
-
-  return result;
+  return result.status === "found" ? result.data : null;
 }
 
 // Shared by /main/download - the fixed download URL, no GitHub enrichment.
 async function resolveMainDownloadUrl(
   c: Context<{ Bindings: CloudflareBindings }>
 ): Promise<string | null> {
-  const waitUntil = (p: Promise<unknown>) => c.executionCtx.waitUntil(p);
+  const read = await readCachedValue<MainPreview>(
+    c.env.CACHE_KV,
+    MAIN_CACHE_KEY
+  );
+  if (read === null) return null; // authoritative negative
+  if (read !== "miss" && read.download_url) return read.download_url;
 
-  const cached = await c.env.CACHE_KV.get(MAIN_CACHE_KEY);
-  if (cached === MAIN_NEGATIVE_CACHE_VALUE) {
-    return null;
-  }
-  if (cached) {
-    try {
-      const parsed = JSON.parse(cached) as MainPreview;
-      if (parsed.download_url) return parsed.download_url;
-    } catch {
-      // Corrupt cache entry - fall through to a fresh R2 lookup.
-    }
-  }
-
+  // No write of any kind here, by design: /main owns the shared entry, and
+  // an unenriched (or negative) body written from this route would silently
+  // clobber a concurrently-cached enriched one. The cost of not warming
+  // from the download path is one single-flighted R2 head per cold download
+  // request - rare next to the embed traffic that hits /main and populates
+  // the entry.
   const object = await resolveMainObject(c);
-  if (!object) {
-    // The R2 miss is single-flighted, so every concurrent route saw the
-    // same outcome and this negative write can't contradict a concurrent
-    // positive one.
-    waitUntil(
-      c.env.CACHE_KV.put(MAIN_CACHE_KEY, MAIN_NEGATIVE_CACHE_VALUE, {
-        expirationTtl: MAIN_NEGATIVE_CACHE_TTL_SECONDS
-      })
-    );
-    return null;
-  }
-
-  // No positive write here, by design: /main owns the shared entry, and an
-  // unenriched body written from this route would silently clobber a
-  // concurrently-cached enriched one. The cost of not warming from the
-  // download path is one single-flighted R2 head per cold download request -
-  // rare next to the embed traffic that hits /main and populates the entry.
-  return object.downloadUrl;
+  return object?.downloadUrl ?? null;
 }
 
 export function registerMainRoutes(app: PreviewsV1App): void {

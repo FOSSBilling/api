@@ -4,8 +4,13 @@ import { etag } from "hono/etag";
 import { prettyJSON } from "hono/pretty-json";
 import { trimTrailingSlash } from "hono/trailing-slash";
 import { compare as semverCompare } from "semver";
-import { getReleases, RELEASE_CACHE_KEY } from "../../versions/v1/index";
+import { getReleases } from "../../versions/v1/index";
 import { Releases } from "../../versions/v1/interfaces";
+import {
+  buildSuccessResponse,
+  buildUnavailableResponse,
+  hasNoReleases
+} from "../../versions/v1/responses";
 import { StatsData, ReleasesPerYearData } from "./interfaces";
 import { STATS_DASHBOARD_HTML } from "./dashboard";
 import { getPlatform } from "../../../lib/middleware";
@@ -48,34 +53,6 @@ function registerCachedRoute<P extends string>(
     prettyJSON(),
     handler
   );
-}
-
-function hasNoReleases(releases: Releases): boolean {
-  return Object.keys(releases).length === 0;
-}
-
-function buildSuccessResponse<T>(
-  result: T,
-  source: "cache" | "fresh" | "stale"
-) {
-  return {
-    result,
-    error_code: 0,
-    message: null,
-    stale: source === "stale"
-  };
-}
-
-function buildUnavailableResponse(error: GitHubError) {
-  return {
-    result: null,
-    error_code: 503,
-    message: "Unable to fetch releases and no cached data available",
-    details: {
-      http_status: error.httpStatus,
-      error_code: error.errorCode
-    }
-  };
 }
 
 function parseVersionLine(version: string): string {
@@ -145,26 +122,15 @@ async function getStats(
   cache: ICache,
   githubToken: string,
   downloadBucket: R2Bucket,
-  updateCache: boolean = false,
   waitUntil?: (promise: Promise<unknown>) => void
 ): Promise<{
   stats: StatsData;
   source: "cache" | "fresh" | "stale";
   error?: GitHubError;
 }> {
-  // Both KV reads are needed on the cold path (stats value + the shared
-  // releases blob getReleases consumes), so issue them together instead of
-  // serializing two round trips on an already-slow request. Only the stats
-  // read may reject the whole call: a transient failure on the releases
-  // read degrades to "no pre-read" (getReleases does its own read, the
-  // pre-parallelization behavior) rather than discarding a valid cached
-  // stats value behind it.
-  const [cachedStats, cachedReleases] = await Promise.all([
-    cache.get(STATS_CACHE_KEY),
-    cache.get(RELEASE_CACHE_KEY).catch(() => undefined)
-  ]);
+  const cachedStats = await cache.get(STATS_CACHE_KEY);
 
-  if (cachedStats && !updateCache) {
+  if (cachedStats) {
     try {
       const parsedCache = JSON.parse(cachedStats);
       if (parsedCache && typeof parsedCache === "object") {
@@ -188,15 +154,13 @@ async function getStats(
   // getReleases shares its cache with the versions service (same
   // RELEASE_CACHE_KEY), so a fresh fetch here must still resolve R2
   // download_url/digest - otherwise a stats-triggered refresh would
-  // overwrite that cache with GitHub-only URLs for up to a day. The
-  // pre-read value from above is threaded through so it isn't fetched twice.
+  // overwrite that cache with GitHub-only URLs for up to a day.
   const result = await getReleases(
     cache,
     githubToken,
     downloadBucket,
-    updateCache,
-    waitUntil,
-    cachedReleases
+    false,
+    waitUntil
   );
 
   if (hasNoReleases(result.releases) && result.error) {
@@ -238,7 +202,6 @@ registerCachedRoute("/data", async (c) => {
     platform.getCache("CACHE_KV"),
     platform.getEnv("GITHUB_TOKEN") || "",
     c.env.DOWNLOAD_BUCKET,
-    false,
     (p) => c.executionCtx.waitUntil(p)
   );
 
