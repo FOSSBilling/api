@@ -65,10 +65,85 @@ describe("Stats API v1", () => {
     if (restoreConsole) restoreConsole();
   });
 
-  // Credential-independence of the public edge entry is covered for the
-  // shared publicResponseCache mechanism in versions/v1 and
-  // test/lib/cache.test.ts; this suite covers stats' own aggregation,
-  // caching, and dashboard payload.
+  // Both stats registrations share the public edge entry: credentials must
+  // not fragment it, and a credentials-driven request must be served from
+  // the edge without waking the backend (spied KV get must stay cold). This
+  // is the stats-specific wiring; the mechanism itself is covered in
+  // test/lib/cache.test.ts.
+  it("serves both stats routes across credentials from the public edge entry", async () => {
+    for (const path of ["/stats/v1", "/stats/v1/data"]) {
+      const requestAs = async (authorization?: string) => {
+        const ctx = createExecutionContext();
+        const response = await app.request(
+          path,
+          {
+            headers: authorization === undefined ? {} : { authorization }
+          },
+          env,
+          ctx
+        );
+        await waitOnExecutionContext(ctx);
+        return response;
+      };
+      const first = await requestAs("Bearer arbitrary-cold");
+      expect(first.status).toBe(200);
+      const body = await first.text();
+      const get = vi
+        .spyOn(env.CACHE_KV, "get")
+        .mockRejectedValue(new Error("backend must not be read"));
+      try {
+        for (const authorization of [undefined, "x", "Bearer other", ""]) {
+          const response = await requestAs(authorization);
+          expect(response.status).toBe(200);
+          await expect(response.text()).resolves.toBe(body);
+        }
+        expect(get).not.toHaveBeenCalled();
+      } finally {
+        get.mockRestore();
+      }
+    }
+  });
+
+  // A cached stats value must be served even when the shared releases read
+  // rejects - getReleases' KV failure must not turn a warm /data request
+  // into a 500.
+  it("serves cached statistics when the shared releases read fails", async () => {
+    const ctx1 = createExecutionContext();
+    await app.request("/stats/v1/data", { headers: PUBLIC_HEADERS }, env, ctx1);
+    await waitOnExecutionContext(ctx1);
+    const cached = await env.CACHE_KV.get("fossbilling-stats-data");
+    expect(cached).toBeTruthy();
+
+    const realGet = env.CACHE_KV.get.bind(env.CACHE_KV) as (
+      key: string
+    ) => Promise<string | null>;
+    const getSpy = vi.spyOn(env.CACHE_KV, "get");
+    getSpy.mockImplementation(((key: string | string[]) => {
+      const first = Array.isArray(key) ? key[0] : key;
+      if (first === "gh-fossbilling-releases") {
+        return Promise.reject(new Error("releases read failed"));
+      }
+      return realGet(key as string);
+    }) as unknown as typeof env.CACHE_KV.get);
+    try {
+      const ctx2 = createExecutionContext();
+      const response = await app.request(
+        "/stats/v1/data",
+        { headers: PUBLIC_HEADERS },
+        env,
+        ctx2
+      );
+      await waitOnExecutionContext(ctx2);
+
+      expect(response.status).toBe(200);
+      const data = (await response.json()) as ApiResponse<StatsData>;
+      expect(data.error_code).toBe(0);
+      expect(data.stale).toBe(false);
+      expect(data.result.releaseSizes.length).toBeGreaterThan(0);
+    } finally {
+      getSpy.mockRestore();
+    }
+  });
 
   describe("GET /stats/v1/data", () => {
     it("should return aggregated statistics", async () => {

@@ -27,6 +27,7 @@ describe("classifyGitHubError", () => {
     expect(result).toBeInstanceOf(AuthError);
     expect(result.message).toBe("Bad credentials");
     expect(result.httpStatus).toBe(401);
+    expect(result.errorCode).toBe("auth_error");
     expect(result.url).toBe("https://api.github.com/test");
   });
 
@@ -38,6 +39,7 @@ describe("classifyGitHubError", () => {
     expect(result).toBeInstanceOf(RateLimitError);
     expect(result.message).toBe("GitHub API rate limit exceeded");
     expect(result.httpStatus).toBe(403);
+    expect(result.errorCode).toBe("rate_limit_error");
   });
 
   it("should classify 403 rate limit errors case-insensitively", () => {
@@ -59,6 +61,7 @@ describe("classifyGitHubError", () => {
     expect(result).toBeInstanceOf(AuthError);
     expect(result.message).toBe("Repository access denied");
     expect(result.httpStatus).toBe(403);
+    expect(result.errorCode).toBe("auth_error");
   });
 
   // Regression: the rate-limit text was read from String(error), which is
@@ -71,6 +74,7 @@ describe("classifyGitHubError", () => {
 
     expect(result).toBeInstanceOf(RateLimitError);
     expect(result.httpStatus).toBe(403);
+    expect(result.errorCode).toBe("rate_limit_error");
   });
 
   it("should classify a 403 with an exhausted quota header as RateLimitError", () => {
@@ -84,6 +88,7 @@ describe("classifyGitHubError", () => {
     expect(result).toBeInstanceOf(RateLimitError);
     expect(result.message).toBe("GitHub API rate limit exceeded");
     expect(result.httpStatus).toBe(403);
+    expect(result.errorCode).toBe("rate_limit_error");
   });
 
   it("should classify 429 errors as RateLimitError", () => {
@@ -93,6 +98,7 @@ describe("classifyGitHubError", () => {
     expect(result).toBeInstanceOf(RateLimitError);
     expect(result.message).toBe("GitHub API rate limit exceeded");
     expect(result.httpStatus).toBe(429);
+    expect(result.errorCode).toBe("rate_limit_error");
   });
 
   // A 5xx has no dedicated class, but dropping its status would make an
@@ -115,6 +121,7 @@ describe("classifyGitHubError", () => {
     expect(result).toBeInstanceOf(NotFoundError);
     expect(result.message).toBe("Not found");
     expect(result.httpStatus).toBe(404);
+    expect(result.errorCode).toBe("not_found_error");
     expect(result.url).toBe("https://api.github.com/test");
   });
 
@@ -125,6 +132,7 @@ describe("classifyGitHubError", () => {
     expect(result).toBeInstanceOf(NetworkError);
     expect(result.message).toBe("GitHub API request timed out");
     expect(result.url).toBe("https://api.github.com/test");
+    expect(result.errorCode).toBe("network_error");
   });
 
   it("should classify network errors as NetworkError", () => {
@@ -133,6 +141,7 @@ describe("classifyGitHubError", () => {
 
     expect(result).toBeInstanceOf(NetworkError);
     expect(result.message).toBe("GitHub API network error");
+    expect(result.errorCode).toBe("network_error");
   });
 
   it("should classify JSON parsing errors as ValidationError", () => {
@@ -141,6 +150,7 @@ describe("classifyGitHubError", () => {
 
     expect(result).toBeInstanceOf(ValidationError);
     expect(result.message).toBe("Invalid JSON response from GitHub API");
+    expect(result.errorCode).toBe("validation_error");
   });
 
   it("should classify unknown errors as GitHubError", () => {

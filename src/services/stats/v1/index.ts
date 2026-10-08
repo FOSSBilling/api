@@ -131,20 +131,30 @@ async function getStats(
   // Kick off the stats read before getReleases so the two KV reads
   // (stats value + the shared releases blob getReleases consumes) overlap
   // on the cold path instead of serializing. A failed stats read degrades
-  // to a cache miss - getReleases' own read is untouched by it.
+  // to a cache miss - getReleases' own read is untouched by it. getReleases
+  // itself is deferred below so that a valid stats hit is served even when
+  // the releases read rejects (getReleases only rejects on its own KV read,
+  // never on GitHub failures - those come back as error results).
   const cachedStatsPromise = cache.get(STATS_CACHE_KEY).catch(() => undefined);
 
-  // getReleases shares its cache with the versions service (same
-  // RELEASE_CACHE_KEY), so a fresh fetch here must still resolve R2
-  // download_url/digest - otherwise a stats-triggered refresh would
-  // overwrite that cache with GitHub-only URLs for up to a day.
-  const result = await getReleases(
-    cache,
-    githubToken,
-    downloadBucket,
-    false,
-    waitUntil
-  );
+  let releases: Awaited<ReturnType<typeof getReleases>> | null = null;
+  let releasesFailure: unknown = null;
+  try {
+    // getReleases shares its cache with the versions service (same
+    // RELEASE_CACHE_KEY), so a fresh fetch here must still resolve R2
+    // download_url/digest - otherwise a stats-triggered refresh would
+    // overwrite that cache with GitHub-only URLs for up to a day.
+    releases = await getReleases(
+      cache,
+      githubToken,
+      downloadBucket,
+      false,
+      waitUntil
+    );
+  } catch (error) {
+    // Held until we know whether a stats cache hit can serve instead.
+    releasesFailure = error;
+  }
   const cachedStats = await cachedStatsPromise;
 
   if (cachedStats) {
@@ -154,6 +164,8 @@ async function getStats(
         logInfo("stats", "Serving stats from cache", {
           cacheKey: STATS_CACHE_KEY
         });
+        // Served even when the releases read above failed: a cached value
+        // in hand beats rethrowing a KV failure.
         return {
           stats: parsedCache as StatsData,
           source: "cache"
@@ -167,6 +179,12 @@ async function getStats(
       });
     }
   }
+
+  // No usable stats cache - now the releases failure (if any) is the answer.
+  if (releasesFailure !== null) {
+    throw releasesFailure;
+  }
+  const result = releases!;
 
   if (hasNoReleases(result.releases) && result.error) {
     return {

@@ -38,7 +38,12 @@ centralAlertsV1.get("/list", async (c) => {
   }
   // This route never authenticates or varies by Authorization. Use a
   // header-free key so that arbitrary credentials cannot force a D1 read.
-  const edgeCache = await caches.open("central-alerts-v1");
+  // Degrade to serving uncached on runtimes without Cache Storage (the
+  // portability seam) rather than failing the route.
+  const edgeCache =
+    typeof caches !== "undefined"
+      ? await caches.open("central-alerts-v1")
+      : undefined;
   const cached = await edgeCache?.match(cacheUrl.href);
   if (cached) return new Response(cached.body, cached);
 

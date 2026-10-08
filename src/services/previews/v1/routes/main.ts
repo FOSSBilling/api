@@ -128,7 +128,10 @@ async function resolveMainDownloadUrl(
     MAIN_CACHE_KEY
   );
   if (read.status === "negative") return null; // authoritative negative
-  if (read.status === "hit" && read.value.download_url)
+  // The `?.` also covers a cached literal `null` (valid JSON written by
+  // something other than cachedLookup): treat it as absent and fall through
+  // to the R2 head rather than throwing on the missing URL.
+  if (read.status === "hit" && read.value?.download_url)
     return read.value.download_url;
 
   // No write of any kind here, by design: /main owns the shared entry, and
