@@ -2,7 +2,6 @@
  * Type definitions for test files
  */
 
-import { vi } from "vitest";
 import type { CentralAlert } from "../../src/services/central-alerts/v1/interfaces";
 
 // API Response Types
@@ -38,38 +37,7 @@ export interface VersionInfo {
   digest: string | null;
 }
 
-// GitHub Types
-export interface GitHubRelease {
-  id: number;
-  tag_name: string;
-  name: string;
-  published_at: string;
-  prerelease: boolean;
-  body: string;
-  assets: GitHubAsset[];
-}
-
-export interface GitHubAsset {
-  name: string;
-  browser_download_url: string;
-  size: number;
-}
-
-export interface GitHubContentResponse {
-  data: {
-    content: string;
-  };
-}
-
 // Mock Types
-export interface MockFetchResponse<T = unknown> {
-  ok: boolean;
-  json: () => Promise<T>;
-  text: () => Promise<string>;
-  status: number;
-  statusText: string;
-}
-
 export interface MockGitHubRequest {
   mockImplementation: (fn: (route: string) => Promise<unknown>) => void;
   mockRejectedValueOnce: (value: unknown) => void;
@@ -81,38 +49,3 @@ export interface MockGitHubGraphQL {
   ) => void;
   mockRejectedValueOnce: (value: unknown) => void;
 }
-
-// Environment Types
-export interface TestEnv {
-  CACHE_KV: {
-    get: (key: string) => Promise<string | null>;
-    put: (
-      key: string,
-      value: string,
-      options?: { expirationTtl: number }
-    ) => Promise<void>;
-    delete: (key: string) => Promise<void>;
-  };
-  AUTH_KV: {
-    get: (key: string) => Promise<string | null>;
-    put: (
-      key: string,
-      value: string,
-      options?: { expirationTtl: number }
-    ) => Promise<void>;
-    delete: (key: string) => Promise<void>;
-  };
-  DB_CENTRAL_ALERTS: unknown;
-}
-
-// Export CentralAlert type
-export type { CentralAlert } from "../../src/services/central-alerts/v1/interfaces";
-
-// Spy Types
-export type FetchSpy = ReturnType<typeof vi.spyOn>;
-
-export type KVPutSpy = {
-  mockImplementation: (
-    fn: (key: string, value: string, options?: unknown) => Promise<void>
-  ) => void;
-} & ReturnType<typeof vi.spyOn>;

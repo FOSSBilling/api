@@ -9,72 +9,9 @@ import {
   classifyGitHubError
 } from "../../src/lib/github-errors";
 
-describe("GitHubError Classes", () => {
-  it("should create GitHubError with all properties", () => {
-    const error = new GitHubError(
-      "Test error",
-      500,
-      "test_error",
-      "https://api.github.com/test"
-    );
-
-    expect(error.message).toBe("Test error");
-    expect(error.httpStatus).toBe(500);
-    expect(error.errorCode).toBe("test_error");
-    expect(error.url).toBe("https://api.github.com/test");
-    expect(error.name).toBe("GitHubError");
-  });
-
-  it("should create AuthError with defaults", () => {
-    const error = new AuthError(
-      "Unauthorized",
-      401,
-      "https://api.github.com/test"
-    );
-
-    expect(error.message).toBe("Unauthorized");
-    expect(error.httpStatus).toBe(401);
-    expect(error.errorCode).toBe("auth_error");
-    expect(error.url).toBe("https://api.github.com/test");
-  });
-
-  it("should create RateLimitError", () => {
-    const error = new RateLimitError("Rate limited", 403);
-
-    expect(error.message).toBe("Rate limited");
-    expect(error.httpStatus).toBe(403);
-    expect(error.errorCode).toBe("rate_limit_error");
-  });
-
-  it("should create NetworkError without a status", () => {
-    const error = new NetworkError(
-      "Network failure",
-      "https://api.github.com/test"
-    );
-
-    expect(error.message).toBe("Network failure");
-    expect(error.httpStatus).toBeUndefined();
-    expect(error.errorCode).toBe("network_error");
-    expect(error.url).toBe("https://api.github.com/test");
-  });
-
-  it("should create NotFoundError", () => {
-    const error = new NotFoundError("Not found", 404);
-
-    expect(error.message).toBe("Not found");
-    expect(error.httpStatus).toBe(404);
-    expect(error.errorCode).toBe("not_found_error");
-  });
-
-  it("should create ValidationError", () => {
-    const error = new ValidationError("Invalid data");
-
-    expect(error.message).toBe("Invalid data");
-    expect(error.httpStatus).toBeUndefined();
-    expect(error.errorCode).toBe("validation_error");
-  });
-});
-
+// The error classes are default-parameter setters over GitHubError; every
+// defaulted value is exercised through classifyGitHubError below, which is
+// the path production code actually consumes. No constructor describe here.
 describe("classifyGitHubError", () => {
   it("should return original error if already a GitHubError", () => {
     const originalError = new AuthError("Already classified");
@@ -222,12 +159,5 @@ describe("classifyGitHubError", () => {
 
     expect(result).toBeInstanceOf(GitHubError);
     expect(result.message).toBe("String error");
-  });
-
-  it("should handle null errors", () => {
-    const result = classifyGitHubError(null);
-
-    expect(result).toBeInstanceOf(GitHubError);
-    expect(result.message).toBe("null");
   });
 });

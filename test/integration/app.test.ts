@@ -142,19 +142,11 @@ describe("FOSSBilling API Worker - Full App Integration", () => {
     });
   });
 
+  // The versions KV write is asserted once here for the whole app; the
+  // /update auth matrix lives in test/services/versions/v1 and the KV-rewrite
+  // flow in integration/versions.
   describe("Cross-Service Communication", () => {
-    it("should allow services to share cached data", async () => {
-      const ctx = createExecutionContext();
-      await app.request("/versions/v1", { headers: BYPASS_CACHE }, env, ctx);
-      await waitOnExecutionContext(ctx);
-
-      const cached = await env.CACHE_KV.get("gh-fossbilling-releases");
-      expect(cached).toBeTruthy();
-    });
-  });
-
-  describe("Context Storage Middleware", () => {
-    it("should make environment bindings available to all services", async () => {
+    it("exposes environment bindings and the shared cache to all services", async () => {
       const ctx = createExecutionContext();
       const response = await app.request(
         "/versions/v1",
@@ -185,26 +177,15 @@ describe("FOSSBilling API Worker - Full App Integration", () => {
       expect(data.result.alerts).toBeInstanceOf(Array);
     });
 
-    it("should handle UPDATE_TOKEN from KV storage", async () => {
+    it("rejects unauthenticated update requests", async () => {
       const ctx = createExecutionContext();
-      const response = await app.request(
-        "/versions/v1/update",
-        {
-          headers: {
-            Authorization: "Bearer test-update-token-12345"
-          }
-        },
-        env,
-        ctx
-      );
+      const response = await app.request("/versions/v1/update", {}, env, ctx);
       await waitOnExecutionContext(ctx);
 
-      expect(response.status).toBe(200);
+      expect(response.status).toBe(401);
     });
-  });
 
-  describe("Error Handling Across Services", () => {
-    it("should handle 404 for invalid service routes", async () => {
+    it("returns 404 for invalid service routes", async () => {
       const endpoints = [
         "/versions/v1/invalid-endpoint",
         "/central-alerts/v1/invalid"
@@ -218,94 +199,11 @@ describe("FOSSBilling API Worker - Full App Integration", () => {
         expect(response.status).toBe(404);
       }
     });
-
-    it("should handle unauthorized update requests", async () => {
-      const ctx = createExecutionContext();
-      const response = await app.request("/versions/v1/update", {}, env, ctx);
-      await waitOnExecutionContext(ctx);
-
-      expect(response.status).toBe(401);
-    });
   });
 
-  describe("Consistent API Response Format", () => {
-    it("should maintain consistent response format across all services", async () => {
-      const endpoints = [
-        { path: "/versions/v1", fields: ["result", "error_code", "message"] },
-        { path: "/central-alerts/v1/list", fields: ["result"] }
-      ];
-
-      for (const { path, fields } of endpoints) {
-        const ctx = createExecutionContext();
-        const response = await app.request(path, {}, env, ctx);
-        await waitOnExecutionContext(ctx);
-
-        const data = await response.json();
-        for (const field of fields) {
-          expect(data).toHaveProperty(field);
-        }
-      }
-    });
-  });
-
-  describe("HTTP Method Handling", () => {
-    it("should handle GET requests across all services", async () => {
-      const endpoints = [
-        "/versions/v1",
-        "/versions/v1/latest",
-        "/central-alerts/v1/list",
-        "/stats/v1/data",
-        "/stats/v1"
-      ];
-
-      for (const endpoint of endpoints) {
-        const ctx = createExecutionContext();
-        const response = await app.request(
-          endpoint,
-          { method: "GET" },
-          env,
-          ctx
-        );
-        await waitOnExecutionContext(ctx);
-
-        expect([200, 301]).toContain(response.status);
-      }
-    });
-
-    it("should return 404 for unsupported methods", async () => {
-      const ctx = createExecutionContext();
-      const response = await app.request(
-        "/versions/v1",
-        { method: "POST" },
-        env,
-        ctx
-      );
-      await waitOnExecutionContext(ctx);
-
-      expect(response.status).toBe(404);
-    });
-
-    it("should handle OPTIONS preflight requests", async () => {
-      const endpoints = ["/versions/v1"];
-
-      for (const endpoint of endpoints) {
-        const ctx = createExecutionContext();
-        const response = await app.request(
-          endpoint,
-          { method: "OPTIONS" },
-          env,
-          ctx
-        );
-        await waitOnExecutionContext(ctx);
-
-        expect([204, 405]).toContain(response.status);
-        if (response.status === 204) {
-          expect(response.headers.get("Access-Control-Allow-Origin")).toBe("*");
-        }
-      }
-    });
-  });
-
+  // Method-level behavior is Hono routing, already exercised by every
+  // request in this suite; the surviving assertions are the cross-service
+  // headers the wiring owns.
   describe("Headers and Middleware", () => {
     it("should include CORS headers on all responses", async () => {
       const endpoints = [

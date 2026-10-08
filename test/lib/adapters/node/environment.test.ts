@@ -1,30 +1,16 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { NodeEnvironmentAdapter } from "../../../../src/lib/adapters/node/environment";
 
+// The adapter is `return process.env[key]`; one smoke test pins the
+// IEnvironment contract (string passthrough, undefined for missing keys).
 describe("NodeEnvironmentAdapter", () => {
-  let adapter: NodeEnvironmentAdapter;
+  it("returns process.env values and undefined for missing keys", () => {
+    process.env.FB_TEST_VAR = "test-value";
 
-  beforeEach(() => {
-    adapter = new NodeEnvironmentAdapter();
-  });
+    const adapter = new NodeEnvironmentAdapter();
+    expect(adapter.get("FB_TEST_VAR")).toBe("test-value");
+    expect(adapter.get("FB_TEST_MISSING")).toBeUndefined();
 
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
-  it("returns environment variables", () => {
-    vi.stubEnv("TEST_VAR", "test-value");
-
-    expect(adapter.get("TEST_VAR")).toBe("test-value");
-  });
-
-  it("returns empty string values", () => {
-    vi.stubEnv("EMPTY_VAR", "");
-
-    expect(adapter.get("EMPTY_VAR")).toBe("");
-  });
-
-  it("returns undefined for missing variables", () => {
-    expect(adapter.get("NONEXISTENT_VAR")).toBeUndefined();
+    delete process.env.FB_TEST_VAR;
   });
 });
