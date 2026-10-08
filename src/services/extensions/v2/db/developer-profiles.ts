@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, gt, isNull, lt, or, sql, SQL } from "drizzle-orm";
 import { DatabaseResult } from "../../../../lib/interfaces";
 import { ExtensionsDb } from "../../../../lib/db";
-import { encodeCursor as encode, decodeCursor as decode } from "./cursor";
+import { createCursorCodec } from "./cursor";
 import {
   developers,
   developerHistory,
@@ -715,7 +715,7 @@ export class DeveloperProfilesDatabase {
     const scope = filters.scope ?? filters.status ?? "all";
     const limit = filters.limit ?? 50;
     const decoded = filters.cursor
-      ? decodeDeveloperCursor(filters.cursor)
+      ? developerListCursor.decode(filters.cursor)
       : null;
     if (filters.cursor && !decoded) {
       return {
@@ -798,13 +798,14 @@ export class DeveloperProfilesDatabase {
         hasMore,
         nextCursor:
           hasMore && last
-            ? encodeDeveloperCursor(
-                scope,
-                scope === "unapproved"
-                  ? last.developer.createdAt
-                  : last.developer.name,
-                String(last.rowid)
-              )
+            ? developerListCursor.encode({
+                k1:
+                  scope === "unapproved"
+                    ? last.developer.createdAt
+                    : last.developer.name,
+                k2: String(last.rowid),
+                s: scope
+              })
             : null
       },
       error: null
@@ -885,7 +886,7 @@ export class DeveloperProfilesDatabase {
     }>
   > {
     const limit = page?.limit ?? 50;
-    const decoded = page?.cursor ? decodeHistoryCursor(page.cursor) : null;
+    const decoded = page?.cursor ? historyCursor.decode(page.cursor) : null;
     // Case-insensitive like the id matching everywhere else: ids are
     // lowercase slugs by schema, but adopted rows predate that.
     if (
@@ -960,11 +961,11 @@ export class DeveloperProfilesDatabase {
         hasMore,
         nextCursor:
           hasMore && last
-            ? encodeHistoryCursor(
-                last.changedAt,
-                String(last.rowid),
-                developerId
-              )
+            ? historyCursor.encode({
+                k1: last.changedAt,
+                k2: String(last.rowid),
+                d: developerId
+              })
             : null
       },
       error: null
@@ -1213,54 +1214,28 @@ export class DeveloperProfilesDatabase {
   }
 }
 
-interface DeveloperListCursor {
+type DeveloperListCursor = {
   k1: string;
   k2: string;
   s: "all" | "unapproved";
-}
+};
 
-function encodeDeveloperCursor(
-  scope: "all" | "unapproved",
-  k1: string,
-  k2: string
-): string {
-  return encode({ k1, k2, s: scope });
-}
-
-function isDeveloperListCursor(
-  parsed: Record<string, unknown>
-): parsed is DeveloperListCursor & Record<string, unknown> {
-  return (
+const developerListCursor = createCursorCodec<DeveloperListCursor>(
+  (parsed): parsed is DeveloperListCursor =>
     typeof parsed.k1 === "string" &&
     typeof parsed.k2 === "string" &&
     (parsed.s === "all" || parsed.s === "unapproved")
-  );
-}
+);
 
-function decodeDeveloperCursor(cursor: string): DeveloperListCursor | null {
-  return decode(cursor, isDeveloperListCursor);
-}
-
-interface HistoryCursor {
+type HistoryCursor = {
   k1: string;
   k2: string;
   d: string;
-}
+};
 
-function encodeHistoryCursor(k1: string, k2: string, d: string): string {
-  return encode({ k1, k2, d });
-}
-
-function isHistoryCursor(
-  parsed: Record<string, unknown>
-): parsed is HistoryCursor & Record<string, unknown> {
-  return (
+const historyCursor = createCursorCodec<HistoryCursor>(
+  (parsed): parsed is HistoryCursor =>
     typeof parsed.k1 === "string" &&
     typeof parsed.k2 === "string" &&
     typeof parsed.d === "string"
-  );
-}
-
-function decodeHistoryCursor(cursor: string): HistoryCursor | null {
-  return decode(cursor, isHistoryCursor);
-}
+);

@@ -1,7 +1,7 @@
 import { getAuth } from "../../../../lib/auth";
 import { getExtensionsDb } from "../../../../lib/db";
 import { createRoute, z } from "@hono/zod-openapi";
-import { errorBody } from "./errors";
+import { errorBody, listErrorStatus, listPayload } from "./errors";
 import {
   ActiveAccountRequiredResponse,
   PaginationSchema,
@@ -64,16 +64,10 @@ export function registerRevisionRoutes(app: ExtensionsV2App): void {
     if (error || !data) {
       return c.json(
         errorBody(error, "Unable to load queue"),
-        error?.code === "INVALID_CURSOR" ? 422 : 500
+        listErrorStatus(error)
       );
     }
-    const res = c.json(
-      {
-        result: data.items,
-        pagination: { next_cursor: data.nextCursor, has_more: data.hasMore }
-      },
-      200
-    );
+    const res = c.json(listPayload(data), 200);
     res.headers.set("Vary", "Authorization");
     return res;
   });

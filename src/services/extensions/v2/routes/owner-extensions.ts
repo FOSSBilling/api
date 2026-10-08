@@ -2,6 +2,8 @@ import type { Context } from "hono";
 import type { DatabaseResult } from "../../../../lib/interfaces";
 import {
   errorBody,
+  listErrorStatus,
+  listPayload,
   setContentRetryAfter,
   statusFromContentCreateError,
   statusFromContentWriteError,
@@ -329,16 +331,10 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
     if (error || !data) {
       return c.json(
         errorBody(error, "Unable to load revisions"),
-        error?.code === "INVALID_CURSOR" ? 422 : 500
+        listErrorStatus(error)
       );
     }
-    const res = c.json(
-      {
-        result: data.items,
-        pagination: { next_cursor: data.nextCursor, has_more: data.hasMore }
-      },
-      200
-    );
+    const res = c.json(listPayload(data), 200);
     res.headers.set("Vary", "Authorization");
     return res;
   });

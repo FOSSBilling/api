@@ -11,16 +11,7 @@ import { toD1Statement } from "./batch";
 import { DeveloperProfile } from "../schemas/developers";
 import { DeveloperTransfer } from "../schemas/ownership";
 import { DeveloperProfilesDatabase } from "./developer-profiles";
-
-async function sha256Hex(input: string): Promise<string> {
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(input)
-  );
-  return [...new Uint8Array(digest)]
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
+import { sha256Hex } from "../../../../lib/hash";
 
 function toSqliteDatetime(date: Date): string {
   return date.toISOString().slice(0, 19).replace("T", " ");

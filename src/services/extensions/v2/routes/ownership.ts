@@ -5,6 +5,8 @@ import { getAuth } from "../../../../lib/auth";
 import { createRoute, z } from "@hono/zod-openapi";
 import {
   errorBody,
+  listErrorStatus,
+  listPayload,
   statusFromErrorCode,
   statusFromGithubErrorCode,
   statusFromWriteErrorCode
@@ -30,8 +32,7 @@ import {
 import { DeveloperClaimsDatabase } from "../db/developer-claims";
 import { DeveloperTransfersDatabase } from "../db/developer-transfers";
 import { UsersDatabase } from "../db/users";
-import { notifyRequested, sendModerationNotification } from "../email/notify";
-import { revalidateCatalogue } from "../revalidate";
+import { notifyAuthor } from "./notify";
 import { ExtensionsV2App } from "./app";
 
 export function registerOwnershipRoutes(app: ExtensionsV2App): void {
@@ -232,22 +233,11 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
       );
       if (error || !data) {
         return c.json(
-          {
-            error: {
-              message: error?.message ?? "Unable to load pending claims",
-              code: error?.code ?? "DATABASE_ERROR"
-            }
-          },
-          error?.code === "INVALID_CURSOR" ? 422 : 500
+          errorBody(error, "Unable to load pending claims"),
+          listErrorStatus(error)
         );
       }
-      return c.json(
-        {
-          result: data.items,
-          pagination: { next_cursor: data.nextCursor, has_more: data.hasMore }
-        },
-        200
-      );
+      return c.json(listPayload(data), 200);
     }
     const { data, error } = await db.listScoped(
       {
@@ -259,22 +249,11 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
     );
     if (error || !data) {
       return c.json(
-        {
-          error: {
-            message: error?.message ?? "Unable to load claims",
-            code: error?.code ?? "DATABASE_ERROR"
-          }
-        },
-        error?.code === "INVALID_CURSOR" ? 422 : 500
+        errorBody(error, "Unable to load claims"),
+        listErrorStatus(error)
       );
     }
-    return c.json(
-      {
-        result: data.items,
-        pagination: { next_cursor: data.nextCursor, has_more: data.hasMore }
-      },
-      200
-    );
+    return c.json(listPayload(data), 200);
   });
 
   const approveClaimRoute = createRoute({
@@ -328,23 +307,14 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
         statusFromWriteErrorCode(error?.code)
       );
     }
-    revalidateCatalogue(c);
-    let notified = false;
-    if (notifyRequested(query)) {
+    const notified = await notifyAuthor(c, extDb, query, {
+      kind: "claim-approved",
       // approveClaim returns the pre-transfer claim snapshot it already
       // loaded (afterwards the profile row no longer records who the
       // claimant was), so no separate read is needed here.
-      notified = await sendModerationNotification(
-        getPlatform(c),
-        extDb,
-        {
-          kind: "claim-approved",
-          developerId: data.claim.developer_id,
-          claimantId: data.claim.claimant_id
-        },
-        (p) => c.executionCtx.waitUntil(p)
-      );
-    }
+      developerId: data.claim.developer_id,
+      claimantId: data.claim.claimant_id
+    });
     return c.json({ result: { ...data.profile, notified } }, 200);
   });
 
@@ -399,27 +369,20 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
     const db = new DeveloperClaimsDatabase(extDb);
     const { data, error } = await db.rejectClaim(id, auth.userId, review_note);
     if (error || !data) {
+      // Deliberately not statusFromWriteErrorCode: rejectClaim cannot
+      // produce CONFLICT, and its contract declares no 409 for it.
       const status =
         error?.code === "FORBIDDEN" || error?.code === "ACCOUNT_INACTIVE"
           ? 403
           : statusFromErrorCode(error?.code, false);
       return c.json(errorBody(error, "Unable to reject claim"), status);
     }
-    revalidateCatalogue(c);
-    let notified = false;
-    if (notifyRequested(query)) {
-      notified = await sendModerationNotification(
-        getPlatform(c),
-        extDb,
-        {
-          kind: "claim-rejected",
-          developerId: data.developer_id,
-          claimantId: data.claimant_id,
-          reason: review_note
-        },
-        (p) => c.executionCtx.waitUntil(p)
-      );
-    }
+    const notified = await notifyAuthor(c, extDb, query, {
+      kind: "claim-rejected",
+      developerId: data.developer_id,
+      claimantId: data.claimant_id,
+      reason: review_note
+    });
     return c.json({ result: { ...data, notified } }, 200);
   });
 

@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import { ExtensionsDb } from "../../../../lib/db";
 import { logInfo, logWarn } from "../../../../lib/logger";
+import { sha256Hex } from "../../../../lib/hash";
 import {
   MAX_CONTENT_BYTES,
   RETENTION_DAYS,
@@ -31,13 +32,7 @@ export async function maintainExtensionResources(
         AND content_bytes <= ${MAX_CONTENT_BYTES} AND compacted_at IS NULL
     `);
     if (!row) continue;
-    const digest = await crypto.subtle.digest(
-      "SHA-256",
-      new TextEncoder().encode(row.content)
-    );
-    const hash = Array.from(new Uint8Array(digest), (b) =>
-      b.toString(16).padStart(2, "0")
-    ).join("");
+    const hash = await sha256Hex(row.content);
     const result = await db.run(sql`
       UPDATE extension_revisions SET content='{}', content_hash=${hash}, compacted_at=CURRENT_TIMESTAMP
       WHERE id=${id} AND content=${row.content} AND compacted_at IS NULL

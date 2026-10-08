@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, gt, isNull, lt, or, sql, SQL } from "drizzle-orm";
 import { DatabaseResult } from "../../../../lib/interfaces";
 import { ExtensionsDb } from "../../../../lib/db";
-import { encodeCursor as encode, decodeCursor as decode } from "./cursor";
+import { createCursorCodec } from "./cursor";
 import { developerClaims, developers, users } from "./schema";
 import {
   databaseError,
@@ -318,7 +318,7 @@ export class DeveloperClaimsDatabase {
     }>
   > {
     const limit = page?.limit ?? 50;
-    const decoded = page?.cursor ? decodeClaimCursor(page.cursor) : null;
+    const decoded = page?.cursor ? claimCursor.decode(page.cursor) : null;
     // Scopes order oppositely (mine newest-first, pending oldest-first),
     // so a cursor from one scope would seek from the wrong key boundary in
     // the other: reject it rather than return a silently wrong page. (The
@@ -415,12 +415,12 @@ export class DeveloperClaimsDatabase {
           hasMore,
           nextCursor:
             hasMore && last
-              ? encodeClaimCursor(
-                  last.claim.createdAt,
-                  String(last.rowid),
-                  filters.scope,
-                  filters.scope === "mine" ? filters.claimantId : undefined
-                )
+              ? claimCursor.encode({
+                  k1: last.claim.createdAt,
+                  k2: String(last.rowid),
+                  s: filters.scope,
+                  ...(filters.scope === "mine" ? { c: filters.claimantId } : {})
+                })
               : null
         },
         error: null
@@ -674,35 +674,17 @@ export class DeveloperClaimsDatabase {
   }
 }
 
-interface ClaimCursor {
+type ClaimCursor = {
   k1: string;
   k2: string;
   s: "mine" | "pending";
   c?: string;
-}
+};
 
-function encodeClaimCursor(
-  k1: string,
-  k2: string,
-  s: "mine" | "pending",
-  claimantId?: string
-): string {
-  return encode(
-    claimantId === undefined ? { k1, k2, s } : { k1, k2, s, c: claimantId }
-  );
-}
-
-function isClaimCursor(
-  parsed: Record<string, unknown>
-): parsed is ClaimCursor & Record<string, unknown> {
-  return (
+const claimCursor = createCursorCodec<ClaimCursor>(
+  (parsed): parsed is ClaimCursor =>
     typeof parsed.k1 === "string" &&
     typeof parsed.k2 === "string" &&
     (parsed.s === "mine" || parsed.s === "pending") &&
     (parsed.c === undefined || typeof parsed.c === "string")
-  );
-}
-
-function decodeClaimCursor(cursor: string): ClaimCursor | null {
-  return decode(cursor, isClaimCursor);
-}
+);

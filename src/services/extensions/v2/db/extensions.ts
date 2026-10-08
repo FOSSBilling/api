@@ -12,10 +12,9 @@ import {
   inactiveActorError,
   moderatorActorError
 } from "./errors";
-import { UsersDatabase } from "./users";
 import { toD1Statement } from "./batch";
 import { developerIsApproved } from "./developer-approval";
-import { encodeCursor as encode, decodeCursor as decode } from "./cursor";
+import { createCursorCodec } from "./cursor";
 import {
   Extension,
   ExtensionContent,
@@ -284,10 +283,20 @@ export interface OwnedExtensionListPage {
   hasMore: boolean;
 }
 
-interface ExtensionCursor {
+type ExtensionCursor = {
   normalizedId: string;
   id: string;
-}
+};
+
+// normalizedId is checked against id rather than trusted: it drives the
+// keyset comparison, so a tampered cursor could otherwise seek from a
+// position the id itself doesn't correspond to.
+const extensionCursor = createCursorCodec<ExtensionCursor>(
+  (parsed): parsed is ExtensionCursor =>
+    typeof parsed.id === "string" &&
+    typeof parsed.normalizedId === "string" &&
+    parsed.normalizedId === parsed.id.toLowerCase()
+);
 
 export interface CreateExtensionInput {
   extensionId: string;
@@ -314,7 +323,7 @@ export class ExtensionsDatabase {
       conditions.push(eq(extensions.developerId, filters.developerId));
 
     if (filters.cursor) {
-      const cursor = decodeCursor(filters.cursor);
+      const cursor = extensionCursor.decode(filters.cursor);
       if (!cursor) return invalidCursor();
       conditions.push(keysetAfter(cursor));
     }
@@ -332,14 +341,12 @@ export class ExtensionsDatabase {
       return databaseError("list", error);
     }
 
-    const hasMore = rows.length > limit;
-    const pageRows = rows.slice(0, limit);
-    const last = pageRows.at(-1);
+    const { pageRows, hasMore, nextCursor } = keysetPage(rows, limit);
     return {
       data: {
         items: pageRows.map((row) => parseListRow(row)),
         hasMore,
-        nextCursor: hasMore && last ? encodeCursor(last.id) : null
+        nextCursor
       },
       error: null
     };
@@ -396,7 +403,7 @@ export class ExtensionsDatabase {
       );
     }
     if (filters.cursor) {
-      const cursor = decodeCursor(filters.cursor);
+      const cursor = extensionCursor.decode(filters.cursor);
       if (!cursor) return invalidCursor();
       conditions.push(keysetAfter(cursor));
     }
@@ -411,14 +418,12 @@ export class ExtensionsDatabase {
       return databaseError("listOwned", error);
     }
 
-    const hasMore = rows.length > limit;
-    const pageRows = rows.slice(0, limit);
-    const last = pageRows.at(-1);
+    const { pageRows, hasMore, nextCursor } = keysetPage(rows, limit);
     return {
       data: {
         items: pageRows.map(parseOwnedListRow),
         hasMore,
-        nextCursor: hasMore && last ? encodeCursor(last.id) : null
+        nextCursor
       },
       error: null
     };
@@ -470,7 +475,7 @@ export class ExtensionsDatabase {
       );
     }
     if (filters.cursor) {
-      const cursor = decodeCursor(filters.cursor);
+      const cursor = extensionCursor.decode(filters.cursor);
       if (!cursor) return invalidCursor();
       conditions.push(keysetAfter(cursor));
     }
@@ -485,14 +490,12 @@ export class ExtensionsDatabase {
       return databaseError("listForModeration", error);
     }
 
-    const hasMore = rows.length > limit;
-    const pageRows = rows.slice(0, limit);
-    const last = pageRows.at(-1);
+    const { pageRows, hasMore, nextCursor } = keysetPage(rows, limit);
     return {
       data: {
         items: pageRows.map(parseOwnedListRow),
         hasMore,
-        nextCursor: hasMore && last ? encodeCursor(last.id) : null
+        nextCursor
       },
       error: null
     };
@@ -919,33 +922,8 @@ export class ExtensionsDatabase {
     // in-statement guard above: a moderator deactivated or demoted after
     // requireModerator() ran fails the write, and must be told so (403)
     // rather than misreported as a state conflict.
-    const access = await new UsersDatabase(this.db).moderatorAccess(
-      moderatorId
-    );
-    if (access.error || !access.data) {
-      return {
-        data: null,
-        error: access.error ?? {
-          message: "Active account required",
-          code: "ACCOUNT_INACTIVE"
-        }
-      };
-    }
-    if (!access.data.active) {
-      return {
-        data: null,
-        error: {
-          message: "Active account required",
-          code: "ACCOUNT_INACTIVE"
-        }
-      };
-    }
-    if (!access.data.moderator) {
-      return {
-        data: null,
-        error: { message: "Moderator access required", code: "FORBIDDEN" }
-      };
-    }
+    const actorError = await moderatorActorError(this.db, moderatorId);
+    if (actorError) return { data: null, error: actorError };
 
     let existing:
       { publishedAt: string | null; delistedAt: string | null } | undefined;
@@ -1044,6 +1022,11 @@ export class ExtensionsDatabase {
         ]
       });
 
+      // The UPDATE below is the column list publish shares with
+      // ExtensionRevisionsDatabase.approve() in db/revisions.ts; the two
+      // differ only in published_at handling and how the row is matched
+      // (LOWER(id) here, because corrections must address legacy
+      // differently-cased rows). Change the projection in both places together.
       const publishStmt = toD1Statement(this.db.$client, {
         sql: `UPDATE extensions
               SET type = ?, name = ?, description = ?, releases = ?, website = ?,
@@ -1095,33 +1078,8 @@ export class ExtensionsDatabase {
     id: string,
     moderatorId: string
   ): Promise<DatabaseResult<never>> {
-    const access = await new UsersDatabase(this.db).moderatorAccess(
-      moderatorId
-    );
-    if (access.error || !access.data) {
-      return {
-        data: null,
-        error: access.error ?? {
-          message: "Active account required",
-          code: "ACCOUNT_INACTIVE"
-        }
-      };
-    }
-    if (!access.data.active) {
-      return {
-        data: null,
-        error: {
-          message: "Active account required",
-          code: "ACCOUNT_INACTIVE"
-        }
-      };
-    }
-    if (!access.data.moderator) {
-      return {
-        data: null,
-        error: { message: "Moderator access required", code: "FORBIDDEN" }
-      };
-    }
+    const actorError = await moderatorActorError(this.db, moderatorId);
+    if (actorError) return { data: null, error: actorError };
 
     let existing:
       { publishedAt: string | null; delistedAt: string | null } | undefined;
@@ -1216,29 +1174,8 @@ function keysetAfter(cursor: ExtensionCursor) {
   )!;
 }
 
-function encodeCursor(id: string): string {
-  return encode({ normalizedId: id.toLowerCase(), id });
-}
-
-// normalizedId is checked against id rather than trusted: it drives the
-// keyset comparison, so a tampered cursor could otherwise seek from a
-// position the id itself doesn't correspond to.
-function isExtensionCursor(
-  parsed: Record<string, unknown>
-): parsed is ExtensionCursor & Record<string, unknown> {
-  return (
-    typeof parsed.id === "string" &&
-    typeof parsed.normalizedId === "string" &&
-    parsed.normalizedId === parsed.id.toLowerCase()
-  );
-}
-
-function decodeCursor(value: string): ExtensionCursor | null {
-  return decode(value, isExtensionCursor);
-}
-
 export function isValidExtensionCursor(value: string): boolean {
-  return decodeCursor(value) !== null;
+  return extensionCursor.decode(value) !== null;
 }
 
 function parseDeveloper(row: DeveloperRow): PublicDeveloper {
@@ -1285,44 +1222,31 @@ function cardSource(stored: string | null): Repository {
   return source;
 }
 
-function parseListRow(row: PublishedListRow, card = true): ExtensionListItem {
-  return {
-    id: row.id,
-    type: row.type as ExtensionListItem["type"],
-    name: card ? row.name.slice(0, 120) : row.name,
-    description: card ? row.description.slice(0, 4000) : row.description,
-    website: card ? cardUrl(row.website) : row.website,
-    license: card
-      ? cardLicense(row.license)
-      : parseJSON<License>(row.license, { name: "" }),
-    icon_url: (card ? cardUrl(row.iconUrl) : row.iconUrl) ?? undefined,
-    source: card
-      ? cardSource(row.source)
-      : parseJSON<Repository>(row.source, { type: "custom", repo: "" }),
-    version: card ? row.version.slice(0, 100) : row.version,
-    download_url: card ? cardUrl(row.downloadUrl) : row.downloadUrl,
-    developer: parseDeveloper(row)
-  };
+// The field subset both the public catalogue rows and the owner listing rows
+// project, in their nullable table form.
+interface ListContentFields {
+  type: string | null;
+  name: string | null;
+  description: string | null;
+  website: string | null;
+  license: string | null;
+  iconUrl: string | null;
+  source: string | null;
+  version: string | null;
+  downloadUrl: string | null;
 }
 
-// The detail view is the list projection plus the two large fields the
-// catalogue query deliberately omits.
-function parseRow(row: PublishedRow): Extension {
-  return {
-    ...parseListRow(row, false),
-    website: row.website,
-    download_url: row.downloadUrl,
-    readme: row.readme,
-    releases: boundedReleases(parseJSON<Release[]>(row.releases, []))
-  };
-}
-
-// Only ever called for a row whose published_at is set, where
-// extensions_published_content_check guarantees each of these is present.
-function publishedContent(
-  row: OwnedListRow,
-  card = true
-): NonNullable<OwnedExtensionListItem["published"]> {
+// The card/detail content projection shared by parseListRow (public
+// catalogue) and the owned listing's published payload. Shaping in one place
+// keeps the two payload producers from drifting; the non-null assertions are
+// sound because every caller only reaches here for rows whose published_at
+// is set, where extensions_published_content_check guarantees presence.
+//
+// The card=true JS-side slices restate the truncation CONTENT_COLUMNS
+// already performs in SQL. They are belt-and-braces for legacy rows written
+// before that truncation existed - not dead code, and not to be "simplified"
+// away without an audit of pre-migration rows.
+function listContent(row: ListContentFields, card: boolean) {
   return {
     type: row.type as ExtensionContent["type"],
     name: card ? (row.name as string).slice(0, 120) : (row.name as string),
@@ -1347,11 +1271,53 @@ function publishedContent(
   };
 }
 
+// Shared keyset-pagination tail: each listing over-fetches one row to detect
+// hasMore, then encodes the next cursor from the final returned row.
+function keysetPage<T extends { id: string }>(
+  rows: T[],
+  limit: number
+): { pageRows: T[]; hasMore: boolean; nextCursor: string | null } {
+  const hasMore = rows.length > limit;
+  const pageRows = rows.slice(0, limit);
+  const last = pageRows.at(-1);
+  return {
+    pageRows,
+    hasMore,
+    nextCursor:
+      hasMore && last
+        ? extensionCursor.encode({
+            normalizedId: last.id.toLowerCase(),
+            id: last.id
+          })
+        : null
+  };
+}
+
+function parseListRow(row: PublishedListRow, card = true): ExtensionListItem {
+  return {
+    id: row.id,
+    ...listContent(row, card),
+    developer: parseDeveloper(row)
+  };
+}
+
+// The detail view is the list projection plus the two large fields the
+// catalogue query deliberately omits.
+function parseRow(row: PublishedRow): Extension {
+  return {
+    ...parseListRow(row, false),
+    website: row.website,
+    download_url: row.downloadUrl,
+    readme: row.readme,
+    releases: boundedReleases(parseJSON<Release[]>(row.releases, []))
+  };
+}
+
 function parseOwnedListRow(row: OwnedListRow): OwnedExtensionListItem {
   return {
     id: row.id,
     developer: parseDeveloper(row),
-    published: row.publishedAt ? publishedContent(row) : null,
+    published: row.publishedAt ? listContent(row, true) : null,
     pending_revision:
       row.pendingId && row.pendingCreatedAt
         ? { id: row.pendingId, created_at: row.pendingCreatedAt }
@@ -1379,7 +1345,7 @@ function parseOwnedRow(row: OwnedRow): OwnedExtension {
     ...parseOwnedListRow(row),
     published: row.publishedAt
       ? {
-          ...publishedContent(row, false),
+          ...listContent(row, false),
           website: row.website as string,
           download_url: row.downloadUrl as string,
           readme: row.readme as string,

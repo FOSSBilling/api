@@ -10,7 +10,7 @@ import {
   moderatorActorError
 } from "./errors";
 import { toD1Statement } from "./batch";
-import { encodeCursor as encode, decodeCursor as decode } from "./cursor";
+import { createCursorCodec } from "./cursor";
 import {
   MAX_PENDING_REVISIONS_PER_USER,
   parseContent,
@@ -37,24 +37,15 @@ interface StoredRevision extends ExtensionRevision {
   ownershipEpoch: number;
 }
 
-interface RevisionCursor {
+type RevisionCursor = {
   createdAt: string;
   id: string;
-}
+};
 
-function encodeCursor(createdAt: string, id: string): string {
-  return encode({ createdAt, id });
-}
-
-function isRevisionCursor(
-  parsed: Record<string, unknown>
-): parsed is RevisionCursor & Record<string, unknown> {
-  return typeof parsed.createdAt === "string" && typeof parsed.id === "string";
-}
-
-function decodeCursor(cursor: string): RevisionCursor | null {
-  return decode(cursor, isRevisionCursor);
-}
+const revisionCursor = createCursorCodec<RevisionCursor>(
+  (parsed): parsed is RevisionCursor =>
+    typeof parsed.createdAt === "string" && typeof parsed.id === "string"
+);
 
 interface RevisionRow {
   id: string;
@@ -253,7 +244,7 @@ export class ExtensionRevisionsDatabase {
     readerId?: string,
     extensionId?: string
   ): Promise<DatabaseResult<RevisionPage>> {
-    const decoded = cursor ? decodeCursor(cursor) : null;
+    const decoded = cursor ? revisionCursor.decode(cursor) : null;
     if (cursor && !decoded) {
       return {
         data: null,
@@ -308,7 +299,9 @@ export class ExtensionRevisionsDatabase {
         items,
         hasMore,
         nextCursor:
-          hasMore && last ? encodeCursor(last.created_at, last.id) : null
+          hasMore && last
+            ? revisionCursor.encode({ createdAt: last.created_at, id: last.id })
+            : null
       },
       error: null
     };
@@ -585,6 +578,12 @@ export class ExtensionRevisionsDatabase {
       // published_at is COALESCEd rather than overwritten: it records when the
       // extension first entered the catalogue, and updated_at carries the
       // "changed just now" signal.
+      //
+      // This is the column list publish shares with
+      // ExtensionsDatabase.moderatorCorrect() in db/extensions.ts; the two
+      // differ only in published_at handling and how the row is matched
+      // (exact id here, LOWER(id) there, because corrections address legacy
+      // rows). Change the projection in both places together.
       const publishStmt = toD1Statement(this.db.$client, {
         sql: `UPDATE extensions
               SET type = ?, name = ?, description = ?, releases = ?, website = ?,

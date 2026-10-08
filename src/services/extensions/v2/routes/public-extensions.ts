@@ -1,6 +1,11 @@
 import { getExtensionsDb } from "../../../../lib/db";
 import { createRoute } from "@hono/zod-openapi";
-import { errorBody, statusFromContentReadError } from "./errors";
+import {
+  errorBody,
+  listErrorStatus,
+  listPayload,
+  statusFromContentReadError
+} from "./errors";
 import { IdParamSchema, errorResponse } from "../schemas/common";
 import {
   UnifiedExtensionListQuerySchema,
@@ -84,19 +89,10 @@ export function registerPublicExtensionsRoutes(app: ExtensionsV2App): void {
       if (error || !data) {
         return c.json(
           errorBody(error, "Unable to load extensions"),
-          error?.code === "INVALID_CURSOR" ? 422 : 500
+          listErrorStatus(error)
         );
       }
-      const res = c.json(
-        {
-          result: data.items,
-          pagination: {
-            next_cursor: data.nextCursor,
-            has_more: data.hasMore
-          }
-        },
-        200
-      );
+      const res = c.json(listPayload(data), 200);
       if (!auth) {
         res.headers.set(
           "Cache-Control",
@@ -175,16 +171,10 @@ export function registerPublicExtensionsRoutes(app: ExtensionsV2App): void {
       if (error || !data) {
         return c.json(
           errorBody(error, "Unable to load extensions"),
-          error?.code === "INVALID_CURSOR" ? 422 : 500
+          listErrorStatus(error)
         );
       }
-      const res = c.json(
-        {
-          result: data.items,
-          pagination: { next_cursor: data.nextCursor, has_more: data.hasMore }
-        },
-        200
-      );
+      const res = c.json(listPayload(data), 200);
       res.headers.set("Vary", "Authorization");
       return res;
     }
@@ -221,16 +211,10 @@ export function registerPublicExtensionsRoutes(app: ExtensionsV2App): void {
     if (error || !data) {
       return c.json(
         errorBody(error, "Unable to load extensions"),
-        error?.code === "INVALID_CURSOR" ? 422 : 500
+        listErrorStatus(error)
       );
     }
-    const res = c.json(
-      {
-        result: data.items,
-        pagination: { next_cursor: data.nextCursor, has_more: data.hasMore }
-      },
-      200
-    );
+    const res = c.json(listPayload(data), 200);
     res.headers.set("Vary", "Authorization");
     return res;
   });

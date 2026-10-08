@@ -8,9 +8,8 @@ import {
 import { getAuth, requireAuth } from "../../../lib/auth";
 import type { AuthPrincipal } from "../../../lib/auth";
 import { getExtensionsDb } from "../../../lib/db";
+import { sha256Hex } from "../../../lib/hash";
 import { UsersDatabase } from "./db/users";
-
-export const requireAuthAllowInactive = requireAuth;
 
 // Optional bearer auth for merged public+authenticated reads: no
 // Authorization header continues anonymously; a present header is verified
@@ -98,10 +97,7 @@ export function requireIdentitySync(): MiddlewareHandler {
           400
         );
       }
-      const digest = await crypto.subtle.digest("SHA-256", rawBody);
-      const hex = Array.from(new Uint8Array(digest), (byte) =>
-        byte.toString(16).padStart(2, "0")
-      ).join("");
+      const hex = await sha256Hex(rawBody);
       if (hex !== auth.bodySha256) {
         return c.json(
           {

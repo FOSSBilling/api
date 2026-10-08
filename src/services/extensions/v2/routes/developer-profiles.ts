@@ -10,6 +10,8 @@ import { getAuth } from "../../../../lib/auth";
 import { createRoute, z } from "@hono/zod-openapi";
 import {
   errorBody,
+  listErrorStatus,
+  listPayload,
   statusFromErrorCode,
   statusFromGithubErrorCode
 } from "./errors";
@@ -91,22 +93,11 @@ export function registerDeveloperProfileRoutes(app: ExtensionsV2App): void {
     });
     if (error || !data) {
       return c.json(
-        {
-          error: {
-            message: error?.message ?? "Unable to load developers",
-            code: error?.code ?? "DATABASE_ERROR"
-          }
-        },
-        error?.code === "INVALID_CURSOR" ? 422 : 500
+        errorBody(error, "Unable to load developers"),
+        listErrorStatus(error)
       );
     }
-    return c.json(
-      {
-        result: data.items,
-        pagination: { next_cursor: data.nextCursor, has_more: data.hasMore }
-      },
-      200
-    );
+    return c.json(listPayload(data), 200);
   });
 
   const getOwnDeveloperRoute = createRoute({
