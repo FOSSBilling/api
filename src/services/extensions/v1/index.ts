@@ -1,13 +1,26 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
 import { trimTrailingSlash } from "hono/trailing-slash";
 import { makeBadge } from "badge-maker";
 import { getExtensionsDb } from "../../../lib/db";
 import { singleFlight } from "../../../lib/cache";
+import { parseLegacyPagination } from "../../../lib/pagination";
 import { ExtensionsDatabase } from "./database";
 import { listCacheKey, LIST_CACHE_TTL_SECONDS } from "./list-cache";
 
 const extensionsV1 = new Hono<{ Bindings: CloudflareBindings }>();
+
+// Shared failure shape for this service's plain-JSON routes: the database's
+// message when present, 404 only for its NOT_FOUND code.
+function extensionError(
+  c: Context<{ Bindings: CloudflareBindings }>,
+  error: { message: string; code?: string } | null | undefined
+) {
+  return c.json(
+    { error: { message: error?.message ?? "Extension not found" } },
+    error?.code === "NOT_FOUND" ? 404 : 500
+  );
+}
 
 extensionsV1.use("/*", cors({ origin: "*" }));
 extensionsV1.use("/*", trimTrailingSlash());
@@ -23,28 +36,13 @@ extensionsV1.get("/list", async (c) => {
   const db = new ExtensionsDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
   const type = c.req.query("type");
 
-  // Opt-in pagination: absent params keep the exact original contract
-  // (every published extension, no pagination object). A non-numeric limit
-  // is treated as absent rather than a 400 - this legacy surface has never
-  // validated query params. offset is the exception: only a caller opting
-  // into pagination can send it, so offset without a usable limit is a 422
-  // (matching the v2 pagination endpoints) rather than a silently ignored
-  // param that returns the full list.
-  const limitParam = Number(c.req.query("limit"));
-  const hasValidLimit =
-    Number.isInteger(limitParam) && limitParam >= 1 && limitParam <= 100;
-  const rawOffset = c.req.query("offset");
-  if (rawOffset !== undefined && !hasValidLimit) {
+  const page = parseLegacyPagination({
+    limit: c.req.query("limit"),
+    offset: c.req.query("offset")
+  });
+  if (page === "invalid") {
     return c.json({ error: { message: "offset requires limit" } }, 422);
   }
-  const offsetParam = rawOffset === undefined ? 0 : Number(rawOffset);
-  const page = hasValidLimit
-    ? {
-        limit: limitParam,
-        offset:
-          Number.isInteger(offsetParam) && offsetParam >= 0 ? offsetParam : 0
-      }
-    : undefined;
   const cacheKey = listCacheKey(type, page);
 
   // singleFlight coalesces the serialized body STRING, not the Response:
@@ -103,11 +101,7 @@ extensionsV1.get("/:id/badges/:type", async (c) => {
 
   const { data: badgeData, error } = await db.getExtensionBadgeData(id);
   if (error || !badgeData) {
-    const status = error?.code === "NOT_FOUND" ? 404 : 500;
-    return c.json(
-      { error: { message: error?.message ?? "Extension not found" } },
-      status
-    );
+    return extensionError(c, error);
   }
 
   const latest = badgeData.latestRelease;
@@ -157,11 +151,7 @@ extensionsV1.get("/:id/version", async (c) => {
 
   const { data: badgeData, error } = await db.getExtensionBadgeData(id);
   if (error || !badgeData) {
-    const status = error?.code === "NOT_FOUND" ? 404 : 500;
-    return c.json(
-      { error: { message: error?.message ?? "Extension not found" } },
-      status
-    );
+    return extensionError(c, error);
   }
 
   const latest = badgeData.latestRelease;
@@ -180,11 +170,7 @@ extensionsV1.get("/:id", async (c) => {
 
   const { data: extension, error } = await db.getExtensionById(id);
   if (error || !extension) {
-    const status = error?.code === "NOT_FOUND" ? 404 : 500;
-    return c.json(
-      { error: { message: error?.message ?? "Extension not found" } },
-      status
-    );
+    return extensionError(c, error);
   }
 
   // Same shape as the v2 public detail route: short client TTL, CDN holds

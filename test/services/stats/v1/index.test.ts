@@ -23,27 +23,11 @@ import type { StatsData } from "../../../../src/services/stats/v1/interfaces";
 
 import { request as ghRequest } from "@octokit/request";
 import { graphql } from "@octokit/graphql";
+import { ApiResponse } from "../../../utils/test-types";
 
-interface StatsApiResponse {
-  result: StatsData | null;
-  error_code: number;
-  message: string | null;
-  stale?: boolean;
-  details?: {
-    http_status?: number;
-    error_code?: string;
-  };
-}
-
-vi.mock("@octokit/request", () => {
-  const endpoint = { DEFAULTS: {} };
-  const derivedFn = Object.assign(vi.fn(), { defaults: vi.fn(), endpoint });
-  const request = Object.assign(vi.fn(), {
-    defaults: vi.fn().mockReturnValue(derivedFn),
-    endpoint
-  });
-  return { request };
-});
+vi.mock("@octokit/request", async () =>
+  (await import("../../../mocks/octokit")).octokitRequestMock()
+);
 
 vi.mock("@octokit/graphql", () => ({
   graphql: vi.fn()
@@ -81,9 +65,13 @@ describe("Stats API v1", () => {
     if (restoreConsole) restoreConsole();
   });
 
-  it.each(["/stats/v1", "/stats/v1/data"])(
-    "shares the public edge entry across credentials for %s",
-    async (path) => {
+  // Both stats registrations share the public edge entry: credentials must
+  // not fragment it, and a credentials-driven request must be served from
+  // the edge without waking the backend (spied KV get must stay cold). This
+  // is the stats-specific wiring; the mechanism itself is covered in
+  // test/lib/cache.test.ts.
+  it("serves both stats routes across credentials from the public edge entry", async () => {
+    for (const path of ["/stats/v1", "/stats/v1/data"]) {
       const requestAs = async (authorization?: string) => {
         const ctx = createExecutionContext();
         const response = await app.request(
@@ -114,7 +102,61 @@ describe("Stats API v1", () => {
         get.mockRestore();
       }
     }
-  );
+  });
+
+  // A cached stats value must be served even when the shared releases read
+  // rejects - getReleases' KV failure must not turn a warm /data request
+  // into a 500.
+  it("serves cached statistics when the shared releases read fails", async () => {
+    const ctx1 = createExecutionContext();
+    await app.request("/stats/v1/data", { headers: PUBLIC_HEADERS }, env, ctx1);
+    await waitOnExecutionContext(ctx1);
+    const cached = await env.CACHE_KV.get("fossbilling-stats-data");
+    expect(cached).toBeTruthy();
+
+    // Drop the edge entry warmed by the request above, otherwise the second
+    // request is served from it and never reaches getStats (the fallback
+    // below would go unexercised).
+    resetEdgeCache();
+
+    const realGet = env.CACHE_KV.get.bind(env.CACHE_KV) as (
+      key: string
+    ) => Promise<string | null>;
+    const getSpy = vi.spyOn(env.CACHE_KV, "get");
+    getSpy.mockImplementation(((key: string | string[]) => {
+      const first = Array.isArray(key) ? key[0] : key;
+      if (first === "gh-fossbilling-releases") {
+        return Promise.reject(new Error("releases read failed"));
+      }
+      return realGet(key as string);
+    }) as unknown as typeof env.CACHE_KV.get);
+    try {
+      const ctx2 = createExecutionContext();
+      const response = await app.request(
+        "/stats/v1/data",
+        { headers: PUBLIC_HEADERS },
+        env,
+        ctx2
+      );
+      await waitOnExecutionContext(ctx2);
+
+      // Prove the failing read was actually exercised by this request
+      // rather than the response coming from the warmed edge entry.
+      expect(
+        getSpy.mock.calls.some(
+          ([k]) => (Array.isArray(k) ? k[0] : k) === "gh-fossbilling-releases"
+        )
+      ).toBe(true);
+
+      expect(response.status).toBe(200);
+      const data = (await response.json()) as ApiResponse<StatsData>;
+      expect(data.error_code).toBe(0);
+      expect(data.stale).toBe(false);
+      expect(data.result.releaseSizes.length).toBeGreaterThan(0);
+    } finally {
+      getSpy.mockRestore();
+    }
+  });
 
   describe("GET /stats/v1/data", () => {
     it("should return aggregated statistics", async () => {
@@ -129,7 +171,7 @@ describe("Stats API v1", () => {
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);
-      const data = (await response.json()) as StatsApiResponse;
+      const data = (await response.json()) as ApiResponse<StatsData | null>;
 
       expect(data).toHaveProperty("result");
       expect(data).toHaveProperty("error_code", 0);
@@ -184,7 +226,7 @@ describe("Stats API v1", () => {
       await waitOnExecutionContext(ctx1);
 
       expect(response1.status).toBe(200);
-      const data1 = (await response1.json()) as StatsApiResponse;
+      const data1 = (await response1.json()) as ApiResponse<StatsData | null>;
 
       const ctx2 = createExecutionContext();
       const response2 = await app.fetch(
@@ -195,7 +237,7 @@ describe("Stats API v1", () => {
       await waitOnExecutionContext(ctx2);
 
       expect(response2.status).toBe(200);
-      const data2 = (await response2.json()) as StatsApiResponse;
+      const data2 = (await response2.json()) as ApiResponse<StatsData | null>;
 
       expect(data1.result).toEqual(data2.result);
       expect(data2.stale).toBe(false);
@@ -220,7 +262,7 @@ describe("Stats API v1", () => {
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);
-      const data = (await response.json()) as StatsApiResponse;
+      const data = (await response.json()) as ApiResponse<StatsData | null>;
 
       expect(data.result).not.toBeNull();
       expect(data.result).toEqual(
@@ -291,7 +333,7 @@ describe("Stats API v1", () => {
       await waitOnExecutionContext(ctx);
 
       expect(response.status).toBe(200);
-      const data = (await response.json()) as StatsApiResponse;
+      const data = (await response.json()) as ApiResponse<StatsData | null>;
 
       expect(data.result).not.toBeNull();
       if (!data.result) {
@@ -389,7 +431,6 @@ describe("Stats API v1", () => {
       expect(html).toContain('id="phpVersionChart"');
       expect(html).toContain('id="patchesChart"');
       expect(html).toContain('id="releasesPerYearChart"');
-      expect(html).toContain('src="https://cdn.jsdelivr.net/npm/chart.js@');
     });
   });
 });

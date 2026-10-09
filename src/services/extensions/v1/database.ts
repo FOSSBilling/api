@@ -2,14 +2,9 @@ import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import { ExtensionsDb } from "../../../lib/db";
 import { extensions, developers } from "../v2/db/schema";
 import { DatabaseResult } from "../../../lib/interfaces";
-import {
-  Extension,
-  Release,
-  Author,
-  Repository,
-  sortReleasesDescending,
-  parseJSON
-} from "./interfaces";
+import { sortReleasesDescending } from "../../../lib/releases";
+import { parseJSON } from "../../../lib/json";
+import { Extension, Release, Author, Repository } from "./interfaces";
 
 const EXTENSION_COLUMNS = {
   id: extensions.id,
@@ -65,6 +60,28 @@ interface ExtensionRow {
 export class ExtensionsDatabase {
   constructor(private db: ExtensionsDb) {}
 
+  // Shared catch shape for this module's D1 reads: driver message surfaced
+  // under the generic DATABASE_ERROR code.
+  private databaseError(error: unknown): DatabaseResult<never> {
+    return {
+      data: null,
+      error: {
+        message: error instanceof Error ? error.message : String(error),
+        code: "DATABASE_ERROR"
+      }
+    };
+  }
+
+  private notFound(id: string): DatabaseResult<never> {
+    return {
+      data: null,
+      error: {
+        message: `Cannot find extension by id: ${id}`,
+        code: "NOT_FOUND"
+      }
+    };
+  }
+
   // page (when given) bounds the query with a limit+1 probe - the extra
   // row only answers has_more and is trimmed off. Omitted => every
   // published extension, unchanged from the original contract. The full
@@ -95,13 +112,7 @@ export class ExtensionsDatabase {
             .limit(page.limit + 1)) as ExtensionRow[])
         : ((await base) as ExtensionRow[]);
     } catch (error) {
-      return {
-        data: null,
-        error: {
-          message: error instanceof Error ? error.message : String(error),
-          code: "DATABASE_ERROR"
-        }
-      };
+      return this.databaseError(error);
     }
 
     const hasMore = page ? rows.length > page.limit : false;
@@ -128,24 +139,12 @@ export class ExtensionsDatabase {
           )
         )) as ExtensionRow[];
     } catch (error) {
-      return {
-        data: null,
-        error: {
-          message: error instanceof Error ? error.message : String(error),
-          code: "DATABASE_ERROR"
-        }
-      };
+      return this.databaseError(error);
     }
 
     const row = rows[0];
     if (!row) {
-      return {
-        data: null,
-        error: {
-          message: `Cannot find extension by id: ${id}`,
-          code: "NOT_FOUND"
-        }
-      };
+      return this.notFound(id);
     }
 
     return { data: parseExtensionRow(row), error: null };
@@ -173,24 +172,12 @@ export class ExtensionsDatabase {
           )
         )) as { releases: string; license: string }[];
     } catch (error) {
-      return {
-        data: null,
-        error: {
-          message: error instanceof Error ? error.message : String(error),
-          code: "DATABASE_ERROR"
-        }
-      };
+      return this.databaseError(error);
     }
 
     const row = rows[0];
     if (!row) {
-      return {
-        data: null,
-        error: {
-          message: `Cannot find extension by id: ${id}`,
-          code: "NOT_FOUND"
-        }
-      };
+      return this.notFound(id);
     }
 
     const releases = sortReleasesDescending(

@@ -1,6 +1,7 @@
 import { Context } from "hono";
 import { request } from "@octokit/request";
 import { GitHubError } from "../../../../lib/github-errors";
+import { sha256Hex } from "../../../../lib/hash";
 
 export interface PreviewGitHub {
   token: string;
@@ -11,6 +12,11 @@ export interface PreviewGitHub {
 // Eight calls preserve ordinary fork-PR lookups and the page-six fallback.
 const MAX_REQUEST_SUBREQUESTS = 8;
 
+// Deliberate abuse-resistance and privacy, not speculative machinery: the
+// bucket key derives from the edge-supplied client IP so (a) an attacker
+// rotating addresses inside one IPv6 /64 shares a single allowance instead
+// of minting a fresh bucket per address, and (b) DO storage rows hold only
+// SHA-256 digests of the derived identity, never raw client IPs.
 function clientBudgetIdentity(address: string | undefined): string {
   if (!address) return "unknown";
   if (!address.includes(":")) {
@@ -55,7 +61,7 @@ export function previewGitHub(
 ): PreviewGitHub {
   // CF supplies this header at the edge; never trust X-Forwarded-For.
   // Missing addresses share a conservative allowance.
-  const client = clientBudgetIdentity(c.req.header("CF-Connecting-IP"));
+  const identity = clientBudgetIdentity(c.req.header("CF-Connecting-IP"));
   let remaining = MAX_REQUEST_SUBREQUESTS;
   return {
     token: c.env.GITHUB_TOKEN,
@@ -63,14 +69,9 @@ export function previewGitHub(
       if (remaining === 0) return false;
       // Consume before awaiting so concurrent calls cannot exceed the ceiling.
       remaining--;
-      const digest = await crypto.subtle.digest(
-        "SHA-256",
-        new TextEncoder().encode(client)
+      return c.env.PREVIEW_GITHUB_BUDGET.getByName("previews").reserve(
+        await sha256Hex(identity)
       );
-      const key = Array.from(new Uint8Array(digest), (b) =>
-        b.toString(16).padStart(2, "0")
-      ).join("");
-      return c.env.PREVIEW_GITHUB_BUDGET.getByName("previews").reserve(key);
     }
   };
 }

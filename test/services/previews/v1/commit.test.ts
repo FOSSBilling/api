@@ -447,6 +447,8 @@ describe("Previews API v1 - GET /previews/v1/commit/:sha", () => {
     const res = await get(`/previews/v1/commit/${SHA.toUpperCase()}`);
 
     expect(res.status).toBe(200);
+    // Uppercase input must be normalized before the artifact-name query -
+    // querying the raw uppercase name silently returns nothing.
     expect(ghRequest).toHaveBeenCalledWith(
       "GET /repos/{owner}/{repo}/actions/artifacts",
       expect.objectContaining({

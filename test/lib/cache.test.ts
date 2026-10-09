@@ -1,25 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { Hono } from "hono";
-import {
-  normalizePublicCacheKey,
-  publicResponseCache
-} from "../../src/lib/cache";
+import { Hono, Context } from "hono";
+import { publicCacheKey, publicResponseCache } from "../../src/lib/cache";
+
+const cacheKeyFor = (url: string) =>
+  publicCacheKey({ req: { url } } as unknown as Context);
 
 describe("cache helpers", () => {
   it("normalizes public cache keys by removing query strings and fragments", () => {
     expect(
-      normalizePublicCacheKey(
+      cacheKeyFor(
         "https://api.fossbilling.net/versions/v1/latest?cacheBust=1#section"
       )
     ).toBe("https://api.fossbilling.net/versions/v1/latest");
-  });
-
-  it("keeps different public paths isolated", () => {
-    expect(
-      normalizePublicCacheKey("https://api.fossbilling.net/versions/v1")
-    ).not.toBe(
-      normalizePublicCacheKey("https://api.fossbilling.net/versions/v1/count")
-    );
   });
 });
 

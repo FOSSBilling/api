@@ -89,4 +89,7 @@ export default {
   }
 };
 
-export { PreviewGitHubBudget } from "../lib/adapters/cloudflare/preview-github-budget";
+// wrangler's main module must export the Durable Object classes bound in
+// wrangler.jsonc; the implementation lives with the previews service, which
+// owns its rate-limit policy.
+export { PreviewGitHubBudget } from "../services/previews/v1/budget";

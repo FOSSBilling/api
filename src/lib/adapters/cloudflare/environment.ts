@@ -7,8 +7,4 @@ export class CloudflareEnvironmentAdapter implements IEnvironment {
     const value = this.env[key];
     return typeof value === "string" ? value : undefined;
   }
-
-  has(key: string): boolean {
-    return key in this.env && typeof this.env[key] === "string";
-  }
 }

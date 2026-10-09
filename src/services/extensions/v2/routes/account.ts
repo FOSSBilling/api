@@ -1,14 +1,11 @@
-import {
-  requireActiveAuth,
-  requireAuthAllowInactive,
-  requireIdentitySync
-} from "../middleware";
+import { requireActiveAuth, requireIdentitySync } from "../middleware";
+import { getAuth, requireAuth } from "../../../../lib/auth";
 import { getExtensionsDb } from "../../../../lib/db";
 import { createRoute, z } from "@hono/zod-openapi";
-import { getAuth } from "../../../../lib/auth";
 import { errorBody, statusFromErrorCode } from "./errors";
 import {
   ActiveAccountRequiredResponse,
+  authErrorResponses,
   errorResponse
 } from "../schemas/common";
 import {
@@ -54,7 +51,7 @@ export function registerAccountRoutes(app: ExtensionsV2App): void {
         description: "Identity projection synchronized"
       },
       400: errorResponse("Request body could not be read"),
-      401: errorResponse("Missing or invalid bearer token"),
+      ...authErrorResponses(),
       403: {
         ...ActiveAccountRequiredResponse,
         description: "Identity synchronization requires a trusted assertion"
@@ -91,7 +88,7 @@ export function registerAccountRoutes(app: ExtensionsV2App): void {
     tags: ["Users"],
     summary: "Get the caller's account projection",
     security: [{ Bearer: [] }],
-    middleware: [requireAuthAllowInactive()] as const,
+    middleware: [requireAuth()] as const,
     responses: {
       200: {
         content: {
@@ -148,8 +145,7 @@ export function registerAccountRoutes(app: ExtensionsV2App): void {
         },
         description: "Profile updated (full account projection)"
       },
-      401: errorResponse("Missing or invalid bearer token"),
-      403: ActiveAccountRequiredResponse,
+      ...authErrorResponses(),
       404: errorResponse("Account does not exist or has been deleted"),
       500: errorResponse("Database error")
     }
@@ -183,7 +179,7 @@ export function registerAccountRoutes(app: ExtensionsV2App): void {
     tags: ["Users"],
     summary: "Delete the caller's account and tombstone its user row",
     security: [{ Bearer: [] }],
-    middleware: [requireAuthAllowInactive()] as const,
+    middleware: [requireAuth()] as const,
     responses: {
       200: {
         content: {

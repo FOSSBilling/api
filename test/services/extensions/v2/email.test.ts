@@ -303,11 +303,15 @@ describe("default fetch binding", () => {
       const viaFactory = createEmailSender(reader(MXROUTE_VARS));
       await expect(viaFactory.send(message)).resolves.toEqual({ ok: true });
 
-      expect(urls).toEqual([
-        "https://smtpapi.mxroute.com/",
-        "https://api.resend.com/emails",
-        "https://smtpapi.mxroute.com/"
-      ]);
+      // Two MXroute sends and one Resend send; order is not a contract,
+      // the per-provider distribution is.
+      expect([...urls].sort()).toEqual(
+        [
+          "https://smtpapi.mxroute.com/",
+          "https://api.resend.com/emails",
+          "https://smtpapi.mxroute.com/"
+        ].sort()
+      );
     } finally {
       globalThis.fetch = originalFetch;
     }

@@ -45,3 +45,18 @@ export function decodeCursor<T>(
     return null;
   }
 }
+
+// A module's codec is a guard over its own fields; the envelope plumbing
+// (version stamping, fatal decode, guard-signature ceremony) is built once
+// here. Cursor shapes are `type` aliases so they satisfy Record<string, string>.
+export function createCursorCodec<T extends Record<string, string>>(
+  isValid: (parsed: Record<string, unknown>) => parsed is T
+): { encode: (payload: T) => string; decode: (cursor: string) => T | null } {
+  return {
+    encode: (payload) => encodeCursor(payload),
+    decode: (cursor) =>
+      decodeCursor(cursor, (parsed): parsed is T & Record<string, unknown> =>
+        isValid(parsed)
+      )
+  };
+}

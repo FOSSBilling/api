@@ -1,7 +1,7 @@
 import type { Context, MiddlewareHandler } from "hono";
 import { cache } from "hono/cache";
 
-export function normalizePublicCacheKey(url: string): string {
+function normalizePublicCacheKey(url: string): string {
   const cacheUrl = new URL(url);
   cacheUrl.search = "";
   cacheUrl.hash = "";

@@ -16,16 +16,6 @@ export function suppressConsole() {
   };
 }
 
-export function createMockFetchResponse(data: unknown, ok = true) {
-  return {
-    ok,
-    json: async () => data,
-    text: async () => JSON.stringify(data),
-    status: ok ? 200 : 500,
-    statusText: ok ? "OK" : "Internal Server Error"
-  };
-}
-
 /**
  * Returns a graphql mock implementation that builds a synthetic batch response
  * from the aliases in the query. Pass null for composerJson to simulate missing

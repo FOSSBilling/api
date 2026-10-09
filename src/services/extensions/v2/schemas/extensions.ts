@@ -1,7 +1,12 @@
 import { MAX_CONTENT_BYTES } from "../resource-limits";
 import { z } from "@hono/zod-openapi";
 import SPDX_LICENSE_IDS from "spdx-license-ids/index.json";
-import { httpUrl, lowercaseId, PaginationSchema } from "./common";
+import {
+  cursorPaginationFields,
+  httpUrl,
+  lowercaseId,
+  PaginationSchema
+} from "./common";
 import { PublicDeveloperSchema } from "./developers";
 
 export const EXTENSION_TYPES = [
@@ -37,13 +42,9 @@ export const RepositorySchema = z
 
 export type Repository = z.infer<typeof RepositorySchema>;
 
-// Re-exported so callers (and tests) validate against the exact same set
-// this schema uses, rather than a hand-copied list that can drift.
 // `spdx-license-ids` ships only the current (non-deprecated) identifiers —
 // https://github.com/jslicense/spdx-license-ids — so submitters are steered
 // toward the license SPDX currently recommends, not a retired alias.
-export { SPDX_LICENSE_IDS };
-
 const spdxLicenseId = () =>
   z
     .string()
@@ -267,22 +268,7 @@ export const ExtensionListQuerySchema = z.object({
     .openapi({
       param: { name: "developer_id", in: "query" }
     }),
-  limit: z.coerce
-    .number()
-    .int()
-    .min(1)
-    .max(100)
-    .default(50)
-    .openapi({ param: { name: "limit", in: "query" } }),
-  cursor: z
-    .string()
-    .min(1)
-    .max(1000)
-    .optional()
-    .openapi({
-      param: { name: "cursor", in: "query" },
-      description: "Opaque cursor returned by the previous page"
-    })
+  ...cursorPaginationFields
 });
 
 // Unified list query for the merged GET /extensions (optional auth,
@@ -328,20 +314,6 @@ export const UnifiedExtensionListQuerySchema = ExtensionListQuerySchema.extend({
         "All scope only: case-insensitive substring match on the extension id"
     })
 });
-
-export const ExtensionListResponseSchema = z
-  .object({
-    result: z.array(ExtensionListItemSchema),
-    pagination: PaginationSchema
-  })
-  .openapi("ExtensionListResponse");
-
-export const OwnedExtensionListResponseSchema = z
-  .object({
-    result: z.array(OwnedExtensionListItemSchema),
-    pagination: PaginationSchema
-  })
-  .openapi("OwnedExtensionListResponse");
 
 // Merged GET /extensions returns one of the two list shapes depending on
 // ?scope=. A union (not two routes) because the only caller is controlled;

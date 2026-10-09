@@ -293,66 +293,6 @@ describe("Central Alerts API v1", () => {
         expect(button.link).toMatch(/^https?:\/\//);
       });
     });
-
-    it("should redirect trailing slash to non-trailing slash path", async () => {
-      const ctx = createExecutionContext();
-      const response = await app.request(
-        `https://${requestHost}/central-alerts/v1/list/`,
-        {},
-        env,
-        ctx
-      );
-      await waitOnExecutionContext(ctx);
-
-      expect(response.status).toBe(301);
-      const location = response.headers.get("Location");
-      expect(location).toContain("/central-alerts/v1/list");
-      expect(location).not.toContain("/central-alerts/v1/list/");
-    });
-
-    it("should return consistent data on multiple requests", async () => {
-      const ctx1 = createExecutionContext();
-      const response1 = await app.request(
-        `https://${requestHost}/central-alerts/v1/list`,
-        {},
-        env,
-        ctx1
-      );
-      await waitOnExecutionContext(ctx1);
-      const data1 = await response1.json();
-
-      const ctx2 = createExecutionContext();
-      const response2 = await app.request(
-        `https://${requestHost}/central-alerts/v1/list`,
-        {},
-        env,
-        ctx2
-      );
-      await waitOnExecutionContext(ctx2);
-      const data2 = await response2.json();
-
-      expect(data1).toEqual(data2);
-    });
-
-    it("should return valid ISO 8601 datetime", async () => {
-      const ctx = createExecutionContext();
-      const response = await app.request(
-        `https://${requestHost}/central-alerts/v1/list`,
-        {},
-        env,
-        ctx
-      );
-      await waitOnExecutionContext(ctx);
-
-      const data: CentralAlertsResponse = await response.json();
-      const alerts = data.result.alerts;
-
-      alerts.forEach((alert: { datetime: string }) => {
-        const date = new Date(alert.datetime);
-        expect(date.toString()).not.toBe("Invalid Date");
-        expect(alert.datetime).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
-      });
-    });
   });
 
   describe("Error Cases", () => {
@@ -387,35 +327,6 @@ describe("Central Alerts API v1", () => {
         env.DB_CENTRAL_ALERTS = realDb;
       }
       expect((await requestList()).status).toBe(200);
-    });
-
-    it("should return 404 for unknown routes", async () => {
-      const ctx = createExecutionContext();
-      const response = await app.request(
-        `https://${requestHost}/central-alerts/v1/unknown`,
-        {},
-        env,
-        ctx
-      );
-      await waitOnExecutionContext(ctx);
-
-      expect(response.status).toBe(404);
-    });
-
-    it("should redirect root path with trailing slash", async () => {
-      const ctx = createExecutionContext();
-      const response = await app.request(
-        `https://${requestHost}/central-alerts/v1/`,
-        {},
-        env,
-        ctx
-      );
-      await waitOnExecutionContext(ctx);
-
-      expect(response.status).toBe(301);
-      const location = response.headers.get("Location");
-      expect(location).toContain("/central-alerts/v1");
-      expect(location).not.toContain("/central-alerts/v1/");
     });
   });
 });

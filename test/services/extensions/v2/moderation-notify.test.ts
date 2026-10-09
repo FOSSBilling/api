@@ -189,6 +189,8 @@ describe("moderation notification emails", () => {
     // mojibake, so subjects stay ASCII and bodies use HTML entities.
     expect(body.subject).toMatch(/^[\u0020-\u007E]*$/);
     expect(body.body).toMatch(/^[\u0020-\u007E]*$/);
+    // ASCII-safety alone would pass with the punctuation lost or replaced -
+    // pin the actual entity encoding of the note.
     expect(body.body).toContain("&#8220;gone&#8221; &#8212;");
   });
 

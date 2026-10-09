@@ -1,19 +1,21 @@
 import { paceContentAccount, requireModerator } from "../middleware";
 import { getExtensionsDb } from "../../../../lib/db";
-import { getPlatform } from "../../../../lib/middleware";
 import { getAuth } from "../../../../lib/auth";
 import { createRoute, z } from "@hono/zod-openapi";
 import {
   errorBody,
+  listErrorStatus,
+  listPayload,
   setContentRetryAfter,
   statusFromContentWriteError,
   statusFromWriteErrorCode
 } from "./errors";
 import {
-  ActiveAccountRequiredResponse,
+  authErrorResponses,
   CursorPaginationQuerySchema,
   DelistReasonSchema,
   IdParamSchema,
+  ModeratorForbiddenResponse,
   NotifiedSchema,
   NotifyQuerySchema,
   PaginationSchema,
@@ -30,7 +32,7 @@ import { ExtensionUpdateSchema } from "../schemas/extensions";
 import { DeveloperProfilesDatabase } from "../db/developer-profiles";
 import { ExtensionsDatabase } from "../db/extensions";
 import { ExtensionRevisionsDatabase } from "../db/revisions";
-import { notifyRequested, sendModerationNotification } from "../email/notify";
+import { notifyAuthor } from "./notify";
 import { revalidateCatalogue } from "../revalidate";
 import { ExtensionsV2App } from "./app";
 
@@ -69,11 +71,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
         description:
           "Revision approved and published as the extension's live content"
       },
-      401: errorResponse("Missing or invalid bearer token"),
-      403: {
-        ...ActiveAccountRequiredResponse,
-        description: "The account is inactive or the caller is not a moderator"
-      },
+      ...authErrorResponses(ModeratorForbiddenResponse),
       404: errorResponse("No such revision on that extension"),
       409: errorResponse(
         "Revision is not pending, or ownership has changed since it was proposed"
@@ -102,22 +100,13 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
       const status = statusFromWriteErrorCode(error?.code);
       return c.json(errorBody(error, "Unable to approve revision"), status);
     }
-    revalidateCatalogue(c);
-    let notified = false;
-    if (notifyRequested(query)) {
-      notified = await sendModerationNotification(
-        getPlatform(c),
-        extDb,
-        {
-          kind: "revision-approved",
-          extensionId: id,
-          // Optional and untrimmed by its schema: a whitespace-only note would
-          // otherwise reach the author as a meaningless "Moderator note:".
-          reason: review_note?.trim() || undefined
-        },
-        (p) => c.executionCtx.waitUntil(p)
-      );
-    }
+    const notified = await notifyAuthor(c, extDb, query, {
+      kind: "revision-approved",
+      extensionId: id,
+      // Optional and untrimmed by its schema: a whitespace-only note would
+      // otherwise reach the author as a meaningless "Moderator note:".
+      reason: review_note?.trim() || undefined
+    });
     return c.json({ result: { ...data, notified } }, 200);
   });
 
@@ -151,11 +140,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
         description:
           "Revision rejected. The extension's published content is unchanged."
       },
-      401: errorResponse("Missing or invalid bearer token"),
-      403: {
-        ...ActiveAccountRequiredResponse,
-        description: "The account is inactive or the caller is not a moderator"
-      },
+      ...authErrorResponses(ModeratorForbiddenResponse),
       404: errorResponse("No such revision on that extension"),
       409: errorResponse("Revision is not pending"),
       422: errorResponse("review_note body or notify query failed validation"),
@@ -180,20 +165,11 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
       const status = statusFromWriteErrorCode(error?.code);
       return c.json(errorBody(error, "Unable to reject revision"), status);
     }
-    revalidateCatalogue(c);
-    let notified = false;
-    if (notifyRequested(query)) {
-      notified = await sendModerationNotification(
-        getPlatform(c),
-        extDb,
-        {
-          kind: "revision-rejected",
-          extensionId: id,
-          reason: review_note
-        },
-        (p) => c.executionCtx.waitUntil(p)
-      );
-    }
+    const notified = await notifyAuthor(c, extDb, query, {
+      kind: "revision-rejected",
+      extensionId: id,
+      reason: review_note
+    });
     return c.json({ result: { ...data, notified } }, 200);
   });
 
@@ -232,11 +208,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
           "Extension removed from the public catalogue. Its content and " +
           "history are kept, and its owner can still see and edit it."
       },
-      401: errorResponse("Missing or invalid bearer token"),
-      403: {
-        ...ActiveAccountRequiredResponse,
-        description: "The account is inactive or the caller is not a moderator"
-      },
+      ...authErrorResponses(ModeratorForbiddenResponse),
       404: errorResponse("No such extension"),
       409: errorResponse("Extension is not published, or is already delisted"),
       422: errorResponse(
@@ -258,20 +230,11 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
       const status = statusFromWriteErrorCode(error?.code);
       return c.json(errorBody(error, "Unable to delist extension"), status);
     }
-    revalidateCatalogue(c);
-    let notified = false;
-    if (notifyRequested(query)) {
-      notified = await sendModerationNotification(
-        getPlatform(c),
-        extDb,
-        {
-          kind: "extension-delisted",
-          extensionId: id,
-          reason
-        },
-        (p) => c.executionCtx.waitUntil(p)
-      );
-    }
+    const notified = await notifyAuthor(c, extDb, query, {
+      kind: "extension-delisted",
+      extensionId: id,
+      reason
+    });
     return c.json(
       { result: { id: data.id, status: "delisted" as const, notified } },
       200
@@ -308,11 +271,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
         description:
           "Extension restored to the public catalogue. Content and history unchanged."
       },
-      401: errorResponse("Missing or invalid bearer token"),
-      403: {
-        ...ActiveAccountRequiredResponse,
-        description: "The account is inactive or the caller is not a moderator"
-      },
+      ...authErrorResponses(ModeratorForbiddenResponse),
       404: errorResponse("No such extension"),
       409: errorResponse("Extension is not delisted, or was never published"),
       422: errorResponse(
@@ -334,20 +293,11 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
       const status = statusFromWriteErrorCode(error?.code);
       return c.json(errorBody(error, "Unable to relist extension"), status);
     }
-    revalidateCatalogue(c);
-    let notified = false;
-    if (notifyRequested(query)) {
-      notified = await sendModerationNotification(
-        getPlatform(c),
-        extDb,
-        {
-          kind: "extension-relisted",
-          extensionId: data.id,
-          reason: review_note?.trim() || undefined
-        },
-        (p) => c.executionCtx.waitUntil(p)
-      );
-    }
+    const notified = await notifyAuthor(c, extDb, query, {
+      kind: "extension-relisted",
+      extensionId: data.id,
+      reason: review_note?.trim() || undefined
+    });
     return c.json(
       { result: { id: data.id, status: "relisted" as const, notified } },
       200
@@ -396,11 +346,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
         description:
           "Content corrected and published. Recorded as an approved moderator revision; no author email is sent."
       },
-      401: errorResponse("Missing or invalid bearer token"),
-      403: {
-        ...ActiveAccountRequiredResponse,
-        description: "The account is inactive or the caller is not a moderator"
-      },
+      ...authErrorResponses(ModeratorForbiddenResponse),
       404: errorResponse("No such extension"),
       409: errorResponse(
         "Extension is unpublished or delisted, or an edit is already awaiting review"
@@ -477,11 +423,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
         },
         description: "Developer profile marked approved"
       },
-      401: errorResponse("Missing or invalid bearer token"),
-      403: {
-        ...ActiveAccountRequiredResponse,
-        description: "The account is inactive or the caller is not a moderator"
-      },
+      ...authErrorResponses(ModeratorForbiddenResponse),
       404: errorResponse("No developer with that id"),
       409: errorResponse("Profile changed after the reviewed revision"),
       422: errorResponse(
@@ -508,19 +450,10 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
       const status = statusFromWriteErrorCode(error?.code);
       return c.json(errorBody(error, "Unable to approve developer"), status);
     }
-    revalidateCatalogue(c);
-    let notified = false;
-    if (notifyRequested(query)) {
-      notified = await sendModerationNotification(
-        getPlatform(c),
-        extDb,
-        {
-          kind: "developer-approved",
-          developerId: id
-        },
-        (p) => c.executionCtx.waitUntil(p)
-      );
-    }
+    const notified = await notifyAuthor(c, extDb, query, {
+      kind: "developer-approved",
+      developerId: id
+    });
     return c.json({ result: { ...data, notified } }, 200);
   });
 
@@ -544,11 +477,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
         },
         description: "Snapshots of the profile, newest first"
       },
-      401: errorResponse("Missing or invalid bearer token"),
-      403: {
-        ...ActiveAccountRequiredResponse,
-        description: "The account is inactive or the caller is not a moderator"
-      },
+      ...authErrorResponses(ModeratorForbiddenResponse),
       422: errorResponse("id param, limit, or cursor query failed validation"),
       500: errorResponse("Database error")
     }
@@ -564,16 +493,10 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
     if (error || !data) {
       return c.json(
         errorBody(error, "Unable to load developer history"),
-        error?.code === "INVALID_CURSOR" ? 422 : 500
+        listErrorStatus(error)
       );
     }
-    return c.json(
-      {
-        result: data.items,
-        pagination: { next_cursor: data.nextCursor, has_more: data.hasMore }
-      },
-      200
-    );
+    return c.json(listPayload(data), 200);
   });
 
   // Queue totals behind the admin tabs. Two small aggregate queries rather
@@ -609,11 +532,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
         },
         description: "Pending/decided totals per queue"
       },
-      401: errorResponse("Missing or invalid bearer token"),
-      403: {
-        ...ActiveAccountRequiredResponse,
-        description: "The account is inactive or the caller is not a moderator"
-      },
+      ...authErrorResponses(ModeratorForbiddenResponse),
       500: errorResponse("Database error")
     }
   });

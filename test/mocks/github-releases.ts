@@ -95,9 +95,3 @@ export const mockComposerJson = {
     php: "^8.1"
   }
 };
-
-export const mockComposerJsonOldVersion = {
-  require: {
-    php: "^8.0"
-  }
-};

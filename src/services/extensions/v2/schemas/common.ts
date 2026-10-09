@@ -52,6 +52,30 @@ export const ActiveAccountRequiredResponse = errorResponse(
   "The bearer is valid but the account is inactive"
 );
 
+// The 403 wording shared by the moderator routes: the same middleware check,
+// but the answer distinguishes a deactivated account from a non-moderator.
+export const ModeratorForbiddenResponse = errorResponse(
+  "The account is inactive or the caller is not a moderator"
+);
+
+// The bearer-auth error entries shared by every authenticated route:
+// `401` is constant, `403` is the active-account shape with a per-route
+// description. Spread into a route's responses map:
+//   ...authErrorResponses(ModeratorForbiddenResponse)
+//
+// Keep the plain return: adding `as const` here compiles for the helper but
+// breaks handler response typing on every route that spreads it (the
+// per-status response union zod-openapi derives from the responses map
+// collapses; verified empirically). If you touch this, re-run tsc.
+export function authErrorResponses(
+  forbidden: ReturnType<typeof errorResponse> = ActiveAccountRequiredResponse
+) {
+  return {
+    401: errorResponse("Missing or invalid bearer token"),
+    403: forbidden
+  };
+}
+
 export const IdParamSchema = z.object({
   id: z.string().openapi({
     param: { name: "id", in: "path" },
@@ -123,7 +147,12 @@ export const NotifiedSchema = z
 // Strict: unknown query params (notably the retired `offset`) are rejected
 // with 422 rather than silently stripped, so a caller paginating the old
 // way gets an error instead of page one on repeat.
-export const CursorPaginationQuerySchema = z.strictObject({
+
+// The limit/cursor query fields every paginated listing shares. Spread into
+// each query schema's z.object rather than extended from
+// CursorPaginationQuerySchema, which is strictObject - extending would
+// silently tighten the other routes' unknown-param handling.
+export const cursorPaginationFields = {
   limit: z.coerce
     .number()
     .int()
@@ -131,9 +160,9 @@ export const CursorPaginationQuerySchema = z.strictObject({
     .max(100)
     .default(50)
     .openapi({ param: { name: "limit", in: "query" } }),
-  // min(1) matches ExtensionListQuerySchema: without it `?cursor=` arrives
-  // as an empty string, which the page helper would treat as "no cursor"
-  // and silently restart pagination instead of reporting the malformed value.
+  // min(1): without it `?cursor=` arrives as an empty string, which the page
+  // helper treats as "no cursor" and silently restarts pagination instead of
+  // reporting the malformed value.
   cursor: z
     .string()
     .min(1)
@@ -143,4 +172,8 @@ export const CursorPaginationQuerySchema = z.strictObject({
       param: { name: "cursor", in: "query" },
       description: "Opaque cursor returned by the previous page"
     })
+};
+
+export const CursorPaginationQuerySchema = z.strictObject({
+  ...cursorPaginationFields
 });

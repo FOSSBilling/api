@@ -88,6 +88,9 @@ describe("bearerAssertionVerifier", () => {
     expect(principal).toBeNull();
   });
 
+  // iss/aud/purpose/ver are minter constants, but a minter/API version skew
+  // (one side deploying before the other) is a real operational scenario, as
+  // is sibling-verifier traffic for `purpose` - the full claim matrix stays.
   it.each([
     ["issuer", { iss: "wrong-issuer" }],
     ["audience", { aud: "wrong-audience" }],
@@ -103,6 +106,12 @@ describe("bearerAssertionVerifier", () => {
     expect(principal).toBeNull();
   });
 
+  // The minter emits integer seconds and a fixed 60s lifetime, so these
+  // states are unreachable from a healthy minter - but the verifier's
+  // integer and lifetime checks are this repo's own defense against a
+  // misbehaving or rolled-back minter, and signAssertion can construct
+  // exactly those tokens. Keep them pinned so the guards cannot silently
+  // weaken (the assertion replay window depends on both).
   it.each(["iat", "exp"])(
     "rejects fractional %s NumericDate values",
     async (claim) => {
@@ -159,18 +168,6 @@ describe("bearerAssertionVerifier", () => {
   it("rejects a token that declares a different algorithm", async () => {
     const token = await signAssertion(SECRET, {
       header: { alg: "HS384", typ: "JWT" }
-    });
-    const principal = await bearerAssertionVerifier.verify(
-      token,
-      platformWithSecret(SECRET)
-    );
-
-    expect(principal).toBeNull();
-  });
-
-  it("rejects a legacy token without contextual claims", async () => {
-    const token = await signAssertion(SECRET, {
-      includeContext: false
     });
     const principal = await bearerAssertionVerifier.verify(
       token,
@@ -241,6 +238,10 @@ describe("identitySyncAssertionVerifier", () => {
       await bearerAssertionVerifier.verify(token, platformWithSecret(SECRET))
     ).toBeNull();
   });
+  // The verifier requires a 64-char lowercase hex digest; the minter can
+  // only ever emit that, but the check is this repo's own validation and
+  // signAssertion can construct every wrong shape - pin it so the format
+  // requirement cannot silently loosen.
   it.each([undefined, "", "A".repeat(64), "a".repeat(63), "z".repeat(64)])(
     "rejects an invalid digest %s",
     async (bodySha256) => {

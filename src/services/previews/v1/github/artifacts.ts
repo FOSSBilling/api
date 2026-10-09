@@ -59,7 +59,16 @@ function unavailable<T>(
   error: unknown,
   url: string
 ): GithubLookupResult<T> {
-  const githubError = classifyGitHubError(error, url);
+  return unavailableWith(context, classifyGitHubError(error, url));
+}
+
+// Overload for call sites that already classified the error while checking
+// for a specific class (e.g. NotFoundError) - classification is pure, but
+// there is no reason to run it twice.
+function unavailableWith<T>(
+  context: string,
+  githubError: GitHubError
+): GithubLookupResult<T> {
   logWarn("previews", `${context} unavailable`, {
     message: githubError.message,
     httpStatus: githubError.httpStatus
@@ -321,7 +330,7 @@ export async function resolvePullRequestHeadSha(
   } catch (error) {
     const githubError = classifyGitHubError(error, url);
     if (githubError instanceof NotFoundError) return { status: "not_found" };
-    return unavailable("Pull request lookup", error, url);
+    return unavailableWith("Pull request lookup", githubError);
   }
 }
 
@@ -358,6 +367,6 @@ export async function getArtifactDownloadUrl(
   } catch (error) {
     const githubError = classifyGitHubError(error, url);
     if (githubError instanceof NotFoundError) return { status: "not_found" };
-    return unavailable("Artifact download redirect", error, url);
+    return unavailableWith("Artifact download redirect", githubError);
   }
 }

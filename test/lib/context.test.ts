@@ -3,6 +3,10 @@ import { Context } from "hono";
 import { createPlatformContext } from "../../src/lib/context";
 import { IPlatformBindings } from "../../src/lib/interfaces";
 
+// createPlatformContext is an object literal over the bindings; the only
+// logic of its own is the missing-binding throw, so that is what is
+// asserted here. The accessors are exercised end-to-end by every suite
+// that boots the real app.
 describe("createPlatformContext", () => {
   const mockBindings: IPlatformBindings = {
     caches: {
@@ -13,8 +17,7 @@ describe("createPlatformContext", () => {
       }
     },
     environment: {
-      get: (key) => (key === "TEST_VAR" ? "test-value" : undefined),
-      has: (key) => key === "TEST_VAR"
+      get: (key) => (key === "TEST_VAR" ? "test-value" : undefined)
     }
   };
 
@@ -25,52 +28,19 @@ describe("createPlatformContext", () => {
     res: {}
   } as unknown as Context;
 
-  it("should create a platform context with all required methods", () => {
+  it("exposes the binding accessors and the raw context", () => {
     const context = createPlatformContext(mockHonoContext, mockBindings);
 
-    expect(context).toHaveProperty("getCache");
-    expect(context).toHaveProperty("getEnv");
-    expect(context).toHaveProperty("raw");
+    expect(context.getCache("testCache")).toBe(mockBindings.caches.testCache);
+    expect(context.getEnv("TEST_VAR")).toBe("test-value");
+    expect(context.raw).toBe(mockHonoContext);
   });
 
-  describe("getCache", () => {
-    it("should return the requested cache binding", () => {
-      const context = createPlatformContext(mockHonoContext, mockBindings);
-      const cache = context.getCache("testCache");
+  it("throws when cache binding not found", () => {
+    const context = createPlatformContext(mockHonoContext, mockBindings);
 
-      expect(cache).toBe(mockBindings.caches.testCache);
-    });
-
-    it("should throw when cache binding not found", () => {
-      const context = createPlatformContext(mockHonoContext, mockBindings);
-
-      expect(() => context.getCache("nonexistent")).toThrow(
-        "Cache binding 'nonexistent' not found"
-      );
-    });
-  });
-
-  describe("getEnv", () => {
-    it("should return environment variable value when it exists", () => {
-      const context = createPlatformContext(mockHonoContext, mockBindings);
-      const value = context.getEnv("TEST_VAR");
-
-      expect(value).toBe("test-value");
-    });
-
-    it("should return undefined when environment variable does not exist", () => {
-      const context = createPlatformContext(mockHonoContext, mockBindings);
-      const value = context.getEnv("NONEXISTENT");
-
-      expect(value).toBeUndefined();
-    });
-  });
-
-  describe("raw property", () => {
-    it("should return the original Hono context", () => {
-      const context = createPlatformContext(mockHonoContext, mockBindings);
-
-      expect(context.raw).toBe(mockHonoContext);
-    });
+    expect(() => context.getCache("nonexistent")).toThrow(
+      "Cache binding 'nonexistent' not found"
+    );
   });
 });

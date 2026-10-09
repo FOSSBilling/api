@@ -22,6 +22,31 @@ const KV_MIN_TTL_SECONDS = 60;
 const NEGATIVE_CACHE_TTL_SECONDS = KV_MIN_TTL_SECONDS;
 const NEGATIVE_CACHE_VALUE = "__not_found__";
 
+// Shared read half of cachedLookup: negative sentinel, positive parse,
+// corrupt-entry fallthrough to miss. The result is tagged rather than a
+// `T | null | "miss"` union so no cached value can collide with a sentinel
+// (a cached JSON `null` must not read as negative, and a cached "miss"
+// string must still be a hit). Routes with asymmetric write rules (main's
+// download path must never write the shared entry it reads) reuse this for
+// their reads while keeping their own write policy.
+export type CachedRead<T> =
+  { status: "hit"; value: T } | { status: "negative" } | { status: "miss" };
+
+export async function readCachedValue<T>(
+  kv: KVNamespace,
+  key: string
+): Promise<CachedRead<T>> {
+  const cached = await kv.get(key);
+  if (cached === NEGATIVE_CACHE_VALUE) return { status: "negative" };
+  if (cached === null) return { status: "miss" };
+  try {
+    return { status: "hit", value: JSON.parse(cached) as T };
+  } catch {
+    // Corrupt cache entry - treat as absent.
+    return { status: "miss" };
+  }
+}
+
 // ttlSeconds may be a function of the resolved data instead of a fixed
 // number - see routes/commit.ts, which caps the cache lifetime at the
 // artifact's own remaining GitHub retention so a lookup resolved just
@@ -40,17 +65,9 @@ export async function cachedLookup<T>(
   ttlSeconds: number | ((data: T) => number) = DEFAULT_CACHE_TTL_SECONDS,
   waitUntil?: (promise: Promise<unknown>) => void
 ): Promise<GithubLookupResult<T>> {
-  const cached = await kv.get(key);
-  if (cached === NEGATIVE_CACHE_VALUE) {
-    return { status: "not_found" };
-  }
-  if (cached !== null) {
-    try {
-      return { status: "found", data: JSON.parse(cached) as T };
-    } catch {
-      // Corrupt cache entry - fall through to a fresh resolve.
-    }
-  }
+  const read = await readCachedValue<T>(kv, key);
+  if (read.status === "hit") return { status: "found", data: read.value };
+  if (read.status === "negative") return { status: "not_found" };
 
   // The KV write runs inside the flight, not per joiner: singleFlight only
   // coalesces the resolve, so without this, N concurrent requests arriving

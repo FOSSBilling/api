@@ -81,6 +81,28 @@ export function setContentRetryAfter(c: Context, code?: string): void {
   else if (code === "WRITE_RATE_DAY") c.header("Retry-After", "86400");
 }
 
+// Shared contract for every paginated listing. Hono's OpenAPI route typing
+// brands each c.json() call with the declared response shape, so the shared
+// helpers build the payload and pick the status while the c.json calls stay
+// at the (typed) call site. INVALID_CURSOR is 422: a client mistake, unlike
+// an internal failure.
+export function listPayload<T>(data: {
+  items: T[];
+  nextCursor: string | null;
+  hasMore: boolean;
+}) {
+  return {
+    result: data.items,
+    pagination: { next_cursor: data.nextCursor, has_more: data.hasMore }
+  };
+}
+
+export function listErrorStatus(
+  error: DatabaseError | null | undefined
+): 422 | 500 {
+  return error?.code === "INVALID_CURSOR" ? 422 : 500;
+}
+
 export function statusFromContentWriteError(
   code?: string
 ): 403 | 404 | 409 | 429 | 500 | 503 {

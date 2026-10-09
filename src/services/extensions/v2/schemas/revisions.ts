@@ -1,4 +1,5 @@
 import { z } from "@hono/zod-openapi";
+import { cursorPaginationFields } from "./common";
 import { StoredExtensionContentSchema } from "./extensions";
 
 export const RevisionStatusSchema = z.enum(["pending", "approved", "rejected"]);
@@ -53,18 +54,13 @@ export const RevisionQueueQuerySchema = z.object({
   status: RevisionStatusSchema.optional().openapi({
     param: { name: "status", in: "query" }
   }),
-  limit: z.coerce
-    .number()
-    .int()
-    .min(1)
-    .max(100)
-    .default(50)
-    .openapi({
-      param: { name: "limit", in: "query" }
-    }),
-  // min(1) matches ExtensionListQuerySchema: without it `?cursor=` arrives as
-  // an empty string, which the page helper treats as "no cursor" and silently
-  // restarts pagination instead of reporting the malformed value.
+  ...cursorPaginationFields,
+  // Deliberate restatement of just the cursor field: unlike /extensions and
+  // the moderator list, this route's cursor param has never carried an
+  // OpenAPI description, and the generated document is kept byte-level
+  // stable. Validation stays in lockstep with the shared fragment (zod
+  // strings, min 1 so `?cursor=` is rejected rather than treated as "no
+  // cursor"); only the param metadata differs.
   cursor: z
     .string()
     .min(1)

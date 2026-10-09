@@ -4,14 +4,6 @@ export enum LogLevel {
   INFO = "info"
 }
 
-interface LogEntry {
-  timestamp: string;
-  service: string;
-  level: LogLevel;
-  message: string;
-  context?: Record<string, unknown>;
-}
-
 function redactSensitiveData(data: unknown): unknown {
   if (typeof data === "string") {
     return data.replace(/Bearer\s+[A-Za-z0-9\-_]+/g, "Bearer [REDACTED]");
@@ -41,36 +33,22 @@ function redactSensitiveData(data: unknown): unknown {
   return data;
 }
 
+// One structured object per line: Workers Logs serializes object arguments
+// as JSON and indexes the top-level fields, so `service` and the redacted
+// `context` keys stay filterable in the dashboard instead of being baked
+// into an unparseable message string. Timestamp and severity metadata are
+// attached by the observability pipeline either way.
 function log(
   level: LogLevel,
   service: string,
   message: string,
   context?: Record<string, unknown>
 ): void {
-  const entry: LogEntry = {
-    timestamp: new Date().toISOString(),
-    service,
-    level,
-    message,
-    context: context
-      ? (redactSensitiveData(context) as Record<string, unknown>)
-      : undefined
-  };
-
-  const logMessage = `[${entry.timestamp}] [${service.toUpperCase()}] [${level.toUpperCase()}] ${message}`;
-  const contextStr = entry.context ? ` ${JSON.stringify(entry.context)}` : "";
-
-  switch (level) {
-    case LogLevel.ERROR:
-      console.error(logMessage + contextStr);
-      break;
-    case LogLevel.WARN:
-      console.warn(logMessage + contextStr);
-      break;
-    case LogLevel.INFO:
-      console.info(logMessage + contextStr);
-      break;
+  const entry: Record<string, unknown> = { service, message };
+  if (context) {
+    entry.context = redactSensitiveData(context);
   }
+  console[level](entry);
 }
 
 export function logError(

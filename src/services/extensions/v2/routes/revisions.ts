@@ -1,10 +1,11 @@
 import { getAuth } from "../../../../lib/auth";
 import { getExtensionsDb } from "../../../../lib/db";
 import { createRoute, z } from "@hono/zod-openapi";
-import { errorBody } from "./errors";
+import { errorBody, listErrorStatus, listPayload } from "./errors";
 import {
-  ActiveAccountRequiredResponse,
+  ModeratorForbiddenResponse,
   PaginationSchema,
+  authErrorResponses,
   errorResponse
 } from "../schemas/common";
 import {
@@ -37,11 +38,7 @@ export function registerRevisionRoutes(app: ExtensionsV2App): void {
         description:
           "Revisions matching the requested status (default: pending), oldest first"
       },
-      401: errorResponse("Missing or invalid bearer token"),
-      403: {
-        ...ActiveAccountRequiredResponse,
-        description: "The account is inactive or the caller is not a moderator"
-      },
+      ...authErrorResponses(ModeratorForbiddenResponse),
       422: errorResponse(
         "Status, limit, or cursor query param failed validation"
       ),
@@ -64,16 +61,10 @@ export function registerRevisionRoutes(app: ExtensionsV2App): void {
     if (error || !data) {
       return c.json(
         errorBody(error, "Unable to load queue"),
-        error?.code === "INVALID_CURSOR" ? 422 : 500
+        listErrorStatus(error)
       );
     }
-    const res = c.json(
-      {
-        result: data.items,
-        pagination: { next_cursor: data.nextCursor, has_more: data.hasMore }
-      },
-      200
-    );
+    const res = c.json(listPayload(data), 200);
     res.headers.set("Vary", "Authorization");
     return res;
   });

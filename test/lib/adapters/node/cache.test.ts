@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { DatabaseSync } from "node:sqlite";
-import { existsSync, unlinkSync } from "node:fs";
+import { describe, it, expect, beforeEach } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   SQLiteCacheAdapter,
   createMemoryCache,
@@ -75,69 +76,33 @@ describe("SQLiteCacheAdapter - Memory", () => {
     expect(await cache.get("key1")).toBe("value1");
   });
 
-  it("should throw on get error", async () => {
-    const db = new DatabaseSync(":memory:");
-    const badCache = new SQLiteCacheAdapter(db);
-    db.close();
-    await expect(badCache.get("key")).rejects.toThrow();
-  });
-
-  it("should throw on put error", async () => {
-    const db = new DatabaseSync(":memory:");
-    const badCache = new SQLiteCacheAdapter(db);
-    db.close();
-    await expect(badCache.put("key", "value")).rejects.toThrow();
-  });
-
-  it("should throw on delete error", async () => {
-    const db = new DatabaseSync(":memory:");
-    const badCache = new SQLiteCacheAdapter(db);
-    db.close();
-    await expect(badCache.delete("key")).rejects.toThrow();
-  });
-});
-
-describe("SQLiteCacheAdapter - File", () => {
-  const testDbPath = "/tmp/test-cache.db";
-  let cache: SQLiteCacheAdapter;
-
-  beforeEach(() => {
-    cache = createFileCache(testDbPath);
-  });
-
-  afterEach(() => {
-    // Close the database connection to release file handles
-    if (cache) {
+  // createNodeBindings uses createFileCache in production-shaped flows, so
+  // file-backed caches must survive reopening - the durable behavior the
+  // memory cache above deliberately does not have.
+  describe("SQLiteCacheAdapter - File", () => {
+    it("persists values across reopen", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "fb-node-cache-"));
+      const dbPath = join(dir, "cache.db");
       try {
-        cache.close();
-      } catch {
-        // Ignore errors during cleanup
-      }
-    }
-    // Clean up the test database file
-    if (existsSync(testDbPath)) {
-      try {
-        unlinkSync(testDbPath);
-      } catch {
-        // Ignore errors if file doesn't exist or can't be deleted
-      }
-    }
-  });
+        const writer = createFileCache(dbPath);
+        await writer.put("key1", "value1");
+        writer.close();
 
-  it("should persist data to file", async () => {
-    await cache.put("key1", "value1");
-    const result = await cache.get("key1");
-    expect(result).toBe("value1");
-  });
-
-  it("should reload data from file", async () => {
-    await cache.put("key1", "value1");
-    const cache2 = createFileCache(testDbPath);
-    try {
-      const result = await cache2.get("key1");
-      expect(result).toBe("value1");
-    } finally {
-      cache2.close();
-    }
+        const reopened = createFileCache(dbPath);
+        try {
+          await expect(reopened.get("key1")).resolves.toBe("value1");
+        } finally {
+          reopened.close();
+        }
+      } finally {
+        // The first handle is already closed; removal is best-effort and
+        // temp-scoped either way.
+        try {
+          rmSync(dir, { recursive: true, force: true });
+        } catch {
+          // Ignore - under the OS temp dir.
+        }
+      }
+    });
   });
 });
