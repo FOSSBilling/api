@@ -4,7 +4,7 @@
 
 Self-service extension publishing, developer-profile ownership, moderation, and public catalogue browsing.
 
-This service owns the complete Extensions domain and its `DB_EXTENSIONS` schema: users, developers, submissions, claims, transfers, history, and catalogue data. The separate Extensions site keeps OIDC/session state but reaches this domain through the generated HTTPS API client; it must not bind or migrate `DB_EXTENSIONS`.
+This service owns the complete Extensions domain and its `DB_EXTENSIONS` schema. The separate Extensions site keeps OIDC/session state but reaches this domain through the generated HTTPS API client; it must not bind or migrate `DB_EXTENSIONS`.
 
 ## Endpoints
 
@@ -13,319 +13,84 @@ Endpoints are not listed here. The service publishes its own contract:
 - **OpenAPI document:** `GET /extensions/v2/docs/openapi.json`
 - **Reference UI:** `GET /extensions/v2/docs`
 
-## The Extension Lifecycle
+## Lifecycle
 
-An extension is a resource from the moment a developer creates it, not from the
-moment a moderator approves it. There is no separate "submission" to reconcile
-against it.
+An extension exists from `POST /extensions`, not from approval. There is no separate submission record.
 
-- `POST /extensions` creates the record. It holds its id immediately and stays
-  out of both catalogues until its first revision is approved.
-- `PUT /extensions/{id}` proposes an edit. The published content does not
-  change until a moderator approves the revision, and only one revision per
-  extension may be unreviewed at a time.
-- `DELETE /extensions/{id}` withdraws an extension that has never been
-  published, releasing its id. A published extension cannot be withdrawn by its
-  owner — consumers pin the id.
-- `POST /extensions/{id}/revisions/{revisionId}/approve` publishes the
-  revision's content. `reject` leaves the published content untouched and the
-  extension available to edit and resubmit.
-- `POST /extensions/{id}/delist` pulls an already-published extension out of
-  the public catalogue for cause (its upstream source disappearing, for
-  example). Moderator-only, and the inverse of neither `approve` nor
-  `reject`: content and history are kept, so the owner can still see and edit
-  the extension. `POST /extensions/{id}/relist` restores it (optional
-  `review_note`, same `?notify` opt-out); see `ExtensionsDatabase.delist()`
-  and `relist()`.
-- `POST /extensions/{id}/moderator-correct` corrects a published extension's
-  live content as a moderator (api#251): truncated readmes, broken links, or
-  other corruption that should not wait for the author to resubmit. One write
-  inserts an already-approved revision row (`submitted_by` and `reviewer_id`
-  both the moderator, `correction_note` as the `review_note`) and publishes
-  it, leaving `published_at` and ownership untouched; the catalogue is
-  revalidated afterwards. Requires a published, listed extension with no
-  pending revision (409 otherwise — approve or reject the pending edit
-  first, never supersede it). Unlike every other moderation write there is no
-  `?notify` query and no author email: the correction is recorded in revision
-  history and surfaced by the directory UI. See `ExtensionsDatabase.moderatorCorrect()`.
-- `GET /extensions/{id}` is role-aware: anonymous and unrelated callers get
-  the published projection (or 404, which hides existence for drafts and
-  delisted rows); the owner and moderators get the full `OwnedExtension`,
-  including `delisted`. This replaces the former `GET /extensions/mine/{id}`
-  and `GET /moderation/extensions/{id}` pair, which shared that shape.
-- `GET /extensions?scope=` lists catalogue cards or owned rows:
-  `scope=public` (default, anonymous allowed) is the published catalogue;
-  `scope=mine` is the caller's own extensions (empty page when they have no
-  developer profile); `scope=all` (moderator only) is every extension,
-  filterable by `status` (`published`, `delisted`, `unpublished`) and `q`
-  (case-insensitive id substring). Replaces `GET /extensions/mine` and
-  `GET /moderation/all-extensions`. An extension's own status and its having
-  a pending edit are independent.
+- `POST /extensions` creates the record and reserves its id. It stays out of catalogues until its first revision is approved.
+- `PUT /extensions/{id}` proposes an edit. Published content is unchanged until approval. One unreviewed revision per extension at a time.
+- `DELETE /extensions/{id}` withdraws an unpublished extension and releases its id. Published extensions cannot be withdrawn by owners.
+- `POST /extensions/{id}/revisions/{revisionId}/approve` publishes. `reject` leaves published content untouched.
+- `POST /extensions/{id}/delist` (moderator-only) hides a published extension for cause without deleting content or history. `POST /extensions/{id}/relist` restores it. Both accept `?notify=false`.
+- `POST /extensions/{id}/moderator-correct` (moderator-only) fixes live catalogue corruption without waiting for the author. Writes an already-approved revision, leaves `published_at` and ownership untouched. Requires a published, listed extension with no pending revision (409 otherwise). No `?notify` option and no author email; the fix is recorded in revision history.
 
-### Moderation Notification Emails
+An edit cannot rename an extension or move it to another developer. A user owns at most one developer profile, so no request body names one.
 
-Revision approve/reject, delist/relist, developer approve, and claim
-approve/reject email the affected author unless the moderator opts out with
-`?notify=false`. Automatic decisions by the FOSSBilling Bot account use the
-same routes and mail path; they are identified by the `[auto policy=…]`
-`review_note` prefix (no schema change).
-The recipient is the developer's `contact_email`, falling back to the owning
-account's `email`; claim decisions go to the claimant's account email.
-Sending is best-effort and never fails the write: the result carries
-`notified: boolean`, which reports whether a recipient was resolved and the
-send dispatched. The provider POST itself runs via `waitUntil` after the
-response (it has a 10s abort timeout and is not worth blocking a moderation
-write on), so delivery failures surface only in logs. A missing address or
-missing mail credentials skip the send before the response and report
-`notified: false`. See `email/` for the provider abstraction (`mxroute` via
-`https://smtpapi.mxroute.com/`, `resend`, or `disabled`) and the root README
-for the `EXTENSIONS_V2_EMAIL_*` configuration.
+## Reads
 
-### Correcting Live Content
+`GET /extensions/{id}` and `GET /developers/{id}` are role-aware: anonymous callers get the published projection; owners and moderators get the full object. For extensions, 404 hides drafts and delisted rows.
 
-Three paths, in order of preference (api#251):
+`GET /extensions?scope=` selects the projection:
 
-- **Moderator edit** (`POST /extensions/{id}/moderator-correct`): live
-  catalogue corruption — a truncated readme, a broken link — on a published,
-  listed extension. Immediate, audited (an approved revision row), no author
-  email.
-- **Ask the author to resubmit**: wording disputes, new releases, unpublished
-  or delisted extensions, or anything while a pending edit exists. The normal
-  propose/review queue, with its notification emails.
-- **Direct D1 edit (break-glass only)**: the API is down, or the stored data
-  violates a constraint the API cannot express a fix through. Back up the row
-  first, write down why in the change record, and trigger a catalogue
-  revalidate manually afterwards — the audit trail and purge that the API
-  would have done do not happen by themselves.
+- `public` (default, anonymous allowed): published catalogue cards.
+- `mine`: caller's own extensions.
+- `all` (moderator only): every extension, filterable by `status` (`published`, `delisted`, `unpublished`) and `q` (case-insensitive id substring).
 
-The id and the developer are properties of the extension, not of a revision: an
-edit cannot rename an extension or move it to another developer, and approving
-one no longer rewrites the developer profile as a side effect. A user owns at
-most one developer profile, so no request body names one.
+Owner/moderator extension reads return four independent fields, not a derived status:
 
-### Reading Owner State
+| `published` | `pending_revision` | `last_review` | Meaning                             |
+| ----------- | ------------------ | ------------- | ----------------------------------- |
+| `null`      | set                | `null`        | Awaiting first review               |
+| `null`      | set                | rejected      | Rejected, already resubmitted       |
+| `null`      | `null`             | rejected      | Rejected; edit and resubmit         |
+| set         | `null`             | approved      | Live, no unreviewed edit            |
+| set         | `null`             | `null`        | Live, adopted from pre-v2 catalogue |
+| set         | set                | either        | Live, edit awaiting review          |
 
-`GET /extensions?scope=mine` and `GET /extensions/{id}` (as owner/moderator)
-return four independent fields rather than a single derived status, because
-together they are the state and a derived enum could only disagree with them. The table below
-covers three of them - `published`, `pending_revision` and `last_review` - the
-fourth, `delisted`, is documented separately just below since it is orthogonal
-to all three:
+`delisted` is orthogonal to all three: it hides the row from public reads without touching them. Adopted rows have no revisions; a live extension with no review history is normal.
 
-| `published` | `pending_revision` | `last_review` | Meaning                                 |
-| ----------- | ------------------ | ------------- | --------------------------------------- |
-| `null`      | set                | `null`        | Awaiting first review                   |
-| `null`      | set                | rejected      | Rejected, and already resubmitted       |
-| `null`      | `null`             | rejected      | Rejected; edit and resubmit             |
-| set         | `null`             | approved      | Live, no unreviewed edit                |
-| set         | `null`             | `null`        | Live, adopted from the pre-v2 catalogue |
-| set         | set                | either        | Live, with an edit awaiting review      |
+`GET /extensions/{id}/revisions` lists one extension's history (owner/moderator, newest first). `GET /revisions` is the global review queue (moderator only, `?status=` defaults to `pending`, oldest first). `GET /developers?scope=` (`all` default, `unapproved` for the queue; `?status=` stays as a deprecated alias and 422s when it disagrees with `?scope=`) and `GET /developers/claims?scope=` (`mine`, `pending`) follow the same pattern. `PATCH /users/me` returns the full account projection, like `GET /users/me`.
 
-The adopted row is the one worth reading twice: migration 0021 published every
-extension that already existed, and those have no revisions at all, so a live
-extension with no review history is normal rather than a gap. `published`
-being set is the only thing that means "in the catalogue" - except a fourth,
-independent field, `delisted`: set once a moderator removes a published
-extension for cause, it hides the row from both public catalogue reads
-without touching `published`, `pending_revision` or `last_review`.
+Anonymous detail reads are cacheable (`Cache-Control: public`); detail reads that vary by caller send `Vary: Authorization`.
 
-Merged reads return a union narrowed by the request: `?scope=` selects the
-list projection explicitly, while `GET /extensions/{id}` and
-`GET /developers/{id}` return the published/public shape anonymously and the
-owned/full shape for the owner or a moderator (for extensions, 404 otherwise
-hides draft and delisted rows).
-Anonymous reads stay cacheable (`Cache-Control: public`); authenticated reads
-send `Vary: Authorization`.
+## Pagination
 
-`GET /extensions/{id}/revisions` lists the full history of one extension,
-newest first, for its owner or any moderator. `GET /revisions` is the global
-review queue (moderator only, `?status=` defaulting to `pending`, oldest
-first).
-
-`GET /developers?scope=` (`all` default, `unapproved` for the review queue;
-`?status=` remains as a deprecated alias during the coordinated migration and
-422s when it disagrees with `?scope=`) replaces `GET /developers/unapproved`.
-`GET /developers/claims?scope=mine` (the caller's claims) and `?scope=pending`
-(moderator queue) replace `GET /developers/claims/mine` and
-`GET /developers/claims`; both return the enriched pending shape, and a
-`status` filter disagreeing with `scope=pending` is rejected with 422 rather
-than silently ignored. `GET /developers/{id}` is role-aware like
-`GET /extensions/{id}`: public view anonymously, full view for the owner or a
-moderator. `PATCH /users/me` returns the full account projection, like
-`GET /users/me`.
-
-`GET /developers`, `GET /developers/claims`, and `GET /developers/{id}/history`
-page by opaque keyset cursor like every other v2 list: `?limit=` (1-100,
-default 50) with `?cursor=` carried from the previous page's
-`pagination.next_cursor`. An invalid cursor is rejected with `INVALID_CURSOR`
-(422); the response envelope is always `pagination: {next_cursor, has_more}`.
+All v2 lists use opaque keyset cursors: `?limit=` (1–100, default 50) with `?cursor=` from the previous page's `pagination.next_cursor`. Envelope is always `pagination: {next_cursor, has_more}`. An invalid cursor returns `INVALID_CURSOR` (422); restart from the first page. List items omit `readme` and `releases`; fetch `GET /extensions/{id}` for detail.
 
 ## Authentication
 
-Requests carry a short-lived bearer assertion minted by the Extensions site and verified here with a shared HMAC secret (`ASSERTION_SIGNING_SECRET`; see the root README for where to configure it).
+Requests carry a short-lived bearer assertion minted by the Extensions site, verified here with `ASSERTION_SIGNING_SECRET` (see root README).
 
-Assertions use HS256 and include the exact issuer `fossbilling-extensions`, audience `fossbilling-api/extensions-v2`, purpose `user-authentication`, and protocol version `1`. They are valid for at most 60 seconds.
+Assertions use HS256 with issuer `fossbilling-extensions`, audience `fossbilling-api/extensions-v2`, purpose `user-authentication`, protocol version `1`. Valid for at most 60 seconds.
 
-`PUT /users/me/identity` instead requires purpose `identity-sync` with a
-`body_sha256` claim containing the lowercase hexadecimal SHA-256 digest of the
-exact UTF-8 JSON request bytes. Other claims and lifetime requirements stay the
-same. The site must derive the projection from trusted provider data, serialize
-once, hash those bytes, sign, and send the same bytes. Never mint identity proofs
-for browser-supplied projections or expose these proofs to clients.
-Ordinary user assertions and mismatched bodies receive 403 on this endpoint;
-missing or invalid credentials receive 401. Identity proofs cannot authorize
-other API routes. Schema validation remains 422 after proof verification.
+`PUT /users/me/identity` requires purpose `identity-sync` plus a `body_sha256` claim holding the lowercase hex SHA-256 of the exact UTF-8 JSON request bytes. The site must hash the same bytes it sends. Identity proofs return 403 on other routes; missing/invalid credentials return 401; schema failures return 422. Membership expiry is capped at one hour.
 
-Deploy the site's new identity-sync signer with this API change; the previous
-unsigned-body sync protocol is intentionally rejected. Membership expiry is
-capped to one hour from synchronization and never extended past the supplied
-expiry. Invalid or stale evidence remains unavailable for automatic verification.
-Review historical identity projections and derived verification records if prior
-abuse is suspected; this ingress fix does not attest to previously stored data.
+### Rotating the shared secret
 
-### Rotating the Shared Secret
-
-`ASSERTION_SIGNING_SECRET_PREVIOUS` is an optional second secret accepted only as a temporary rotation window. To rotate without interrupting requests:
+`ASSERTION_SIGNING_SECRET_PREVIOUS` is accepted only as a temporary rotation window:
 
 1. Set the API's `ASSERTION_SIGNING_SECRET_PREVIOUS` to the current value.
 2. Replace the API's active `ASSERTION_SIGNING_SECRET`.
 3. Replace the Extensions site's active secret.
-4. After at least 65 seconds, verify requests and remove the API's previous secret.
+4. After at least 65 seconds, verify traffic and remove the previous secret.
 
-Remove the previous secret once the new one has been active for at least 65 seconds and all in-flight assertions have expired.
+## Ownership verification
 
-## Ownership Verification
+For organization developer IDs, GitHub membership auto-verifies only against a valid, unexpired membership snapshot. A fresh snapshot without the org is a confirmed mismatch. Missing, malformed, or expired evidence is inconclusive: the profile stays unapproved and claims stay pending for manual review. `github_org_verified` absent or `null` is a review signal, not proof.
 
-For organization developer IDs, GitHub membership is used for automatic verification only when the API has a valid, unexpired membership snapshot. A fresh snapshot that does not contain the organization remains a confirmed mismatch and is rejected. Missing, malformed, or expired evidence is inconclusive instead: a new profile remains unapproved and a claim remains pending for manual moderator review. Moderators must verify ownership through their normal out-of-band process before approving either workflow.
+## Notification emails
 
-`github_org_verified` being absent or `null` is a review signal, not proof of ownership or an authorization grant. Consumers and moderation tooling must not treat an inconclusive result as verified.
+Revision approve/reject, delist/relist, developer approve, and claim approve/reject email the affected author unless the moderator passes `?notify=false`. Bot decisions use the same path, marked with an `[auto policy=…]` `review_note` prefix.
 
-## List Pagination
+Recipients: developer `contact_email`, falling back to the owning account's email; claim decisions go to the claimant's account email. Sending is best-effort via `waitUntil` and never fails the write; the result carries `notified: boolean`. See `email/` for the provider abstraction (`mxroute`, `resend`, `disabled`) and the root README for `EXTENSIONS_V2_EMAIL_*`.
 
-`GET /extensions/v2/extensions` returns bounded pages. `scope=public` (default)
-returns lightweight published catalogue items, `scope=mine`/`all` return owned
-rows. List items intentionally omit `readme` and `releases`; retrieve the full object from `GET /extensions/v2/extensions/{id}` for detail views. Follow `pagination.next_cursor` by passing it unchanged as `cursor`, and treat cursors as opaque. The default page size is 50 and `limit` may be set from 1 through 100.
+## Limits and budgets
 
-Cursors carry a version field and are validated on decode, so a cursor from an older format is rejected with `INVALID_CURSOR` (HTTP 422) rather than being misread. Clients should treat that as "restart pagination from the first page", not as an error to surface.
+Content writes (`POST /extensions`, `PUT /extensions/{id}`, moderator-correct) count the raw request stream before JSON parsing. Raw limit is **512 KiB** (`413 BODY_TOO_LARGE`); normalized JSON content limit is **256 KiB**. New slug ids are at most 200 characters.
 
-## Database
+`EXTENSION_WRITE_RATE_LIMITER` paces IP and account attempts at 60/minute, including validation failures. It is approximate edge pacing, not the durable quota. Missing pacing fails closed (`503 ADMISSION_UNAVAILABLE`).
 
-Uses the D1 binding `DB_EXTENSIONS`, shared with v1 (read-only there). This service owns the schema and the migrations.
-
-`extensions` holds the record; its content columns are the _published_
-projection and are NULL until a first approval, with `published_at` as the
-marker both catalogues filter on and `extensions_published_content_check`
-guaranteeing a published row is never half-written. `extension_revisions`
-(renamed from `extension_submissions` in migration 0021) holds proposed
-content, always attached to a real extension row and cascading with it.
-
-Migration 0021 rebuilds `extensions` and replaces `extension_submissions` with
-`extension_revisions`, because SQLite cannot relax `NOT NULL`, add a `CHECK`, or
-add a foreign key in place. It also renames `extensions.author_id` to
-`developer_id` — nothing public depended on the old name, since v1's response
-field is `author` either way.
-
-**Ordering in 0021 is load-bearing.** It never drops a table that still has
-children, so `extension_submissions` is copied aside and dropped before
-`extensions` is rebuilt. Foreign keys cannot be relaxed to avoid this:
-`PRAGMA foreign_keys` is a no-op inside a transaction and wrangler wraps each
-migration file in one, while `PRAGMA defer_foreign_keys` does not help either —
-dropping a parent increments SQLite's deferred-violation counter per child row
-and nothing decrements it, so the commit fails even when the data is sound. The
-same constraint is why `developers` is not rebuilt: three tables reference it.
-`migrations.test.ts` applies the chain under those conditions so this cannot
-regress.
-
-Apply migrations **only from this repository**, from `db/migrations`, with `npm run db:migrate:extensions-v2:local` / `:remote`. The Extensions site has no D1 migration source.
-
-Migration `0020` is a check, not a schema change: it fails if an adopted developer row holds an id that a static route shadows (`developers.id` of `me`/`claims`/`unapproved`), which would make that row's detail page unreachable. If it fails, rename the row deliberately — the id is public and consumers pin it.
-
-Migration `0021` refuses to run against data it cannot migrate, rather than aborting halfway through the rebuild. Each check selects the offending rows into a scratch table whose named `CHECK` can never hold, so the constraint name is the error message — SQLite has no `RAISE()` outside a trigger:
-
-| Failure                                      | Meaning                                                                 |
-| -------------------------------------------- | ----------------------------------------------------------------------- |
-| `extension_ids_must_not_differ_only_by_case` | Two catalogue ids collide under `idx_extensions_id_nocase`              |
-| `submission_target_ids_must_not_be_reserved` | A submission targets an id a static route shadows                       |
-| `extension_references_must_resolve`          | The `foreign_keys=OFF` rebuild would carry a dangling reference through |
-
-None of these are repaired automatically: each is a decision about published data that belongs to a human. Reconcile and re-run — the migration has touched nothing at that point.
-
-It does resolve one case itself: pending submissions whose ownership state can never satisfy approval are rejected, since one pending revision per extension would otherwise block the owner's next edit forever.
-
-Migration `0021` also drops any submission filed under a developer that no longer exists: there is no `developer_id` such a row could carry that satisfies the new foreign key, and the profile it was filed under is already gone.
-
-## Code Layout
-
-See `AGENTS.md` for what belongs in `routes/`, `db/`, `schemas/`, `github/`, and `middleware.ts`. This service is the reference layout for larger services.
-
-### Claim verification budget
-
-Claim verification is limited before contacting GitHub: 3 attempts per account
-and per normalized developer ID per 60 seconds, plus 300 aggregate claim
-verification attempts per hour. D1 reserves all budgets atomically. Mismatches,
-upstream failures, and cancellation do not refund attempts. Exhaustion returns
-429 (`RATE_LIMITED`); sequential replays of a pending claim short-circuit to
-409 before spending quota, but two requests racing each other can each spend
-one attempt before the unique index decides the winner. Deploy migration
-`0024_claim_verification_budgets.sql` before the Worker update.
-The aggregate budget covers claims only and leaves shared GitHub capacity for
-other workflows; it is not a budget for every GitHub consumer.
-
-### Developer profile approval
-
-Every meaningful profile edit clears manual approval, including edits by
-GitHub-verified owners. Identical submissions preserve it. GitHub identity and
-website verification remain separate signals. Profile reads, embedded extension
-developers, and the review queue require an approval for the current revision.
-
-Owner and moderator reads include `profile_generation` (a 32-character lowercase
-hexadecimal token) and `content_revision`; anonymous reads omit both.
-`POST /developers/{id}/approve` requires
-`{ "expected_generation": "<profile_generation>", "expected_revision": 1 }`.
-Send both values from the profile actually reviewed. Changed or recreated
-profiles return 409; missing or invalid tokens return 422. Each creation gets a
-fresh generation token, including reused developer ids.
-
-Apply migration `0027_bind_developer_profile_generation.sql` and deploy the API
-and updated moderation client before resuming moderation. Older approval requests
-are rejected. The migration clears existing manual approvals for fresh review
-because the previous rules could preserve them across unreviewed edits. GitHub
-verification is retained.
-
-### Profile write budget
-
-`PUT /developers/me` permits 20 successful profile writes per account in a
-rolling 24-hour window, including creation. Exhaustion returns 429 with
-`PROFILE_MUTATION_RATE_LIMITED` and a conservative `Retry-After: 86400`.
-Unchanged submissions return the current profile without changing approval,
-revision, audit history, or revalidating the catalogue. All five editable fields
-participate in the comparison; omitted optional fields mean null. The budget is
-enforced atomically with the write using indexed, immutable history and survives
-profile deletion, recreation, and ownership transfer. Audit records remain
-append-only; this bounds growth per account per day rather than total retention.
-Apply migration `0025_luxuriant_franklin_richards.sql` before deploying.
-
-## Extension resource admission and retention
-
-Content writes (`POST /extensions`, `PUT /extensions/{id}`, and moderator
-correction) count the actual request stream before JSON parsing. The raw request
-limit is **512 KiB**, including whitespace, escapes, and unknown fields. An
-oversized stream is canceled and returns `413 BODY_TOO_LARGE`; `Content-Length`
-cannot bypass counting. The separate normalized JSON content limit remains
-**256 KiB**, with the existing field/release maxima. New extension slug IDs are at most
-200 characters. Previously stored IDs had no length cap and remain supported.
-
-The `EXTENSION_WRITE_RATE_LIMITER` binding paces IP and authenticated-account
-attempts at 60/minute, including validation failures. This edge control is
-approximate and must not be used as the durable quota. Missing/unavailable
-attempt pacing fails closed with `503 ADMISSION_UNAVAILABLE`. Unavailable durable
-write admission returns the same response with `Retry-After: 60`.
-
-Migration `0026_resource_bounds.sql` enforces the following accepted-write and
-retained-resource limits **inside the write transaction**, including moderator
-corrections. Its trigger guards and accounting are shared by create, edit,
-approval, correction, withdrawal and retention; a failed batch leaves neither
-an extension nor an accepted-write charge behind.
+Migration `0026_resource_bounds.sql` enforces accepted-write and retained-resource limits inside the write transaction:
 
 | Resource                              | Account | Developer |
 | ------------------------------------- | ------- | --------- |
@@ -335,99 +100,36 @@ an extension nor an accepted-write charge behind.
 | Extension records                     | 100     | 100       |
 | Revision metadata records             | 1,000   | 1,000     |
 
-Aggregate storage and record counts are measured for visibility; they do not
-impose a whole-system admission limit.
+Minute/day exhaustion returns `429` (`WRITE_RATE_MINUTE` / `WRITE_RATE_DAY`, `Retry-After` 60 / 86400). Retained quota exhaustion returns `409 RESOURCE_QUOTA`. Withdrawing an unpublished extension releases stored bytes and record counts, not accepted-write allowance. Pending budget: ten revisions per submitter, one per extension. See `resource-limits.ts` for the mirrored policy values.
 
-The pending budget remains ten revisions per submitter and one per extension.
-The byte quota includes retained revision JSON **and** published content
-columns. It counts UTF-8 bytes, not JavaScript string length. Original creators
-are charged for extension records and published projections; revision bodies
-and metadata remain charged to their submitters and original developer IDs.
-Transferring a profile does not silently shift these charges to the recipient.
-The `created_by` attribution is immutable. Legacy unowned publications are
-charged to a synthetic `legacy` account bucket.
+Claim verification is budgeted before contacting GitHub: 3 attempts per account and per developer id per 60 seconds, plus 300 aggregate attempts per hour (migration `0024`). Exhaustion returns `429 RATE_LIMITED`. Mismatches and upstream failures do not refund attempts.
 
-Each accepted write also removes up to 50 expired ledger entries, so expiry
-cleanup scales with write traffic. The hourly job handles idle cleanup.
+`PUT /developers/me` allows 20 successful writes per account per rolling 24 hours (migration `0025`). Exhaustion returns `429 PROFILE_MUTATION_RATE_LIMITED` with `Retry-After: 86400`. Identical submissions preserve approval and skip the write.
 
-The accepted-write ledger has no deletion-cascading foreign keys: review,
-withdrawal, profile replacement and account reactivation do not refund a
-rolling allowance. Minute/day exhaustion returns `429` with a domain
-code (`WRITE_RATE_MINUTE`, `WRITE_RATE_DAY`) and a conservative
-`Retry-After` of 60 or 86400 seconds respectively. Retained quota exhaustion
-returns `409 RESOURCE_QUOTA`. Withdrawing an unpublished extension releases its
-stored bytes and record counts, but not its accepted-write allowance.
+Profile approval binds to the reviewed revision: owner/moderator reads include `profile_generation` and `content_revision`; `POST /developers/{id}/approve` requires both as `expected_generation` / `expected_revision` (migration `0027`). Changed profiles return 409; missing/invalid tokens return 422. Every meaningful edit clears manual approval.
 
-`resource-limits.ts` mirrors the policy values used by middleware and maintenance.
+## Revisions and retention
 
-### Revision list/detail contract
+`GET /revisions` and `GET /extensions/{id}/revisions` return summaries (`name`, `version`, `description`, decision metadata, `content_bytes`, `content_available`, `content_hash`, `compacted_at`), never content bodies. Fetch `GET /extensions/{id}/revisions/{revisionId}` for full content (owner/moderator). A compacted revision returns `content: null` with its hash and timestamp. Oversized legacy bodies return `409 CONTENT_UNAVAILABLE`; their summaries report `content_available: false`.
 
-`GET /revisions` and `GET /extensions/{id}/revisions` now return
-`ExtensionRevisionSummary` pages. They select stored, bounded summary fields
-(`name`, `version`, `description`), decision metadata, `content_bytes`,
-`content_available`, `content_hash` and `compacted_at`. They do **not** select,
-transfer or parse content JSON, including the pagination lookahead row.
-Timestamp/ID keyset ordering, limit 1–100 and default 50 are unchanged.
+Scheduled maintenance runs hourly, handling at most 20 bodies and 500 expired ledger rows per run. Retention defaults to `dry-run` (report only); only `EXTENSIONS_RETENTION_MODE=compact` compacts reviewed bodies older than 180 days to `{}`. Pending bodies and the published revision are always protected. Inventory totals are logged after each run. `db/resource-inventory.sql` is a manual read-only reconciliation query.
 
-Fetch `GET /extensions/{id}/revisions/{revisionId}` for full content on demand.
-The caller must be the current owner or an active moderator, and authorization
-is repeated in the actual data query. A compacted revision returns `content:
-null`, `content_available: false`, a SHA-256 hash of the original stored bytes,
-and its compaction timestamp. `content_bytes` measures the currently retained
-body (the two-byte `{}` placeholder after compaction), not the historical body.
+## Database
 
-Oversized legacy content remains stored and counted, but is never fetched or
-parsed by list or detail handlers. Its revision detail returns `409
-CONTENT_UNAVAILABLE`. An owner/moderator extension detail with an oversized
-published or pending body also returns this error. Oversized published legacy
-rows are excluded from public catalogue cards. Historical release collections
-are checked for safe count/tag bounds before version sorting; unsafe collections
-also return `CONTENT_UNAVAILABLE`; their summaries report `content_available: false`.
-The stored readability flag is calculated alongside summary metadata, including
-the safe legacy release count and tag bounds (100 Unicode code points).
-Anonymous public extension detail reads also return `409 CONTENT_UNAVAILABLE`
-for oversized published bodies. Moderator lists still expose
-the published card for correction without reading its oversized body.
-Cards bound display fields and project license/repository metadata; oversized
-legacy URLs are null (or an omitted optional icon), rather than clipped links.
-Detail reads preserve the original fields when the body is safe to fetch.
-Reject an oversized pending revision, then ask its
-owner to resubmit under current bounds; use moderator correction for published
-content. Administrative export is required if the original oversized body must
-be recovered. The migration backfills byte counts/summaries in SQL without
-loading old bodies into a Worker or discarding any rows. Existing over-quota
-collections cannot grow until usage is reduced.
+Uses D1 binding `DB_EXTENSIONS`, shared with v1 (read-only there). This service owns the schema. Apply migrations only from this repository with `npm run db:migrate:extensions-v2:local` / `:remote`.
 
-### Maintenance and monitoring
+- `0020`: guard check; fails if an adopted developer id shadows a static route (`me`/`claims`/`unapproved`).
+- `0021`: rebuilds `extensions`, replaces `extension_submissions` with `extension_revisions`. Ordering is load-bearing (never drop a table with children); covered by `migrations.test.ts`. Refuses unmigratable data with named checks:
 
-The Worker runs scheduled maintenance **hourly**, handling at most
-**20 bodies** and 500 expired ledger rows per invocation. Retention defaults to
-`dry-run`: it reports eligible bodies and reclaimable bytes without fetching or
-changing bodies. Only `EXTENSIONS_RETENTION_MODE=compact` enables compaction;
-missing or invalid mode values keep retention non-destructive. Expired admission
-ledger entries and empty usage counters are cleaned in either mode. Reviewed revision
-bodies older than **180 days** are compacted to `{}` while retaining their
-bounded summaries, review note, reviewer, dates, status and original content
-hash. Pending bodies and the currently published revision are always protected.
-Oversized legacy bodies are left for administrative handling. Metadata is
-retained under the count quota; reaching that quota needs deliberate export
-and administrative cleanup rather than silent deletion of decisions.
+| Failure                                       | Meaning                                                 |
+| --------------------------------------------- | ------------------------------------------------------- |
+| `extension_ids_must_not_differ_only_by_case`  | Two ids collide under `idx_extensions_id_nocase`        |
+| `extension_references_must_resolve`           | An extension names a developer id with no developer row |
+| `submissions_must_name_an_existing_developer` | A submission names a developer id with no developer row |
+| `submission_target_ids_must_not_be_reserved`  | A submission targets a reserved static-route id         |
 
-Compaction rechecks age, status, body equality and the published pointer in the
-UPDATE, so concurrent review/publication changes cannot discard protected
-content. Accounting is updated in the same transaction. Repeated runs are
-idempotent. Expired write events and empty usage counters are cleaned in bounded
-batches.
+Reconcile and re-run; the migration touches nothing before these checks.
 
-Full resource inventory is logged after each hourly maintenance run.
-Structured logs record revision-response bytes/duration, admission reason codes and maintenance/inventory totals:
-`retained_bytes`, `extensions`, `revisions`, `pending`,
-`oversized_legacy_revisions`, `cleanup_backlog`, `compacted`, and
-`expired_events`. They contain no revision bodies or user identifiers. Warning-level signals flag
-oversized legacy bodies and an active
-compaction backlog of 300 or more bodies. Dry-run eligibility is informational.
+## Code layout
 
-`db/resource-inventory.sql` is a manual, read-only reconciliation diagnostic,
-separate from the hourly usage report. It lists at most 100 accounting
-discrepancies using stored scalar sizes without returning content bodies,
-ordered by descending byte/count drift with stable scope/subject tie-breaks.
+See `AGENTS.md` for `routes/`, `db/`, `schemas/`, `github/`, and `middleware.ts`. This service is the reference layout for larger services.

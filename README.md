@@ -1,27 +1,31 @@
 # FOSSBilling API Worker
 
-This is the API service that acts as the central hub for FOSSBilling instances. It handles version checks, update information, and broadcasts system-wide alerts.
+This is the API service that acts as the central hub for FOSSBilling instances. It serves version checks, system-wide alerts, the extensions catalogue, preview builds, and release stats.
 
 Everything is built on [Hono](https://hono.dev), making it lightweight and fast. While we currently deploy this to Cloudflare Workers, the code is designed to be platform-agnostic.
 
 ## What it does
 
-The worker exposes four main services:
+The worker exposes five services:
 
-- **Versions Service** (`/versions/v1`)
+- **Versions** (`/versions/v1`)
   The source of truth for FOSSBilling updates. It fetches release data from GitHub, caches it for performance, and helps instances decide if they need to update.
 
 - **Central Alerts** (`/central-alerts/v1`)
   Allows the project to push critical notifications to all FOSSBilling installations—useful for security hotfixes or major announcements.
 
 - **Extensions** (`/extensions/v1`, `/extensions/v2`)
-  Owns the complete Extensions domain and its `DB_EXTENSIONS` schema. The separate Extensions site keeps OIDC/session state but accesses this domain through the
+  Owns the complete Extensions domain and its `DB_EXTENSIONS` schema. `v2` is authoritative; `v1` is legacy read-only. The separate Extensions site keeps OIDC/session state but accesses this domain through the
   generated HTTPS API client; it must not bind or migrate `DB_EXTENSIONS`.
   See [`src/services/extensions/v2/README.md`](src/services/extensions/v2/README.md).
 
 - **Previews** (`/previews/v1`)
   Resolves FOSSBilling preview builds — the current main preview and per-PR/per-commit builds produced by FOSSBilling/FOSSBilling's GitHub Actions workflows. Read-only; GitHub Actions and R2 are the sources of truth, not this service.
   See [`src/services/previews/v1/README.md`](src/services/previews/v1/README.md).
+
+- **Stats** (`/stats/v1`)
+  Aggregates release data through the versions service's shared releases cache into charts and JSON; a cold cache can trigger a GitHub fetch through that shared path.
+  See [`src/services/stats/v1/README.md`](src/services/stats/v1/README.md).
 
 ## Architecture
 
@@ -34,6 +38,8 @@ We've structured the app to separate the core logic from the specific runtime en
 - **Adapters**:
   - `src/lib/adapters/cloudflare`: Real implementations using KV and D1.
   - `src/lib/adapters/node`: Reference implementations (useful for testing or alternative deployments).
+
+Cron and Durable Object code lives with its owning service and is wired in `src/app/index.ts`.
 
 ## APIs
 
@@ -62,7 +68,11 @@ We use [Cloudflare D1](https://developers.cloudflare.com/d1/) and [KV](https://d
   Migrations are owned by extensions v2 and applied only from this repository — see [its README](src/services/extensions/v2/README.md#database) for the migration and adoption procedure.
 - **KV Namespace** (`CACHE_KV`): Caches GitHub API responses so we don't hit rate limits.
 - **KV Namespace** (`AUTH_KV`): Stores the `UPDATE_TOKEN` value for `/versions/v1/update`.
-- **R2 Bucket** (`DOWNLOAD_BUCKET`): Backs `/previews/v1/main` — see [`src/services/previews/v1/README.md`](src/services/previews/v1/README.md) and the comment in `wrangler.jsonc` for which bucket this points at and why.
+- **R2 Bucket** (`DOWNLOAD_BUCKET`): Shared by versions, previews, and stats for release/preview zips — see [`src/services/previews/v1/README.md`](src/services/previews/v1/README.md) and the comment in `wrangler.jsonc` for which bucket this points at and why.
+- **Durable Object** (`PREVIEW_GITHUB_BUDGET`): Token bucket limiting previews GitHub calls. Policy lives in `src/services/previews/v1/budget.ts`.
+- **Rate limiters** (`EXTENSION_WRITE_RATE_LIMITER`, `PROFILE_CREATION_RATE_LIMITER`): Edge pacing for extension writes and profile creation. Durable quotas are enforced in D1; see [extensions v2 README](src/services/extensions/v2/README.md#limits-and-budgets).
+- **Service binding** (`EXTENSIONS_FRONTEND`): Private binding to the Extensions site worker, used to purge cached catalogue pages after mutations.
+- **Cron** (`0 * * * *`): Hourly extension resource maintenance. See [extensions v2 README](src/services/extensions/v2/README.md#revisions-and-retention).
 
 ### Environment Variables
 
@@ -75,6 +85,7 @@ We use [Cloudflare D1](https://developers.cloudflare.com/d1/) and [KV](https://d
 - `EXTENSIONS_V2_EMAIL_REPLY_TO`: Optional Reply-To address for a monitored inbox. Omit when unset (no Reply-To header is sent) — notification emails do not invite replies.
 - `EXTENSIONS_V2_MXROUTE_SERVER`, `EXTENSIONS_V2_MXROUTE_USERNAME`, `EXTENSIONS_V2_MXROUTE_PASSWORD`: Mailbox credentials for the MXroute SMTP API (`https://smtpapi.mxroute.com/`). Required when `EXTENSIONS_V2_EMAIL_PROVIDER=mxroute`.
 - `EXTENSIONS_V2_RESEND_API_KEY`: API key for Resend. Required when `EXTENSIONS_V2_EMAIL_PROVIDER=resend`.
+- `EXTENSIONS_RETENTION_MODE`: `dry-run` (report only) or `compact` (prune old revision bodies). See [extensions v2 README](src/services/extensions/v2/README.md#revisions-and-retention).
 
 Only extensions v2 consumes these. For the assertion format and the rotation procedure, see [its README](src/services/extensions/v2/README.md#authentication).
 
@@ -101,8 +112,7 @@ npm install
 2. Apply migrations to the local D1 databases:
 
    ```bash
-   npm run db:migrate:extensions-v2:local
-   npm run db:migrate:central-alerts:local
+   npm run db:migrate:all:local
    ```
 
 3. (Optional) Store an update token in KV for `/versions/v1/update`:
@@ -121,8 +131,22 @@ You can now hit endpoints at `http://localhost:8787`.
 
 ### Testing
 
-We use Vitest for testing. The suite includes unit tests for the endpoints and integration tests using the platform adapters.
+We use Vitest. Unit tests run under the Workers pool; Node adapter tests use a separate config.
 
 ```bash
-npm run test
+npm run test       # workers pool
+npm run test:all   # workers + node adapters
 ```
+
+```bash
+npm run typecheck
+npm run lint
+```
+
+### Deploy
+
+```bash
+npm run cf-deploy
+```
+
+This applies remote D1 migrations, then deploys with Wrangler.
