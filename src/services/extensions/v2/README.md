@@ -86,7 +86,7 @@ Recipients: developer `contact_email`, falling back to the owning account's emai
 
 ## Limits and budgets
 
-Request size is counted on the raw stream before JSON parsing. Raw limit is **512 KiB** (`413 BODY_TOO_LARGE`); normalized JSON content limit is **256 KiB**. New slug ids are at most 200 characters.
+Content writes (`POST /extensions`, `PUT /extensions/{id}`, moderator-correct) count the raw request stream before JSON parsing. Raw limit is **512 KiB** (`413 BODY_TOO_LARGE`); normalized JSON content limit is **256 KiB**. New slug ids are at most 200 characters.
 
 `EXTENSION_WRITE_RATE_LIMITER` paces IP and account attempts at 60/minute, including validation failures. It is approximate edge pacing, not the durable quota. Missing pacing fails closed (`503 ADMISSION_UNAVAILABLE`).
 
@@ -121,11 +121,12 @@ Uses D1 binding `DB_EXTENSIONS`, shared with v1 (read-only there). This service 
 - `0020`: guard check; fails if an adopted developer id shadows a static route (`me`/`claims`/`unapproved`).
 - `0021`: rebuilds `extensions`, replaces `extension_submissions` with `extension_revisions`. Ordering is load-bearing (never drop a table with children); covered by `migrations.test.ts`. Refuses unmigratable data with named checks:
 
-| Failure                                      | Meaning                                          |
-| -------------------------------------------- | ------------------------------------------------ |
-| `extension_ids_must_not_differ_only_by_case` | Two ids collide under `idx_extensions_id_nocase` |
-| `submission_target_ids_must_not_be_reserved` | A submission targets a reserved static-route id  |
-| `extension_references_must_resolve`          | Rebuild would carry a dangling reference through |
+| Failure                                       | Meaning                                                 |
+| --------------------------------------------- | ------------------------------------------------------- |
+| `extension_ids_must_not_differ_only_by_case`  | Two ids collide under `idx_extensions_id_nocase`        |
+| `extension_references_must_resolve`           | An extension names a developer id with no developer row |
+| `submissions_must_name_an_existing_developer` | A submission names a developer id with no developer row |
+| `submission_target_ids_must_not_be_reserved`  | A submission targets a reserved static-route id         |
 
 Reconcile and re-run; the migration touches nothing before these checks.
 
