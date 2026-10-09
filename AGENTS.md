@@ -10,7 +10,7 @@
 
 ### Service layout
 
-Small services are flat: `index.ts`, `interfaces.ts`, optionally `database.ts` and `db/` (see `central-alerts/v1`, `versions/v1`, `stats/v1`).
+Small services are flat: `index.ts` + `interfaces.ts` plus narrow helpers (`database.ts`, `db/`, `r2.ts`, `responses.ts`, `dashboard.ts`, `list-cache.ts`, depending on the service).
 
 `extensions/v2` is the reference layout for anything larger, and new services should grow into it rather than inventing a third shape:
 
@@ -20,6 +20,7 @@ Small services are flat: `index.ts`, `interfaces.ts`, optionally `database.ts` a
 - `db/` — `schema.ts`, `migrations/`, one `*Database` class per workflow, plus `errors.ts` (D1 constraint classification) and `batch.ts`.
 - `schemas/` — zod/OpenAPI contract split by domain. There is deliberately **no barrel**: import from `schemas/<domain>` directly so a module's dependencies are visible. This is why `extensions/v2` has no `interfaces.ts`.
 - `github/` — outbound GitHub calls, kept out of the persistence modules.
+- `email/` (extensions v2) — provider abstraction and templates. Service-root helpers (`revalidate.ts`, `resource-limits.ts`) stay at the service root. `previews/v1` follows the same split (`routes/`, `github/`, `schemas/`, plus `budget.ts` / `cache.ts`).
 
 Route modules import `getExtensionsDb`/`getAuth`/`getPlatform` and middleware directly. There is no dependency-injection container; tests drive the real app through `app.request`.
 
@@ -29,8 +30,11 @@ Each service documents its own contract and operational detail in its own `READM
 
 - `npm install`: install dependencies.
 - `npm run dev`: start the local Cloudflare Workers dev server.
-- `npm run deploy`: deploy the worker via Wrangler.
+- `npm run cf-deploy`: apply remote D1 migrations, then deploy via Wrangler.
+- `npm run cf-typegen`: regenerate `worker-configuration.d.ts`.
+- `npm run db:migrate:all:local` / `db:migrate:all:remote`: apply all D1 migrations locally / remotely.
 - `npm run test`: run the default Vitest suite (Workers pool).
+- `npm run test:all`: run Workers pool plus Node adapter tests.
 - `npm run test:node`: run Node adapter tests via `vitest.node.config.ts`.
 - `npm run test:coverage`: run tests with coverage.
 - `npm run typecheck`: TypeScript typecheck without emit.
@@ -58,13 +62,13 @@ Each service documents its own contract and operational detail in its own `READM
 ## Configuration & Secrets
 
 - Local secrets go in `.dev.vars` (for example `GITHUB_TOKEN="..."`).
-- Bindings for D1/KV are defined in `wrangler.jsonc`; keep names aligned with `CloudflareBindings`.
+- Bindings, cron, and vars are defined in `wrangler.jsonc` (D1, KV, R2, Durable Objects, rate limiters, service bindings); keep names aligned with `CloudflareBindings`.
 - Use Wrangler secrets for production tokens instead of committing them.
 - `ASSERTION_SIGNING_SECRET`: HMAC key the extensions v2 API uses to verify short-lived bearer assertions minted by the extensions site (`src/lib/auth/bearer-assertion.ts`). Not sent over the wire — only signs/verifies server-side in each Worker. Add `ASSERTION_SIGNING_SECRET="..."` to `.dev.vars` for local dev; set via `wrangler secret put ASSERTION_SIGNING_SECRET` in production, matching the value configured in the extensions site's Worker.
 - `EXTENSIONS_REVALIDATE_SECRET`: bearer token the extensions v2 API sends to the extensions site's `POST /api/revalidate` (over the `EXTENSIONS_FRONTEND` service binding) to purge the site's CDN-cached catalogue pages after content mutations. Must match the value configured in the extensions site's Worker. Same local/prod setup as `ASSERTION_SIGNING_SECRET`.
 
 ## Cache Revalidation
 
-Any endpoint that mutates catalogue-visible content (revision approve/reject, delist/relist, developer approve, developer profile upsert via `PUT /developers/me`, profile deletion via `DELETE /developers/me`, claim approve/reject, extension withdraw) must call `revalidateCatalogue(c)` from `src/services/extensions/v2/revalidate.ts` after a successful write.
+Any endpoint that mutates catalogue-visible content (revision approve/reject, moderator-correct, delist/relist, developer approve, developer profile upsert via `PUT /developers/me`, profile deletion via `DELETE /developers/me`, claim approve/reject, extension withdraw) must call `revalidateCatalogue(c)` from `src/services/extensions/v2/revalidate.ts` after a successful write.
 
-Skipping it does not break correctness — the site's `maxAge`/`stale-while-revalidate` windows bound staleness — but changes then take minutes instead of seconds to appear. Profile deletion can remove an approved, extension-less profile, which is still public content; the purge is a no-op today while no cached route carries the `developers` tag, but keeps the endpoint correct if that ever changes.
+Skipping it does not break correctness — the site's `maxAge`/`stale-while-revalidate` windows bound staleness — but changes then take minutes instead of seconds to appear. Profile deletion keeps its purge even though the `developers` tag is currently a no-op.
