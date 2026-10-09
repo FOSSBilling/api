@@ -24,7 +24,7 @@ The worker exposes five services:
   See [`src/services/previews/v1/README.md`](src/services/previews/v1/README.md).
 
 - **Stats** (`/stats/v1`)
-  Aggregates release data from the versions service into charts and JSON. No separate GitHub calls.
+  Aggregates release data through the versions service's shared releases cache into charts and JSON; a cold cache can trigger a GitHub fetch through that shared path.
   See [`src/services/stats/v1/README.md`](src/services/stats/v1/README.md).
 
 ## Architecture

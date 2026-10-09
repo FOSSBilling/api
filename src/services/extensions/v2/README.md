@@ -28,7 +28,7 @@ An edit cannot rename an extension or move it to another developer. A user owns 
 
 ## Reads
 
-`GET /extensions/{id}` and `GET /developers/{id}` are role-aware: anonymous callers get the published projection (404 hides drafts and delisted rows); owners and moderators get the full object.
+`GET /extensions/{id}` and `GET /developers/{id}` are role-aware: anonymous callers get the published projection; owners and moderators get the full object. For extensions, 404 hides drafts and delisted rows.
 
 `GET /extensions?scope=` selects the projection:
 
@@ -51,7 +51,7 @@ Owner/moderator extension reads return four independent fields, not a derived st
 
 `GET /extensions/{id}/revisions` lists one extension's history (owner/moderator, newest first). `GET /revisions` is the global review queue (moderator only, `?status=` defaults to `pending`, oldest first). `GET /developers?scope=` (`all` default, `unapproved` for the queue; `?status=` stays as a deprecated alias and 422s when it disagrees with `?scope=`) and `GET /developers/claims?scope=` (`mine`, `pending`) follow the same pattern. `PATCH /users/me` returns the full account projection, like `GET /users/me`.
 
-Anonymous reads are cacheable (`Cache-Control: public`); authenticated reads send `Vary: Authorization`.
+Anonymous detail reads are cacheable (`Cache-Control: public`); detail reads that vary by caller send `Vary: Authorization`.
 
 ## Pagination
 
