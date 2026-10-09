@@ -8,18 +8,11 @@ The Central Alerts service provides targeted notifications to FOSSBilling instal
 
 ### GET `/list`
 
-Retrieve all alerts in the system. Optional `limit` (integer 1–100) and
-`offset` enable pagination. An unusable limit keeps the full-list response;
-`offset` without a usable limit returns 422. An omitted or unusable offset
-with a usable limit defaults to zero.
+Retrieve all alerts in the system. Optional `limit` (integer 1–100) and `offset` enable pagination. An unusable limit keeps the full-list response; `offset` without a usable limit returns 422. An omitted or unusable offset with a usable limit defaults to zero.
 
-Successful responses are edge-cached for 60 seconds by the effective page.
-Unknown query parameters and equivalent pagination spellings reuse the same
-entry. This endpoint is public: Authorization does not affect its response or
-bypass its cache. Validation failures and database errors are not cached.
+Successful responses are edge-cached for 60 seconds by the effective page. Unknown query parameters and equivalent pagination spellings reuse the same entry. This endpoint is public: Authorization does not affect its response or bypass its cache. Validation failures and database errors are not cached.
 
-When `limit` is usable the response adds a `pagination` object next to
-`alerts`:
+When `limit` is usable the response adds a `pagination` object next to `alerts`:
 
 ```json
 {
@@ -79,4 +72,4 @@ The `type` field accepts: `success`, `info`, `warning`, `danger`
 
 ## Database
 
-Uses D1 database binding `DB_CENTRAL_ALERTS`. Initialize with the setup script in `src/services/central-alerts/v1/scripts/`.
+Uses D1 database binding `DB_CENTRAL_ALERTS`. Apply migrations from `db/migrations` with `npm run db:migrate:central-alerts:local` / `:remote`.

@@ -10,34 +10,20 @@
 
 ### Service layout
 
-Small services are flat: `index.ts`, `interfaces.ts`, optionally `database.ts`
-and `db/` (see `central-alerts/v1`, `versions/v1`, `stats/v1`).
+Small services are flat: `index.ts`, `interfaces.ts`, optionally `database.ts` and `db/` (see `central-alerts/v1`, `versions/v1`, `stats/v1`).
 
-`extensions/v2` is the reference layout for anything larger, and new services
-should grow into it rather than inventing a third shape:
+`extensions/v2` is the reference layout for anything larger, and new services should grow into it rather than inventing a third shape:
 
-- `index.ts` — app assembly only: middleware, route registration, OpenAPI
-  document. Route registration order is load-bearing where static paths must
-  beat parameter paths; those cases carry comments.
+- `index.ts` — app assembly only: middleware, route registration, OpenAPI document. Route registration order is load-bearing where static paths must beat parameter paths; those cases carry comments.
 - `middleware.ts` — service-specific Hono middleware.
-- `routes/` — one module per route group, each exporting `register*Routes(app)`.
-  `routes/errors.ts` maps domain error codes to HTTP status; `routes/app.ts`
-  holds the typed app alias.
-- `db/` — `schema.ts`, `migrations/`, one `*Database` class per workflow, plus
-  `errors.ts` (D1 constraint classification) and `batch.ts`.
-- `schemas/` — zod/OpenAPI contract split by domain. There is deliberately **no
-  barrel**: import from `schemas/<domain>` directly so a module's dependencies
-  are visible. This is why `extensions/v2` has no `interfaces.ts`.
+- `routes/` — one module per route group, each exporting `register*Routes(app)`. `routes/errors.ts` maps domain error codes to HTTP status; `routes/app.ts` holds the typed app alias.
+- `db/` — `schema.ts`, `migrations/`, one `*Database` class per workflow, plus `errors.ts` (D1 constraint classification) and `batch.ts`.
+- `schemas/` — zod/OpenAPI contract split by domain. There is deliberately **no barrel**: import from `schemas/<domain>` directly so a module's dependencies are visible. This is why `extensions/v2` has no `interfaces.ts`.
 - `github/` — outbound GitHub calls, kept out of the persistence modules.
 
-Route modules import `getExtensionsDb`/`getAuth`/`getPlatform` and middleware
-directly. There is no dependency-injection container; tests drive the real app
-through `app.request`.
+Route modules import `getExtensionsDb`/`getAuth`/`getPlatform` and middleware directly. There is no dependency-injection container; tests drive the real app through `app.request`.
 
-Each service documents its own contract and operational detail in its own
-`README.md` (`src/services/<name>/<version>/README.md`). Keep API behaviour
-there rather than here or in the root README: this file is for conventions that
-apply when modifying the code.
+Each service documents its own contract and operational detail in its own `README.md` (`src/services/<name>/<version>/README.md`). Keep API behaviour there rather than here or in the root README: this file is for conventions that apply when modifying the code.
 
 ## Build, Test, and Development Commands
 
@@ -74,27 +60,11 @@ apply when modifying the code.
 - Local secrets go in `.dev.vars` (for example `GITHUB_TOKEN="..."`).
 - Bindings for D1/KV are defined in `wrangler.jsonc`; keep names aligned with `CloudflareBindings`.
 - Use Wrangler secrets for production tokens instead of committing them.
-- `ASSERTION_SIGNING_SECRET`: HMAC key the extensions v2 API uses to verify short-lived
-  bearer assertions minted by the extensions site (`src/lib/auth/bearer-assertion.ts`).
-  Not sent over the wire — only signs/verifies server-side in each Worker. Add
-  `ASSERTION_SIGNING_SECRET="..."` to `.dev.vars` for local dev; set via
-  `wrangler secret put ASSERTION_SIGNING_SECRET` in production, matching the value
-  configured in the extensions site's Worker.
-- `EXTENSIONS_REVALIDATE_SECRET`: bearer token the extensions v2 API sends to the
-  extensions site's `POST /api/revalidate` (over the `EXTENSIONS_FRONTEND` service
-  binding) to purge the site's CDN-cached catalogue pages after content mutations.
-  Must match the value configured in the extensions site's Worker. Same local/prod
-  setup as `ASSERTION_SIGNING_SECRET`.
+- `ASSERTION_SIGNING_SECRET`: HMAC key the extensions v2 API uses to verify short-lived bearer assertions minted by the extensions site (`src/lib/auth/bearer-assertion.ts`). Not sent over the wire — only signs/verifies server-side in each Worker. Add `ASSERTION_SIGNING_SECRET="..."` to `.dev.vars` for local dev; set via `wrangler secret put ASSERTION_SIGNING_SECRET` in production, matching the value configured in the extensions site's Worker.
+- `EXTENSIONS_REVALIDATE_SECRET`: bearer token the extensions v2 API sends to the extensions site's `POST /api/revalidate` (over the `EXTENSIONS_FRONTEND` service binding) to purge the site's CDN-cached catalogue pages after content mutations. Must match the value configured in the extensions site's Worker. Same local/prod setup as `ASSERTION_SIGNING_SECRET`.
 
 ## Cache Revalidation
 
-Any endpoint that mutates catalogue-visible content (revision approve/reject,
-delist/relist, developer approve, developer profile upsert via `PUT /developers/me`,
-profile deletion via `DELETE /developers/me`, claim approve/reject, extension
-withdraw) must call `revalidateCatalogue(c)` from
-`src/services/extensions/v2/revalidate.ts` after a successful write. Skipping it
-does not break correctness — the site's `maxAge`/`stale-while-revalidate` windows
-bound staleness — but changes then take minutes instead of seconds to appear.
-Profile deletion can remove an approved, extension-less profile, which is still
-public content; the purge is a no-op today while no cached route carries the
-`developers` tag, but keeps the endpoint correct if that ever changes.
+Any endpoint that mutates catalogue-visible content (revision approve/reject, delist/relist, developer approve, developer profile upsert via `PUT /developers/me`, profile deletion via `DELETE /developers/me`, claim approve/reject, extension withdraw) must call `revalidateCatalogue(c)` from `src/services/extensions/v2/revalidate.ts` after a successful write.
+
+Skipping it does not break correctness — the site's `maxAge`/`stale-while-revalidate` windows bound staleness — but changes then take minutes instead of seconds to appear. Profile deletion can remove an approved, extension-less profile, which is still public content; the purge is a no-op today while no cached route carries the `developers` tag, but keeps the endpoint correct if that ever changes.
