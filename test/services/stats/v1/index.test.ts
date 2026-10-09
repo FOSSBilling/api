@@ -114,6 +114,11 @@ describe("Stats API v1", () => {
     const cached = await env.CACHE_KV.get("fossbilling-stats-data");
     expect(cached).toBeTruthy();
 
+    // Drop the edge entry warmed by the request above, otherwise the second
+    // request is served from it and never reaches getStats (the fallback
+    // below would go unexercised).
+    resetEdgeCache();
+
     const realGet = env.CACHE_KV.get.bind(env.CACHE_KV) as (
       key: string
     ) => Promise<string | null>;
@@ -134,6 +139,14 @@ describe("Stats API v1", () => {
         ctx2
       );
       await waitOnExecutionContext(ctx2);
+
+      // Prove the failing read was actually exercised by this request
+      // rather than the response coming from the warmed edge entry.
+      expect(
+        getSpy.mock.calls.some(
+          ([k]) => (Array.isArray(k) ? k[0] : k) === "gh-fossbilling-releases"
+        )
+      ).toBe(true);
 
       expect(response.status).toBe(200);
       const data = (await response.json()) as ApiResponse<StatsData>;
