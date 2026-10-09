@@ -10,7 +10,7 @@
 
 ### Service layout
 
-Small services are flat: `index.ts` + `interfaces.ts` plus narrow helpers (`database.ts`, `db/`, `r2.ts`, `responses.ts`, `dashboard.ts`, `list-cache.ts`, depending on the service).
+Small services are flat: `index.ts` + `interfaces.ts` plus narrow helpers (for example `database.ts`, `db/`, `r2.ts`).
 
 `extensions/v2` is the reference layout for anything larger, and new services should grow into it rather than inventing a third shape:
 

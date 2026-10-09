@@ -70,9 +70,9 @@ We use [Cloudflare D1](https://developers.cloudflare.com/d1/) and [KV](https://d
 - **KV Namespace** (`AUTH_KV`): Stores the `UPDATE_TOKEN` value for `/versions/v1/update`.
 - **R2 Bucket** (`DOWNLOAD_BUCKET`): Shared by versions, previews, and stats for release/preview zips — see [`src/services/previews/v1/README.md`](src/services/previews/v1/README.md) and the comment in `wrangler.jsonc` for which bucket this points at and why.
 - **Durable Object** (`PREVIEW_GITHUB_BUDGET`): Token bucket limiting previews GitHub calls. Policy lives in `src/services/previews/v1/budget.ts`.
-- **Rate limiters** (`EXTENSION_WRITE_RATE_LIMITER`, `PROFILE_CREATION_RATE_LIMITER`): Edge pacing for extension writes and profile creation. Durable quotas are enforced in D1; see [extensions v2 README](src/services/extensions/v2/README.md#extension-resource-admission-and-retention).
+- **Rate limiters** (`EXTENSION_WRITE_RATE_LIMITER`, `PROFILE_CREATION_RATE_LIMITER`): Edge pacing for extension writes and profile creation. Durable quotas are enforced in D1; see [extensions v2 README](src/services/extensions/v2/README.md#limits-and-budgets).
 - **Service binding** (`EXTENSIONS_FRONTEND`): Private binding to the Extensions site worker, used to purge cached catalogue pages after mutations.
-- **Cron** (`0 * * * *`): Hourly extension resource maintenance. See [extensions v2 README](src/services/extensions/v2/README.md#maintenance-and-monitoring).
+- **Cron** (`0 * * * *`): Hourly extension resource maintenance. See [extensions v2 README](src/services/extensions/v2/README.md#revisions-and-retention).
 
 ### Environment Variables
 
@@ -85,7 +85,7 @@ We use [Cloudflare D1](https://developers.cloudflare.com/d1/) and [KV](https://d
 - `EXTENSIONS_V2_EMAIL_REPLY_TO`: Optional Reply-To address for a monitored inbox. Omit when unset (no Reply-To header is sent) — notification emails do not invite replies.
 - `EXTENSIONS_V2_MXROUTE_SERVER`, `EXTENSIONS_V2_MXROUTE_USERNAME`, `EXTENSIONS_V2_MXROUTE_PASSWORD`: Mailbox credentials for the MXroute SMTP API (`https://smtpapi.mxroute.com/`). Required when `EXTENSIONS_V2_EMAIL_PROVIDER=mxroute`.
 - `EXTENSIONS_V2_RESEND_API_KEY`: API key for Resend. Required when `EXTENSIONS_V2_EMAIL_PROVIDER=resend`.
-- `EXTENSIONS_RETENTION_MODE`: `dry-run` (report only) or `compact` (prune old revision bodies). See [extensions v2 README](src/services/extensions/v2/README.md#maintenance-and-monitoring).
+- `EXTENSIONS_RETENTION_MODE`: `dry-run` (report only) or `compact` (prune old revision bodies). See [extensions v2 README](src/services/extensions/v2/README.md#revisions-and-retention).
 
 Only extensions v2 consumes these. For the assertion format and the rotation procedure, see [its README](src/services/extensions/v2/README.md#authentication).
 
