@@ -54,7 +54,21 @@ export const RevisionQueueQuerySchema = z.object({
   status: RevisionStatusSchema.optional().openapi({
     param: { name: "status", in: "query" }
   }),
-  ...cursorPaginationFields
+  ...cursorPaginationFields,
+  // Deliberate restatement of just the cursor field: unlike /extensions and
+  // the moderator list, this route's cursor param has never carried an
+  // OpenAPI description, and the generated document is kept byte-level
+  // stable. Validation stays in lockstep with the shared fragment (zod
+  // strings, min 1 so `?cursor=` is rejected rather than treated as "no
+  // cursor"); only the param metadata differs.
+  cursor: z
+    .string()
+    .min(1)
+    .max(1000)
+    .optional()
+    .openapi({
+      param: { name: "cursor", in: "query" }
+    })
 });
 
 // History query for GET /extensions/{id}/revisions: newest-first pages of
