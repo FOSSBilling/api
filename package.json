@@ -34,7 +34,7 @@
     "hono": "4.13.13",
     "semver": "7.8.5",
     "spdx-license-ids": "3.0.24",
-    "zod": "4.6.5"
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "1.4.0",
