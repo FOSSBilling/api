@@ -99,9 +99,15 @@ describe("Central Alerts API v1", () => {
           "?limit=0x1&offset=-1",
           "?limit=%201%20&offset=0.0",
           "?%6cimit=1",
-          "?%6cimit=2&limit=1",
+          // Since hono#5495, encoded duplicates keep their string position
+          // and params resolve first-wins, so the encoded 1 wins here.
+          "?%6cimit=1&limit=2",
           "?limit=1&limit=2"
         ]
+      },
+      {
+        initial: "?limit=2",
+        variants: ["?%6cimit=2&limit=1", "?limit=2.0"]
       },
       {
         initial: "?limit=2&offset=1",
