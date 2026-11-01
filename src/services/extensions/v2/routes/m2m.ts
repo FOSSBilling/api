@@ -64,7 +64,13 @@ export function registerM2mRoutes(app: ExtensionsV2App): void {
     const developer = await new DeveloperProfilesDatabase(extDb).getById(
       developer_id
     );
-    if (developer.error || !developer.data || developer.data.unclaimed) {
+    if (developer.error && developer.error.code !== "NOT_FOUND") {
+      return c.json(
+        errorBody(developer.error, "Unable to load developer"),
+        500
+      );
+    }
+    if (!developer.data || developer.data.unclaimed) {
       return c.json(
         {
           error: {

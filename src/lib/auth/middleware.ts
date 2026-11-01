@@ -10,10 +10,13 @@ declare module "hono" {
   }
 }
 
-// Ordered list of verifiers tried for an incoming bearer token. Adding the
-// future long-lived API-key verifier means appending here — route handlers
-// and requireAuth() itself don't change.
-const verifiers: TokenVerifier[] = [bearerAssertionVerifier, m2mBearerVerifier];
+// Ordered list of verifiers tried for an incoming bearer token. The m2m
+// verifier runs first: it filters on the RFC 9068 `typ: at+jwt` header, so
+// machine tokens never fall through to the assertion verifier's failure
+// warning, and user assertions (typ JWT) skip past it without a JWKS fetch.
+// Adding the future long-lived API-key verifier means appending here — route
+// handlers and requireAuth() itself don't change.
+const verifiers: TokenVerifier[] = [m2mBearerVerifier, bearerAssertionVerifier];
 
 export function requireAuth(
   tokenVerifiers: readonly TokenVerifier[] = verifiers

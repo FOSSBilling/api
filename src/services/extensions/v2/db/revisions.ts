@@ -267,6 +267,7 @@ export class ExtensionRevisionsDatabase {
                WHERE m.client_id = ${input.clientId}
                  AND m.revoked_at IS NULL
                  AND m.developer_id = d.id
+                 AND m.ownership_epoch = d.ownership_epoch
              )
              AND (
                SELECT COUNT(*) FROM ${extensionRevisions}
@@ -301,6 +302,15 @@ export class ExtensionRevisionsDatabase {
     const inactive = await inactiveActorError(this.db, input.submittedBy);
     if (inactive) return inactive;
 
+    const [owner] = await this.db
+      .select({ ownerUserId: developers.ownerUserId })
+      .from(developers)
+      .where(eq(developers.id, input.developerId));
+    if (owner?.ownerUserId) {
+      const inactive = await inactiveActorError(this.db, owner.ownerUserId);
+      if (inactive) return inactive;
+    }
+
     const [mapping] = await this.db
       .select({ one: sql`1` })
       .from(sql`m2m_publisher_clients`)
@@ -312,6 +322,24 @@ export class ExtensionRevisionsDatabase {
     if (!mapping) {
       return {
         message: "Publisher client is not registered for this developer",
+        code: "FORBIDDEN"
+      };
+    }
+
+    const [stale] = await this.db
+      .select({ one: sql`1` })
+      .from(sql`m2m_publisher_clients m, developers d`)
+      .where(
+        sql`m.client_id = ${input.clientId}
+            AND m.revoked_at IS NULL
+            AND d.id = m.developer_id
+            AND d.id = ${input.developerId}
+            AND m.ownership_epoch != d.ownership_epoch`
+      );
+    if (stale) {
+      return {
+        message:
+          "Publisher binding is stale after an ownership change; ask a moderator to re-register it",
         code: "FORBIDDEN"
       };
     }
@@ -829,9 +857,11 @@ export class ExtensionRevisionsDatabase {
                 )
                 AND EXISTS (
                   SELECT 1 FROM m2m_publisher_clients m
+                  JOIN developers d ON d.id = m.developer_id
                   WHERE m.client_id = ?
                     AND m.revoked_at IS NULL AND m.can_publish = 1
                     AND m.developer_id = extension_revisions.developer_id
+                    AND d.ownership_epoch = extension_revisions.ownership_epoch
                 )
                 AND EXISTS (
                   SELECT 1 FROM users u
@@ -867,17 +897,37 @@ export class ExtensionRevisionsDatabase {
               AND revoked_at IS NULL AND can_publish = 1
               AND developer_id = ${revision.developer_id}`
         );
+      if (!mapping) {
+        return {
+          data: null,
+          error: {
+            message: "Publisher client cannot publish for this developer",
+            code: "FORBIDDEN"
+          }
+        };
+      }
+      const [stale] = await this.db
+        .select({ one: sql`1` })
+        .from(sql`m2m_publisher_clients m, developers d`)
+        .where(
+          sql`m.client_id = ${input.clientId}
+              AND m.revoked_at IS NULL
+              AND d.id = m.developer_id
+              AND d.id = ${revision.developer_id}
+              AND m.ownership_epoch != d.ownership_epoch`
+        );
       return {
         data: null,
-        error: mapping
+        error: stale
           ? {
+              message:
+                "Publisher binding is stale after an ownership change; ask a moderator to re-register it",
+              code: "FORBIDDEN"
+            }
+          : {
               message:
                 "Revision is not pending, or ownership changed since it was proposed",
               code: "CONFLICT"
-            }
-          : {
-              message: "Publisher client cannot publish for this developer",
-              code: "FORBIDDEN"
             }
       };
     }

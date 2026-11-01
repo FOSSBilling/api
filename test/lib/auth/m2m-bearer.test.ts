@@ -52,6 +52,20 @@ describe("m2m bearer verifier", () => {
     expect(await verifier.verify(token, platform)).toBeNull();
   });
 
+  it("rejects a token from a different issuer", async () => {
+    await activateM2mJwks();
+    const token = await signAccessToken({ iss: "https://evil.example.test" });
+    expect(await verifier.verify(token, platform)).toBeNull();
+  });
+
+  it("rejects an expired token", async () => {
+    await activateM2mJwks();
+    const token = await signAccessToken({
+      exp: Math.floor(Date.now() / 1000) - 60
+    });
+    expect(await verifier.verify(token, platform)).toBeNull();
+  });
+
   it("rejects a token with the wrong typ (user assertions are not machine tokens)", async () => {
     await activateM2mJwks();
     const token = await signAccessToken({ typ: "JWT" });

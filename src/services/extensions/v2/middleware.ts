@@ -195,10 +195,13 @@ const insufficientScopeResponse = (required: string) =>
 // Resolves the m2m mapping and checks the token's scope for a publisher
 // write. Human callers never reach this - their middleware branch is the
 // account/ownership check, and they carry no OAuth scopes on this API.
+// `requireCanPublish` only fast-fails here: the write statements re-assert
+// registration, publish flag, and epoch binding atomically.
 async function resolvePublisher(
   c: Context,
   m2m: AuthPrincipal & { scope: "m2m" },
-  requiredScope: string
+  requiredScope: string,
+  requireCanPublish = false
 ): Promise<Response | undefined> {
   const publishers = new PublisherClientsDatabase(
     getExtensionsDb(c.env.DB_EXTENSIONS)
@@ -216,8 +219,31 @@ async function resolvePublisher(
       403
     );
   }
+  if (ref.data.stale) {
+    return c.json(
+      {
+        error: {
+          message:
+            "Publisher binding is stale after an ownership change; ask a moderator to re-register it",
+          code: "FORBIDDEN"
+        }
+      },
+      403
+    );
+  }
   if (!m2m.scopes.includes(requiredScope)) {
     return c.json(insufficientScopeResponse(requiredScope), 403);
+  }
+  if (requireCanPublish && !ref.data.canPublish) {
+    return c.json(
+      {
+        error: {
+          message: "Publisher client cannot publish for this developer",
+          code: "FORBIDDEN"
+        }
+      },
+      403
+    );
   }
   c.set("publisher", { clientId: m2m.clientId, ...ref.data });
 }
@@ -243,7 +269,7 @@ export function requireApproveAccess(): MiddlewareHandler {
   return withAuthenticatedCheck(async (c) => {
     const auth = getAuth(c);
     if (auth.scope === "m2m") {
-      return resolvePublisher(c, auth, "extensions:publish");
+      return resolvePublisher(c, auth, "extensions:publish", true);
     }
     const users = new UsersDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
     const result = await users.moderatorAccess(auth.userId);

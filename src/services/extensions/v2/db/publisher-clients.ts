@@ -18,6 +18,7 @@ export interface RegisteredPublisher {
   clientId: string;
   developerId: string;
   canPublish: boolean;
+  ownershipEpoch: number;
   createdAt: string;
   revokedAt: string | null;
 }
@@ -26,6 +27,7 @@ interface PublisherRow {
   clientId: string;
   developerId: string;
   canPublish: number;
+  ownershipEpoch: number;
   createdAt: string;
   revokedAt: string | null;
 }
@@ -35,6 +37,7 @@ function parsePublisherRow(row: PublisherRow): RegisteredPublisher {
     clientId: row.clientId,
     developerId: row.developerId,
     canPublish: row.canPublish === 1,
+    ownershipEpoch: row.ownershipEpoch,
     createdAt: row.createdAt,
     revokedAt: row.revokedAt
   };
@@ -76,11 +79,13 @@ export class PublisherClientsDatabase {
     }
   }
 
-  // Registers or re-registers a client against a developer. Re-registration
-  // is also the un-revoke path: revoked_at clears and the mapping fields are
-  // replaced, so the table always holds the moderator's latest decision.
-  // The synthetic users projection row is ensured in the same batch; it must
-  // exist before the client can submit or approve anything (foreign keys).
+  // Registers or re-registers a client against a developer, binding to the
+  // developer's CURRENT ownership epoch. Re-registration is also the
+  // un-revoke and the rebind path: revoked_at clears and the mapping fields
+  // (including the epoch) are replaced, so after an ownership transfer a
+  // moderator must re-register before the client writes again. The synthetic
+  // users projection row is ensured in the same batch; it must exist before
+  // the client can submit or approve anything (foreign keys).
   async register(input: {
     clientId: string;
     developerId: string;
@@ -96,17 +101,21 @@ export class PublisherClientsDatabase {
         }),
         toD1Statement(this.db.$client, {
           sql: `INSERT INTO m2m_publisher_clients
-                  (client_id, developer_id, can_publish, created_at, revoked_at)
-                VALUES (?, ?, ?, ?, NULL)
+                  (client_id, developer_id, can_publish, ownership_epoch, created_at, revoked_at)
+                SELECT ?, ?, ?, d.ownership_epoch, ?, NULL
+                FROM developers d
+                WHERE d.id = ?
                 ON CONFLICT (client_id) DO UPDATE SET
                   developer_id = excluded.developer_id,
                   can_publish = excluded.can_publish,
+                  ownership_epoch = excluded.ownership_epoch,
                   revoked_at = NULL`,
           params: [
             input.clientId,
             input.developerId,
             input.canPublish ? 1 : 0,
-            now
+            now,
+            input.developerId
           ]
         })
       ]);
@@ -147,14 +156,16 @@ export class PublisherClientsDatabase {
     }
   }
 
-  // Developer binding + publish flag of an active mapping, joined with the
-  // developer's ownership epoch for the write guards. Null when the mapping
-  // is missing, revoked, or its developer row is gone (inner join).
+  // Developer binding + publish flag of an active mapping, with whether the
+  // binding has gone stale (the developer's ownership epoch moved since
+  // registration — an ownership transfer). Null when the mapping is missing,
+  // revoked, or its developer row is gone (inner join).
   async getActiveRef(clientId: string): Promise<
     DatabaseResult<{
       developerId: string;
       ownershipEpoch: number;
       canPublish: boolean;
+      stale: boolean;
     } | null>
   > {
     try {
@@ -162,7 +173,8 @@ export class PublisherClientsDatabase {
         .select({
           developerId: m2mPublisherClients.developerId,
           canPublish: m2mPublisherClients.canPublish,
-          ownershipEpoch: developers.ownershipEpoch
+          ownershipEpoch: m2mPublisherClients.ownershipEpoch,
+          developerEpoch: developers.ownershipEpoch
         })
         .from(m2mPublisherClients)
         .innerJoin(
@@ -180,7 +192,8 @@ export class PublisherClientsDatabase {
           ? {
               developerId: row.developerId,
               ownershipEpoch: row.ownershipEpoch,
-              canPublish: row.canPublish === 1
+              canPublish: row.canPublish === 1,
+              stale: row.developerEpoch !== row.ownershipEpoch
             }
           : null,
         error: null

@@ -1,5 +1,6 @@
 import { verifyBearerToken } from "better-auth/oauth2";
 import type { AuthPrincipal, TokenVerifier } from "./interfaces";
+import { logWarn } from "../logger";
 
 // Machine-to-machine bearer tokens minted by the central auth service's
 // client_credentials grant (FOSSBilling/auth). Tokens carrying a `resource`
@@ -14,6 +15,13 @@ import type { AuthPrincipal, TokenVerifier } from "./interfaces";
 // insufficient-scope failure can answer 403 while a bad token answers 401.
 
 const M2M_USER_PREFIX = "m2m:";
+
+// Failed verifications are routine public traffic, so warnings are rate
+// limited the same way bearer-assertion.ts limits its own - a consistently
+// failing JWKS fetch or a stale M2M_* variable must surface without letting
+// junk Authorization headers dictate log volume.
+const WARN_INTERVAL_MS = 60_000;
+let lastAuthWarnAt = 0;
 
 function decodeJwtHeader(token: string): { typ?: string } | null {
   const parts = token.split(".");
@@ -44,7 +52,14 @@ export const m2mBearerVerifier: TokenVerifier = {
         verifyOptions: { issuer, audience },
         jwksUrl
       })) as Record<string, unknown>;
-    } catch {
+    } catch (error) {
+      const now = Date.now();
+      if (now - lastAuthWarnAt >= WARN_INTERVAL_MS) {
+        lastAuthWarnAt = now;
+        logWarn("auth", "Machine access token failed verification", {
+          reason: error instanceof Error ? error.name : "unknown"
+        });
+      }
       return null;
     }
 

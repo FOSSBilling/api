@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "ea6949c7-7dd1-4100-b31f-c3fba0f2034b",
+  "id": "417f6ce6-9d14-46b0-ba84-234dee5e4cc8",
   "prevId": "db0cb288-afb2-41e0-8033-469fc602e86a",
   "tables": {
     "claim_verification_budgets": {
@@ -1141,6 +1141,14 @@
           "autoincrement": false,
           "default": 0
         },
+        "ownership_epoch": {
+          "name": "ownership_epoch",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 1
+        },
         "created_at": {
           "name": "created_at",
           "type": "text",
@@ -1181,6 +1189,10 @@
         "m2m_publisher_clients_can_publish_check": {
           "name": "m2m_publisher_clients_can_publish_check",
           "value": "\"m2m_publisher_clients\".\"can_publish\" IN (0, 1)"
+        },
+        "m2m_publisher_clients_ownership_epoch_check": {
+          "name": "m2m_publisher_clients_ownership_epoch_check",
+          "value": "\"m2m_publisher_clients\".\"ownership_epoch\" >= 1"
         }
       }
     },

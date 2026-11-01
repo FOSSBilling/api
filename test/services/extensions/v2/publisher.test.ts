@@ -13,7 +13,11 @@ import {
   seedUnownedDeveloper,
   db
 } from "./harness";
-import { insertUser, insertExtension } from "./db-fixtures";
+import {
+  insertUser,
+  insertExtension,
+  bumpDeveloperOwnership
+} from "./db-fixtures";
 import {
   signAccessToken,
   activateM2mJwks,
@@ -268,6 +272,31 @@ describe("m2m publisher writes", () => {
       sampleCreate({ extensionId: "wrong-aud" })
     );
     expect(res.status).toBe(401);
+  });
+
+  it("stops writing after an ownership transfer and recovers on re-registration", async () => {
+    await registerPublisher();
+    // The mapping holds the epoch from registration; the transfer bumps it.
+    await bumpDeveloperOwnership(db, DEVELOPER, "new-owner-1");
+
+    const stale = await post(
+      "/extensions/v2/extensions",
+      await m2mHeaders(["extensions:push"]),
+      sampleCreate({ extensionId: "stale-after-transfer" })
+    );
+    expect(stale.status).toBe(403);
+    const staleBody = (await stale.json()) as { error: { message: string } };
+    expect(staleBody.error.message).toContain("stale");
+
+    // Re-registering rebinds to the new epoch and un-revokes.
+    const reregistered = await registerPublisher();
+    expect(reregistered.status).toBe(200);
+    const res = await post(
+      "/extensions/v2/extensions",
+      await m2mHeaders(["extensions:push"]),
+      sampleCreate({ extensionId: "rebound-after-transfer" })
+    );
+    expect(res.status).toBe(201);
   });
 });
 

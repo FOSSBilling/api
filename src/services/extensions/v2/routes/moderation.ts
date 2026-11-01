@@ -76,7 +76,11 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
         description:
           "Revision approved and published as the extension's live content"
       },
-      ...authErrorResponses(ModeratorForbiddenResponse),
+      ...authErrorResponses(
+        errorResponse(
+          "The account is inactive or is not a moderator; machine clients are unregistered, revoked, stale after an ownership change, or hold neither can_publish nor the extensions:publish scope"
+        )
+      ),
       404: errorResponse("No such revision on that extension"),
       409: errorResponse(
         "Revision is not pending, or ownership has changed since it was proposed"

@@ -20,8 +20,13 @@ function base64UrlEncodeString(value: string): string {
 let keyPair: CryptoKeyPair | null = null;
 let publicJwk: JsonWebKey | null = null;
 
+// Memoized past the boolean guard: concurrent sign/verify calls share one
+// in-flight key generation, so `keyPair` and `publicJwk` always belong
+// together.
+let keyPairPromise: Promise<void> | null = null;
+
 async function ensureKeyPair(): Promise<void> {
-  if (!keyPair) {
+  keyPairPromise ??= (async () => {
     keyPair = (await crypto.subtle.generateKey({ name: "Ed25519" }, true, [
       "sign",
       "verify"
@@ -30,7 +35,8 @@ async function ensureKeyPair(): Promise<void> {
       "jwk",
       keyPair.publicKey
     )) as JsonWebKey;
-  }
+  })();
+  await keyPairPromise;
 }
 
 export interface AccessTokenOverrides {

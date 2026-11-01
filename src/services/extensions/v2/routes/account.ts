@@ -101,6 +101,7 @@ export function registerAccountRoutes(app: ExtensionsV2App): void {
         description: "The caller's account projection, including active status"
       },
       401: errorResponse("Missing or invalid bearer token"),
+      403: errorResponse("Machine tokens are not accepted on this route"),
       404: errorResponse("Account does not exist"),
       500: errorResponse("Database error")
     }
@@ -194,6 +195,7 @@ export function registerAccountRoutes(app: ExtensionsV2App): void {
         description: "Account deleted"
       },
       401: errorResponse("Missing or invalid bearer token"),
+      403: errorResponse("Machine tokens are not accepted on this route"),
       404: errorResponse("Account does not exist"),
       409: errorResponse("Account still owns protected domain records"),
       500: errorResponse("Database error")
