@@ -99,6 +99,13 @@
       "when": 1791341353749,
       "tag": "0027_bind_developer_profile_generation",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "6",
+      "when": 1793550752673,
+      "tag": "0028_m2m_publisher_clients",
+      "breakpoints": true
     }
   ]
 }

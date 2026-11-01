@@ -23,6 +23,9 @@ export default defineConfig({
           GITHUB_TOKEN: "test-github-token",
           UPDATE_TOKEN: "test-update-token",
           ASSERTION_SIGNING_SECRET: "test-assertion-signing-secret",
+          M2M_ISSUER: "https://auth.example.test",
+          M2M_JWKS_URL: "https://auth.example.test/.well-known/jwks.json",
+          M2M_AUDIENCE: "https://api.fossbilling.net",
           TEST_MIGRATIONS_EXTENSIONS: extensionsMigrations,
           TEST_MIGRATIONS_CENTRAL_ALERTS: centralAlertsMigrations
         },

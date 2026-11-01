@@ -471,3 +471,32 @@ export const extensionWriteEvents = sqliteTable(
     index("idx_extension_write_events_time").on(table.occurredAt)
   ]
 );
+
+// A machine client registered by a moderator to publish on behalf of one
+// developer. The client_id is the central auth service's OAuth client id;
+// the auth service authenticates the token, this table authorizes it.
+// Soft-revoked rows keep the audit trail; lookups filter revoked_at.
+// Each registered client also has a synthetic `users` projection row
+// (`m2m:<client_id>`) that anchors the users foreign keys on the revisions
+// it submits and approves — see PublisherClientsDatabase.ensureProjectUser().
+export const m2mPublisherClients = sqliteTable(
+  "m2m_publisher_clients",
+  {
+    clientId: text("client_id").primaryKey(),
+    developerId: text("developer_id")
+      .notNull()
+      .references(() => developers.id),
+    canPublish: integer("can_publish").notNull().default(0),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+    revokedAt: text("revoked_at")
+  },
+  (table) => [
+    index("idx_m2m_publisher_clients_developer").on(table.developerId),
+    check(
+      "m2m_publisher_clients_can_publish_check",
+      sql`${table.canPublish} IN (0, 1)`
+    )
+  ]
+);

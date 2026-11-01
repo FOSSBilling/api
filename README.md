@@ -86,6 +86,7 @@ We use [Cloudflare D1](https://developers.cloudflare.com/d1/) and [KV](https://d
 - `EXTENSIONS_V2_MXROUTE_SERVER`, `EXTENSIONS_V2_MXROUTE_USERNAME`, `EXTENSIONS_V2_MXROUTE_PASSWORD`: Mailbox credentials for the MXroute SMTP API (`https://smtpapi.mxroute.com/`). Required when `EXTENSIONS_V2_EMAIL_PROVIDER=mxroute`.
 - `EXTENSIONS_V2_RESEND_API_KEY`: API key for Resend. Required when `EXTENSIONS_V2_EMAIL_PROVIDER=resend`.
 - `EXTENSIONS_RETENTION_MODE`: `dry-run` (report only) or `compact` (prune old revision bodies). See [extensions v2 README](src/services/extensions/v2/README.md#revisions-and-retention).
+- `M2M_ISSUER`, `M2M_JWKS_URL`, `M2M_AUDIENCE`: Issuer, JWKS endpoint, and expected audience for machine-to-machine access tokens minted by the central auth service (`FOSSBilling/auth`). Defaults live in `wrangler.jsonc`; preview environments need them pointed at the issuing preview. See [extensions v2 README](src/services/extensions/v2/README.md#machine-publishing).
 
 Only extensions v2 consumes these. For the assertion format and the rotation procedure, see [its README](src/services/extensions/v2/README.md#authentication).
 

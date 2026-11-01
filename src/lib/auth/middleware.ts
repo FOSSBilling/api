@@ -2,6 +2,7 @@ import { Context, MiddlewareHandler } from "hono";
 import { getPlatform } from "../middleware";
 import { AuthPrincipal, TokenVerifier } from "./interfaces";
 import { bearerAssertionVerifier } from "./bearer-assertion";
+import { m2mBearerVerifier } from "./m2m-bearer";
 
 declare module "hono" {
   interface ContextVariableMap {
@@ -12,7 +13,7 @@ declare module "hono" {
 // Ordered list of verifiers tried for an incoming bearer token. Adding the
 // future long-lived API-key verifier means appending here — route handlers
 // and requireAuth() itself don't change.
-const verifiers: TokenVerifier[] = [bearerAssertionVerifier];
+const verifiers: TokenVerifier[] = [bearerAssertionVerifier, m2mBearerVerifier];
 
 export function requireAuth(
   tokenVerifiers: readonly TokenVerifier[] = verifiers

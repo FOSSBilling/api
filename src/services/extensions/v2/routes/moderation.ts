@@ -1,4 +1,9 @@
-import { paceContentAccount, requireModerator } from "../middleware";
+import {
+  paceContentAccount,
+  requireApproveAccess,
+  requireModerator,
+  getPublisher
+} from "../middleware";
 import { getExtensionsDb } from "../../../../lib/db";
 import { getAuth } from "../../../../lib/auth";
 import { createRoute, z } from "@hono/zod-openapi";
@@ -47,7 +52,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
     tags: ["Moderation"],
     summary: "Approve a pending revision and publish it",
     security: [{ Bearer: [] }],
-    middleware: [requireModerator()] as const,
+    middleware: [requireApproveAccess()] as const,
     request: {
       params: RevisionIdParamSchema,
       query: NotifyQuerySchema,
@@ -90,12 +95,21 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
     const query = c.req.valid("query");
     const extDb = getExtensionsDb(c.env.DB_EXTENSIONS);
     const db = new ExtensionRevisionsDatabase(extDb);
-    const { data, error } = await db.approve(
-      id,
-      revisionId,
-      auth.userId,
-      review_note
-    );
+    const publisher = getPublisher(c);
+    // The first-party carve-out: a can_publish client approves a revision on
+    // its own mapped developer's extension. The mapping and publish flag are
+    // re-asserted inside approveAsPublisher's claim statement, so a revoke
+    // landing mid-request cannot publish. The client id is stamped into the
+    // review note - reviewer_id can only carry the synthetic user.
+    const { data, error } = publisher
+      ? await db.approveAsPublisher({
+          extensionId: id,
+          revisionId,
+          clientId: publisher.clientId,
+          reviewerId: auth.userId,
+          reviewNote: review_note
+        })
+      : await db.approve(id, revisionId, auth.userId, review_note);
     if (error || !data) {
       const status = statusFromWriteErrorCode(error?.code);
       return c.json(errorBody(error, "Unable to approve revision"), status);

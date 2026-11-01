@@ -140,6 +140,7 @@ export async function resetExtensionsDb(db: D1Database): Promise<void> {
     "developer_transfers",
     "developer_claims",
     "extensions",
+    "m2m_publisher_clients",
     "developers",
     "users"
   ]) {

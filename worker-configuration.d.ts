@@ -18,6 +18,9 @@ interface __BaseEnv_CloudflareBindings {
 	ASSERTION_SIGNING_SECRET: string;
 	EXTENSIONS_V2_MXROUTE_PASSWORD: string;
 	EXTENSIONS_REVALIDATE_SECRET: string;
+	M2M_ISSUER: "https://auth.fossbilling.net";
+	M2M_JWKS_URL: "https://auth.fossbilling.net/.well-known/jwks.json";
+	M2M_AUDIENCE: "https://api.fossbilling.net";
 	PREVIEW_GITHUB_BUDGET: DurableObjectNamespace<import("./src/app/index").PreviewGitHubBudget>;
 	EXTENSIONS_FRONTEND: Fetcher /* extensions */;
 }

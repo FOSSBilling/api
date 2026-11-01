@@ -74,6 +74,18 @@ Assertions use HS256 with issuer `fossbilling-extensions`, audience `fossbilling
 3. Replace the Extensions site's active secret.
 4. After at least 65 seconds, verify traffic and remove the previous secret.
 
+## Machine publishing
+
+Machine clients (CI publishers) authenticate with short-lived access tokens from the central auth service's `client_credentials` grant, bound to this API via RFC 8707 `resource=https://api.fossbilling.net`. Tokens are RFC 9068 JWTs (`typ: at+jwt`, EdDSA) carrying `client_id` and `scope`; verification is local via the issuer's JWKS (`M2M_*` variables, root README), so revocation takes effect at token expiry (10 minutes).
+
+Two scopes gate the machine surface: `extensions:push` covers `POST /extensions` and `PUT /extensions/{id}`; `extensions:publish` additionally covers approving a pending revision on the mapped developer's own extension — the one carve-out from moderator-only approval. Machine tokens are rejected everywhere else, including moderator routes and account routes.
+
+A moderator binds a client to a developer profile with `PUT /m2m/clients/{client_id}` (`developer_id`, `can_publish`), lists bindings with `GET /m2m/clients`, and revokes with `DELETE /m2m/clients/{client_id}`. A revoked client's tokens still verify but fail authorization on the next write. Each binding also creates a synthetic internal user (`m2m:<client_id>`) that anchors revision foreign keys; it is not an account and cannot sign in.
+
+Submissions made by a client are recorded under that synthetic user, and its auto-approvals are stamped `[auto publisher=<client_id>]` in the revision's `review_note`. Write pacing keys machine traffic by `client_id`; per-developer content budgets apply unchanged.
+
+Provisioning spans both repos: create the client and its scopes/resource link in the auth service (see its operations README), then register the mapping here.
+
 ## Ownership verification
 
 For organization developer IDs, GitHub membership auto-verifies only against a valid, unexpired membership snapshot. A fresh snapshot without the org is a confirmed mismatch. Missing, malformed, or expired evidence is inconclusive: the profile stays unapproved and claims stay pending for manual review. `github_org_verified` absent or `null` is a review signal, not proof.

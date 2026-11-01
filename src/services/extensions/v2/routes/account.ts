@@ -1,5 +1,9 @@
-import { requireActiveAuth, requireIdentitySync } from "../middleware";
-import { getAuth, requireAuth } from "../../../../lib/auth";
+import {
+  requireActiveAuth,
+  requireIdentitySync,
+  requireUser
+} from "../middleware";
+import { getAuth } from "../../../../lib/auth";
 import { getExtensionsDb } from "../../../../lib/db";
 import { createRoute, z } from "@hono/zod-openapi";
 import { errorBody, statusFromErrorCode } from "./errors";
@@ -88,7 +92,7 @@ export function registerAccountRoutes(app: ExtensionsV2App): void {
     tags: ["Users"],
     summary: "Get the caller's account projection",
     security: [{ Bearer: [] }],
-    middleware: [requireAuth()] as const,
+    middleware: [requireUser()] as const,
     responses: {
       200: {
         content: {
@@ -179,7 +183,7 @@ export function registerAccountRoutes(app: ExtensionsV2App): void {
     tags: ["Users"],
     summary: "Delete the caller's account and tombstone its user row",
     security: [{ Bearer: [] }],
-    middleware: [requireAuth()] as const,
+    middleware: [requireUser()] as const,
     responses: {
       200: {
         content: {

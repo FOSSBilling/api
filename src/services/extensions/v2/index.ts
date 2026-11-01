@@ -12,6 +12,7 @@ import { registerOwnerExtensionsRoutes } from "./routes/owner-extensions";
 import { registerDeveloperProfileRoutes } from "./routes/developer-profiles";
 import { registerOwnershipRoutes } from "./routes/ownership";
 import { registerModerationRoutes } from "./routes/moderation";
+import { registerM2mRoutes } from "./routes/m2m";
 import { registerAccountRoutes } from "./routes/account";
 import { registerRevisionRoutes } from "./routes/revisions";
 
@@ -85,6 +86,7 @@ registerOwnerExtensionsRoutes(extensionsV2);
 registerAccountRoutes(extensionsV2);
 registerOwnershipRoutes(extensionsV2);
 registerModerationRoutes(extensionsV2);
+registerM2mRoutes(extensionsV2);
 registerRevisionRoutes(extensionsV2);
 registerDeveloperProfileRoutes(extensionsV2);
 
