@@ -1200,6 +1200,12 @@ describe("Extensions API v2", () => {
         await authHeaders("user-1"),
         sampleDeveloper()
       );
+      await db
+        .prepare(
+          "INSERT INTO m2m_publisher_clients (client_id, developer_id, can_publish) VALUES (?, ?, 1)"
+        )
+        .bind("modules-publisher", "dev-developer")
+        .run();
 
       const res = await del(
         "/extensions/v2/developers/me",
@@ -1213,6 +1219,10 @@ describe("Extensions API v2", () => {
 
       const getRes = await get("/extensions/v2/developers/dev-developer", {});
       expect(getRes.status).toBe(404);
+      const mapping = await db
+        .prepare("SELECT client_id FROM m2m_publisher_clients")
+        .first();
+      expect(mapping).toBeNull();
     });
 
     // The DELETE statements re-check ownership themselves rather than trusting

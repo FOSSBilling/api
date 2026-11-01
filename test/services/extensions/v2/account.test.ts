@@ -409,6 +409,38 @@ describe("Extensions API v2", () => {
       });
     });
 
+    it("clears publisher mappings bound to a deleted owner's profiles", async () => {
+      // Deletion removes developer profiles with no extensions; the mapping
+      // cleanup statement must run in the same batch or the developers
+      // delete would fail on the foreign key.
+      await put(
+        "/extensions/v2/developers/me",
+        await authHeaders("mapping-owner"),
+        sampleDeveloper({ id: "mapped-developer" })
+      );
+      await db
+        .prepare(
+          "INSERT INTO m2m_publisher_clients (client_id, developer_id, can_publish) VALUES (?, ?, 1)"
+        )
+        .bind("modules-publisher", "mapped-developer")
+        .run();
+      const before = await db
+        .prepare("SELECT developer_id FROM m2m_publisher_clients")
+        .first();
+      expect(before).not.toBeNull();
+
+      const deleted = await del(
+        "/extensions/v2/users/me",
+        await authHeaders("mapping-owner")
+      );
+      expect(deleted.status).toBe(200);
+
+      const after = await db
+        .prepare("SELECT developer_id FROM m2m_publisher_clients")
+        .first();
+      expect(after).toBeNull();
+    });
+
     it("blocks deletion while published extensions remain owned", async () => {
       await seedOwnedExtension();
       const headers = await authHeaders("owner-1");
