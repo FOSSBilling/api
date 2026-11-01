@@ -306,6 +306,18 @@ export interface CreateExtensionInput {
   content: ExtensionContent;
 }
 
+// Publisher variant of CreateExtensionInput: the ownership epoch is read
+// from the developers row inside the insert rather than carried in (the
+// route's mapping lookup is only advisory; the insert re-derives it), and
+// submittedBy is the client's synthetic users row.
+export interface CreateExtensionAsPublisherInput {
+  extensionId: string;
+  clientId: string;
+  developerId: string;
+  submittedBy: string;
+  content: ExtensionContent;
+}
+
 export class ExtensionsDatabase {
   constructor(private db: ExtensionsDb) {}
 
@@ -680,6 +692,150 @@ export class ExtensionsDatabase {
   ): Promise<DatabaseError> {
     const inactive = await inactiveActorError(this.db, input.submittedBy);
     if (inactive) return inactive;
+
+    const [taken] = await this.db
+      .select({ one: sql`1` })
+      .from(extensions)
+      .where(sql`LOWER(${extensions.id}) = LOWER(${input.extensionId})`);
+    if (taken) {
+      return {
+        message: "An extension with this id already exists",
+        code: "CONFLICT"
+      };
+    }
+    return {
+      message:
+        "Extension could not be created because ownership changed or the pending-revision limit was reached",
+      code: "CONFLICT"
+    };
+  }
+
+  // Creates an extension for a registered publisher client. Mirrors create()
+  // but the ownership guard checks the client's active mapping instead of
+  // owner_user_id = submitted_by (the client submits under its synthetic
+  // users row); the mapped developer's human owner must still be active.
+  async createAsPublisher(
+    input: CreateExtensionAsPublisherInput
+  ): Promise<DatabaseResult<{ id: string; revisionId: string }>> {
+    const revisionId = crypto.randomUUID();
+
+    let results;
+    try {
+      const extensionStmt = toD1Statement(this.db.$client, {
+        sql: `INSERT INTO extensions (id, developer_id, created_by, created_at, updated_at)
+              SELECT ?, d.id, d.owner_user_id, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+              FROM developers d
+              WHERE d.id = ?
+                AND EXISTS (
+                  SELECT 1 FROM users u WHERE u.id = d.owner_user_id AND u.deleted_at IS NULL
+                )
+                AND EXISTS (
+                  SELECT 1 FROM m2m_publisher_clients m
+                  WHERE m.client_id = ? AND m.revoked_at IS NULL AND m.developer_id = d.id
+                    AND m.ownership_epoch = d.ownership_epoch
+                )
+                AND (
+                  SELECT COUNT(*) FROM extension_revisions
+                  WHERE submitted_by = ? AND status = 'pending'
+                ) < ?
+              ON CONFLICT DO NOTHING`,
+        params: [
+          input.extensionId,
+          input.developerId,
+          input.clientId,
+          input.submittedBy,
+          MAX_PENDING_REVISIONS_PER_USER
+        ]
+      });
+
+      const revisionStmt = toD1Statement(this.db.$client, {
+        sql: `INSERT INTO extension_revisions
+                (id, extension_id, developer_id, submitted_by, status, content, ownership_epoch)
+              SELECT ?, ?, d.id, ?, 'pending', ?, d.ownership_epoch
+              FROM developers d
+              WHERE d.id = ?
+                AND changes() = 1`,
+        params: [
+          revisionId,
+          input.extensionId,
+          input.submittedBy,
+          JSON.stringify(input.content),
+          input.developerId
+        ]
+      });
+
+      results = await this.db.$client.batch([extensionStmt, revisionStmt]);
+    } catch (error) {
+      return contentAdmissionError("createAsPublisher", error);
+    }
+
+    if (!results[0]?.meta?.changes) {
+      try {
+        return {
+          data: null,
+          error: await this.createAsPublisherBlockedError(input)
+        };
+      } catch (error) {
+        return contentAdmissionError("createAsPublisher", error);
+      }
+    }
+
+    return { data: { id: input.extensionId, revisionId }, error: null };
+  }
+
+  private async createAsPublisherBlockedError(
+    input: CreateExtensionAsPublisherInput
+  ): Promise<DatabaseError> {
+    const inactive = await inactiveActorError(this.db, input.submittedBy);
+    if (inactive) return inactive;
+
+    // The insert's guard requires the mapped developer's human owner to be
+    // active; diagnose against the owner rather than the synthetic user,
+    // which never deactivates.
+    const [developer] = await this.db
+      .select({ ownerUserId: developers.ownerUserId })
+      .from(developers)
+      .where(eq(developers.id, input.developerId));
+    if (developer?.ownerUserId) {
+      const ownerInactive = await inactiveActorError(
+        this.db,
+        developer.ownerUserId
+      );
+      if (ownerInactive) return ownerInactive;
+    }
+
+    const [mapping] = await this.db
+      .select({ one: sql`1` })
+      .from(sql`m2m_publisher_clients`)
+      .where(
+        sql`client_id = ${input.clientId}
+            AND revoked_at IS NULL
+            AND developer_id = ${input.developerId}`
+      );
+    if (!mapping) {
+      return {
+        message: "Publisher client is not registered for this developer",
+        code: "FORBIDDEN"
+      };
+    }
+
+    const [stale] = await this.db
+      .select({ one: sql`1` })
+      .from(sql`m2m_publisher_clients m, developers d`)
+      .where(
+        sql`m.client_id = ${input.clientId}
+            AND m.revoked_at IS NULL
+            AND d.id = m.developer_id
+            AND d.id = ${input.developerId}
+            AND m.ownership_epoch != d.ownership_epoch`
+      );
+    if (stale) {
+      return {
+        message:
+          "Publisher binding is stale after an ownership change; ask a moderator to re-register it",
+        code: "FORBIDDEN"
+      };
+    }
 
     const [taken] = await this.db
       .select({ one: sql`1` })

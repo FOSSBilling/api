@@ -230,6 +230,154 @@ export class ExtensionRevisionsDatabase {
     };
   }
 
+  // Proposes an edit on behalf of a registered publisher client. The client
+  // is authenticated by the auth service; the mapping (checked again inside
+  // the insert) is the authorization. submitted_by is the client's synthetic
+  // users row, so the pending-revision budget is per client, not per human
+  // owner; the human owner's account must still be active.
+  async proposeAsPublisher(input: {
+    extensionId: string;
+    clientId: string;
+    submittedBy: string;
+    developerId: string;
+    content: ExtensionContent;
+  }): Promise<DatabaseResult<{ id: string }>> {
+    const id = crypto.randomUUID();
+
+    let result;
+    try {
+      result = await this.db.run(sql`
+        INSERT INTO ${extensionRevisions}
+             (id, extension_id, developer_id, submitted_by, status, content, ownership_epoch)
+           SELECT ${id}, e.id, d.id, ${input.submittedBy}, 'pending', ${JSON.stringify(input.content)}, d.ownership_epoch
+           FROM ${extensions} e
+           JOIN ${developers} d ON d.id = e.developer_id
+           WHERE LOWER(e.id) = LOWER(${input.extensionId})
+             AND d.id = ${input.developerId}
+             AND EXISTS (
+               SELECT 1 FROM ${users} u
+               WHERE u.id = ${input.submittedBy} AND u.deleted_at IS NULL
+             )
+             AND EXISTS (
+               SELECT 1 FROM ${users} o
+               WHERE o.id = d.owner_user_id AND o.deleted_at IS NULL
+             )
+             AND EXISTS (
+               SELECT 1 FROM m2m_publisher_clients m
+               WHERE m.client_id = ${input.clientId}
+                 AND m.revoked_at IS NULL
+                 AND m.developer_id = d.id
+                 AND m.ownership_epoch = d.ownership_epoch
+             )
+             AND (
+               SELECT COUNT(*) FROM ${extensionRevisions}
+               WHERE submitted_by = ${input.submittedBy} AND status = 'pending'
+             ) < ${MAX_PENDING_REVISIONS_PER_USER}
+        ON CONFLICT DO NOTHING
+      `);
+    } catch (error) {
+      return contentAdmissionError("proposeAsPublisher", error);
+    }
+
+    if (!result.meta?.changes) {
+      try {
+        return {
+          data: null,
+          error: await this.proposeAsPublisherBlockedError(input)
+        };
+      } catch (error) {
+        return contentAdmissionError("proposeAsPublisher", error);
+      }
+    }
+
+    return { data: { id }, error: null };
+  }
+
+  private async proposeAsPublisherBlockedError(input: {
+    extensionId: string;
+    clientId: string;
+    submittedBy: string;
+    developerId: string;
+  }): Promise<DatabaseError> {
+    const inactive = await inactiveActorError(this.db, input.submittedBy);
+    if (inactive) return inactive;
+
+    const [owner] = await this.db
+      .select({ ownerUserId: developers.ownerUserId })
+      .from(developers)
+      .where(eq(developers.id, input.developerId));
+    if (owner?.ownerUserId) {
+      const inactive = await inactiveActorError(this.db, owner.ownerUserId);
+      if (inactive) return inactive;
+    }
+
+    const [mapping] = await this.db
+      .select({ one: sql`1` })
+      .from(sql`m2m_publisher_clients`)
+      .where(
+        sql`client_id = ${input.clientId}
+            AND revoked_at IS NULL
+            AND developer_id = ${input.developerId}`
+      );
+    if (!mapping) {
+      return {
+        message: "Publisher client is not registered for this developer",
+        code: "FORBIDDEN"
+      };
+    }
+
+    const [stale] = await this.db
+      .select({ one: sql`1` })
+      .from(sql`m2m_publisher_clients m, developers d`)
+      .where(
+        sql`m.client_id = ${input.clientId}
+            AND m.revoked_at IS NULL
+            AND d.id = m.developer_id
+            AND d.id = ${input.developerId}
+            AND m.ownership_epoch != d.ownership_epoch`
+      );
+    if (stale) {
+      return {
+        message:
+          "Publisher binding is stale after an ownership change; ask a moderator to re-register it",
+        code: "FORBIDDEN"
+      };
+    }
+
+    const [existing] = await this.db
+      .select({ one: sql`1` })
+      .from(extensions)
+      .where(sql`LOWER(${extensions.id}) = LOWER(${input.extensionId})`);
+
+    if (!existing) {
+      return {
+        message: `Cannot find extension by id: ${input.extensionId}`,
+        code: "NOT_FOUND"
+      };
+    }
+
+    const [pending] = await this.db
+      .select({ one: sql`1` })
+      .from(extensionRevisions)
+      .where(
+        and(
+          sql`LOWER(${extensionRevisions.extensionId}) = LOWER(${input.extensionId})`,
+          eq(extensionRevisions.status, "pending")
+        )
+      );
+    if (pending) {
+      return {
+        message: "An edit to this extension is already awaiting review",
+        code: "CONFLICT"
+      };
+    }
+
+    return {
+      message: "The pending-revision limit was reached",
+      code: "CONFLICT"
+    };
+  }
+
   // listScoped below pages through the same keyset in opposite directions:
   // newest-first for an owner reading an extension's history, oldest-first
   // for moderators working a queue front to back. Only the base predicate
@@ -500,24 +648,37 @@ export class ExtensionRevisionsDatabase {
   // the pre-0021 flow this touches nothing else: the developer profile is not
   // rewritten, and the extension's id and author are not up for review because
   // a revision cannot propose them.
-  async approve(
+  //
+  // approveAsPublisher shares the pre-checks and the publish statement; the
+  // two differ only in who may flip the claim (an active moderator vs. an
+  // active can_publish publisher mapping) and in the epoch claim: a publisher
+  // submits under its synthetic user, so ownership is asserted by epoch match
+  // rather than by owner_user_id = submitted_by.
+  private async prepareApproval(
     extensionId: string,
-    id: string,
-    reviewerId: string,
-    reviewNote?: string
-  ): Promise<DatabaseResult<{ id: string; status: "approved" }>> {
+    id: string
+  ): Promise<
+    | { ok: false; error: DatabaseError }
+    | {
+        ok: true;
+        revision: StoredRevision & { extension_id: string };
+        content: ExtensionContent;
+      }
+  > {
     const existing = await this.getById(extensionId, id);
     if (existing.error || !existing.data) {
       return {
-        data: null,
+        ok: false,
         error: existing.error ?? revisionNotFound(id).error
       };
     }
-    const revision = existing.data;
+    const revision = existing.data as StoredRevision & {
+      extension_id: string;
+    };
 
     if (revision.status !== "pending") {
       return {
-        data: null,
+        ok: false,
         error: { message: "Revision is not pending", code: "CONFLICT" }
       };
     }
@@ -531,7 +692,7 @@ export class ExtensionRevisionsDatabase {
     const parsed = ExtensionContentSchema.safeParse(revision.content);
     if (!parsed.success) {
       return {
-        data: null,
+        ok: false,
         error: {
           message:
             "This revision predates the current content requirements and cannot be published as-is; ask the developer to resubmit it",
@@ -539,15 +700,72 @@ export class ExtensionRevisionsDatabase {
         }
       };
     }
-    const content = parsed.data;
+    return { ok: true, revision, content: parsed.data };
+  }
 
-    // Kept as raw sql via the raw D1 client (see toD1Statement) rather than
-    // the query builder: D1's batch() executes these two statements as one
-    // transaction, and the publish is deliberately gated on `changes() = 1`
-    // from the immediately-preceding statement (SQLite's per-connection
-    // changes() function) so a race or ownership change caught by the claim's
-    // WHERE also blocks the publish - a guarantee that's easy to silently
-    // lose by rewriting this as two independent query-builder calls.
+  // The claim statement's epoch predicate is ownership-change protection,
+  // not an owner check: transfers bump the epoch, so a stale proposal fails
+  // it whatever `submitted_by` says. That matters because publisher clients
+  // submit under their synthetic m2m:<client_id> user, which never equals
+  // owner_user_id - matching on owner would make their submissions
+  // unapprovable by anyone.
+
+  // The column list publish shares with ExtensionsDatabase.moderatorCorrect()
+  // in db/extensions.ts; the two differ only in published_at handling and how
+  // the row is matched (exact id here, LOWER(id) there, because corrections
+  // address legacy rows). Change the projection in both places together.
+  private buildPublishStmt(
+    content: ExtensionContent,
+    revisionId: string,
+    extensionId: string
+  ): D1PreparedStatement {
+    // published_at is COALESCEd rather than overwritten: it records when the
+    // extension first entered the catalogue, and updated_at carries the
+    // "changed just now" signal. The WHERE changes() = 1 gates the publish on
+    // the immediately-preceding claim statement (SQLite's per-connection
+    // changes() function) inside the same D1 batch transaction - a race or
+    // ownership change caught by the claim's WHERE also blocks the publish -
+    // a guarantee that's easy to silently lose by rewriting this as two
+    // independent query-builder calls.
+    return toD1Statement(this.db.$client, {
+      sql: `UPDATE extensions
+            SET type = ?, name = ?, description = ?, releases = ?, website = ?,
+                license = ?, icon_url = ?, readme = ?, source = ?, version = ?,
+                download_url = ?,
+                published_at = COALESCE(published_at, CURRENT_TIMESTAMP),
+                published_revision_id = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE changes() = 1 AND id = ?`,
+      params: [
+        content.type,
+        content.name,
+        content.description,
+        JSON.stringify(content.releases),
+        content.website,
+        JSON.stringify(content.license),
+        content.icon_url ?? null,
+        content.readme,
+        JSON.stringify(content.source),
+        content.version,
+        content.download_url,
+        revisionId,
+        extensionId
+      ]
+    });
+  }
+
+  async approve(
+    extensionId: string,
+    id: string,
+    reviewerId: string,
+    reviewNote?: string
+  ): Promise<DatabaseResult<{ id: string; status: "approved" }>> {
+    const prepared = await this.prepareApproval(extensionId, id);
+    if (!prepared.ok) {
+      return { data: null, error: prepared.error };
+    }
+    const { revision, content } = prepared;
+
     let results;
     try {
       const claimStmt = toD1Statement(this.db.$client, {
@@ -559,7 +777,6 @@ export class ExtensionRevisionsDatabase {
                   JOIN developers d ON d.id = e.developer_id
                   WHERE e.id = extension_revisions.extension_id
                     AND d.id = extension_revisions.developer_id
-                    AND d.owner_user_id = extension_revisions.submitted_by
                     AND d.ownership_epoch = extension_revisions.ownership_epoch
                 )
                 AND EXISTS (
@@ -575,40 +792,11 @@ export class ExtensionRevisionsDatabase {
         ]
       });
 
-      // published_at is COALESCEd rather than overwritten: it records when the
-      // extension first entered the catalogue, and updated_at carries the
-      // "changed just now" signal.
-      //
-      // This is the column list publish shares with
-      // ExtensionsDatabase.moderatorCorrect() in db/extensions.ts; the two
-      // differ only in published_at handling and how the row is matched
-      // (exact id here, LOWER(id) there, because corrections address legacy
-      // rows). Change the projection in both places together.
-      const publishStmt = toD1Statement(this.db.$client, {
-        sql: `UPDATE extensions
-              SET type = ?, name = ?, description = ?, releases = ?, website = ?,
-                  license = ?, icon_url = ?, readme = ?, source = ?, version = ?,
-                  download_url = ?,
-                  published_at = COALESCE(published_at, CURRENT_TIMESTAMP),
-                  published_revision_id = ?,
-                  updated_at = CURRENT_TIMESTAMP
-              WHERE changes() = 1 AND id = ?`,
-        params: [
-          content.type,
-          content.name,
-          content.description,
-          JSON.stringify(content.releases),
-          content.website,
-          JSON.stringify(content.license),
-          content.icon_url ?? null,
-          content.readme,
-          JSON.stringify(content.source),
-          content.version,
-          content.download_url,
-          id,
-          revision.extension_id
-        ]
-      });
+      const publishStmt = this.buildPublishStmt(
+        content,
+        id,
+        revision.extension_id
+      );
 
       results = await this.db.$client.batch([claimStmt, publishStmt]);
     } catch (error) {
@@ -628,6 +816,123 @@ export class ExtensionRevisionsDatabase {
     }
 
     return { data: { id, status: "approved" }, error: null };
+  }
+
+  // Publisher auto-approval: the machine revision flip recorded as
+  // "[auto publisher=<client_id>]" in review_note. The claim requires the
+  // mapping to still be active, can_publish, and to point at the revision's
+  // own developer - checked inside the statement, so a concurrent revoke or
+  // ownership change cannot slip between the route check and the write.
+  async approveAsPublisher(input: {
+    extensionId: string;
+    revisionId: string;
+    clientId: string;
+    reviewerId: string;
+    reviewNote?: string;
+  }): Promise<DatabaseResult<{ id: string; status: "approved" }>> {
+    const prepared = await this.prepareApproval(
+      input.extensionId,
+      input.revisionId
+    );
+    if (!prepared.ok) {
+      return { data: null, error: prepared.error };
+    }
+    const { revision, content } = prepared;
+    const reviewNote = `[auto publisher=${input.clientId}]${
+      input.reviewNote ? ` ${input.reviewNote.trim()}` : ""
+    }`;
+
+    let results;
+    try {
+      const claimStmt = toD1Statement(this.db.$client, {
+        sql: `UPDATE extension_revisions
+              SET status = 'approved', reviewer_id = ?, review_note = ?, reviewed_at = CURRENT_TIMESTAMP
+              WHERE id = ? AND extension_id = ? AND status = 'pending'
+                AND EXISTS (
+                  SELECT 1 FROM extensions e
+                  JOIN developers d ON d.id = e.developer_id
+                  WHERE e.id = extension_revisions.extension_id
+                    AND d.id = extension_revisions.developer_id
+                    AND d.ownership_epoch = extension_revisions.ownership_epoch
+                )
+                AND EXISTS (
+                  SELECT 1 FROM m2m_publisher_clients m
+                  JOIN developers d ON d.id = m.developer_id
+                  WHERE m.client_id = ?
+                    AND m.revoked_at IS NULL AND m.can_publish = 1
+                    AND m.developer_id = extension_revisions.developer_id
+                    AND d.ownership_epoch = extension_revisions.ownership_epoch
+                )
+                AND EXISTS (
+                  SELECT 1 FROM users u
+                  WHERE u.id = ? AND u.deleted_at IS NULL
+                )`,
+        params: [
+          input.reviewerId,
+          reviewNote,
+          input.revisionId,
+          revision.extension_id,
+          input.clientId,
+          input.reviewerId
+        ]
+      });
+
+      const publishStmt = this.buildPublishStmt(
+        content,
+        input.revisionId,
+        revision.extension_id
+      );
+
+      results = await this.db.$client.batch([claimStmt, publishStmt]);
+    } catch (error) {
+      return databaseError("approveAsPublisher", error);
+    }
+
+    if (!results[0]?.meta?.changes) {
+      const [mapping] = await this.db
+        .select({ one: sql`1` })
+        .from(sql`m2m_publisher_clients`)
+        .where(
+          sql`client_id = ${input.clientId}
+              AND revoked_at IS NULL AND can_publish = 1
+              AND developer_id = ${revision.developer_id}`
+        );
+      if (!mapping) {
+        return {
+          data: null,
+          error: {
+            message: "Publisher client cannot publish for this developer",
+            code: "FORBIDDEN"
+          }
+        };
+      }
+      const [stale] = await this.db
+        .select({ one: sql`1` })
+        .from(sql`m2m_publisher_clients m, developers d`)
+        .where(
+          sql`m.client_id = ${input.clientId}
+              AND m.revoked_at IS NULL
+              AND d.id = m.developer_id
+              AND d.id = ${revision.developer_id}
+              AND m.ownership_epoch != d.ownership_epoch`
+        );
+      return {
+        data: null,
+        error: stale
+          ? {
+              message:
+                "Publisher binding is stale after an ownership change; ask a moderator to re-register it",
+              code: "FORBIDDEN"
+            }
+          : {
+              message:
+                "Revision is not pending, or ownership changed since it was proposed",
+              code: "CONFLICT"
+            }
+      };
+    }
+
+    return { data: { id: input.revisionId, status: "approved" }, error: null };
   }
 }
 

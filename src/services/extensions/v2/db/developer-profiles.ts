@@ -626,6 +626,16 @@ export class DeveloperProfilesDatabase {
         params: [developer.id, userId, userId]
       });
 
+      // Publisher mappings die with the profile: they authorize writes for
+      // this developer specifically, and keeping them would block the
+      // developers delete through the foreign key.
+      const deletePublisherStmt = toD1Statement(this.db.$client, {
+        sql: `DELETE FROM m2m_publisher_clients
+              WHERE developer_id = ?
+                AND ${ownedAndDeletable("m2m_publisher_clients.developer_id")}`,
+        params: [developer.id, userId, userId]
+      });
+
       const deleteDeveloperStmt = toD1Statement(this.db.$client, {
         sql: `DELETE FROM developers
               WHERE id = ?
@@ -638,13 +648,14 @@ export class DeveloperProfilesDatabase {
         results = await this.db.$client.batch([
           deleteTransfersStmt,
           deleteClaimsStmt,
+          deletePublisherStmt,
           deleteDeveloperStmt
         ]);
       } catch (error) {
         return databaseError("deleteOwn", error);
       }
 
-      const [, , developerResult] = results;
+      const [, , , developerResult] = results;
       if (!developerResult.meta?.changes) {
         return {
           data: null,

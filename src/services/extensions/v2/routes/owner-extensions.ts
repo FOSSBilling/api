@@ -9,7 +9,12 @@ import {
   statusFromContentWriteError,
   statusFromWriteErrorCode
 } from "./errors";
-import { paceContentAccount, requireActiveAuth } from "../middleware";
+import {
+  paceContentAccount,
+  requireActiveAuth,
+  requireContentWrite,
+  getPublisher
+} from "../middleware";
 import { getExtensionsDb } from "../../../../lib/db";
 import { getAuth } from "../../../../lib/auth";
 import { createRoute, z } from "@hono/zod-openapi";
@@ -31,7 +36,10 @@ import {
   RevisionHistoryQuerySchema
 } from "../schemas/revisions";
 import { DeveloperProfilesDatabase } from "../db/developer-profiles";
-import { ExtensionsDatabase } from "../db/extensions";
+import {
+  ExtensionsDatabase,
+  CreateExtensionAsPublisherInput
+} from "../db/extensions";
 import { ExtensionRevisionsDatabase } from "../db/revisions";
 import { UsersDatabase } from "../db/users";
 import { revalidateCatalogue } from "../revalidate";
@@ -79,7 +87,7 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
     tags: ["Extensions"],
     summary: "Create an extension and submit its first version for review",
     security: [{ Bearer: [] }],
-    middleware: [requireActiveAuth(), paceContentAccount()] as const,
+    middleware: [requireContentWrite(), paceContentAccount()] as const,
     request: {
       body: {
         content: { "application/json": { schema: ExtensionCreateSchema } }
@@ -113,6 +121,38 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
   app.openapi(createRouteDefinition, async (c) => {
     const auth = getAuth(c);
     const { id, ...content } = c.req.valid("json");
+    const publisher = getPublisher(c);
+
+    // A publisher client writes under its mapped developer; the mapping is
+    // re-verified inside the insert. Humans resolve their own profile.
+    if (publisher) {
+      const input: CreateExtensionAsPublisherInput = {
+        extensionId: id,
+        clientId: publisher.clientId,
+        developerId: publisher.developerId,
+        submittedBy: auth.userId,
+        content
+      };
+      const db = new ExtensionsDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
+      const { data, error } = await db.createAsPublisher(input);
+      if (error || !data) {
+        setContentRetryAfter(c, error?.code);
+        return c.json(
+          errorBody(error, "Unable to create extension"),
+          statusFromContentCreateError(error?.code)
+        );
+      }
+      return c.json(
+        {
+          result: {
+            id: data.id,
+            revision_id: data.revisionId,
+            status: "pending" as const
+          }
+        },
+        201
+      );
+    }
 
     const owner = await new DeveloperProfilesDatabase(
       getExtensionsDb(c.env.DB_EXTENSIONS)
@@ -166,7 +206,7 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
     tags: ["Extensions"],
     summary: "Submit an edit to an extension the caller owns",
     security: [{ Bearer: [] }],
-    middleware: [requireActiveAuth(), paceContentAccount()] as const,
+    middleware: [requireContentWrite(), paceContentAccount()] as const,
     request: {
       params: IdParamSchema,
       body: {
@@ -203,14 +243,23 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
     const auth = getAuth(c);
     const { id } = c.req.valid("param");
     const content = c.req.valid("json");
+    const publisher = getPublisher(c);
     const db = new ExtensionRevisionsDatabase(
       getExtensionsDb(c.env.DB_EXTENSIONS)
     );
-    const { data, error } = await db.propose({
-      extensionId: id,
-      callerId: auth.userId,
-      content
-    });
+    const { data, error } = publisher
+      ? await db.proposeAsPublisher({
+          extensionId: id,
+          clientId: publisher.clientId,
+          submittedBy: auth.userId,
+          developerId: publisher.developerId,
+          content
+        })
+      : await db.propose({
+          extensionId: id,
+          callerId: auth.userId,
+          content
+        });
     if (error || !data) {
       setContentRetryAfter(c, error?.code);
       return c.json(

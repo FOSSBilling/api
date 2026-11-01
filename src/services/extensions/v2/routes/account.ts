@@ -1,5 +1,9 @@
-import { requireActiveAuth, requireIdentitySync } from "../middleware";
-import { getAuth, requireAuth } from "../../../../lib/auth";
+import {
+  requireActiveAuth,
+  requireIdentitySync,
+  requireUser
+} from "../middleware";
+import { getAuth } from "../../../../lib/auth";
 import { getExtensionsDb } from "../../../../lib/db";
 import { createRoute, z } from "@hono/zod-openapi";
 import { errorBody, statusFromErrorCode } from "./errors";
@@ -88,7 +92,7 @@ export function registerAccountRoutes(app: ExtensionsV2App): void {
     tags: ["Users"],
     summary: "Get the caller's account projection",
     security: [{ Bearer: [] }],
-    middleware: [requireAuth()] as const,
+    middleware: [requireUser()] as const,
     responses: {
       200: {
         content: {
@@ -97,6 +101,7 @@ export function registerAccountRoutes(app: ExtensionsV2App): void {
         description: "The caller's account projection, including active status"
       },
       401: errorResponse("Missing or invalid bearer token"),
+      403: errorResponse("Machine tokens are not accepted on this route"),
       404: errorResponse("Account does not exist"),
       500: errorResponse("Database error")
     }
@@ -179,7 +184,7 @@ export function registerAccountRoutes(app: ExtensionsV2App): void {
     tags: ["Users"],
     summary: "Delete the caller's account and tombstone its user row",
     security: [{ Bearer: [] }],
-    middleware: [requireAuth()] as const,
+    middleware: [requireUser()] as const,
     responses: {
       200: {
         content: {
@@ -190,6 +195,7 @@ export function registerAccountRoutes(app: ExtensionsV2App): void {
         description: "Account deleted"
       },
       401: errorResponse("Missing or invalid bearer token"),
+      403: errorResponse("Machine tokens are not accepted on this route"),
       404: errorResponse("Account does not exist"),
       409: errorResponse("Account still owns protected domain records"),
       500: errorResponse("Database error")

@@ -30,6 +30,7 @@
     "@octokit/request": "10.0.16",
     "@scalar/hono-api-reference": "0.12.16",
     "badge-maker": "6.0.0",
+    "better-auth": "^1.7.14",
     "drizzle-orm": "0.45.4",
     "hono": "4.13.14",
     "semver": "7.8.5",
@@ -53,6 +54,11 @@
     "typescript-eslint": "8.72.1",
     "vitest": "5.0.5",
     "wrangler": "4.155.0"
+  },
+  "overrides": {
+    "@esbuild-kit/core-utils": {
+      "esbuild": "^0.25.12"
+    }
   },
   "allowScripts": {
     "esbuild": true,

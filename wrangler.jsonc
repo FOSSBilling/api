@@ -26,7 +26,10 @@
     "EXTENSIONS_RETENTION_MODE": "dry-run",
     "EXTENSIONS_V2_EMAIL_PROVIDER": "mxroute",
     "EXTENSIONS_V2_MXROUTE_SERVER": "wednesday.mxrouting.net",
-    "EXTENSIONS_V2_MXROUTE_USERNAME": "extensions@fossbilling.org"
+    "EXTENSIONS_V2_MXROUTE_USERNAME": "extensions@fossbilling.org",
+    "M2M_ISSUER": "https://auth.fossbilling.net",
+    "M2M_JWKS_URL": "https://auth.fossbilling.net/.well-known/jwks.json",
+    "M2M_AUDIENCE": "https://api.fossbilling.net"
   },
   "routes": [
     {

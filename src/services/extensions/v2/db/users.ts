@@ -310,6 +310,17 @@ export class UsersDatabase {
         params: [userId, userId, deletedAt]
       });
 
+      // Publisher mappings die with the profiles they authorize (see the
+      // matching statement in DeveloperProfilesDatabase.deleteOwn()).
+      const deletePublisherStmt = toD1Statement(this.db.$client, {
+        sql: `DELETE FROM m2m_publisher_clients
+              WHERE developer_id IN (
+                SELECT id FROM developers WHERE owner_user_id = ?
+              )
+                AND EXISTS (SELECT 1 FROM users WHERE id = ? AND deleted_at = ?)`,
+        params: [userId, userId, deletedAt]
+      });
+
       const deleteDeveloperStmt = toD1Statement(this.db.$client, {
         sql: `DELETE FROM developers
               WHERE owner_user_id = ?
@@ -340,11 +351,12 @@ export class UsersDatabase {
         rejectClaimsStmt,
         deleteTransfersStmt,
         deleteClaimsStmt,
+        deletePublisherStmt,
         deleteDeveloperStmt,
         clearUserStmt
       ]);
 
-      if (!results[0]?.meta?.changes || !results[6]?.meta?.changes) {
+      if (!results[0]?.meta?.changes || !results[7]?.meta?.changes) {
         return {
           data: null,
           error: {
