@@ -55,6 +55,11 @@
     "vitest": "5.0.5",
     "wrangler": "4.155.0"
   },
+  "overrides": {
+    "@esbuild-kit/core-utils": {
+      "esbuild": "^0.25.12"
+    }
+  },
   "allowScripts": {
     "esbuild": true,
     "fsevents": true,
