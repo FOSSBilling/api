@@ -38,7 +38,7 @@
     "zod": "4.6.7"
   },
   "devDependencies": {
-    "@cloudflare/vitest-plugin": "1.4.10",
+    "@cloudflare/vitest-plugin": "1.4.11",
     "@eslint/js": "10.0.1",
     "@types/node": "26.6.6",
     "@types/semver": "7.8.0",
