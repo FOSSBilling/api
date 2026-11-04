@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { env } from "cloudflare:workers";
+import { listCacheKey } from "../../../../src/services/extensions/v1/list-cache";
 import {
   setupExtensionsV2Tests,
   db,
@@ -84,6 +85,10 @@ async function delist(as: string): Promise<Response> {
 
 describe("CDN cache revalidation on extension mutations", () => {
   it("invalidates both v1 module cache aliases after a successful mutation", async () => {
+    // D1 reset does not clear KV. Start cold before priming either alias.
+    for (const type of ["mod", "module"]) {
+      await env.CACHE_KV.delete(listCacheKey(type, undefined));
+    }
     await seedModAndExtension();
     for (const type of ["mod", "module"]) {
       const response = await get(`/extensions/v1/list?type=${type}`, {});
