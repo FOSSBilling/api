@@ -55,6 +55,8 @@ export const extensions = sqliteTable(
     // need. NULL for rows adopted from the pre-v2 directory, which were never
     // published through a revision.
     publishedRevisionId: text("published_revision_id"),
+    // 0029 enforces presence on published rows with insert/update triggers;
+    // extending the original CHECK would require rebuilding this FK parent.
     manifest: text("manifest"),
     type: text("type"),
     name: text("name"),

@@ -26,7 +26,10 @@ FROM published p, json_each(json_array(
   CASE WHEN p.manifest_license IS NULL OR length(trim(p.manifest_license)) NOT BETWEEN 1 AND 1000 OR p.manifest_license GLOB '*[^A-Za-z0-9.()+_: |-]*'
     THEN 'license: supply a valid manifest license string or legacy spdx_id/name' END,
   CASE WHEN length(trim(p.author_name)) = 0 OR length(p.author_name) > 200
-    OR (p.author_url IS NOT NULL AND p.author_url != '' AND (length(p.author_url) > 2048 OR (p.author_url NOT LIKE 'https://%' AND p.author_url NOT LIKE 'http://%')))
+    OR (p.author_url IS NOT NULL AND p.author_url != '' AND (length(p.author_url) > 2048
+      OR (p.author_url NOT LIKE 'https://%' AND p.author_url NOT LIKE 'http://%')
+      OR substr(p.author_url,instr(p.author_url,'://')+3,1) IN ('','/','?','#')
+      OR p.author_url GLOB ('*[' || char(9) || char(10) || char(13) || ' ]*')))
     THEN 'author: correct the developer name/URL before copying package attribution' END,
   CASE WHEN CASE WHEN NOT json_valid(p.releases) THEN 1 WHEN json_type(p.releases) != 'array' THEN 1 ELSE json_array_length(p.releases) NOT BETWEEN 1 AND 100 END
     THEN 'releases: supply a non-empty JSON array with at most 100 releases' END,
@@ -295,3 +298,14 @@ CREATE TRIGGER resource_extensions_update AFTER UPDATE OF type,name,description,
   )
   THEN RAISE(ABORT,'extension_resource_quota') END;
 END;
+
+--> statement-breakpoint
+-- The existing published-content CHECK predates this column. Enforce its
+-- presence without rebuilding the parent of extension_revisions.
+CREATE TRIGGER extensions_published_manifest_insert BEFORE INSERT ON extensions
+WHEN NEW.published_at IS NOT NULL AND NEW.manifest IS NULL
+BEGIN SELECT RAISE(ABORT,'extensions_published_manifest_required'); END;
+--> statement-breakpoint
+CREATE TRIGGER extensions_published_manifest_update BEFORE UPDATE OF published_at,manifest ON extensions
+WHEN NEW.published_at IS NOT NULL AND NEW.manifest IS NULL
+BEGIN SELECT RAISE(ABORT,'extensions_published_manifest_required'); END;

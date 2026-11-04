@@ -33,7 +33,7 @@ export function invalidateListCache(
   // Mirrors listCacheKey's encoding: the "all" sentinel for the unfiltered
   // list, "%"-prefixed encoded keys per type.
   const keys = [listCacheKey(undefined, undefined)].concat(
-    EXTENSION_TYPES.map((type) => listCacheKey(type, undefined))
+    [...EXTENSION_TYPES, "mod"].map((type) => listCacheKey(type, undefined))
   );
   for (const key of keys) {
     waitUntil(kv.delete(key).catch(() => {}));

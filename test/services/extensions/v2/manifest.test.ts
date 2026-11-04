@@ -10,7 +10,8 @@ import {
   sampleContent,
   db
 } from "./harness";
-import { insertUser } from "./db-fixtures";
+import { StoredExtensionContentSchema } from "../../../../src/services/extensions/v2/schemas/extensions";
+import { insertExtension, insertUser } from "./db-fixtures";
 
 vi.mock("@octokit/request", async () =>
   (await import("../../../mocks/octokit")).octokitRequestMock()
@@ -104,6 +105,66 @@ describe("manifest v1 publishing", () => {
     });
   });
 
+  it("keeps the historical minimum-version field bounded in revision schemas", () => {
+    const content = (minimum: string) => ({
+      releases: [
+        { ...sampleContent().releases[0], min_fossbilling_version: minimum }
+      ]
+    });
+    expect(
+      StoredExtensionContentSchema.safeParse(content("x".repeat(100))).success
+    ).toBe(true);
+    const oversized = StoredExtensionContentSchema.safeParse(
+      content("x".repeat(101))
+    );
+    expect(oversized.success).toBe(false);
+    if (!oversized.success)
+      expect(oversized.error.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            code: "too_big",
+            path: ["releases", 0, "min_fossbilling_version"]
+          })
+        ])
+      );
+  });
+
+  it("rejects the retired website key specifically as an unknown root field", async () => {
+    await seedDeveloper("owner", "user-1");
+    const response = await post(
+      "/extensions/v2/extensions",
+      await authHeaders("user-1"),
+      { ...sampleCreate(), website: "https://example.com" }
+    );
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toMatchObject({
+      error: {
+        details: expect.arrayContaining([
+          expect.objectContaining({
+            code: "unrecognized_keys",
+            keys: ["website"],
+            path: []
+          })
+        ])
+      }
+    });
+  });
+
+  it("allows existing long identities to be edited without relaxing new manifest IDs", async () => {
+    await seedDeveloper("owner", "user-1");
+    const id = "e".repeat(120);
+    await insertExtension(db, { id, developer_id: "owner" });
+    expect(
+      (
+        await put(
+          `/extensions/v2/extensions/${id}`,
+          await authHeaders("user-1"),
+          sampleContent()
+        )
+      ).status
+    ).toBe(202);
+  });
+
   it("accepts an omitted homepage and rejects old fields and unsafe package paths", async () => {
     await seedDeveloper("owner", "user-1");
     const headers = await authHeaders("user-1");
@@ -112,7 +173,6 @@ describe("manifest v1 publishing", () => {
       { type: "mod" },
       { manifest_version: 2 },
       { license: { name: "MIT" } },
-      { website: "https://example.com" },
       { version: "v1.0.0" },
       { version: "01.0.0" },
       { version: "1.0.0+" + "x".repeat(100) },

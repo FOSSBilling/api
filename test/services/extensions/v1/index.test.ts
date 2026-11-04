@@ -16,6 +16,11 @@ import { applyTestMigrations } from "../../../utils/apply-migrations";
 const testExtensionRows = [
   {
     id: "Example",
+    manifest: JSON.stringify({
+      manifest_version: 1,
+      author: { name: "FOSSBilling" },
+      requires: { fossbilling: ">=0.6.0", php: ">=8.3" }
+    }),
     type: "module" as const,
     developerId: "fossbilling",
     name: "Example Module",
@@ -55,6 +60,11 @@ const testExtensionRows = [
   },
   {
     id: "TestTheme",
+    manifest: JSON.stringify({
+      manifest_version: 1,
+      author: { name: "FOSSBilling" },
+      requires: { fossbilling: ">=0.6.0", php: ">=8.3" }
+    }),
     type: "theme" as const,
     developerId: "fossbilling",
     name: "Test Theme",

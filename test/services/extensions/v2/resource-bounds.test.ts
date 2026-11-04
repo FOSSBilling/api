@@ -12,6 +12,7 @@ import {
   inventoryExtensionRetention
 } from "../../../../src/services/extensions/v2/db/resource-maintenance";
 import {
+  ExtensionSchema,
   ExtensionListItemSchema,
   ExtensionUpdateSchema,
   OwnedExtensionListItemSchema
@@ -1143,6 +1144,28 @@ describe("Bounded revision reads and maintenance", () => {
       license,
       source
     });
+  });
+  it("describes historical detail URLs without applying the card URL bound", async () => {
+    await owned();
+    const homepage = "https://example.test/" + "x".repeat(3000);
+    const download = "https://example.test/" + "y".repeat(3000);
+    await db
+      .prepare(
+        "UPDATE extensions SET website=?,download_url=?,releases=? WHERE id='live'"
+      )
+      .bind(homepage, download, JSON.stringify(sampleContent().releases))
+      .run();
+    const extensions = new ExtensionsDatabase(getExtensionsDb(db));
+    const detail = await extensions.getById("live");
+    expect(detail.error).toBeNull();
+    expect(ExtensionSchema.safeParse(detail.data).success).toBe(true);
+    expect(detail.data).toMatchObject({
+      homepage_url: homepage,
+      download_url: download
+    });
+    const cards = await extensions.list({});
+    expect(cards.data?.items[0].download_url).toBeNull();
+    expect(cards.data?.items[0].homepage_url).toBeUndefined();
   });
   it("limits maintenance work per invocation", async () => {
     await owned();

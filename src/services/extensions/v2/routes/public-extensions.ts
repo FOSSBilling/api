@@ -36,7 +36,7 @@ export function registerPublicExtensionsRoutes(app: ExtensionsV2App): void {
           }
         },
         description:
-          "Extensions matching the scope: extension cards for scope=public, owned rows for scope=mine/all"
+          "Extensions matching the scope: extension cards for scope=public, owned rows for scope=mine, moderation rows for scope=all"
       },
       401: errorResponse("Invalid bearer token"),
       403: errorResponse(

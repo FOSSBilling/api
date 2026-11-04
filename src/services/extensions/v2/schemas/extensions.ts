@@ -77,7 +77,7 @@ export type ExtensionContent = z.infer<typeof ExtensionContentSchema>;
 // reads, with a 200-code-unit ceiling so supplementary characters still fit.
 const StoredReleaseSchema = ReleaseSchema.extend({
   requires: ManifestRequirementsSchema.optional(),
-  min_fossbilling_version: z.string().optional(),
+  min_fossbilling_version: z.string().min(1).max(100).optional(),
   tag: z
     .string()
     .min(1)
@@ -145,6 +145,8 @@ const PublishedContentSchema = ExtensionContentSchema.extend({
   description: z.string().min(1).max(4000),
   version: z.string().min(1).max(100),
   license: z.string().min(1),
+  homepage_url: z.string().min(1).optional(),
+  download_url: z.string().min(1),
   icon_url: z.string().optional()
 });
 

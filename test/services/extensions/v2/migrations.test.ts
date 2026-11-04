@@ -985,13 +985,29 @@ it("migrates published manifest metadata without changing reviewed audit bodies"
     db.exec(
       "INSERT INTO developers(id,type,name,url,owner_user_id) VALUES('dev','organization','Developer','https://example.com','owner')"
     );
+    const olderRelease = {
+      tag: "0.9.0",
+      date: "2025-12-01",
+      download_url: "https://example.com/older.zip",
+      requires: {
+        fossbilling: "^0.7",
+        php: "^8.2",
+        modules: { "old-module": "~1.0" }
+      }
+    };
+    const currentRequirements = {
+      fossbilling: ">=0.8.9",
+      php: ">=8.3",
+      modules: { branding: "^2" }
+    };
     const releases = JSON.stringify([
       {
         tag: "1.0.0",
         date: "2026-01-01",
         download_url: "https://example.com/a.zip",
         min_fossbilling_version: "0.8.9"
-      }
+      },
+      { ...olderRelease, min_fossbilling_version: "0.7.0" }
     ]);
     db.prepare(
       `INSERT INTO extensions(id,developer_id,type,name,description,releases,website,license,readme,source,version,download_url,published_at)
@@ -1035,7 +1051,7 @@ it("migrates published manifest metadata without changing reviewed audit bodies"
     // Operator supplies actual requirements, not guessed wildcard metadata.
     db.prepare(
       "UPDATE extensions SET releases=json_set(releases,'$[0].requires',json(?)) WHERE id='legacy'"
-    ).run(JSON.stringify({ fossbilling: ">=0.8.9", php: ">=8.3" }));
+    ).run(JSON.stringify(currentRequirements));
     expect(db.prepare(preflight).all()).toEqual([]);
     // Existing over-quota collections must survive a structural backfill.
     db.exec(
@@ -1070,15 +1086,34 @@ it("migrates published manifest metadata without changing reviewed audit bodies"
         tag: "1.0.0",
         date: "2026-01-01",
         download_url: "https://example.com/a.zip",
-        requires: { fossbilling: ">=0.8.9", php: ">=8.3" }
-      }
+        requires: currentRequirements
+      },
+      olderRelease
     ]);
+    expect(() =>
+      db.exec("UPDATE extensions SET manifest=NULL WHERE id='legacy'")
+    ).toThrow(/extensions_published_manifest_required/);
+    db.exec("INSERT INTO extensions(id,developer_id) VALUES('draft','dev')");
+    expect(
+      db.prepare("SELECT manifest FROM extensions WHERE id='draft'").get()
+        ?.manifest
+    ).toBeNull();
+    expect(() =>
+      db.exec(
+        "UPDATE extensions SET published_at='now',type='module',name='Draft',description='d',releases='[]',website='',license='\"MIT\"',readme='r',source='{}',version='1.0.0',download_url='https://example.com' WHERE id='draft'"
+      )
+    ).toThrow(/extensions_published_manifest_required/);
+    expect(() =>
+      db.exec(
+        "INSERT INTO extensions(id,developer_id,published_at,type,name,description,releases,website,license,readme,source,version,download_url) VALUES('missing','dev','now','module','Missing','d','[]','','\"MIT\"','r','{}','1.0.0','https://example.com')"
+      )
+    ).toThrow(/extensions_published_manifest_required/);
     expect(row.type).toBe("module");
     expect(JSON.parse(row.license as string)).toBe("Apache-2.0");
     expect(JSON.parse(row.manifest as string)).toEqual({
       manifest_version: 1,
       author: { name: "Developer", url: "https://example.com" },
-      requires: { fossbilling: ">=0.8.9", php: ">=8.3" }
+      requires: currentRequirements
     });
     expect(
       db
@@ -1125,7 +1160,14 @@ it("migrates published manifest metadata without changing reviewed audit bodies"
 it.each([
   ["license", "not-json", "license:", null],
   ["license", '{"name":42}', "license:", null],
+  ["license", "null", "license:", null],
+  ["license", "42", "license:", null],
+  ["license", "[]", "license:", null],
   ["type", "hook", "type:", null],
+  ["developer_url", "javascript:alert(1)", "author:", null],
+  ["developer_url", "https://", "author:", null],
+  ["developer_url", "https://bad host.example", "author:", null],
+  ["developer_url", "https://example.com/" + "x".repeat(2048), "author:", null],
   ["releases", "not-json", "releases:", null],
   [
     "releases",
@@ -1180,9 +1222,10 @@ it.each([
         `INSERT INTO extensions(id,developer_id,type,name,description,releases,website,license,readme,source,version,download_url,published_at)
       VALUES('needs-review','dev','mod','Example','Description',?,'https://example.com','{"name":"MIT"}','README','{}','1.0.0','https://example.com/release.zip','now')`
       ).run(releases);
-      db.prepare(
-        `UPDATE extensions SET ${column}=? WHERE id='needs-review'`
-      ).run(value);
+      const table = column === "developer_url" ? "developers" : "extensions";
+      const field = column === "developer_url" ? "url" : column;
+      const id = column === "developer_url" ? "dev" : "needs-review";
+      db.prepare(`UPDATE ${table} SET ${field}=? WHERE id=?`).run(value, id);
       const preflight = readFileSync(
         join(migrationsDirectory, "../manifest-preflight.sql"),
         "utf8"
@@ -1203,11 +1246,8 @@ it.each([
       db.exec("ROLLBACK");
       expect(columnNames(db, "extensions")).not.toContain("manifest");
       expect(
-        db
-          .prepare(
-            `SELECT ${column} AS value FROM extensions WHERE id='needs-review'`
-          )
-          .get()?.value
+        db.prepare(`SELECT ${field} AS value FROM ${table} WHERE id=?`).get(id)
+          ?.value
       ).toBe(value);
     } finally {
       db.close();

@@ -4,6 +4,7 @@ import {
   setupExtensionsV2Tests,
   db,
   authHeaders,
+  get,
   post,
   put,
   del,
@@ -82,6 +83,22 @@ async function delist(as: string): Promise<Response> {
 }
 
 describe("CDN cache revalidation on extension mutations", () => {
+  it("invalidates both v1 module cache aliases after a successful mutation", async () => {
+    await seedModAndExtension();
+    for (const type of ["mod", "module"]) {
+      const response = await get(`/extensions/v1/list?type=${type}`, {});
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({
+        result: [{ id: "live-ext" }]
+      });
+    }
+    expect((await delist("mod-1")).status).toBe(200);
+    for (const type of ["mod", "module"]) {
+      const response = await get(`/extensions/v1/list?type=${type}`, {});
+      await expect(response.json()).resolves.toMatchObject({ result: [] });
+    }
+  });
+
   it("does not revalidate unchanged profile replays", async () => {
     const fetcher = stubFrontend();
     const headers = await authHeaders("noop-revalidate-owner");
