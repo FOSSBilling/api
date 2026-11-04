@@ -1,3 +1,4 @@
+import { manifestMetadata } from "../schemas/manifest";
 import { MAX_CONTENT_BYTES } from "../resource-limits";
 import { and, asc, desc, eq, gt, lt, or, sql, SQL } from "drizzle-orm";
 import { DatabaseError, DatabaseResult } from "../../../../lib/interfaces";
@@ -686,7 +687,7 @@ export class ExtensionRevisionsDatabase {
     // The stored content is deliberately validated again here rather than
     // trusted from submission time. A revision can predate the current content
     // rules - migration 0021 carries legacy submissions through verbatim - and
-    // publishing is the one boundary where the public catalogue's stricter
+    // publishing is the one boundary where the public extension listing's stricter
     // contract has to hold. This is the same reason the pre-0021 code
     // re-checked reserved ids at approval.
     const parsed = ExtensionContentSchema.safeParse(revision.content);
@@ -720,7 +721,7 @@ export class ExtensionRevisionsDatabase {
     extensionId: string
   ): D1PreparedStatement {
     // published_at is COALESCEd rather than overwritten: it records when the
-    // extension first entered the catalogue, and updated_at carries the
+    // extension first entered the extension directory, and updated_at carries the
     // "changed just now" signal. The WHERE changes() = 1 gates the publish on
     // the immediately-preceding claim statement (SQLite's per-connection
     // changes() function) inside the same D1 batch transaction - a race or
@@ -731,7 +732,7 @@ export class ExtensionRevisionsDatabase {
       sql: `UPDATE extensions
             SET type = ?, name = ?, description = ?, releases = ?, website = ?,
                 license = ?, icon_url = ?, readme = ?, source = ?, version = ?,
-                download_url = ?,
+                download_url = ?, manifest = ?,
                 published_at = COALESCE(published_at, CURRENT_TIMESTAMP),
                 published_revision_id = ?,
                 updated_at = CURRENT_TIMESTAMP
@@ -741,13 +742,14 @@ export class ExtensionRevisionsDatabase {
         content.name,
         content.description,
         JSON.stringify(content.releases),
-        content.website,
+        content.homepage_url ?? "",
         JSON.stringify(content.license),
         content.icon_url ?? null,
         content.readme,
         JSON.stringify(content.source),
         content.version,
         content.download_url,
+        JSON.stringify(manifestMetadata(content)),
         revisionId,
         extensionId
       ]

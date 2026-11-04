@@ -1,5 +1,5 @@
 // Cache-key surface for the v1 list body cache (see index.ts). Kept separate
-// so extensions/v2's revalidateCatalogue can invalidate it after catalogue
+// so extensions/v2's revalidateExtensions can invalidate it after extension directory
 // mutations without importing the v1 app module (which would drag the whole
 // Hono app into v2's import graph for one function).
 import { EXTENSION_TYPES } from "../v2/schemas/extensions";

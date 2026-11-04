@@ -191,7 +191,8 @@ describe("Extension resource admission", () => {
       "readme",
       "source",
       "version",
-      "download_url"
+      "download_url",
+      "manifest"
     ];
     async function reconcile() {
       const rows = await db
@@ -245,7 +246,12 @@ describe("Extension resource admission", () => {
       "読んでください",
       JSON.stringify({ type: "custom", repo: "café/😀" }),
       "1.0.0",
-      "https://example.test/é.zip"
+      "https://example.test/é.zip",
+      JSON.stringify({
+        manifest_version: 1,
+        author: { name: "Déveloper" },
+        requires: { fossbilling: "*", php: "*" }
+      })
     ];
     for (let i = 0; i < columns.length; i++) {
       await db
@@ -928,7 +934,7 @@ describe("Bounded revision reads and maintenance", () => {
     await insertUser(db, { id: "mod", is_moderator: 1 });
     const content = {
       ...sampleContent(),
-      description: "\u0001".repeat(4000),
+      description: "\u0001".repeat(500),
       readme: ""
     };
     const remaining =
@@ -1120,18 +1126,21 @@ describe("Bounded revision reads and maintenance", () => {
       ExtensionListItemSchema.safeParse(cards.data?.items[0]).success
     ).toBe(true);
     expect(cards.data?.items[0]).toMatchObject({
-      website: null,
-      license: { name: "L".repeat(100) },
+      license: "L".repeat(1000),
       source: { type: "custom", repo: "R".repeat(500) }
     });
     const publicDetail = await extensions.getById("live");
     expect(publicDetail.error).toBeNull();
-    expect(publicDetail.data).toMatchObject({ website, license, source });
+    expect(publicDetail.data).toMatchObject({
+      homepage_url: website,
+      license: license.name,
+      source
+    });
     const ownerDetail = await extensions.getOwned("live");
     expect(ownerDetail.error).toBeNull();
     expect(ownerDetail.data?.extension.published).toMatchObject({
-      website,
-      license,
+      homepage_url: website,
+      license: license.name,
       source
     });
   });

@@ -81,7 +81,7 @@ async function delist(as: string): Promise<Response> {
   );
 }
 
-describe("CDN cache revalidation on catalogue mutations", () => {
+describe("CDN cache revalidation on extension mutations", () => {
   it("does not revalidate unchanged profile replays", async () => {
     const fetcher = stubFrontend();
     const headers = await authHeaders("noop-revalidate-owner");
@@ -105,7 +105,7 @@ describe("CDN cache revalidation on catalogue mutations", () => {
     expect(fetcher.fetch).toHaveBeenCalledTimes(2);
   });
 
-  it("purges the catalogue tags after a successful delist", async () => {
+  it("purges the extension page tags after a successful delist", async () => {
     await seedModAndExtension();
     const fetcher = stubFrontend();
 
@@ -123,11 +123,11 @@ describe("CDN cache revalidation on catalogue mutations", () => {
       "content-type": "application/json"
     });
     expect(JSON.parse(String(init.body))).toEqual({
-      tags: ["catalogue", "developers"]
+      tags: ["extensions", "developers"]
     });
   });
 
-  it("purges the catalogue tags after a successful relist", async () => {
+  it("purges the extension page tags after a successful relist", async () => {
     await seedModAndExtension();
     expect((await delist("mod-1")).status).toBe(200);
     const fetcher = stubFrontend();
@@ -146,7 +146,7 @@ describe("CDN cache revalidation on catalogue mutations", () => {
     );
     expect(init.method).toBe("POST");
     expect(JSON.parse(String(init.body))).toEqual({
-      tags: ["catalogue", "developers"]
+      tags: ["extensions", "developers"]
     });
   });
 

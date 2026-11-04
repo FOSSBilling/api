@@ -1,4 +1,5 @@
-import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";
+import { minVersion } from "semver";
+import { and, eq, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { ExtensionsDb } from "../../../lib/db";
 import { extensions, developers } from "../v2/db/schema";
 import { DatabaseResult } from "../../../lib/interfaces";
@@ -34,10 +35,10 @@ const EXTENSION_COLUMNS = {
 // non-null here because both queries below filter on published_at IS NOT NULL
 // and extensions_published_content_check makes that filter sufficient - a
 // published row cannot be missing any of them. That filter is also what keeps
-// unreviewed extensions out of the v1 catalogue. delisted_at IS NULL is the
-// other half: v1 shares this table with v2's public catalogue and must stay
+// unreviewed extensions out of the v1 extension listing. delisted_at IS NULL is the
+// other half: v1 shares this table with v2's public extension listing and must stay
 // in sync with what v2 hides, or a moderator delisting an extension would
-// pull it from the v2 catalogue while it stayed visible here.
+// pull it from the v2 extension listing while it stayed visible here.
 interface ExtensionRow {
   id: string;
   type: string;
@@ -101,10 +102,22 @@ export class ExtensionsDatabase {
         .select(EXTENSION_COLUMNS)
         .from(extensions)
         .innerJoin(developers, eq(extensions.developerId, developers.id))
-        .where(type ? and(published, eq(extensions.type, type)) : published);
+        .where(
+          type
+            ? and(
+                published,
+                type === "mod"
+                  ? or(
+                      eq(extensions.type, "mod"),
+                      eq(extensions.type, "module")
+                    )
+                  : eq(extensions.type, type)
+              )
+            : published
+        );
       // Offset pagination needs a deterministic order (the unpaginated
       // default deliberately stays unordered) - (LOWER(id), id) matches
-      // the published-catalogue index and is unique.
+      // the published-extension index and is unique.
       rows = page
         ? ((await base
             .orderBy(sql`LOWER(${extensions.id})`, extensions.id)
@@ -180,13 +193,11 @@ export class ExtensionsDatabase {
       return this.notFound(id);
     }
 
-    const releases = sortReleasesDescending(
-      parseJSON<Release[]>(row.releases, [])
-    );
+    const releases = sortReleasesDescending(legacyReleases(row.releases));
     return {
       data: {
         latestRelease: releases[0] ?? null,
-        license: parseJSON(row.license, { name: "" })
+        license: legacyLicense(row.license)
       },
       error: null
     };
@@ -194,10 +205,10 @@ export class ExtensionsDatabase {
 }
 
 function parseExtensionRow(row: ExtensionRow): Extension {
-  const releases = parseJSON<Release[]>(row.releases, []);
+  const releases = legacyReleases(row.releases);
   return {
     id: row.id,
-    type: row.type as Extension["type"],
+    type: (row.type === "module" ? "mod" : row.type) as Extension["type"],
     name: row.name,
     description: row.description,
     author: {
@@ -212,11 +223,37 @@ function parseExtensionRow(row: ExtensionRow): Extension {
     } as Author,
     releases: sortReleasesDescending(releases),
     website: row.website,
-    license: parseJSON(row.license, { name: "" }),
-    icon_url: row.iconUrl ?? "",
+    license: legacyLicense(row.license),
+    // Package-relative manifest icons have no public URL in the v1 contract.
+    icon_url:
+      row.iconUrl && /^https?:\/\//i.test(row.iconUrl) ? row.iconUrl : "",
     readme: row.readme,
     source: parseJSON<Repository>(row.source, { type: "custom", repo: "" }),
     version: row.version,
     download_url: row.downloadUrl
   };
+}
+
+function legacyLicense(stored: string): { name: string; URL?: string } {
+  const value = parseJSON<string | { name: string; URL?: string }>(stored, {
+    name: ""
+  });
+  return typeof value === "string" ? { name: value } : value;
+}
+
+function legacyReleases(stored: string): Release[] {
+  return parseJSON<Array<Release & { requires?: { fossbilling: string } }>>(
+    stored,
+    []
+  ).map((release) => {
+    const { requires, ...legacy } = release;
+    if (legacy.min_fossbilling_version) return legacy;
+    let minimum = "0.0.0";
+    try {
+      minimum = minVersion(requires?.fossbilling ?? "*")?.version ?? minimum;
+    } catch {
+      /* Composer-only ranges have no v1 representation. */
+    }
+    return { ...legacy, min_fossbilling_version: minimum };
+  });
 }

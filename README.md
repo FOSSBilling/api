@@ -1,6 +1,6 @@
 # FOSSBilling API Worker
 
-This is the API service that acts as the central hub for FOSSBilling instances. It serves version checks, system-wide alerts, the extensions catalogue, preview builds, and release stats.
+This is the API service that acts as the central hub for FOSSBilling instances. It serves version checks, system-wide alerts, the extensions directory, preview builds, and release stats.
 
 Everything is built on [Hono](https://hono.dev), making it lightweight and fast. While we currently deploy this to Cloudflare Workers, the code is designed to be platform-agnostic.
 
@@ -71,7 +71,7 @@ We use [Cloudflare D1](https://developers.cloudflare.com/d1/) and [KV](https://d
 - **R2 Bucket** (`DOWNLOAD_BUCKET`): Shared by versions, previews, and stats for release/preview zips — see [`src/services/previews/v1/README.md`](src/services/previews/v1/README.md) and the comment in `wrangler.jsonc` for which bucket this points at and why.
 - **Durable Object** (`PREVIEW_GITHUB_BUDGET`): Token bucket limiting previews GitHub calls. Policy lives in `src/services/previews/v1/budget.ts`.
 - **Rate limiters** (`EXTENSION_WRITE_RATE_LIMITER`, `PROFILE_CREATION_RATE_LIMITER`): Edge pacing for extension writes and profile creation. Durable quotas are enforced in D1; see [extensions v2 README](src/services/extensions/v2/README.md#limits-and-budgets).
-- **Service binding** (`EXTENSIONS_FRONTEND`): Private binding to the Extensions site worker, used to purge cached catalogue pages after mutations.
+- **Service binding** (`EXTENSIONS_FRONTEND`): Private binding to the Extensions site worker, used to purge cached extension pages after mutations.
 - **Cron** (`0 * * * *`): Hourly extension resource maintenance. See [extensions v2 README](src/services/extensions/v2/README.md#revisions-and-retention).
 
 ### Environment Variables
@@ -79,7 +79,7 @@ We use [Cloudflare D1](https://developers.cloudflare.com/d1/) and [KV](https://d
 - `GITHUB_TOKEN`: A GitHub Personal Access Token (classic) with public repo read access.
 - `ASSERTION_SIGNING_SECRET`: Shared HMAC secret used to verify the short-lived bearer assertions minted by the Extensions site. Configure the same value in both Workers; it is never sent to clients.
 - `ASSERTION_SIGNING_SECRET_PREVIOUS`: Optional previous HMAC secret accepted during a signing-key rotation.
-- `EXTENSIONS_REVALIDATE_SECRET`: Bearer token the API sends to the Extensions site's `POST /api/revalidate` (over the `EXTENSIONS_FRONTEND` service binding) to purge the site's CDN-cached catalogue pages after content mutations. Configure the same value in both Workers; it is never sent to clients.
+- `EXTENSIONS_REVALIDATE_SECRET`: Bearer token the API sends to the Extensions site's `POST /api/revalidate` (over the `EXTENSIONS_FRONTEND` service binding) to purge the site's CDN-cached extension pages after content mutations. Configure the same value in both Workers; it is never sent to clients.
 - `EXTENSIONS_V2_EMAIL_PROVIDER`: `mxroute` or `resend` to send moderator notification emails, or unset/`disabled` to skip sending.
 - `EXTENSIONS_V2_EMAIL_FROM`: Sender address for notification emails (default `noreply@fossbilling.org`).
 - `EXTENSIONS_V2_EMAIL_REPLY_TO`: Optional Reply-To address for a monitored inbox. Omit when unset (no Reply-To header is sent) — notification emails do not invite replies.

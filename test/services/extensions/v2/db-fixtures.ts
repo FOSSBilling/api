@@ -274,7 +274,7 @@ export async function insertExtension(
       row.developer_id,
       row.published_at !== undefined ? row.published_at : now,
       row.published_revision_id ?? null,
-      row.type ?? "mod",
+      row.type ?? "module",
       row.name ?? "Extension",
       row.description ?? "d",
       row.releases ?? "[]",

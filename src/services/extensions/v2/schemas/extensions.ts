@@ -1,23 +1,14 @@
 import { MAX_CONTENT_BYTES } from "../resource-limits";
 import { z } from "@hono/zod-openapi";
-import SPDX_LICENSE_IDS from "spdx-license-ids/index.json";
 import {
-  cursorPaginationFields,
-  httpUrl,
-  lowercaseId,
-  PaginationSchema
-} from "./common";
+  ManifestSchema,
+  MANIFEST_EXTENSION_TYPES,
+  ManifestRequirementsSchema
+} from "./manifest";
+import { cursorPaginationFields, httpUrl, PaginationSchema } from "./common";
 import { PublicDeveloperSchema } from "./developers";
 
-export const EXTENSION_TYPES = [
-  "mod",
-  "theme",
-  "payment-gateway",
-  "server-manager",
-  "domain-registrar",
-  "hook",
-  "translation"
-] as const;
+export const EXTENSION_TYPES = MANIFEST_EXTENSION_TYPES;
 
 export const ReleaseSchema = z
   .object({
@@ -25,7 +16,7 @@ export const ReleaseSchema = z
     date: z.string().min(1).max(64),
     download_url: httpUrl(),
     changelog_url: httpUrl().optional(),
-    min_fossbilling_version: z.string().min(1).max(100)
+    requires: ManifestRequirementsSchema
   })
   .strict()
   .openapi("Release");
@@ -42,31 +33,7 @@ export const RepositorySchema = z
 
 export type Repository = z.infer<typeof RepositorySchema>;
 
-// `spdx-license-ids` ships only the current (non-deprecated) identifiers —
-// https://github.com/jslicense/spdx-license-ids — so submitters are steered
-// toward the license SPDX currently recommends, not a retired alias.
-const spdxLicenseId = () =>
-  z
-    .string()
-    .refine((value) => SPDX_LICENSE_IDS.includes(value), {
-      message: "must be a current (non-deprecated) SPDX license identifier"
-    })
-    .openapi({
-      description:
-        "A current SPDX license identifier (https://spdx.org/licenses/). " +
-        "Omitted for custom or proprietary licenses.",
-      example: "MIT"
-    });
-
-export const LicenseSchema = z
-  .object({
-    name: z.string().min(1).max(100),
-    spdx_id: spdxLicenseId().optional(),
-    URL: httpUrl().optional()
-  })
-  .strict()
-  .openapi("License");
-
+export const LicenseSchema = ManifestSchema.shape.license;
 export type License = z.infer<typeof LicenseSchema>;
 
 // Everything about an extension that a developer can edit. Excludes `id`,
@@ -74,16 +41,19 @@ export type License = z.infer<typeof LicenseSchema>;
 // revision stores and what moderators approve.
 export const ExtensionContentSchema = z
   .object({
-    type: z.enum(EXTENSION_TYPES),
-    name: z.string().min(1).max(120),
-    description: z.string().min(1).max(4000),
+    manifest_version: ManifestSchema.shape.manifest_version,
+    type: ManifestSchema.shape.type,
+    name: ManifestSchema.shape.name,
+    description: ManifestSchema.shape.description,
+    author: ManifestSchema.shape.author,
+    requires: ManifestSchema.shape.requires,
     releases: z.array(ReleaseSchema).min(1).max(100),
-    website: httpUrl(),
+    homepage_url: ManifestSchema.shape.homepage_url,
     license: LicenseSchema,
-    icon_url: httpUrl().optional(),
+    icon_url: ManifestSchema.shape.icon_url,
     readme: z.string().min(1).max(100_000),
     source: RepositorySchema,
-    version: z.string().min(1).max(100),
+    version: ManifestSchema.shape.version,
     download_url: httpUrl()
   })
   .openapi("ExtensionContent");
@@ -102,10 +72,12 @@ export type ExtensionContent = z.infer<typeof ExtensionContentSchema>;
 // a record written under rules that no longer exist. Field types and upper
 // bounds are kept, since those still say something true about the shape.
 // Nothing is weakened for publication - approve() revalidates against the
-// strict schema before anything reaches the catalogue.
+// strict schema before anything reaches the extension directory.
 // SQLite length() counts Unicode code points. Use the same bound for legacy
 // reads, with a 200-code-unit ceiling so supplementary characters still fit.
 const StoredReleaseSchema = ReleaseSchema.extend({
+  requires: ManifestRequirementsSchema.optional(),
+  min_fossbilling_version: z.string().optional(),
   tag: z
     .string()
     .min(1)
@@ -115,6 +87,20 @@ const StoredReleaseSchema = ReleaseSchema.extend({
 });
 
 export const StoredExtensionContentSchema = ExtensionContentSchema.extend({
+  type: z.enum([...EXTENSION_TYPES, "mod", "hook"]),
+  name: z.string().min(1).max(120),
+  description: z.string().min(1).max(4000),
+  version: z.string().min(1).max(100),
+  icon_url: z.union([ManifestSchema.shape.icon_url, httpUrl()]).optional(),
+  website: httpUrl().optional(),
+  license: z.union([
+    LicenseSchema,
+    z.object({
+      name: z.string(),
+      spdx_id: z.string().optional(),
+      URL: httpUrl().optional()
+    })
+  ]),
   releases: z.array(StoredReleaseSchema).max(100)
 })
   .partial()
@@ -139,7 +125,7 @@ function refineContentSize(content: unknown, ctx: z.RefinementCtx): void {
 // POST /extensions. The id is chosen once here and is immutable afterwards.
 // No developer field: a user owns at most one profile, so the server knows it.
 export const ExtensionCreateSchema = ExtensionContentSchema.extend({
-  id: lowercaseId("extension").max(200)
+  id: ManifestSchema.shape.id
 })
   .strict()
   .superRefine(refineContentSize)
@@ -152,23 +138,39 @@ export const ExtensionUpdateSchema = ExtensionContentSchema.strict()
   .superRefine(refineContentSize)
   .openapi("ExtensionUpdate");
 
-// The public projection: published content plus the developer that owns it.
-export const ExtensionSchema = ExtensionContentSchema.extend({
+// Published reads also cover pre-manifest rows, whose display fields and
+// icon URLs may predate the current input constraints.
+const PublishedContentSchema = ExtensionContentSchema.extend({
+  name: z.string().min(1).max(120),
+  description: z.string().min(1).max(4000),
+  version: z.string().min(1).max(100),
+  license: z.string().min(1),
+  icon_url: z.string().optional()
+});
+
+// The public projection: published package attribution plus its current owner.
+export const ExtensionSchema = PublishedContentSchema.extend({
   id: z.string(),
   developer: PublicDeveloperSchema
 }).openapi("Extension");
 
 export type Extension = z.infer<typeof ExtensionSchema>;
 
-// Catalogue cards do not need the potentially large README or every historic
-// release. Consumers can fetch those fields from GET /extensions/{id} when a
+// Extension cards omit the README, release history, and requirements map. Consumers can fetch those fields from GET /extensions/{id} when a
 // visitor opens an extension's detail page.
 const ExtensionCardContentSchema = ExtensionContentSchema.omit({
   readme: true,
-  releases: true
+  releases: true,
+  requires: true
 }).extend({
-  website: httpUrl()
+  name: z.string().min(1).max(120),
+  description: z.string().min(1).max(4000),
+  version: z.string().min(1).max(100),
+  license: z.string().min(1).max(1000),
+  icon_url: z.string().max(2048).optional(),
+  homepage_url: httpUrl()
     .nullable()
+    .optional()
     .describe("Null when a legacy URL exceeds the card length bound"),
   download_url: httpUrl()
     .nullable()
@@ -183,13 +185,13 @@ export const ExtensionListItemSchema = ExtensionCardContentSchema.extend({
 export type ExtensionListItem = z.infer<typeof ExtensionListItemSchema>;
 
 // The published projection as its *owner* sees it. Identical to the
-// catalogue's, except releases may be empty: v1 constrained
+// public listing's, except releases may be empty: v1 constrained
 // extensions.releases to NOT NULL and nothing more, so a row adopted by
 // migration 0021 can legitimately have none, and the owner view is where
 // someone looks at what is actually there rather than at an idealised copy.
 // This can only ever describe a pre-v2 row - approve() requires a release
-// before anything reaches the catalogue through v2.
-const PublishedExtensionContentSchema = ExtensionContentSchema.extend({
+// before anything reaches the extension directory through v2.
+const PublishedExtensionContentSchema = PublishedContentSchema.extend({
   releases: z.array(StoredReleaseSchema).max(100)
 });
 
@@ -212,9 +214,9 @@ const PendingRevisionRefSchema = z
   .openapi("PendingRevisionRef");
 
 // Set once a moderator pulls an already-published extension from the
-// catalogue for cause (its upstream source disappearing, for example).
+// extension directory for cause (its upstream source disappearing, for example).
 // Content and history are kept, so the owner can still see and edit the
-// extension - they just cannot get it back into the catalogue without a
+// extension - they just cannot get it back into the extension directory without a
 // moderator re-listing it.
 export const DelistedInfoSchema = z
   .object({
@@ -272,9 +274,9 @@ export const ExtensionListQuerySchema = z.object({
 });
 
 // Unified list query for the merged GET /extensions (optional auth,
-// role-aware). scope selects the projection: public (published catalogue
+// role-aware). scope selects the projection: public (published extension
 // cards, anonymous allowed), mine (caller's own Owned rows), all (moderator's
-// whole-catalogue Owned rows). developer_id is public-only, status/q are
+// view of all Owned rows). developer_id is public-only, status/q are
 // all-only; mismatched combinations are rejected with 422 so a caller cannot
 // silently get a different projection than requested.
 export const ExtensionListScopeSchema = z.enum(["public", "mine", "all"]);
@@ -289,7 +291,7 @@ export const UnifiedExtensionListQuerySchema = ExtensionListQuerySchema.extend({
   scope: ExtensionListScopeSchema.default("public").openapi({
     param: { name: "scope", in: "query" },
     description:
-      "public: published catalogue (anonymous allowed). mine: caller's own extensions. all: every extension (moderator only)."
+      "public: published extension directory (anonymous allowed). mine: caller's own extensions. all: every extension (moderator only)."
   }),
   developer_id: z
     .string()

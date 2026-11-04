@@ -2,7 +2,7 @@
 
 **Base Path:** `/extensions/v2`
 
-Self-service extension publishing, developer-profile ownership, moderation, and public catalogue browsing.
+Self-service extension publishing, developer-profile ownership, moderation, and browsing published extensions.
 
 This service owns the complete Extensions domain and its `DB_EXTENSIONS` schema. The separate Extensions site keeps OIDC/session state but reaches this domain through the generated HTTPS API client; it must not bind or migrate `DB_EXTENSIONS`.
 
@@ -13,16 +13,34 @@ Endpoints are not listed here. The service publishes its own contract:
 - **OpenAPI document:** `GET /extensions/v2/docs/openapi.json`
 - **Reference UI:** `GET /extensions/v2/docs`
 
+## Manifest contract
+
+New v2 writes use the [FOSSBilling manifest v1 fields](https://github.com/FOSSBilling/modules/blob/main/manifest.schema.json): `manifest_version: 1`, `type: "module"` (replacing `mod`; former `hook` entries become modules), `author: {name, url?}`, a string `license`, optional `homepage_url` (replacing `website`), and `requires: {fossbilling, php, modules?}`. IDs allow lowercase letters, digits, underscores, and hyphens, up to 64 characters. Names are limited to 100 characters, descriptions to 500, and versions use SemVer without a `v` prefix.
+
+`icon_url` is an optional path relative to the package root, as in `icon.svg`; it cannot be an absolute URL, absolute path, or contain `..` or backslashes. Consumers resolve package assets against their trusted distribution source. Historical icons may still be absolute URLs.
+
+API publishing fields `readme`, `source`, `download_url`, and `releases` remain alongside the manifest metadata. Each release carries its own `requires` object instead of `min_fossbilling_version`. Constraints are retained verbatim, including Composer ranges and module dependencies; package CI remains responsible for semantic constraint/license validation and confirming that icon files exist. The API adds size bounds to metadata (author names: 200 characters; license and requirement strings: 1,000; URLs and icon paths: 2,048).
+
+`author` is package attribution. `developer` identifies the authenticated owner and remains controlled by the API; an author field never grants ownership.
+
+Migration `0029_align_manifest.sql` backfills published metadata from the owning developer and release requirements. The selected release's former minimum becomes `>=minimum`; missing requirements, including historical PHP requirements, become `*` to indicate that no constraint was recorded. License identifiers use the old `spdx_id` when available, otherwise the display name. Physical `website` storage remains for v1 compatibility. Reviewed and pending revision bodies retain their original audit content; old pending revisions must be resubmitted using the new contract before approval. Existing IDs and published historical content remain readable without being forced through new-write validation.
+
+Apply the migration and API deployment in a controlled cutover: the old Worker expects object licenses, while the new Worker requires the added metadata column.
+
+This changes the v2 request/response contract: regenerate the Extensions site's client and update CI publishers together with the API rollout. The modules publisher must stop translating `module` to `mod` and send the manifest fields directly. Package-relative icons use v1's empty-string fallback. The v1 adapter continues to return `mod`, `website`, object licenses, and minimum release versions; complex ranges are reduced to the earliest SemVer version when representable, with `0.0.0` for Composer-only ranges that v1 cannot express.
+
+The frontend revalidation tags are `extensions` and `developers`, shared with the Extensions site. Deploy the API and site tag change together. New code calls `revalidateExtensions(c)`.
+
 ## Lifecycle
 
 An extension exists from `POST /extensions`, not from approval. There is no separate submission record.
 
-- `POST /extensions` creates the record and reserves its id. It stays out of catalogues until its first revision is approved.
+- `POST /extensions` creates the record and reserves its id. It stays out of public listings until its first revision is approved.
 - `PUT /extensions/{id}` proposes an edit. Published content is unchanged until approval. One unreviewed revision per extension at a time.
 - `DELETE /extensions/{id}` withdraws an unpublished extension and releases its id. Published extensions cannot be withdrawn by owners.
 - `POST /extensions/{id}/revisions/{revisionId}/approve` publishes. `reject` leaves published content untouched.
 - `POST /extensions/{id}/delist` (moderator-only) hides a published extension for cause without deleting content or history. `POST /extensions/{id}/relist` restores it. Both accept `?notify=false`.
-- `POST /extensions/{id}/moderator-correct` (moderator-only) fixes live catalogue corruption without waiting for the author. Writes an already-approved revision, leaves `published_at` and ownership untouched. Requires a published, listed extension with no pending revision (409 otherwise). No `?notify` option and no author email; the fix is recorded in revision history.
+- `POST /extensions/{id}/moderator-correct` (moderator-only) fixes live extension content corruption without waiting for the author. Writes an already-approved revision, leaves `published_at` and ownership untouched. Requires a published, listed extension with no pending revision (409 otherwise). No `?notify` option and no author email; the fix is recorded in revision history.
 
 An edit cannot rename an extension or move it to another developer. A user owns at most one developer profile, so no request body names one.
 
@@ -32,7 +50,7 @@ An edit cannot rename an extension or move it to another developer. A user owns 
 
 `GET /extensions?scope=` selects the projection:
 
-- `public` (default, anonymous allowed): published catalogue cards.
+- `public` (default, anonymous allowed): published extension cards.
 - `mine`: caller's own extensions.
 - `all` (moderator only): every extension, filterable by `status` (`published`, `delisted`, `unpublished`) and `q` (case-insensitive id substring).
 
@@ -44,7 +62,7 @@ Owner/moderator extension reads return four independent fields, not a derived st
 | `null`      | set                | rejected      | Rejected, already resubmitted       |
 | `null`      | `null`             | rejected      | Rejected; edit and resubmit         |
 | set         | `null`             | approved      | Live, no unreviewed edit            |
-| set         | `null`             | `null`        | Live, adopted from pre-v2 catalogue |
+| set         | `null`             | `null`        | Live, adopted from pre-v2 directory |
 | set         | set                | either        | Live, edit awaiting review          |
 
 `delisted` is orthogonal to all three: it hides the row from public reads without touching them. Adopted rows have no revisions; a live extension with no review history is normal.
@@ -55,7 +73,7 @@ Anonymous detail reads are cacheable (`Cache-Control: public`); detail reads tha
 
 ## Pagination
 
-All v2 lists use opaque keyset cursors: `?limit=` (1–100, default 50) with `?cursor=` from the previous page's `pagination.next_cursor`. Envelope is always `pagination: {next_cursor, has_more}`. An invalid cursor returns `INVALID_CURSOR` (422); restart from the first page. List items omit `readme` and `releases`; fetch `GET /extensions/{id}` for detail.
+All v2 lists use opaque keyset cursors: `?limit=` (1–100, default 50) with `?cursor=` from the previous page's `pagination.next_cursor`. Envelope is always `pagination: {next_cursor, has_more}`. An invalid cursor returns `INVALID_CURSOR` (422); restart from the first page. List items omit `readme`, `releases`, and `requires`; fetch `GET /extensions/{id}` for detail.
 
 ## Authentication
 
@@ -98,7 +116,7 @@ Recipients: developer `contact_email`, falling back to the owning account's emai
 
 ## Limits and budgets
 
-Content writes (`POST /extensions`, `PUT /extensions/{id}`, moderator-correct) count the raw request stream before JSON parsing. Raw limit is **512 KiB** (`413 BODY_TOO_LARGE`); normalized JSON content limit is **256 KiB**. New slug ids are at most 200 characters.
+Content writes (`POST /extensions`, `PUT /extensions/{id}`, moderator-correct) count the raw request stream before JSON parsing. Raw limit is **512 KiB** (`413 BODY_TOO_LARGE`); normalized JSON content limit is **256 KiB**. New slug ids are at most 64 characters.
 
 `EXTENSION_WRITE_RATE_LIMITER` paces IP and account attempts at 60/minute, including validation failures. It is approximate edge pacing, not the durable quota. Missing pacing fails closed (`503 ADMISSION_UNAVAILABLE`).
 

@@ -125,7 +125,7 @@ describe("Extensions API v1", () => {
 
     // The assembled body is cached in CACHE_KV (60s TTL): the second request
     // must be served byte-identical from KV even after the underlying rows
-    // change, until revalidateCatalogue deletes the key or the TTL lapses.
+    // change, until revalidateExtensions deletes the key or the TTL lapses.
     it("should serve a repeated request from the cached body", async () => {
       const requestOnce = async () => {
         const ctx = createExecutionContext();
@@ -168,7 +168,7 @@ describe("Extensions API v1", () => {
     });
 
     // Opt-in pagination walks the list in (LOWER(id), id) order - the same
-    // ordering as the catalogue index - so pages are deterministic and
+    // ordering as the extension directory index - so pages are deterministic and
     // case-mixed ids sort case-insensitively. Without params the response
     // stays the unpaginated legacy shape (no pagination object).
     it("should page deterministically with an opt-in limit and offset", async () => {
@@ -274,7 +274,7 @@ describe("Extensions API v1", () => {
       expect(example!.releases[0].tag).toBe("0.0.5");
     });
 
-    // Legacy FOSSBilling installs (0.8.x) render the catalogue with
+    // Legacy FOSSBilling installs (0.8.x) render the extension directory with
     // strict_variables, where a missing key throws and crashes the whole
     // Extensions page (issue FOSSBilling/FOSSBilling#4486). The keys must
     // always be present ("" when unknown) so old templates fall into their
