@@ -180,6 +180,79 @@ export class ExtensionRevisionsDatabase {
     return { data: { id }, error: null };
   }
 
+  // Replace only the pending identity the owner actually opened. A fresh id
+  // makes any moderator decision prepared against the old content stale.
+  // D1 rolls back the deletion if insertion or admission triggers fail.
+  async replacePending(input: {
+    extensionId: string;
+    revisionId: string;
+    callerId: string;
+    content: ExtensionContent;
+  }): Promise<DatabaseResult<{ id: string }>> {
+    const id = crypto.randomUUID();
+    try {
+      const results = await this.db.$client.batch([
+        this.db.$client
+          .prepare(
+            `
+          DELETE FROM extension_revisions
+          WHERE id = ? AND status = 'pending'
+            AND EXISTS (
+              SELECT 1 FROM extensions e JOIN developers d ON d.id = e.developer_id
+              JOIN users u ON u.id = d.owner_user_id
+              WHERE LOWER(e.id) = LOWER(?) AND e.id = extension_revisions.extension_id
+                AND d.id = extension_revisions.developer_id
+                AND d.ownership_epoch = extension_revisions.ownership_epoch
+                AND d.owner_user_id = ? AND u.deleted_at IS NULL
+            )
+            AND (submitted_by = ? OR (
+              SELECT COUNT(*) FROM extension_revisions WHERE submitted_by = ? AND status = 'pending'
+            ) < ?)
+        `
+          )
+          .bind(
+            input.revisionId,
+            input.extensionId,
+            input.callerId,
+            input.callerId,
+            input.callerId,
+            MAX_PENDING_REVISIONS_PER_USER
+          ),
+        this.db.$client
+          .prepare(
+            `
+          INSERT INTO extension_revisions
+            (id, extension_id, developer_id, submitted_by, status, content, ownership_epoch)
+          SELECT ?, e.id, d.id, ?, 'pending', ?, d.ownership_epoch
+          FROM extensions e JOIN developers d ON d.id = e.developer_id
+          WHERE LOWER(e.id) = LOWER(?) AND changes() = 1
+        `
+          )
+          .bind(
+            id,
+            input.callerId,
+            JSON.stringify(input.content),
+            input.extensionId
+          )
+      ]);
+      if (results[1].meta.changes) return { data: { id }, error: null };
+      const error = await this.proposeBlockedError(input);
+      return {
+        data: null,
+        error:
+          error.code === "CONFLICT"
+            ? {
+                code: "CONFLICT",
+                message:
+                  "The pending submission changed, was reviewed, or the pending-revision limit was reached. Reload before editing again."
+              }
+            : error
+      };
+    } catch (error) {
+      return contentAdmissionError("replacePending", error);
+    }
+  }
+
   // Distinguishes the three ways the guard above can reject a write, so the
   // route can map them to 404/403/409 rather than one opaque conflict.
   private async proposeBlockedError(input: {

@@ -57,7 +57,7 @@ extensionsV2.on(
 );
 extensionsV2.on(
   "PUT",
-  "/extensions/:id",
+  ["/extensions/:id", "/extensions/:id/revisions/:revisionId"],
   paceContentIp(),
   boundContentRequest()
 );

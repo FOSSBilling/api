@@ -273,6 +273,71 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
     );
   });
 
+  const replacePendingRoute = createRoute({
+    method: "put",
+    path: "/extensions/{id}/revisions/{revisionId}",
+    tags: ["Extensions"],
+    summary: "Replace the pending submission the owner opened",
+    security: [{ Bearer: [] }],
+    middleware: [requireActiveAuth(), paceContentAccount()] as const,
+    request: {
+      params: RevisionIdParamSchema,
+      body: {
+        content: { "application/json": { schema: ExtensionUpdateSchema } }
+      }
+    },
+    responses: {
+      202: {
+        content: { "application/json": { schema: AcceptedRevisionSchema } },
+        description:
+          "Pending content replaced with a new revision id. The old pending id is removed; reviewed history and published content are unchanged."
+      },
+      ...authErrorResponses(),
+      403: {
+        ...ActiveAccountRequiredResponse,
+        description:
+          "The account is inactive, or the caller does not own this extension"
+      },
+      404: errorResponse("No extension with that id"),
+      409: errorResponse(
+        "The pending revision changed, was reviewed, ownership changed, or the pending-revision limit was reached"
+      ),
+      413: errorResponse("Raw request exceeds 512 KiB"),
+      429: errorResponse(
+        "Extension write allowance exhausted; see Retry-After"
+      ),
+      503: errorResponse("Write admission unavailable"),
+      422: errorResponse("Body failed validation"),
+      500: errorResponse("Database error")
+    }
+  });
+
+  app.openapi(replacePendingRoute, async (c) => {
+    const auth = getAuth(c);
+    const { id, revisionId } = c.req.valid("param");
+    const content = c.req.valid("json");
+    const db = new ExtensionRevisionsDatabase(
+      getExtensionsDb(c.env.DB_EXTENSIONS)
+    );
+    const { data, error } = await db.replacePending({
+      extensionId: id,
+      revisionId,
+      callerId: auth.userId,
+      content
+    });
+    if (error || !data) {
+      setContentRetryAfter(c, error?.code);
+      return c.json(
+        errorBody(error, "Unable to submit edit"),
+        statusFromContentWriteError(error?.code)
+      );
+    }
+    return c.json(
+      { result: { id, revision_id: data.id, status: "pending" as const } },
+      202
+    );
+  });
+
   const withdrawRoute = createRoute({
     method: "delete",
     path: "/extensions/{id}",
