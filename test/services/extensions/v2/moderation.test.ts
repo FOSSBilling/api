@@ -189,7 +189,7 @@ describe("Extensions API v2", () => {
       expect(res.status).toBe(403);
     });
 
-    it("lists extensions across every status, unlike the public catalogue", async () => {
+    it("lists extensions across every status, unlike the public extension listing", async () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await seedDeveloper("new-developer", "user-1");
       await insertExtension(db, {
@@ -405,7 +405,7 @@ describe("Extensions API v2", () => {
       await seedDeveloper("new-developer", "user-1");
       const { id, revisionId } = await createPending("user-1");
 
-      // Until approval the extension exists but is in neither catalogue.
+      // Until approval the extension exists but is in neither public listing.
       expect((await get("/extensions/v1/new-ext", {})).status).toBe(404);
       expect((await get("/extensions/v2/extensions/new-ext", {})).status).toBe(
         404
@@ -532,7 +532,7 @@ describe("Extensions API v2", () => {
 
     // Revision history outlives the rules its content was written under, so
     // the response schema tolerates a stored revision with no releases. The
-    // public catalogue does not, which makes approval the boundary that has to
+    // public extension listing does not, which makes approval the boundary that has to
     // re-check rather than trust submission-time validation.
     it("refuses to publish a revision that predates current content rules", async () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
@@ -911,7 +911,7 @@ describe("Extensions API v2", () => {
       expect(res.status).toBe(422);
     });
 
-    it("removes a published extension from the public catalogue and records why", async () => {
+    it("removes a published extension from the public extension listing and records why", async () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await seedDeveloper("new-developer", "user-1");
       await insertExtension(db, {
@@ -982,7 +982,7 @@ describe("Extensions API v2", () => {
 
     // Public reads are covered in public-extensions.test.ts. This is about
     // who can still reach a delisted extension's full record once it is out
-    // of the catalogue: the owner and moderators via the merged
+    // of the extension directory: the owner and moderators via the merged
     // GET /extensions/{id} (ownership/moderator check, unaffected by delisted
     // state - see getOwned()), and no one else (404 hides existence).
     it("only the owner or a moderator can still reach a delisted extension", async () => {
@@ -1108,7 +1108,7 @@ describe("Extensions API v2", () => {
       });
     });
 
-    it("restores a delisted extension to the public catalogue", async () => {
+    it("restores a delisted extension to the public extension listing", async () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await seedDeveloper("new-developer", "user-1");
       await insertExtension(db, {

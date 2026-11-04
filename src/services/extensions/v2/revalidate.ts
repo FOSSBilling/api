@@ -2,24 +2,24 @@ import { Context } from "hono";
 import { getPlatform } from "../../../lib/middleware";
 import { invalidateListCache } from "../v1/list-cache";
 
-// The extensions site route-caches its public catalogue pages behind
+// The extensions site route-caches its public extension pages behind
 // Cloudflare-CDN-Cache-Control (maxAge + stale-while-revalidate). Those
 // windows are the correctness floor for freshness; this purge is the latency
 // optimization that makes api-side mutations visible within a second or two
 // instead of after a cache window.
 //
-// Catalogue-mutating endpoints must call revalidateCatalogue(c) after a
+// Extension-mutating endpoints must call revalidateExtensions(c) after a
 // successful write (see AGENTS.md). The call is fire-and-forget: failures
 // are logged and swallowed, because the mutation has already succeeded and
 // the cache windows bound any resulting staleness.
 //
-// The v1 list body cache (../v1/list-cache) hangs off the same catalogue, so
+// The v1 list body cache (../v1/list-cache) hangs off the same extension directory, so
 // it is invalidated here too - same fire-and-forget trade: a failed delete
 // merely leaves the list stale until its own short TTL expires.
-const REVALIDATE_TAGS = ["catalogue", "developers"];
+const REVALIDATE_TAGS = ["extensions", "developers"];
 const REVALIDATE_URL = "https://extensions.fossbilling.org/api/revalidate";
 
-export function revalidateCatalogue(
+export function revalidateExtensions(
   c: Context<{ Bindings: CloudflareBindings }>
 ): void {
   invalidateListCache(c.env.CACHE_KV, (p) => c.executionCtx.waitUntil(p));

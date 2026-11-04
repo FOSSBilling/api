@@ -1,12 +1,13 @@
-import { EXTENSION_TYPES } from "../v2/schemas/extensions";
-
 export type Extension = {
   id: string;
-  // Derived from v2 rather than restated: both describe the same
-  // extensions.type column (v1/database.ts already reads v2's db/schema), so a
-  // new extension type would otherwise pass v2's runtime validator while v1's
-  // type silently disagreed.
-  type: (typeof EXTENSION_TYPES)[number];
+  type:
+    | "mod"
+    | "theme"
+    | "payment-gateway"
+    | "server-manager"
+    | "domain-registrar"
+    | "hook"
+    | "translation";
   name: string;
   description: string;
   author: Author;

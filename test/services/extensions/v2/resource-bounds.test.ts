@@ -12,6 +12,7 @@ import {
   inventoryExtensionRetention
 } from "../../../../src/services/extensions/v2/db/resource-maintenance";
 import {
+  ExtensionSchema,
   ExtensionListItemSchema,
   ExtensionUpdateSchema,
   OwnedExtensionListItemSchema
@@ -191,7 +192,8 @@ describe("Extension resource admission", () => {
       "readme",
       "source",
       "version",
-      "download_url"
+      "download_url",
+      "manifest"
     ];
     async function reconcile() {
       const rows = await db
@@ -240,12 +242,17 @@ describe("Extension resource admission", () => {
       "Résumé 🧪",
       JSON.stringify(content.releases),
       "https://example.test/é",
-      JSON.stringify({ name: "Lïcence" }),
+      JSON.stringify("Lïcence"),
       "https://example.test/😀.png",
       "読んでください",
       JSON.stringify({ type: "custom", repo: "café/😀" }),
       "1.0.0",
-      "https://example.test/é.zip"
+      "https://example.test/é.zip",
+      JSON.stringify({
+        manifest_version: 1,
+        author: { name: "Déveloper" },
+        requires: { fossbilling: "*", php: "*" }
+      })
     ];
     for (let i = 0; i < columns.length; i++) {
       await db
@@ -928,7 +935,7 @@ describe("Bounded revision reads and maintenance", () => {
     await insertUser(db, { id: "mod", is_moderator: 1 });
     const content = {
       ...sampleContent(),
-      description: "\u0001".repeat(4000),
+      description: "\u0001".repeat(500),
       readme: ""
     };
     const remaining =
@@ -1105,7 +1112,7 @@ describe("Bounded revision reads and maintenance", () => {
   it("preserves under-limit legacy fields in public and owner details", async () => {
     await owned();
     const website = "https://example.test/" + "x".repeat(3000);
-    const license = { name: "L".repeat(5000) };
+    const license = "L".repeat(5000);
     const source = { type: "custom", repo: "R".repeat(5000) };
     await db
       .prepare(
@@ -1120,20 +1127,45 @@ describe("Bounded revision reads and maintenance", () => {
       ExtensionListItemSchema.safeParse(cards.data?.items[0]).success
     ).toBe(true);
     expect(cards.data?.items[0]).toMatchObject({
-      website: null,
-      license: { name: "L".repeat(100) },
+      license: "L".repeat(1000),
       source: { type: "custom", repo: "R".repeat(500) }
     });
     const publicDetail = await extensions.getById("live");
     expect(publicDetail.error).toBeNull();
-    expect(publicDetail.data).toMatchObject({ website, license, source });
-    const ownerDetail = await extensions.getOwned("live");
-    expect(ownerDetail.error).toBeNull();
-    expect(ownerDetail.data?.extension.published).toMatchObject({
-      website,
+    expect(publicDetail.data).toMatchObject({
+      homepage_url: website,
       license,
       source
     });
+    const ownerDetail = await extensions.getOwned("live");
+    expect(ownerDetail.error).toBeNull();
+    expect(ownerDetail.data?.extension.published).toMatchObject({
+      homepage_url: website,
+      license,
+      source
+    });
+  });
+  it("describes historical detail URLs without applying the card URL bound", async () => {
+    await owned();
+    const homepage = "https://example.test/" + "x".repeat(3000);
+    const download = "https://example.test/" + "y".repeat(3000);
+    await db
+      .prepare(
+        "UPDATE extensions SET website=?,download_url=?,releases=? WHERE id='live'"
+      )
+      .bind(homepage, download, JSON.stringify(sampleContent().releases))
+      .run();
+    const extensions = new ExtensionsDatabase(getExtensionsDb(db));
+    const detail = await extensions.getById("live");
+    expect(detail.error).toBeNull();
+    expect(ExtensionSchema.safeParse(detail.data).success).toBe(true);
+    expect(detail.data).toMatchObject({
+      homepage_url: homepage,
+      download_url: download
+    });
+    const cards = await extensions.list({});
+    expect(cards.data?.items[0].download_url).toBeNull();
+    expect(cards.data?.items[0].homepage_url).toBeUndefined();
   });
   it("limits maintenance work per invocation", async () => {
     await owned();

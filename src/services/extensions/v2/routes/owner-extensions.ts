@@ -42,7 +42,7 @@ import {
 } from "../db/extensions";
 import { ExtensionRevisionsDatabase } from "../db/revisions";
 import { UsersDatabase } from "../db/users";
-import { revalidateCatalogue } from "../revalidate";
+import { revalidateExtensions } from "../revalidate";
 import { ExtensionsV2App } from "./app";
 
 // Both history and detail authorize against current account/profile state;
@@ -97,7 +97,7 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
       201: {
         content: { "application/json": { schema: AcceptedRevisionSchema } },
         description:
-          "Extension created. It holds the id immediately but stays out of the public catalogue until a moderator approves the revision."
+          "Extension created. It holds the id immediately but stays out of the public extension listing until a moderator approves the revision."
       },
       ...authErrorResponses(),
       403: {
@@ -315,7 +315,7 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
         statusFromWriteErrorCode(error?.code)
       );
     }
-    revalidateCatalogue(c);
+    revalidateExtensions(c);
     return c.json({ result: { id: data.id, deleted: true as const } }, 200);
   });
 

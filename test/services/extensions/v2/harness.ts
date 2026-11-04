@@ -129,7 +129,10 @@ export async function syncIdentity(sub: string, body: unknown) {
 // are now properties of the extension record rather than of the edit.
 export function sampleContent(overrides?: { name?: string }) {
   return {
-    type: "mod",
+    manifest_version: 1,
+    author: { name: "Developer" },
+    requires: { fossbilling: ">=0.6", php: ">=8.2" },
+    type: "module",
     name: overrides?.name ?? "New Extension",
     description: "A new extension",
     releases: [
@@ -137,11 +140,11 @@ export function sampleContent(overrides?: { name?: string }) {
         tag: "1.0.0",
         date: "2026-01-01T00:00:00Z",
         download_url: "https://example.com/download.zip",
-        min_fossbilling_version: "0.6"
+        requires: { fossbilling: ">=0.6", php: ">=8.2" }
       }
     ],
-    website: "https://example.com",
-    license: { name: "MIT" },
+    homepage_url: "https://example.com",
+    license: "MIT",
     readme: "# Readme",
     source: { type: "github", repo: "example/new-ext" },
     version: "1.0.0",

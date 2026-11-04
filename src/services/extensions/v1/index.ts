@@ -27,7 +27,7 @@ extensionsV1.use("/*", trimTrailingSlash());
 
 // The assembled list is ~126KB of readme + release history per entry, rebuilt
 // from a full-table D1 read (per the documented legacy contract) on every
-// request - yet catalogue content changes at human speed. Cache the serialized
+// request - yet extension content changes at human speed. Cache the serialized
 // response body in CACHE_KV and let concurrent cold misses share one build per
 // isolate; a cached response also freezes the unpaginated query's otherwise
 // nondeterministic row order.

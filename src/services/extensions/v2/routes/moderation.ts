@@ -38,7 +38,7 @@ import { DeveloperProfilesDatabase } from "../db/developer-profiles";
 import { ExtensionsDatabase } from "../db/extensions";
 import { ExtensionRevisionsDatabase } from "../db/revisions";
 import { notifyAuthor } from "./notify";
-import { revalidateCatalogue } from "../revalidate";
+import { revalidateExtensions } from "../revalidate";
 import { ExtensionsV2App } from "./app";
 
 export function registerModerationRoutes(app: ExtensionsV2App): void {
@@ -192,14 +192,14 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
   });
 
   // Distinct from reject: reject leaves a pending edit unpublished, delist
-  // pulls an already-published extension out of the catalogue entirely. See
+  // pulls an already-published extension out of the extension directory entirely. See
   // ExtensionsDatabase.delist() for why content and history are kept rather
   // than cleared.
   const delistRoute = createRoute({
     method: "post",
     path: "/extensions/{id}/delist",
     tags: ["Moderation"],
-    summary: "Remove a published extension from the public catalogue",
+    summary: "Remove a published extension from the public extension listing",
     security: [{ Bearer: [] }],
     middleware: [requireModerator()] as const,
     request: {
@@ -223,7 +223,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
           }
         },
         description:
-          "Extension removed from the public catalogue. Its content and " +
+          "Extension removed from the public extension listing. Its content and " +
           "history are kept, and its owner can still see and edit it."
       },
       ...authErrorResponses(ModeratorForbiddenResponse),
@@ -263,7 +263,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
     method: "post",
     path: "/extensions/{id}/relist",
     tags: ["Moderation"],
-    summary: "Restore a delisted extension to the public catalogue",
+    summary: "Restore a delisted extension to the public extension listing",
     security: [{ Bearer: [] }],
     middleware: [requireModerator()] as const,
     request: {
@@ -287,7 +287,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
           }
         },
         description:
-          "Extension restored to the public catalogue. Content and history unchanged."
+          "Extension restored to the public extension listing. Content and history unchanged."
       },
       ...authErrorResponses(ModeratorForbiddenResponse),
       404: errorResponse("No such extension"),
@@ -399,7 +399,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
       const status = statusFromContentWriteError(error?.code);
       return c.json(errorBody(error, "Unable to correct extension"), status);
     }
-    revalidateCatalogue(c);
+    revalidateExtensions(c);
     return c.json(
       {
         result: {
