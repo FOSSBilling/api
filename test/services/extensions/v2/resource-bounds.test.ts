@@ -241,7 +241,7 @@ describe("Extension resource admission", () => {
       "Résumé 🧪",
       JSON.stringify(content.releases),
       "https://example.test/é",
-      JSON.stringify({ name: "Lïcence" }),
+      JSON.stringify("Lïcence"),
       "https://example.test/😀.png",
       "読んでください",
       JSON.stringify({ type: "custom", repo: "café/😀" }),
@@ -1111,7 +1111,7 @@ describe("Bounded revision reads and maintenance", () => {
   it("preserves under-limit legacy fields in public and owner details", async () => {
     await owned();
     const website = "https://example.test/" + "x".repeat(3000);
-    const license = { name: "L".repeat(5000) };
+    const license = "L".repeat(5000);
     const source = { type: "custom", repo: "R".repeat(5000) };
     await db
       .prepare(
@@ -1133,14 +1133,14 @@ describe("Bounded revision reads and maintenance", () => {
     expect(publicDetail.error).toBeNull();
     expect(publicDetail.data).toMatchObject({
       homepage_url: website,
-      license: license.name,
+      license,
       source
     });
     const ownerDetail = await extensions.getOwned("live");
     expect(ownerDetail.error).toBeNull();
     expect(ownerDetail.data?.extension.published).toMatchObject({
       homepage_url: website,
-      license: license.name,
+      license,
       source
     });
   });

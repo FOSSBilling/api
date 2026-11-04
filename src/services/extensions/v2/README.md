@@ -23,11 +23,24 @@ API publishing fields `readme`, `source`, `download_url`, and `releases` remain 
 
 `author` is package attribution. `developer` identifies the authenticated owner and remains controlled by the API; an author field never grants ownership.
 
-Migration `0029_align_manifest.sql` backfills published metadata from the owning developer and release requirements. The selected release's former minimum becomes `>=minimum`; missing requirements, including historical PHP requirements, become `*` to indicate that no constraint was recorded. License identifiers use the old `spdx_id` when available, otherwise the display name. Physical `website` storage remains for v1 compatibility. Reviewed and pending revision bodies retain their original audit content; old pending revisions must be resubmitted using the new contract before approval. Existing IDs and published historical content remain readable without being forced through new-write validation.
+Run the read-only `db/manifest-preflight.sql` query before deployment. It reports extension IDs and zero-based release indexes needing manual correction. Every published release must have an explicitly reviewed `requires` object, including its PHP constraint; migration does not invent `*`, an author, or a license placeholder. Use the package manifest/release metadata to fill missing requirements. A deliberate `*` is allowed only when it accurately represents the reviewed requirement.
+
+Migration `0029_align_manifest.sql` stops with `manifest_data_requires_manual_correction` before changing library data if the preflight reports issues. Correct those rows and retry. Once prepared, it converts `mod` to `module`, converts legacy license objects to strings (using `spdx_id`, otherwise `name`), copies the current release's exact requirements and the developer's attribution, and removes obsolete release minimum fields. Physical `website` storage remains for v1 compatibility. Reviewed and pending revision bodies retain their original audit content; old pending revisions must be resubmitted using the new contract before approval. Published reads expect canonical storage; historical audit reads remain separate.
+
+For example, after checking an affected package's actual requirements, an operator can add `requires` to one release without rewriting its remaining fields:
+
+```sql
+UPDATE extensions
+SET releases = json_set(releases, '$[0].requires',
+  json('{"fossbilling":">=0.8.9","php":">=8.3"}'))
+WHERE id = 'affected-extension';
+```
+
+Use the ID, index, and verified constraints from the preflight investigation; the values above are examples. Re-run the query until it returns no rows.
 
 Apply the migration and API deployment in a controlled cutover: the old Worker expects object licenses, while the new Worker requires the added metadata column.
 
-This changes the v2 request/response contract: regenerate the Extensions site's client and update CI publishers together with the API rollout. The modules publisher must stop translating `module` to `mod` and send the manifest fields directly. Package-relative icons use v1's empty-string fallback. The v1 adapter continues to return `mod`, `website`, object licenses, and minimum release versions; complex ranges are reduced to the earliest SemVer version when representable, with `0.0.0` for Composer-only ranges that v1 cannot express.
+This changes the v2 request/response contract: regenerate the Extensions site's client and update CI publishers together with the API rollout. The modules publisher must stop translating `module` to `mod` and send the manifest fields directly. Package-relative icons use v1's empty-string fallback. The v1 adapter continues to return `mod`, `website`, object licenses, and minimum release versions; constraints are converted to their earliest matching SemVer version. A malformed, unsatisfiable, or Composer-only constraint with no representable v1 minimum produces an explicit error identifying the release for manual correction; it is never replaced with `0.0.0`.
 
 The frontend revalidation tags are `extensions` and `developers`, shared with the Extensions site. Deploy the API and site tag change together. New code calls `revalidateExtensions(c)`.
 

@@ -29,7 +29,7 @@ describe("Extensions API v2", () => {
           description: `Description for ${id}`,
           releases: '[{"tag":"1.0.0"}]',
           website: "https://example.com",
-          license: '{"name":"MIT"}',
+          license: '"MIT"',
           icon_url: null,
           readme: `README for ${id}`,
           source: '{"type":"github","repo":"example/extensions"}',

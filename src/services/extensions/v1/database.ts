@@ -1,10 +1,11 @@
-import { minVersion } from "semver";
-import { and, eq, isNotNull, isNull, or, sql } from "drizzle-orm";
+import { minVersion, validRange } from "semver";
+import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import { ExtensionsDb } from "../../../lib/db";
 import { extensions, developers } from "../v2/db/schema";
 import { DatabaseResult } from "../../../lib/interfaces";
 import { sortReleasesDescending } from "../../../lib/releases";
 import { parseJSON } from "../../../lib/json";
+import type { Release as ManifestRelease } from "../v2/schemas/extensions";
 import { Extension, Release, Author, Repository } from "./interfaces";
 
 const EXTENSION_COLUMNS = {
@@ -64,6 +65,10 @@ export class ExtensionsDatabase {
   // Shared catch shape for this module's D1 reads: driver message surfaced
   // under the generic DATABASE_ERROR code.
   private databaseError(error: unknown): DatabaseResult<never> {
+    console.error(
+      "[extensions-v1] Cannot read canonical extension data:",
+      error
+    );
     return {
       data: null,
       error: {
@@ -106,12 +111,7 @@ export class ExtensionsDatabase {
           type
             ? and(
                 published,
-                type === "mod"
-                  ? or(
-                      eq(extensions.type, "mod"),
-                      eq(extensions.type, "module")
-                    )
-                  : eq(extensions.type, type)
+                eq(extensions.type, type === "mod" ? "module" : type)
               )
             : published
         );
@@ -131,10 +131,14 @@ export class ExtensionsDatabase {
     const hasMore = page ? rows.length > page.limit : false;
     const trimmed = page && hasMore ? rows.slice(0, page.limit) : rows;
 
-    return {
-      data: { extensions: trimmed.map(parseExtensionRow), hasMore },
-      error: null
-    };
+    try {
+      return {
+        data: { extensions: trimmed.map(parseExtensionRow), hasMore },
+        error: null
+      };
+    } catch (error) {
+      return this.databaseError(error);
+    }
   }
 
   async getExtensionById(id: string): Promise<DatabaseResult<Extension>> {
@@ -160,7 +164,11 @@ export class ExtensionsDatabase {
       return this.notFound(id);
     }
 
-    return { data: parseExtensionRow(row), error: null };
+    try {
+      return { data: parseExtensionRow(row), error: null };
+    } catch (error) {
+      return this.databaseError(error);
+    }
   }
 
   // Badge/version endpoints read only these two columns, and badges are the
@@ -193,19 +201,23 @@ export class ExtensionsDatabase {
       return this.notFound(id);
     }
 
-    const releases = sortReleasesDescending(legacyReleases(row.releases));
-    return {
-      data: {
-        latestRelease: releases[0] ?? null,
-        license: legacyLicense(row.license)
-      },
-      error: null
-    };
+    try {
+      const releases = sortReleasesDescending(toV1Releases(row.releases));
+      return {
+        data: {
+          latestRelease: releases[0] ?? null,
+          license: toV1License(row.license)
+        },
+        error: null
+      };
+    } catch (error) {
+      return this.databaseError(error);
+    }
   }
 }
 
 function parseExtensionRow(row: ExtensionRow): Extension {
-  const releases = legacyReleases(row.releases);
+  const releases = toV1Releases(row.releases);
   return {
     id: row.id,
     type: (row.type === "module" ? "mod" : row.type) as Extension["type"],
@@ -223,7 +235,7 @@ function parseExtensionRow(row: ExtensionRow): Extension {
     } as Author,
     releases: sortReleasesDescending(releases),
     website: row.website,
-    license: legacyLicense(row.license),
+    license: toV1License(row.license),
     // Package-relative manifest icons have no public URL in the v1 contract.
     icon_url:
       row.iconUrl && /^https?:\/\//i.test(row.iconUrl) ? row.iconUrl : "",
@@ -234,26 +246,22 @@ function parseExtensionRow(row: ExtensionRow): Extension {
   };
 }
 
-function legacyLicense(stored: string): { name: string; URL?: string } {
-  const value = parseJSON<string | { name: string; URL?: string }>(stored, {
-    name: ""
-  });
-  return typeof value === "string" ? { name: value } : value;
+// Storage is canonical after migration 0029; these only adapt the v1 contract.
+function toV1License(stored: string): { name: string } {
+  return { name: JSON.parse(stored) as string };
 }
 
-function legacyReleases(stored: string): Release[] {
-  return parseJSON<Array<Release & { requires?: { fossbilling: string } }>>(
-    stored,
-    []
-  ).map((release) => {
-    const { requires, ...legacy } = release;
-    if (legacy.min_fossbilling_version) return legacy;
-    let minimum = "0.0.0";
-    try {
-      minimum = minVersion(requires?.fossbilling ?? "*")?.version ?? minimum;
-    } catch {
-      /* Composer-only ranges have no v1 representation. */
+function toV1Releases(stored: string): Release[] {
+  return (JSON.parse(stored) as ManifestRelease[]).map(
+    ({ requires, ...release }) => {
+      const range = validRange(requires.fossbilling);
+      const minimum = range === null ? null : minVersion(range);
+      if (!minimum) {
+        throw new Error(
+          `Release "${release.tag}" requires manual correction: FOSSBilling constraint "${requires.fossbilling}" has no representable v1 minimum`
+        );
+      }
+      return { ...release, min_fossbilling_version: minimum.version };
     }
-    return { ...legacy, min_fossbilling_version: minimum };
-  });
+  );
 }

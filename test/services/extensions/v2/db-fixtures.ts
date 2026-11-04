@@ -31,6 +31,7 @@ export interface ExtensionRow {
   developer_id: string;
   published_at: string | null;
   published_revision_id: string | null;
+  manifest: string | null;
   type: string | null;
   name: string | null;
   description: string | null;
@@ -266,8 +267,8 @@ export async function insertExtension(
          (id, developer_id, published_at, published_revision_id, type, name,
           description, releases, website, license, icon_url, readme, source,
           version, download_url, created_at, updated_at, delisted_at,
-          delist_reason)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          delist_reason, manifest)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .bind(
       row.id,
@@ -279,7 +280,7 @@ export async function insertExtension(
       row.description ?? "d",
       row.releases ?? "[]",
       row.website ?? "https://e.com",
-      row.license ?? '{"name":"MIT"}',
+      row.license ?? '"MIT"',
       row.icon_url ?? null,
       row.readme ?? "r",
       row.source ?? '{"type":"github","repo":"example/ext"}',
@@ -288,7 +289,13 @@ export async function insertExtension(
       row.created_at ?? now,
       row.updated_at ?? now,
       row.delisted_at ?? null,
-      row.delist_reason ?? null
+      row.delist_reason ?? null,
+      row.manifest ??
+        JSON.stringify({
+          manifest_version: 1,
+          author: { name: "Developer" },
+          requires: { fossbilling: ">=0.6.0", php: ">=8.3" }
+        })
     )
     .run();
 }

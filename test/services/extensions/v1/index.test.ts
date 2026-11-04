@@ -16,7 +16,7 @@ import { applyTestMigrations } from "../../../utils/apply-migrations";
 const testExtensionRows = [
   {
     id: "Example",
-    type: "mod" as const,
+    type: "module" as const,
     developerId: "fossbilling",
     name: "Example Module",
     description: "An example module for developers.",
@@ -28,7 +28,7 @@ const testExtensionRows = [
           "https://github.com/FOSSBilling/example-module/releases/download/0.0.5/Example.zip",
         changelog_url:
           "https://github.com/FOSSBilling/example-module/releases/tag/0.0.5",
-        min_fossbilling_version: "0.6"
+        requires: { fossbilling: ">=0.6.0", php: ">=8.3" }
       },
       {
         tag: "0.0.4",
@@ -37,14 +37,11 @@ const testExtensionRows = [
           "https://github.com/FOSSBilling/example-module/releases/download/0.0.4/Example.zip",
         changelog_url:
           "https://github.com/FOSSBilling/example-module/releases/tag/0.0.4",
-        min_fossbilling_version: "0.5"
+        requires: { fossbilling: ">=0.5.0", php: ">=8.2" }
       }
     ]),
     website: "https://fossbilling.org",
-    license: JSON.stringify({
-      name: "Apache 2.0",
-      URL: "https://www.apache.org/licenses/LICENSE-2.0"
-    }),
+    license: JSON.stringify("Apache-2.0"),
     iconUrl:
       "https://raw.githubusercontent.com/FOSSBilling/example-module/main/src/icon.svg",
     readme: "# Example module\n\nThis is an example module.",
@@ -67,11 +64,11 @@ const testExtensionRows = [
         tag: "1.0.0",
         date: "2024-01-01T00:00:00Z",
         download_url: "https://example.com/TestTheme.zip",
-        min_fossbilling_version: "0.6"
+        requires: { fossbilling: ">=0.6.0", php: ">=8.3" }
       }
     ]),
     website: "https://fossbilling.org",
-    license: JSON.stringify({ name: "MIT" }),
+    license: JSON.stringify("MIT"),
     readme: "# Test Theme",
     source: JSON.stringify({ type: "github", repo: "FOSSBilling/test-theme" }),
     version: "1.0.0",
@@ -109,6 +106,23 @@ describe("Extensions API v1", () => {
         publishedAt: "2026-01-01T00:00:00.000Z"
       }))
     );
+  });
+
+  it("projects canonical licenses and release requirements into the v1 contract", async () => {
+    const ctx = createExecutionContext();
+    const response = await app.request("/extensions/v1/Example", {}, env, ctx);
+    await waitOnExecutionContext(ctx);
+    const body = (await response.json()) as {
+      result: {
+        type: string;
+        license: { name: string };
+        releases: Array<Record<string, unknown>>;
+      };
+    };
+    expect(body.result.type).toBe("mod");
+    expect(body.result.license).toEqual({ name: "Apache-2.0" });
+    expect(body.result.releases[0].min_fossbilling_version).toBe("0.6.0");
+    expect(body.result.releases[0]).not.toHaveProperty("requires");
   });
 
   describe("GET /list", () => {
@@ -440,7 +454,7 @@ describe("Extensions API v1", () => {
 
       expect(res.status).toBe(200);
       const svg = await res.text();
-      expect(svg).toContain("Apache 2.0");
+      expect(svg).toContain("Apache-2.0");
     });
 
     it("should return red SVG for unknown badge type", async () => {
@@ -485,4 +499,51 @@ describe("Extensions API v1", () => {
       expect(res.status).toBe(404);
     });
   });
+});
+
+describe("v1 projection failures", () => {
+  beforeAll(applyTestMigrations);
+  it.each(["not-a-range", ">=2.0.0 <1.0.0"])(
+    "flags a requirement with no v1 minimum: %s",
+    async (constraint) => {
+      const db = getExtensionsDb(env.DB_EXTENSIONS);
+      await db.delete(extensions);
+      await db.delete(developers);
+      await db.insert(developers).values({
+        id: "projection-owner",
+        type: "organization",
+        name: "Owner"
+      });
+      const original = JSON.parse(testExtensionRows[0].releases);
+      original[0].requires.fossbilling = constraint;
+      await db.insert(extensions).values({
+        ...testExtensionRows[0],
+        developerId: "projection-owner",
+        releases: JSON.stringify(original),
+        publishedAt: "2026-01-01T00:00:00Z"
+      });
+      const ctx = createExecutionContext();
+      const response = await app.request(
+        "/extensions/v1/Example",
+        {},
+        env,
+        ctx
+      );
+      await waitOnExecutionContext(ctx);
+      expect(response.status).toBe(500);
+      await expect(response.json()).resolves.toMatchObject({
+        error: {
+          message: expect.stringContaining("requires manual correction")
+        }
+      });
+      const badge = await app.request(
+        "/extensions/v1/Example/badges/min_fossbilling_version",
+        {},
+        env,
+        ctx
+      );
+      expect(badge.status).toBe(500);
+      expect(await badge.text()).not.toContain("v0.0.0");
+    }
+  );
 });

@@ -61,10 +61,7 @@ const CONTENT_COLUMNS = {
   >`CASE WHEN length(${extensions.website}) <= 2048 THEN ${extensions.website} ELSE NULL END`,
   license: sql<
     string | null
-  >`CASE WHEN length(CAST(${extensions.license} AS BLOB)) <= ${MAX_CONTENT_BYTES} AND json_valid(${extensions.license}) THEN
-    json_quote(substr(CASE WHEN json_type(${extensions.license}) = 'text' THEN json_extract(${extensions.license}, '$')
-      ELSE COALESCE(json_extract(${extensions.license}, '$.spdx_id'), json_extract(${extensions.license}, '$.name'), 'Unavailable') END, 1, 1000))
-    ELSE '"Unavailable"' END`,
+  >`json_quote(substr(json_extract(${extensions.license}, '$'), 1, 1000))`,
   manifest: sql<
     string | null
   >`CASE WHEN length(CAST(${extensions.manifest} AS BLOB)) <= ${MAX_CONTENT_BYTES} AND json_valid(${extensions.manifest}) THEN
@@ -1366,14 +1363,6 @@ function cardUrl(url: string | null): string | null {
   return url && url.length <= 2048 ? url : null;
 }
 
-function parseLicense(stored: string | null): License {
-  const value = parseJSON<string | { name: string; spdx_id?: string }>(
-    stored ?? "",
-    "Unavailable"
-  );
-  return typeof value === "string" ? value : (value.spdx_id ?? value.name);
-}
-
 function cardSource(stored: string | null): Repository {
   const source = parseJSON<Repository>(stored ?? "", {
     type: "custom",
@@ -1432,17 +1421,15 @@ function listContent(
     author: card
       ? { ...metadata.author, name: metadata.author.name.slice(0, 200) }
       : metadata.author,
-    type: (row.type === "mod"
-      ? "module"
-      : row.type) as ExtensionContent["type"],
+    type: row.type as ExtensionContent["type"],
     name: card ? (row.name as string).slice(0, 120) : (row.name as string),
     description: card
       ? (row.description as string).slice(0, 4000)
       : (row.description as string),
     homepage_url: (card ? cardUrl(row.website) : row.website) || undefined,
     license: card
-      ? parseLicense(row.license).slice(0, 1000)
-      : parseLicense(row.license),
+      ? (JSON.parse(row.license as string) as License).slice(0, 1000)
+      : (JSON.parse(row.license as string) as License),
     icon_url: (card ? cardUrl(row.iconUrl) : row.iconUrl) ?? undefined,
     source: card
       ? cardSource(row.source)
@@ -1497,7 +1484,7 @@ function parseRow(row: PublishedRow): Extension {
     homepage_url: row.website || undefined,
     download_url: row.downloadUrl,
     readme: row.readme,
-    releases: boundedReleases(parseJSON<Release[]>(row.releases, []))
+    releases: boundedReleases(JSON.parse(row.releases))
   };
 }
 
@@ -1537,9 +1524,7 @@ function parseOwnedRow(row: OwnedRow): OwnedExtension {
           homepage_url: row.website || undefined,
           download_url: row.downloadUrl as string,
           readme: row.readme as string,
-          releases: boundedReleases(
-            parseJSON<Release[]>(row.releases as string, [])
-          )
+          releases: boundedReleases(JSON.parse(row.releases as string))
         }
       : null,
     pending_revision:
@@ -1559,7 +1544,7 @@ export function parseContent(stored: string | null): StoredExtensionContent {
   const content = parseJSON<StoredExtensionContent>(stored ?? "", {});
   return {
     ...content,
-    releases: boundedReleases(content.releases ?? [], false)
+    releases: boundedReleases(content.releases ?? [])
   };
 }
 
@@ -1567,7 +1552,7 @@ export class LegacyContentError extends Error {}
 
 // Legacy bodies bypassed today's schema. Bound the collection and tag work
 // before semver sorting, while retaining support for partial historical content.
-function boundedReleases(value: unknown, normalize = true): Release[] {
+function boundedReleases(value: unknown): Release[] {
   if (
     !Array.isArray(value) ||
     value.length > 100 ||
@@ -1582,21 +1567,7 @@ function boundedReleases(value: unknown, normalize = true): Release[] {
     throw new LegacyContentError(
       "Legacy release collection exceeds safe read bounds"
     );
-  if (!normalize) return sortReleasesDescending(value as Release[]);
-  return sortReleasesDescending(
-    value.map((release) => {
-      const { min_fossbilling_version, ...rest } = release;
-      return {
-        ...rest,
-        requires: rest.requires ?? {
-          fossbilling: min_fossbilling_version
-            ? `>=${min_fossbilling_version}`
-            : "*",
-          php: "*"
-        }
-      };
-    }) as Release[]
-  );
+  return sortReleasesDescending(value as Release[]);
 }
 
 export function oversizedContent(): DatabaseResult<never> {
@@ -1613,9 +1584,5 @@ export function oversizedContent(): DatabaseResult<never> {
 function parseManifestMetadata(
   stored: string | null
 ): Pick<Manifest, "manifest_version" | "author" | "requires"> {
-  return parseJSON(stored ?? "", {
-    manifest_version: 1,
-    author: { name: "Unknown" },
-    requires: { fossbilling: "*", php: "*" }
-  });
+  return JSON.parse(stored as string);
 }

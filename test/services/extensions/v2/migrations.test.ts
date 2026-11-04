@@ -1012,10 +1012,36 @@ it("migrates published manifest metadata without changing reviewed audit bodies"
     db.prepare(
       "INSERT INTO extension_revisions(id,extension_id,developer_id,submitted_by,status,content) VALUES('audit','legacy','dev','owner','approved',?)"
     ).run(audit);
+    const preflight = readFileSync(
+      join(migrationsDirectory, "../manifest-preflight.sql"),
+      "utf8"
+    );
+    expect(db.prepare(preflight).all()).toEqual([
+      {
+        id: "legacy",
+        release_index: 0,
+        issue: expect.stringContaining("set explicit FOSSBilling and PHP")
+      }
+    ]);
+    db.exec("BEGIN");
+    expect(() => db.exec(migration("0029_align_manifest.sql"))).toThrow(
+      /manifest_data_requires_manual_correction/
+    );
+    db.exec("ROLLBACK");
+    expect(columnNames(db, "extensions")).not.toContain("manifest");
+    expect(
+      db.prepare("SELECT type FROM extensions WHERE id='legacy'").get()?.type
+    ).toBe("mod");
+    // Operator supplies actual requirements, not guessed wildcard metadata.
+    db.prepare(
+      "UPDATE extensions SET releases=json_set(releases,'$[0].requires',json(?)) WHERE id='legacy'"
+    ).run(JSON.stringify({ fossbilling: ">=0.8.9", php: ">=8.3" }));
+    expect(db.prepare(preflight).all()).toEqual([]);
     // Existing over-quota collections must survive a structural backfill.
     db.exec(
       "UPDATE extension_resource_usage SET extensions=101 WHERE scope='developer'"
     );
+
     db.exec("BEGIN");
     db.exec(migration("0029_align_manifest.sql"));
     db.exec("COMMIT");
@@ -1044,7 +1070,7 @@ it("migrates published manifest metadata without changing reviewed audit bodies"
         tag: "1.0.0",
         date: "2026-01-01",
         download_url: "https://example.com/a.zip",
-        requires: { fossbilling: ">=0.8.9", php: "*" }
+        requires: { fossbilling: ">=0.8.9", php: ">=8.3" }
       }
     ]);
     expect(row.type).toBe("module");
@@ -1052,7 +1078,7 @@ it("migrates published manifest metadata without changing reviewed audit bodies"
     expect(JSON.parse(row.manifest as string)).toEqual({
       manifest_version: 1,
       author: { name: "Developer", url: "https://example.com" },
-      requires: { fossbilling: ">=0.8.9", php: "*" }
+      requires: { fossbilling: ">=0.8.9", php: ">=8.3" }
     });
     expect(
       db
@@ -1095,3 +1121,96 @@ it("migrates published manifest metadata without changing reviewed audit bodies"
     db.close();
   }
 });
+
+it.each([
+  ["license", "not-json", "license:", null],
+  ["license", '{"name":42}', "license:", null],
+  ["type", "hook", "type:", null],
+  ["releases", "not-json", "releases:", null],
+  [
+    "releases",
+    JSON.stringify([
+      {
+        tag: "1.0.0",
+        requires: {
+          fossbilling: ">=0.8.9",
+          php: ">=8.3",
+          modules: { branding: 42 }
+        }
+      }
+    ]),
+    "requires:",
+    0
+  ],
+  [
+    "releases",
+    JSON.stringify([{ tag: "1.0.0", requires: { fossbilling: ">=0.8.9" } }]),
+    "requires:",
+    0
+  ],
+  [
+    "releases",
+    JSON.stringify([
+      { tag: "1.0.0", requires: { fossbilling: "*", php: "*" } },
+      { tag: "v1.0.0", requires: { fossbilling: "*", php: "*" } }
+    ]),
+    "version:",
+    null
+  ]
+] as const)(
+  "flags %s data for manual correction before migration",
+  (column, value, issue, releaseIndex) => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      db.exec("PRAGMA foreign_keys=ON");
+      for (const name of migrationNames.filter((name) => name < "0029"))
+        db.exec(migration(name));
+      db.exec(
+        "INSERT INTO developers(id,type,name) VALUES('dev','organization','Developer')"
+      );
+      const releases = JSON.stringify([
+        {
+          tag: "1.0.0",
+          date: "2026-01-01",
+          download_url: "https://example.com/release.zip",
+          requires: { fossbilling: ">=0.8.9", php: ">=8.3" }
+        }
+      ]);
+      db.prepare(
+        `INSERT INTO extensions(id,developer_id,type,name,description,releases,website,license,readme,source,version,download_url,published_at)
+      VALUES('needs-review','dev','mod','Example','Description',?,'https://example.com','{"name":"MIT"}','README','{}','1.0.0','https://example.com/release.zip','now')`
+      ).run(releases);
+      db.prepare(
+        `UPDATE extensions SET ${column}=? WHERE id='needs-review'`
+      ).run(value);
+      const preflight = readFileSync(
+        join(migrationsDirectory, "../manifest-preflight.sql"),
+        "utf8"
+      );
+      expect(db.prepare(preflight).all()).toEqual(
+        expect.arrayContaining([
+          {
+            id: "needs-review",
+            release_index: releaseIndex,
+            issue: expect.stringContaining(issue)
+          }
+        ])
+      );
+      db.exec("BEGIN");
+      expect(() => db.exec(migration("0029_align_manifest.sql"))).toThrow(
+        /manifest_data_requires_manual_correction/
+      );
+      db.exec("ROLLBACK");
+      expect(columnNames(db, "extensions")).not.toContain("manifest");
+      expect(
+        db
+          .prepare(
+            `SELECT ${column} AS value FROM extensions WHERE id='needs-review'`
+          )
+          .get()?.value
+      ).toBe(value);
+    } finally {
+      db.close();
+    }
+  }
+);
