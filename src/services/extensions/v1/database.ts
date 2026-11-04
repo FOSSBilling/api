@@ -254,7 +254,9 @@ function toV1License(stored: string): { name: string } {
 function toV1Releases(stored: string): Release[] {
   return (JSON.parse(stored) as ManifestRelease[]).map(
     ({ requires, ...release }) => {
-      const range = validRange(requires.fossbilling);
+      const range = requires.fossbilling.trim()
+        ? validRange(requires.fossbilling)
+        : null;
       const minimum = range === null ? null : minVersion(range);
       if (!minimum) {
         throw new Error(

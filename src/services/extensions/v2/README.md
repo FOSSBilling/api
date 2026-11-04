@@ -15,7 +15,7 @@ Endpoints are not listed here. The service publishes its own contract:
 
 ## Manifest contract
 
-New v2 writes use the [FOSSBilling manifest v1 fields](https://github.com/FOSSBilling/modules/blob/main/manifest.schema.json): `manifest_version: 1`, `type: "module"` (replacing `mod`; former `hook` entries become modules), `author: {name, url?}`, a string `license`, optional `homepage_url` (replacing `website`), and `requires: {fossbilling, php, modules?}`. IDs allow lowercase letters, digits, underscores, and hyphens, up to 64 characters. Names are limited to 100 characters, descriptions to 500, and versions use SemVer without a `v` prefix.
+New v2 writes use the [FOSSBilling manifest v1 fields](https://github.com/FOSSBilling/modules/blob/main/manifest.schema.json): `manifest_version: 1`, `type: "module"` (replacing `mod`; standalone `hook` entries require manual reclassification), `author: {name, url?}`, a string `license`, optional `homepage_url` (replacing `website`), and `requires: {fossbilling, php, modules?}`. IDs allow lowercase letters, digits, underscores, and hyphens, up to 64 characters. Names are limited to 100 characters, descriptions to 500, and versions use SemVer without a `v` prefix.
 
 `icon_url` is an optional path relative to the package root, as in `icon.svg`; it cannot be an absolute URL, absolute path, or contain `..` or backslashes. Consumers resolve package assets against their trusted distribution source. Historical icons may still be absolute URLs.
 
@@ -25,7 +25,7 @@ API publishing fields `readme`, `source`, `download_url`, and `releases` remain 
 
 Run the read-only `db/manifest-preflight.sql` query before deployment. It reports extension IDs and zero-based release indexes needing manual correction. Every published release must have an explicitly reviewed `requires` object, including its PHP constraint; migration does not invent `*`, an author, or a license placeholder. Use the package manifest/release metadata to fill missing requirements. A deliberate `*` is allowed only when it accurately represents the reviewed requirement.
 
-Migration `0029_align_manifest.sql` stops with `manifest_data_requires_manual_correction` before changing library data if the preflight reports issues. Correct those rows and retry. Once prepared, it converts `mod` to `module`, converts legacy license objects to strings (using `spdx_id`, otherwise `name`), copies the current release's exact requirements and the developer's attribution, and removes obsolete release minimum fields. Physical `website` storage remains for v1 compatibility. Reviewed and pending revision bodies retain their original audit content; old pending revisions must be resubmitted using the new contract before approval. Published reads expect canonical storage; historical audit reads remain separate.
+Migration `0029_align_manifest.sql` stops with `manifest_data_requires_manual_correction` if the preflight reports issues, rolling back the entire migration. Correct those rows and retry. Once prepared, it converts `mod` to `module`, converts legacy license objects to strings (using `spdx_id`, otherwise `name`), copies the current release's exact requirements and the developer's attribution, and removes obsolete release minimum fields. Physical `website` storage remains for v1 compatibility. Reviewed and pending revision bodies retain their original audit content; old pending revisions must be resubmitted using the new contract before approval. Published reads expect canonical storage; historical audit reads remain separate.
 
 For example, after checking an affected package's actual requirements, an operator can add `requires` to one release without rewriting its remaining fields:
 
@@ -37,6 +37,10 @@ WHERE id = 'affected-extension';
 ```
 
 Use the ID, index, and verified constraints from the preflight investigation; the values above are examples. Re-run the query until it returns no rows.
+
+For imported collections already over a retained-resource quota, the direct update above will be rejected because it grows stored content. Add the reviewed, ID-scoped correction statements at `-- MANUAL_MANIFEST_CORRECTIONS` in migration `0029` instead. This section runs inside D1's atomic migration transaction after the growth gate is temporarily relaxed, while byte-accounting triggers stay active. Preflight then validates the corrected library before backfill; an error rolls back every correction and schema change. The normal growth gate is restored before commit. With this path, the external preflight report will still list the uncorrected rows until execution; the migration reruns preflight after applying the reviewed corrections. Do not lower usage counters or leave production triggers disabled to force an update through.
+
+After applying the prepared migration, run the read-only `db/resource-inventory.sql` reconciliation query. It must return no discrepancies; investigate any returned subjects before reopening writes. The migration regression test covers correction of an over-quota collection, rollback when issues remain, restored quota enforcement, and reconciled byte totals.
 
 Apply the migration and API deployment in a controlled cutover: the old Worker expects object licenses, while the new Worker requires the added metadata column.
 

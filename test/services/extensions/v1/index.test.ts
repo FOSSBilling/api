@@ -513,7 +513,7 @@ describe("Extensions API v1", () => {
 
 describe("v1 projection failures", () => {
   beforeAll(applyTestMigrations);
-  it.each(["not-a-range", ">=2.0.0 <1.0.0"])(
+  it.each(["not-a-range", ">=2.0.0 <1.0.0", "", "   ", "\t\n"])(
     "flags a requirement with no v1 minimum: %s",
     async (constraint) => {
       const db = getExtensionsDb(env.DB_EXTENSIONS);

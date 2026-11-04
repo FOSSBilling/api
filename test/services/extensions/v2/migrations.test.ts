@@ -1039,6 +1039,10 @@ it("migrates published manifest metadata without changing reviewed audit bodies"
         issue: expect.stringContaining("set explicit FOSSBilling and PHP")
       }
     ]);
+    // Existing over-quota collections must survive a structural backfill.
+    db.exec(
+      "UPDATE extension_resource_usage SET extensions=101 WHERE scope='developer'"
+    );
     db.exec("BEGIN");
     expect(() => db.exec(migration("0029_align_manifest.sql"))).toThrow(
       /manifest_data_requires_manual_correction/
@@ -1048,19 +1052,34 @@ it("migrates published manifest metadata without changing reviewed audit bodies"
     expect(
       db.prepare("SELECT type FROM extensions WHERE id='legacy'").get()?.type
     ).toBe("mod");
-    // Operator supplies actual requirements, not guessed wildcard metadata.
-    db.prepare(
-      "UPDATE extensions SET releases=json_set(releases,'$[0].requires',json(?)) WHERE id='legacy'"
-    ).run(JSON.stringify(currentRequirements));
-    expect(db.prepare(preflight).all()).toEqual([]);
-    // Existing over-quota collections must survive a structural backfill.
-    db.exec(
-      "UPDATE extension_resource_usage SET extensions=101 WHERE scope='developer'"
-    );
-
+    const incompleteCorrection = `UPDATE extensions SET releases=json_set(releases,'$[0].requires',json('{"fossbilling":">=0.8.9"}')) WHERE id='legacy';`;
     db.exec("BEGIN");
-    db.exec(migration("0029_align_manifest.sql"));
+    expect(() =>
+      db.exec(
+        migration("0029_align_manifest.sql").replace(
+          "-- MANUAL_MANIFEST_CORRECTIONS",
+          `-- MANUAL_MANIFEST_CORRECTIONS\n${incompleteCorrection}`
+        )
+      )
+    ).toThrow(/manifest_data_requires_manual_correction/);
+    db.exec("ROLLBACK");
+    expect(
+      db.prepare("SELECT releases FROM extensions WHERE id='legacy'").get()
+        ?.releases
+    ).toBe(releases);
+    expect(columnNames(db, "extensions")).not.toContain("manifest");
+    // The operator inserts an explicit correction into the migration's
+    // maintenance section; direct growth would still be rejected pre-migration.
+    const correction = `UPDATE extensions SET releases=json_set(releases,'$[0].requires',json('${JSON.stringify(currentRequirements)}')) WHERE id='legacy';`;
+    expect(() => db.exec(correction)).toThrow(/extension_resource_quota/);
+    const preparedMigration = migration("0029_align_manifest.sql").replace(
+      "-- MANUAL_MANIFEST_CORRECTIONS",
+      `-- MANUAL_MANIFEST_CORRECTIONS\n${correction}`
+    );
+    db.exec("BEGIN");
+    db.exec(preparedMigration);
     db.exec("COMMIT");
+    expect(db.prepare(preflight).all()).toEqual([]);
     const row = db
       .prepare(
         "SELECT type,license,manifest,published_bytes FROM extensions WHERE id='legacy'"

@@ -179,6 +179,15 @@ describe("manifest v1 publishing", () => {
       { description: "x".repeat(501) },
       { name: "x".repeat(101) },
       { requires: { fossbilling: "^1" } },
+      { requires: { fossbilling: "   ", php: ">=8.3" } },
+      { requires: { fossbilling: "^1", php: "   " } },
+      {
+        requires: {
+          fossbilling: "^1",
+          php: ">=8.3",
+          modules: { branding: "   " }
+        }
+      },
       {
         requires: {
           fossbilling: "^1",

@@ -12,12 +12,18 @@ export const MANIFEST_EXTENSION_TYPES = [
   "translation"
 ] as const;
 
+const versionConstraint = z
+  .string()
+  .min(1)
+  .max(1000)
+  .regex(/\S/, "must contain a version constraint");
+
 export const ManifestRequirementsSchema = z
   .object({
-    fossbilling: z.string().min(1).max(1000),
-    php: z.string().min(1).max(1000),
+    fossbilling: versionConstraint,
+    php: versionConstraint,
     modules: z
-      .record(z.string().regex(/^[a-z0-9_-]+$/), z.string().min(1).max(1000))
+      .record(z.string().regex(/^[a-z0-9_-]+$/), versionConstraint)
       .optional()
   })
   .strict()
