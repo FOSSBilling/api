@@ -411,3 +411,29 @@ export const claimVerificationBudgets = sqliteTable(
     index("idx_claim_verification_budgets_expiry").on(table.expiresAt)
   ]
 );
+
+// Maps an auth-issued OAuth client (client_credentials grant) to the
+// developer profile it may publish for. Auth owns the token and its scopes;
+// this table is the API-side authorization: which developer, which service
+// user the writes are attributed to (submitted_by/reviewer_id FKs), and
+// whether the client may publish (approve) or only propose revisions.
+// Revocation is a timestamp rather than a delete so past revisions keep
+// their attribution story. See "Machine publishing" in the service README.
+export const publisherClients = sqliteTable(
+  "publisher_clients",
+  {
+    clientId: text("client_id").primaryKey(),
+    developerId: text("developer_id")
+      .notNull()
+      .references(() => developers.id),
+    serviceUserId: text("service_user_id")
+      .notNull()
+      .references(() => users.id),
+    canPublish: integer("can_publish").notNull().default(0),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+    revokedAt: text("revoked_at")
+  },
+  (table) => [index("idx_publisher_clients_developer").on(table.developerId)]
+);

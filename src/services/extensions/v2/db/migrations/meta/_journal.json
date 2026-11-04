@@ -85,6 +85,13 @@
       "when": 1791143160901,
       "tag": "0025_luxuriant_franklin_richards",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "6",
+      "when": 1793752727175,
+      "tag": "0026_add_publisher_clients",
+      "breakpoints": true
     }
   ]
 }

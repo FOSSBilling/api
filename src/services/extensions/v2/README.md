@@ -194,6 +194,44 @@ abuse is suspected; this ingress fix does not attest to previously stored data.
 
 Remove the previous secret once the new one has been active for at least 65 seconds and all in-flight assertions have expired.
 
+## Machine publishing
+
+First-party releases are pushed by CI (`FOSSBilling/modules`, one directory
+per extension, `publish.yml` on GitHub release) rather than proposed by a
+human in the directory UI. Authentication reuses the central auth service
+instead of the assertion above: CI fetches a `client_credentials` token from
+`https://auth.fossbilling.net/oauth2/token` with
+`scope=extensions:push extensions:publish` and
+`resource=https://api.fossbilling.net`, and this API verifies the JWT against
+the auth JWKS (`src/services/extensions/v2/machine.ts`). `resource=` is
+required — without it the grant returns an opaque token this API cannot
+verify locally. Tokens carry `sub` (= the OAuth client id), `aud`, `scope`,
+and a 10-minute expiry; there is no user and no refresh token. See the auth
+repo's README runbook for creating the client and requesting the token.
+
+Possession of a valid token is not enough: the client id must be linked to a
+developer profile in this database (`publisher_clients`: client id → developer
+id, service user id, `can_publish`, `revoked_at`). The service user is a real
+`users` row (synced through identity sync like any other account) that owns
+the developer profile, so owner checks, pending-revision limits, and
+`submitted_by`/`reviewer_id` attribution work unchanged. `extensions:push`
+proposes through the owner routes (`POST /extensions`, `PUT
+/extensions/{id}`); `extensions:publish` plus `can_publish = 1` approves
+through the moderation approve route. A client with `can_publish = 0` can only
+propose — a human moderator approves. Machine approvals stamp
+`[auto policy=trusted-publisher]` as the review note when the caller sends
+none, so they are identifiable in history the same way as every other
+automatic decision.
+
+If a publish fails with 409, a revision is already pending review — a
+moderator resolves it in the review queue, then the workflow is re-run.
+`?notify=false` is recommended on machine approvals; the catalogue is
+revalidated on every publish like any other moderation write.
+
+To stop a publisher: revoke in auth (disable the client or the resource row —
+worst-case latency is the 10-minute token lifetime) and, for an immediate
+stop, set `publisher_clients.revoked_at`. Past revisions keep their history.
+
 ## Ownership Verification
 
 For organization developer IDs, GitHub membership is used for automatic verification only when the API has a valid, unexpired membership snapshot. A fresh snapshot that does not contain the organization remains a confirmed mismatch and is rejected. Missing, malformed, or expired evidence is inconclusive instead: a new profile remains unapproved and a claim remains pending for manual moderator review. Moderators must verify ownership through their normal out-of-band process before approving either workflow.

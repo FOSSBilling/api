@@ -97,6 +97,14 @@ export interface DeveloperHistoryRow {
   changed_at: string;
 }
 
+export interface PublisherClientRow {
+  client_id: string;
+  developer_id: string;
+  service_user_id: string;
+  can_publish?: number;
+  revoked_at?: string | null;
+}
+
 // developer_history is genuinely append-only in production (see migrations
 // 0005/0008's trg_developer_history_no_update/_no_delete triggers) - there
 // is no real way to clear it that doesn't briefly drop those triggers,
@@ -134,6 +142,7 @@ export async function resetExtensionsDb(db: D1Database): Promise<void> {
   await db.prepare("DELETE FROM claim_verification_budgets").run();
   await clearDeveloperHistory(db);
   for (const table of [
+    "publisher_clients",
     "extension_revisions",
     "developer_transfers",
     "developer_claims",
@@ -431,6 +440,27 @@ export async function insertDeveloperHistory(
       row.url ?? null,
       row.changed_by,
       row.changed_at ?? new Date().toISOString()
+    )
+    .run();
+}
+
+export async function insertPublisherClient(
+  db: D1Database,
+  row: PublisherClientRow
+): Promise<void> {
+  await ensureUser(db, row.service_user_id);
+  await db
+    .prepare(
+      `INSERT INTO publisher_clients
+         (client_id, developer_id, service_user_id, can_publish, revoked_at)
+       VALUES (?, ?, ?, ?, ?)`
+    )
+    .bind(
+      row.client_id,
+      row.developer_id,
+      row.service_user_id,
+      row.can_publish ?? 1,
+      row.revoked_at ?? null
     )
     .run();
 }

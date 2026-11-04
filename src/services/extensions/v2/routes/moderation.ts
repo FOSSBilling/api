@@ -91,11 +91,19 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
     const query = c.req.valid("query");
     const extDb = getExtensionsDb(c.env.DB_EXTENSIONS);
     const db = new ExtensionRevisionsDatabase(extDb);
+    // Machine approvals are automatic decisions by a trusted publisher, not
+    // human review. Tag them like every other automatic decision so history
+    // and mail carry the [auto policy=…] marker the README documents.
+    const effectiveNote =
+      review_note?.trim() ||
+      (auth.scope === "machine"
+        ? "[auto policy=trusted-publisher]"
+        : undefined);
     const { data, error } = await db.approve(
       id,
       revisionId,
       auth.userId,
-      review_note
+      effectiveNote
     );
     if (error || !data) {
       const status = statusFromWriteErrorCode(error?.code);
@@ -112,7 +120,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
           extensionId: id,
           // Optional and untrimmed by its schema: a whitespace-only note would
           // otherwise reach the author as a meaningless "Moderator note:".
-          reason: review_note?.trim() || undefined
+          reason: effectiveNote
         },
         (p) => c.executionCtx.waitUntil(p)
       );

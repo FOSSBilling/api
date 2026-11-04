@@ -9,9 +9,11 @@ declare module "hono" {
   }
 }
 
-// Ordered list of verifiers tried for an incoming bearer token. Adding the
-// future long-lived API-key verifier means appending here — route handlers
-// and requireAuth() itself don't change.
+// Ordered list of verifiers tried for an incoming bearer token.
+// Domain-specific verifiers (e.g. extensions v2's machine-token verifier
+// for CI publishers) are registered by the service that owns them, by
+// passing an explicit list — this default stays the human-assertion path
+// so account routes never accept machine credentials.
 const verifiers: TokenVerifier[] = [bearerAssertionVerifier];
 
 export function requireAuth(

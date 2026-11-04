@@ -7,6 +7,16 @@ import { getAuth, requireAuth } from "../../../lib/auth";
 import type { AuthPrincipal } from "../../../lib/auth";
 import { getExtensionsDb } from "../../../lib/db";
 import { UsersDatabase } from "./db/users";
+import {
+  MACHINE_SCOPE_PUBLISH,
+  MACHINE_SCOPE_PUSH,
+  machineTokenVerifier
+} from "./machine";
+
+// Domain verifiers: the site's short-lived assertions plus auth-issued
+// machine tokens for CI publishers. Identity-sync keeps its own list —
+// machine credentials must never satisfy it.
+const v2Verifiers = [bearerAssertionVerifier, machineTokenVerifier];
 
 export const requireAuthAllowInactive = requireAuth;
 
@@ -15,7 +25,7 @@ export const requireAuthAllowInactive = requireAuth;
 // normally (invalid tokens still 401 rather than silently downgrading to
 // anonymous, so callers cannot mistake a broken token for a public read).
 export function optionalAuth(): MiddlewareHandler {
-  const authenticate = requireAuth();
+  const authenticate = requireAuth(v2Verifiers);
   return async (c, next) => {
     const header = c.req.header("Authorization");
     if (!header?.trim()) return next();
@@ -33,7 +43,7 @@ type AuthenticatedCheck = (c: Context) => Promise<Response | undefined>;
 
 function withAuthenticatedCheck(
   check: AuthenticatedCheck,
-  authenticate = requireAuth()
+  authenticate = requireAuth(v2Verifiers)
 ): MiddlewareHandler {
   return async (c, next) => {
     let response: Response | undefined;
@@ -58,8 +68,23 @@ const inactiveAccountResponse = {
 
 export function requireActiveAuth(): MiddlewareHandler {
   return withAuthenticatedCheck(async (c) => {
+    const auth = getAuth(c);
+    // Machine credentials act as their mapped service user, but only with
+    // the push scope — a publish-only token cannot propose, and human
+    // assertions are unaffected by scope checks.
+    if (auth.scope === "machine" && !auth.scopes.includes(MACHINE_SCOPE_PUSH)) {
+      return c.json(
+        {
+          error: {
+            message: "Machine token lacks extensions:push scope",
+            code: "FORBIDDEN"
+          }
+        },
+        403
+      );
+    }
     const users = new UsersDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
-    const result = await users.isActive(getAuth(c).userId);
+    const result = await users.isActive(auth.userId);
     if (result.error) return c.json({ error: result.error }, 500);
     if (!result.data) return c.json(inactiveAccountResponse, 403);
   });
@@ -120,8 +145,32 @@ export function requireIdentitySync(): MiddlewareHandler {
 // authenticates through the same combinator and answers both the active and
 // the moderator question from one row. The two 403s are distinct on purpose -
 // a deactivated moderator gets ACCOUNT_INACTIVE, not FORBIDDEN.
+//
+// Machine credentials never consult the moderator table: their publish right
+// comes from the publisher_clients mapping (can_publish) plus the token's
+// publish scope, resolved by the verifier before this runs.
 export function requireModerator(): MiddlewareHandler {
   return withAuthenticatedCheck(async (c) => {
+    const auth = getAuth(c);
+    if (auth.scope === "machine") {
+      const users = new UsersDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
+      const active = await users.isActive(auth.userId);
+      if (active.error) return c.json({ error: active.error }, 500);
+      if (!active.data)
+        return c.json({ error: inactiveAccountResponse.error }, 403);
+      if (!auth.scopes.includes(MACHINE_SCOPE_PUBLISH) || !auth.canPublish) {
+        return c.json(
+          {
+            error: {
+              message: "Publishing access required",
+              code: "FORBIDDEN"
+            }
+          },
+          403
+        );
+      }
+      return undefined;
+    }
     const users = new UsersDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
     const result = await users.moderatorAccess(getAuth(c).userId);
     if (result.error) return c.json({ error: result.error }, 500);
