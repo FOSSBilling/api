@@ -32,7 +32,7 @@
     "badge-maker": "6.0.0",
     "better-auth": "^1.7.14",
     "drizzle-orm": "0.45.4",
-    "hono": "4.13.14",
+    "hono": "4.13.16",
     "semver": "7.8.5",
     "zod": "4.6.7"
   },
