@@ -248,13 +248,13 @@ describe("Extensions API v2", () => {
       });
       await insertExtension(db, {
         id: "account-extension",
-        type: "mod",
+        type: "module",
         developer_id: "account-developer",
         name: "Account Extension",
         description: "description",
         releases: "[]",
         website: "https://example.com",
-        license: '{"name":"MIT"}',
+        license: '"MIT"',
         icon_url: null,
         readme: "# Readme",
         source: '{"type":"github","repo":"example/account"}',

@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { env } from "cloudflare:workers";
+import { listCacheKey } from "../../../../src/services/extensions/v1/list-cache";
 import {
   setupExtensionsV2Tests,
   db,
   authHeaders,
+  get,
   post,
   put,
   del,
@@ -81,7 +83,27 @@ async function delist(as: string): Promise<Response> {
   );
 }
 
-describe("CDN cache revalidation on catalogue mutations", () => {
+describe("CDN cache revalidation on extension mutations", () => {
+  it("invalidates both v1 module cache aliases after a successful mutation", async () => {
+    // D1 reset does not clear KV. Start cold before priming either alias.
+    for (const type of ["mod", "module"]) {
+      await env.CACHE_KV.delete(listCacheKey(type, undefined));
+    }
+    await seedModAndExtension();
+    for (const type of ["mod", "module"]) {
+      const response = await get(`/extensions/v1/list?type=${type}`, {});
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({
+        result: [{ id: "live-ext" }]
+      });
+    }
+    expect((await delist("mod-1")).status).toBe(200);
+    for (const type of ["mod", "module"]) {
+      const response = await get(`/extensions/v1/list?type=${type}`, {});
+      await expect(response.json()).resolves.toMatchObject({ result: [] });
+    }
+  });
+
   it("does not revalidate unchanged profile replays", async () => {
     const fetcher = stubFrontend();
     const headers = await authHeaders("noop-revalidate-owner");
@@ -105,7 +127,7 @@ describe("CDN cache revalidation on catalogue mutations", () => {
     expect(fetcher.fetch).toHaveBeenCalledTimes(2);
   });
 
-  it("purges the catalogue tags after a successful delist", async () => {
+  it("purges the extension page tags after a successful delist", async () => {
     await seedModAndExtension();
     const fetcher = stubFrontend();
 
@@ -123,11 +145,11 @@ describe("CDN cache revalidation on catalogue mutations", () => {
       "content-type": "application/json"
     });
     expect(JSON.parse(String(init.body))).toEqual({
-      tags: ["catalogue", "developers"]
+      tags: ["extensions", "developers"]
     });
   });
 
-  it("purges the catalogue tags after a successful relist", async () => {
+  it("purges the extension page tags after a successful relist", async () => {
     await seedModAndExtension();
     expect((await delist("mod-1")).status).toBe(200);
     const fetcher = stubFrontend();
@@ -146,7 +168,7 @@ describe("CDN cache revalidation on catalogue mutations", () => {
     );
     expect(init.method).toBe("POST");
     expect(JSON.parse(String(init.body))).toEqual({
-      tags: ["catalogue", "developers"]
+      tags: ["extensions", "developers"]
     });
   });
 

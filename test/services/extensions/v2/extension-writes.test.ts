@@ -83,7 +83,7 @@ describe("Extensions API v2 writes", () => {
       expect(data.error.code).toBe("VALIDATION_ERROR");
     });
 
-    it("rejects a spdx_id that isn't a current SPDX license identifier", async () => {
+    it("rejects the legacy license object", async () => {
       await seedDeveloper("new-developer", "user-1");
       const res = await post(
         "/extensions/v2/extensions",
@@ -97,42 +97,38 @@ describe("Extensions API v2 writes", () => {
       expect(await countRevisions(db)).toBe(0);
     });
 
-    it("rejects a deprecated SPDX identifier", async () => {
+    it("rejects characters outside the manifest license grammar", async () => {
       await seedDeveloper("new-developer", "user-1");
       const res = await post(
         "/extensions/v2/extensions",
         await authHeaders("user-1"),
-        // "GPL-3.0" is deprecated in favor of GPL-3.0-only / GPL-3.0-or-later.
-        { ...sampleCreate(), license: { name: "GPL 3.0", spdx_id: "GPL-3.0" } }
+        { ...sampleCreate(), license: "invalid/license" }
       );
       expect(res.status).toBe(422);
     });
 
-    it("stores a recognized spdx_id alongside the display name", async () => {
+    it("stores a manifest license expression", async () => {
       await seedDeveloper("new-developer", "user-1");
       const res = await post(
         "/extensions/v2/extensions",
         await authHeaders("user-1"),
         {
           ...sampleCreate(),
-          license: { name: "Apache License 2.0", spdx_id: "Apache-2.0" }
+          license: "Apache-2.0 OR MIT"
         }
       );
       expect(res.status).toBe(201);
       const data = (await res.json()) as { result: { revision_id: string } };
       const revision = await getRevision(db, data.result.revision_id);
-      expect(JSON.parse(revision!.content).license).toEqual({
-        name: "Apache License 2.0",
-        spdx_id: "Apache-2.0"
-      });
+      expect(JSON.parse(revision!.content).license).toBe("Apache-2.0 OR MIT");
     });
 
-    it("accepts a license with no spdx_id, for custom/proprietary licenses", async () => {
+    it("accepts a custom manifest license", async () => {
       await seedDeveloper("new-developer", "user-1");
       const res = await post(
         "/extensions/v2/extensions",
         await authHeaders("user-1"),
-        { ...sampleCreate(), license: { name: "Acme Proprietary License" } }
+        { ...sampleCreate(), license: "LicenseRef-Acme" }
       );
       expect(res.status).toBe(201);
     });
@@ -295,7 +291,7 @@ describe("Extensions API v2 writes", () => {
         date: "2026-01-01T00:00:00Z",
         download_url: longUrl,
         changelog_url: longUrl,
-        min_fossbilling_version: "0.6"
+        requires: { fossbilling: ">=0.6", php: "*" }
       }));
       const body = { ...sampleCreate(), releases };
       expect(
@@ -329,12 +325,12 @@ describe("Extensions API v2 writes", () => {
       expect(await countRevisions(db)).toBe(0);
     });
 
-    it("preserves compatibility with stored slug ids over 100 characters", async () => {
+    it("rejects new ids above the manifest limit of 64 characters", async () => {
       await seedDeveloper("d".repeat(120), "user-1");
       const res = await createExtension("user-1", {
-        extensionId: "e".repeat(120)
+        extensionId: "e".repeat(65)
       });
-      expect(res.status).toBe(201);
+      expect(res.status).toBe(422);
     });
 
     it("caps each user's unreviewed backlog", async () => {
@@ -774,7 +770,7 @@ describe("Extensions API v2 writes", () => {
 
     // Both of these are states the README's mapping table now documents, and
     // both were reachable before it did.
-    it("reports a live extension adopted from the pre-v2 catalogue", async () => {
+    it("reports a live extension adopted from the pre-v2 directory", async () => {
       await seedOwnedExtension();
 
       const res = await get(
@@ -876,7 +872,7 @@ describe("Extensions API v2 writes", () => {
       );
 
       const res = await get(
-        "/extensions/v2/extensions?scope=mine&type=mod",
+        "/extensions/v2/extensions?scope=mine&type=module",
         headers
       );
       expect(res.status).toBe(200);

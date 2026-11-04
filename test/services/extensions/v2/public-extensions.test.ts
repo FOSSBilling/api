@@ -12,27 +12,27 @@ setupExtensionsV2Tests();
 
 describe("Extensions API v2", () => {
   describe("GET /extensions", () => {
-    async function seedCatalogue(ids: string[]): Promise<void> {
+    async function seedExtensions(ids: string[]): Promise<void> {
       await insertDeveloper(db, {
-        id: "catalogue-developer",
+        id: "listing-developer",
         type: "user",
-        name: "Catalogue Developer",
+        name: "Listing Developer",
         url: null,
         owner_user_id: null
       });
       for (const id of ids) {
         await insertExtension(db, {
           id,
-          type: "mod",
-          developer_id: "catalogue-developer",
+          type: "module",
+          developer_id: "listing-developer",
           name: id,
           description: `Description for ${id}`,
           releases: '[{"tag":"1.0.0"}]',
           website: "https://example.com",
-          license: '{"name":"MIT"}',
+          license: '"MIT"',
           icon_url: null,
           readme: `README for ${id}`,
-          source: '{"type":"github","repo":"example/catalogue"}',
+          source: '{"type":"github","repo":"example/extensions"}',
           version: "1.0.0",
           download_url: "https://example.com/download.zip"
         });
@@ -61,7 +61,7 @@ describe("Extensions API v2", () => {
     });
 
     it("marks unowned public developers as unclaimed", async () => {
-      await seedCatalogue(["legacy-extension"]);
+      await seedExtensions(["legacy-extension"]);
 
       const res = await get("/extensions/v2/extensions", {});
       expect(res.status).toBe(200);
@@ -74,7 +74,7 @@ describe("Extensions API v2", () => {
     it("filters by type", async () => {
       await seedOwnedExtension();
 
-      const matching = await get("/extensions/v2/extensions?type=mod", {});
+      const matching = await get("/extensions/v2/extensions?type=module", {});
       const matchingBody = (await matching.json()) as { result: unknown[] };
       expect(matchingBody.result).toHaveLength(1);
 
@@ -111,7 +111,7 @@ describe("Extensions API v2", () => {
     });
 
     it("returns deterministic first, middle, and final pages", async () => {
-      await seedCatalogue(["charlie", "Alpha", "bravo", "delta", "echo"]);
+      await seedExtensions(["charlie", "Alpha", "bravo", "delta", "echo"]);
 
       const first = await get("/extensions/v2/extensions?limit=2", {});
       const firstBody = (await first.json()) as {
@@ -159,7 +159,7 @@ describe("Extensions API v2", () => {
     });
 
     it("supports UTF-8 extension ids in cursors", async () => {
-      await seedCatalogue(["alpha", "zulu", "éclair", "😀"]);
+      await seedExtensions(["alpha", "zulu", "éclair", "😀"]);
 
       const first = await get("/extensions/v2/extensions?limit=3", {});
       const firstBody = (await first.json()) as {
@@ -180,7 +180,7 @@ describe("Extensions API v2", () => {
     });
 
     it("accepts the maximum limit and rejects values above it", async () => {
-      await seedCatalogue(["one"]);
+      await seedExtensions(["one"]);
       expect(
         (await get("/extensions/v2/extensions?limit=100", {})).status
       ).toBe(200);
@@ -224,15 +224,15 @@ describe("Extensions API v2", () => {
 
     it("404s for a delisted extension, even though it is still published", async () => {
       await insertDeveloper(db, {
-        id: "catalogue-developer",
+        id: "listing-developer",
         type: "user",
-        name: "Catalogue Developer",
+        name: "Listing Developer",
         url: null,
         owner_user_id: null
       });
       await insertExtension(db, {
         id: "delisted-ext",
-        developer_id: "catalogue-developer",
+        developer_id: "listing-developer",
         delisted_at: "2026-01-01T00:00:00.000Z",
         delist_reason: "Upstream source removed"
       });

@@ -24,7 +24,7 @@ export function registerPublicExtensionsRoutes(app: ExtensionsV2App): void {
     path: "/extensions",
     tags: ["Extensions"],
     summary:
-      "List extensions: published catalogue (scope=public), caller's own (scope=mine), or every extension (scope=all, moderator)",
+      "List extensions: published extension directory (scope=public), caller's own (scope=mine), or every extension (scope=all, moderator)",
     security: [{ Bearer: [] }],
     middleware: [optionalAuth()] as const,
     request: { query: UnifiedExtensionListQuerySchema },
@@ -36,7 +36,7 @@ export function registerPublicExtensionsRoutes(app: ExtensionsV2App): void {
           }
         },
         description:
-          "Extensions matching the scope: catalogue cards for scope=public, owned rows for scope=mine/all"
+          "Extensions matching the scope: extension cards for scope=public, owned rows for scope=mine, moderation rows for scope=all"
       },
       401: errorResponse("Invalid bearer token"),
       403: errorResponse(

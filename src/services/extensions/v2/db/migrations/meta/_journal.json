@@ -106,6 +106,13 @@
       "when": 1793554482651,
       "tag": "0028_m2m_publisher_clients",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "6",
+      "when": 1793793600000,
+      "tag": "0029_align_manifest",
+      "breakpoints": true
     }
   ]
 }

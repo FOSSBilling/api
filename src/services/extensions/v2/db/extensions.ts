@@ -27,6 +27,7 @@ import {
   Release,
   Repository
 } from "../schemas/extensions";
+import { Manifest, manifestMetadata } from "../schemas/manifest";
 import { PublicDeveloper } from "../schemas/developers";
 
 export const MAX_PENDING_REVISIONS_PER_USER = 10;
@@ -60,13 +61,15 @@ const CONTENT_COLUMNS = {
   >`CASE WHEN length(${extensions.website}) <= 2048 THEN ${extensions.website} ELSE NULL END`,
   license: sql<
     string | null
-  >`CASE WHEN length(CAST(${extensions.license} AS BLOB)) <= ${MAX_CONTENT_BYTES} AND json_valid(${extensions.license}) THEN
-    json_patch(json_object('name', substr(json_extract(${extensions.license}, '$.name'), 1, 100)),
-      json_patch(CASE WHEN json_type(${extensions.license}, '$.spdx_id') = 'text'
-        THEN json_object('spdx_id', substr(json_extract(${extensions.license}, '$.spdx_id'), 1, 100)) ELSE '{}' END,
-      CASE WHEN json_type(${extensions.license}, '$.URL') = 'text' AND length(json_extract(${extensions.license}, '$.URL')) <= 2048
-        THEN json_object('URL', json_extract(${extensions.license}, '$.URL')) ELSE '{}' END))
-    ELSE '{"name":"Unavailable"}' END`,
+  >`json_quote(substr(json_extract(${extensions.license}, '$'), 1, 1000))`,
+  manifest: sql<
+    string | null
+  >`CASE WHEN length(CAST(${extensions.manifest} AS BLOB)) <= ${MAX_CONTENT_BYTES} AND json_valid(${extensions.manifest}) THEN
+    json_object('manifest_version', 1, 'author', json_patch(
+      json_object('name', substr(json_extract(${extensions.manifest}, '$.author.name'), 1, 200)),
+      CASE WHEN json_type(${extensions.manifest}, '$.author.url') = 'text' AND length(json_extract(${extensions.manifest}, '$.author.url')) <= 2048
+        THEN json_object('url', json_extract(${extensions.manifest}, '$.author.url')) ELSE '{}' END))
+    ELSE NULL END`,
   iconUrl: sql<
     string | null
   >`CASE WHEN length(${extensions.iconUrl}) <= 2048 THEN ${extensions.iconUrl} ELSE NULL END`,
@@ -86,6 +89,9 @@ const CONTENT_COLUMNS = {
 
 // Detail preserves stored fields; the overall size guard prevents oversized reads.
 const DETAIL_CONTENT_COLUMNS = {
+  manifest: sql<
+    string | null
+  >`CASE WHEN ${publishedBytes} <= ${MAX_CONTENT_BYTES} THEN ${extensions.manifest} ELSE NULL END`,
   type: sql<
     string | null
   >`CASE WHEN ${publishedBytes} <= ${MAX_CONTENT_BYTES} THEN ${extensions.type} ELSE NULL END`,
@@ -179,7 +185,7 @@ const REVIEW_COLUMNS = {
   reviewedAt: REVIEWED.reviewedAt
 };
 
-// The owner list drops the same two large published fields the catalogue does,
+// The owner list omits README, releases, and requirements, like public lists,
 // and the pending revision's stored content (up to 256 KiB per row) with it.
 const OWNED_LIST_COLUMNS = {
   id: extensions.id,
@@ -244,6 +250,7 @@ interface DeveloperRow {
 // filter sufficient: a published row cannot be missing any of them. That
 // constraint is what makes the non-null types here sound.
 interface PublishedRow extends DeveloperRow {
+  manifest: string | null;
   id: string;
   type: string;
   name: string;
@@ -513,7 +520,7 @@ export class ExtensionsDatabase {
     };
   }
 
-  // Catalogue totals for the admin tabs, using the same published /
+  // Extension directory totals for the admin tabs, using the same published /
   // delisted / unpublished predicates as listForModeration so the badges
   // can never disagree with what each tab lists. One conditional-SUM
   // query rather than four COUNTs.
@@ -855,7 +862,7 @@ export class ExtensionsDatabase {
   }
 
   // Withdrawing is only offered while an extension has never been published:
-  // once it is in the catalogue, consumers pin its id and removing it is a
+  // once it is in the extension directory, consumers pin its id and removing it is a
   // moderator's decision, not the owner's.
   async withdraw(
     id: string,
@@ -932,7 +939,7 @@ export class ExtensionsDatabase {
   }
 
   // A moderator's decision to pull an already-published extension from the
-  // catalogue for cause - its upstream source disappearing, for example.
+  // extension directory for cause - its upstream source disappearing, for example.
   // Content and history are kept (unlike withdraw(), which deletes a
   // never-published row outright), so an owner can still see why and a
   // moderator can re-list it later without the developer resubmitting from
@@ -1024,7 +1031,7 @@ export class ExtensionsDatabase {
   }
 
   // Inverse of delist(): restores a delisted-but-published extension to the
-  // catalogue. Content and history are untouched; only the delist markers
+  // extension directory. Content and history are untouched; only the delist markers
   // are cleared. `AND delisted_at IS NOT NULL` makes this a single atomic
   // check-and-set mirroring delist(). The actor guard re-checks moderator
   // status inside the statement (not just activity): requireModerator()
@@ -1119,7 +1126,7 @@ export class ExtensionsDatabase {
     };
   }
 
-  // Moderator correction of live catalogue content (api#251): a truncated
+  // Moderator correction of live extension content (api#251): a truncated
   // readme or broken link the owner should not have to resubmit to fix. One
   // D1 batch() like approve(): the first statement inserts an
   // already-approved revision row (submitted_by and reviewer both the
@@ -1187,7 +1194,7 @@ export class ExtensionsDatabase {
         sql: `UPDATE extensions
               SET type = ?, name = ?, description = ?, releases = ?, website = ?,
                   license = ?, icon_url = ?, readme = ?, source = ?, version = ?,
-                  download_url = ?,
+                  download_url = ?, manifest = ?,
                   published_revision_id = ?,
                   updated_at = CURRENT_TIMESTAMP
               WHERE changes() = 1 AND LOWER(id) = LOWER(?)`,
@@ -1196,13 +1203,14 @@ export class ExtensionsDatabase {
           valid.name,
           valid.description,
           JSON.stringify(valid.releases),
-          valid.website,
+          valid.homepage_url ?? "",
           JSON.stringify(valid.license),
           valid.icon_url ?? null,
           valid.readme,
           JSON.stringify(valid.source),
           valid.version,
           valid.download_url,
+          JSON.stringify(manifestMetadata(valid)),
           revisionId,
           id
         ]
@@ -1350,20 +1358,9 @@ function parseDeveloper(row: DeveloperRow): PublicDeveloper {
   };
 }
 
-// Shared by both parsers so the catalogue card and the detail view can never
-// disagree about the embedded developer.
+// Keep URLs on list cards within the response size bound.
 function cardUrl(url: string | null): string | null {
   return url && url.length <= 2048 ? url : null;
-}
-
-function cardLicense(stored: string | null): License {
-  const license = parseJSON<License>(stored ?? "", { name: "Unavailable" });
-  license.name =
-    typeof license.name === "string" && license.name
-      ? license.name.slice(0, 100)
-      : "Unavailable";
-  if (license.URL && license.URL.length > 2048) delete license.URL;
-  return license;
 }
 
 function cardSource(stored: string | null): Repository {
@@ -1378,9 +1375,10 @@ function cardSource(stored: string | null): Repository {
   return source;
 }
 
-// The field subset both the public catalogue rows and the owner listing rows
+// The field subset both the public extension listing rows and the owner listing rows
 // project, in their nullable table form.
 interface ListContentFields {
+  manifest: string | null;
   type: string | null;
   name: string | null;
   description: string | null;
@@ -1393,7 +1391,7 @@ interface ListContentFields {
 }
 
 // The card/detail content projection shared by parseListRow (public
-// catalogue) and the owned listing's published payload. Shaping in one place
+// extension directory) and the owned listing's published payload. Shaping in one place
 // keeps the two payload producers from drifting; the non-null assertions are
 // sound because every caller only reaches here for rows whose published_at
 // is set, where extensions_published_content_check guarantees presence.
@@ -1402,17 +1400,36 @@ interface ListContentFields {
 // already performs in SQL. They are belt-and-braces for legacy rows written
 // before that truncation existed - not dead code, and not to be "simplified"
 // away without an audit of pre-migration rows.
-function listContent(row: ListContentFields, card: boolean) {
+function listContent(
+  row: ListContentFields,
+  card: true
+): Omit<ExtensionListItem, "id" | "developer">;
+function listContent(
+  row: ListContentFields,
+  card: false
+): Omit<ExtensionContent, "readme" | "releases">;
+function listContent(
+  row: ListContentFields,
+  card: boolean
+):
+  | Omit<ExtensionListItem, "id" | "developer">
+  | Omit<ExtensionContent, "readme" | "releases"> {
+  const metadata = parseManifestMetadata(row.manifest);
   return {
+    ...metadata,
+    requires: card ? undefined : metadata.requires,
+    author: card
+      ? { ...metadata.author, name: metadata.author.name.slice(0, 200) }
+      : metadata.author,
     type: row.type as ExtensionContent["type"],
     name: card ? (row.name as string).slice(0, 120) : (row.name as string),
     description: card
       ? (row.description as string).slice(0, 4000)
       : (row.description as string),
-    website: card ? cardUrl(row.website) : row.website,
+    homepage_url: (card ? cardUrl(row.website) : row.website) || undefined,
     license: card
-      ? cardLicense(row.license)
-      : parseJSON<License>(row.license as string, { name: "" }),
+      ? (JSON.parse(row.license as string) as License).slice(0, 1000)
+      : (JSON.parse(row.license as string) as License),
     icon_url: (card ? cardUrl(row.iconUrl) : row.iconUrl) ?? undefined,
     source: card
       ? cardSource(row.source)
@@ -1449,23 +1466,25 @@ function keysetPage<T extends { id: string }>(
   };
 }
 
-function parseListRow(row: PublishedListRow, card = true): ExtensionListItem {
+function parseListRow(row: PublishedListRow): ExtensionListItem {
   return {
     id: row.id,
-    ...listContent(row, card),
+    ...listContent(row, true),
     developer: parseDeveloper(row)
   };
 }
 
 // The detail view is the list projection plus the two large fields the
-// catalogue query deliberately omits.
+// extension directory query deliberately omits.
 function parseRow(row: PublishedRow): Extension {
   return {
-    ...parseListRow(row, false),
-    website: row.website,
+    id: row.id,
+    developer: parseDeveloper(row),
+    ...listContent(row, false),
+    homepage_url: row.website || undefined,
     download_url: row.downloadUrl,
     readme: row.readme,
-    releases: boundedReleases(parseJSON<Release[]>(row.releases, []))
+    releases: boundedReleases(JSON.parse(row.releases))
   };
 }
 
@@ -1502,12 +1521,10 @@ function parseOwnedRow(row: OwnedRow): OwnedExtension {
     published: row.publishedAt
       ? {
           ...listContent(row, false),
-          website: row.website as string,
+          homepage_url: row.website || undefined,
           download_url: row.downloadUrl as string,
           readme: row.readme as string,
-          releases: boundedReleases(
-            parseJSON<Release[]>(row.releases as string, [])
-          )
+          releases: boundedReleases(JSON.parse(row.releases as string))
         }
       : null,
     pending_revision:
@@ -1562,4 +1579,10 @@ export function oversizedContent(): DatabaseResult<never> {
         "Legacy content exceeds safe read bounds; resubmit or export it administratively"
     }
   };
+}
+
+function parseManifestMetadata(
+  stored: string | null
+): Pick<Manifest, "manifest_version" | "author" | "requires"> {
+  return JSON.parse(stored as string);
 }
