@@ -134,6 +134,14 @@ Submissions made by a client are recorded under that synthetic user, and its aut
 
 Provisioning spans both repos: create the client and its scopes/resource link in the auth service (see its operations README), then register the mapping here.
 
+## Public badges
+
+`GET /extensions/v2/extensions/{id}/badges/{type}` returns an SVG for a published, listed extension without authentication. Types are `version` (latest release tag), `fossbilling` (that release's complete `requires.fossbilling` string), and `license` (the canonical package license). FOSSBilling constraints are displayed verbatim, including upper bounds, exclusions, and compound Composer ranges; they are never reduced to a minimum or prefixed with `v`.
+
+For example, `/extensions/v2/extensions/branding/badges/fossbilling?color=green`. The optional `color` uses badge-maker's color syntax (at most 100 characters). Responses are publicly cached for five minutes in browsers and one hour at the CDN, matching v1 badge caching. Missing, unpublished, and delisted extensions return 404; unsupported types and invalid query values return 422. Unusable or oversized stored badge fields return 409 for manual correction. Empty release histories display `unknown` for version and FOSSBilling requirements; license badges still use the stored license.
+
+Existing `/extensions/v1/{id}/badges/{type}` URLs and their minimum-version projection remain unchanged for older consumers. New embeds should use v2, since a minimum cannot describe the full compatibility range.
+
 ## Ownership verification
 
 For organization developer IDs, GitHub membership auto-verifies only against a valid, unexpired membership snapshot. A fresh snapshot without the org is a confirmed mismatch. Missing, malformed, or expired evidence is inconclusive: the profile stays unapproved and claims stay pending for manual review. `github_org_verified` absent or `null` is a review signal, not proof.
