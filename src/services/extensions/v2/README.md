@@ -136,11 +136,13 @@ Provisioning spans both repos: create the client and its scopes/resource link in
 
 ## Public badges
 
-`GET /extensions/v2/extensions/{id}/badges/{type}` returns an SVG for a published, listed extension without authentication. Types are `version` (latest release tag), `fossbilling` (that release's complete `requires.fossbilling` string), and `license` (the canonical package license). FOSSBilling constraints are displayed verbatim, including upper bounds, exclusions, and compound Composer ranges; they are never reduced to a minimum or prefixed with `v`.
+`GET /extensions/v2/extensions/{id}/badges/{type}` returns a public SVG. Types are `version` (latest release tag), `fossbilling` (that release's full `requires.fossbilling` string), and `license` (package license). Requirements are displayed unchanged, including upper bounds, exclusions, and compound ranges.
 
-For example, `/extensions/v2/extensions/branding/badges/fossbilling?color=green`. The optional `color` uses badge-maker's color syntax (at most 100 characters). Responses are publicly cached for five minutes in browsers and one hour at the CDN, matching v1 badge caching. Missing, unpublished, and delisted extensions return 404; unsupported types and invalid query values return 422. Unusable or oversized stored badge fields return 409 for manual correction. Empty release histories display `unknown` for version and FOSSBilling requirements; license badges still use the stored license.
+For example: `/extensions/v2/extensions/branding/badges/fossbilling?color=green`. The optional `color` accepts badge-maker colors, up to 100 characters. Badges are cached for five minutes in browsers and one hour at the CDN, matching v1.
 
-Existing `/extensions/v1/{id}/badges/{type}` URLs and their minimum-version projection remain unchanged for older consumers. New embeds should use v2, since a minimum cannot describe the full compatibility range.
+Missing, unpublished, and delisted extensions return 404. Invalid types or query values return 422; unusable stored badge fields return 409 for manual correction. With no releases, version and requirement badges show `unknown`; license badges still work.
+
+Existing v1 badge URLs and minimum-version output are unchanged. Use v2 for new embeds that need the full requirement.
 
 ## Ownership verification
 

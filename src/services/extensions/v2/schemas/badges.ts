@@ -1,5 +1,6 @@
 import { z } from "@hono/zod-openapi";
 import { IdParamSchema } from "./common";
+import { ManifestRequirementsSchema } from "./manifest";
 
 export const BadgeParamsSchema = IdParamSchema.extend({
   type: z.enum(["version", "fossbilling", "license"]).openapi({
@@ -21,8 +22,6 @@ export const BadgeQuerySchema = z.object({
     })
 });
 
-// Validate only the published fields badges consume. In particular, a large
-// legacy README must not prevent this small public projection from rendering.
 export const BadgeDataSchema = z.object({
   license: z.string().min(1).max(1000),
   releases: z
@@ -34,7 +33,7 @@ export const BadgeDataSchema = z.object({
           .max(200)
           .refine((tag) => Array.from(tag).length <= 100),
         requires: z.object({
-          fossbilling: z.string().min(1).max(1000).regex(/\S/)
+          fossbilling: ManifestRequirementsSchema.shape.fossbilling
         })
       })
     )

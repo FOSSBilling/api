@@ -1,3 +1,4 @@
+import { ZodError } from "zod";
 import { and, isNotNull, isNull, sql } from "drizzle-orm";
 import { ExtensionsDb } from "../../../../lib/db";
 import { DatabaseResult } from "../../../../lib/interfaces";
@@ -17,8 +18,7 @@ export class ExtensionBadgesDatabase {
 
   async getById(id: string): Promise<DatabaseResult<BadgeData>> {
     try {
-      // Keep this public, high-volume read independent of the full content,
-      // selecting only bounded JSON fields and filtering hidden rows in SQL.
+      // Select only badge fields so large README content does not affect badges.
       const [row] = await this.db
         .select({
           releases: sql<
@@ -45,28 +45,19 @@ export class ExtensionBadgesDatabase {
           }
         };
 
-      const parsed = BadgeDataSchema.safeParse({
+      const data = BadgeDataSchema.parse({
         releases: row.releases === null ? null : JSON.parse(row.releases),
         license: row.license === null ? null : JSON.parse(row.license)
       });
-      if (!parsed.success)
-        return {
-          data: null,
-          error: {
-            code: "CONTENT_UNAVAILABLE",
-            message: "Published badge fields require manual correction"
-          }
-        };
       return {
         data: {
-          latestRelease:
-            sortReleasesDescending(parsed.data.releases)[0] ?? null,
-          license: parsed.data.license
+          latestRelease: sortReleasesDescending(data.releases)[0] ?? null,
+          license: data.license
         },
         error: null
       };
     } catch (error) {
-      if (error instanceof SyntaxError)
+      if (error instanceof SyntaxError || error instanceof ZodError)
         return {
           data: null,
           error: {

@@ -12,8 +12,7 @@ export function registerBadgeRoutes(app: ExtensionsV2App): void {
     method: "get",
     path: "/extensions/{id}/badges/{type}",
     tags: ["Extensions"],
-    summary:
-      "Render a public extension badge using canonical manifest metadata",
+    summary: "Get a public extension badge",
     request: { params: BadgeParamsSchema, query: BadgeQuerySchema },
     responses: {
       200: {
