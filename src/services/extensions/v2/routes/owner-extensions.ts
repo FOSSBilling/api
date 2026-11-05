@@ -277,7 +277,9 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
     method: "put",
     path: "/extensions/{id}/revisions/{revisionId}",
     tags: ["Extensions"],
-    summary: "Replace the pending submission the owner opened",
+    summary: "Replace a pending submission for an extension the caller owns",
+    description:
+      "The active owner may replace a pending submission even when a publisher client submitted it. The replacement records the owner as submitter. The revisionId must match the pending version being edited.",
     security: [{ Bearer: [] }],
     middleware: [requireActiveAuth(), paceContentAccount()] as const,
     request: {
@@ -333,7 +335,13 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
       );
     }
     return c.json(
-      { result: { id, revision_id: data.id, status: "pending" as const } },
+      {
+        result: {
+          id: data.extensionId,
+          revision_id: data.id,
+          status: "pending" as const
+        }
+      },
       202
     );
   });

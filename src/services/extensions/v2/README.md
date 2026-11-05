@@ -54,12 +54,21 @@ An extension exists from `POST /extensions`, not from approval. There is no sepa
 
 - `POST /extensions` creates the record and reserves its id. It stays out of public listings until its first revision is approved.
 - `PUT /extensions/{id}` proposes an edit. Published content is unchanged until approval. One unreviewed revision per extension at a time.
+- `PUT /extensions/{id}/revisions/{revisionId}` lets the active owner replace that pending revision; see [Editing a pending submission](#editing-a-pending-submission).
 - `DELETE /extensions/{id}` withdraws an unpublished extension and releases its id. Published extensions cannot be withdrawn by owners.
 - `POST /extensions/{id}/revisions/{revisionId}/approve` publishes. `reject` leaves published content untouched.
 - `POST /extensions/{id}/delist` (moderator-only) hides a published extension for cause without deleting content or history. `POST /extensions/{id}/relist` restores it. Both accept `?notify=false`.
 - `POST /extensions/{id}/moderator-correct` (moderator-only) fixes live extension content corruption without waiting for the author. Writes an already-approved revision, leaves `published_at` and ownership untouched. Requires a published, listed extension with no pending revision (409 otherwise). No `?notify` option and no author email; the fix is recorded in revision history.
 
 An edit cannot rename an extension or move it to another developer. A user owns at most one developer profile, so no request body names one.
+
+### Editing a pending submission
+
+An active owner can replace the pending content with `PUT /extensions/{id}/revisions/{revisionId}`, using the same complete content body as `PUT /extensions/{id}`. This human-only endpoint returns `202` with a **new** pending `revision_id`. Only the specified pending revision at the current ownership epoch can be replaced; a stale id or an already reviewed submission returns `409`. Refresh before editing again after a conflict. The response's extension `id` uses the stored canonical casing, regardless of the request path's casing.
+
+Ownership, not the original submitter, grants this permission: the owner can also replace a publisher client's pending submission. The replacement's `submitted_by` is the owner performing the update, and it uses that owner's pending-revision allowance.
+
+Replacement atomically removes the unreviewed revision and inserts its replacement. Reviewed history and published content are preserved. Rotating the id prevents a moderator's stale approval or rejection from applying to content they have not seen. The original pending submission is restored if insertion fails. Each replacement counts as a new content write for admission and rate limits; it still occupies one pending slot.
 
 ## Reads
 
@@ -180,9 +189,3 @@ Reconcile and re-run; the migration touches nothing before these checks.
 ## Code layout
 
 See `AGENTS.md` for `routes/`, `db/`, `schemas/`, `github/`, and `middleware.ts`. This service is the reference layout for larger services.
-
-### Editing a pending submission
-
-An active owner can replace the pending content with `PUT /extensions/{id}/revisions/{revisionId}`, using the same complete content body as `PUT /extensions/{id}`. This human-only endpoint returns `202` with a **new** pending `revision_id`. Only the specified pending revision at the current ownership epoch can be replaced; a stale id or an already reviewed submission returns `409`. Refresh before editing again after a conflict.
-
-Replacement atomically removes the unreviewed revision and inserts its replacement. Reviewed history and published content are preserved. Rotating the id prevents a moderator's stale approval or rejection from applying to content they have not seen. The original pending submission is restored if insertion fails. Each replacement counts as a new content write for admission and rate limits; it still occupies one pending slot.

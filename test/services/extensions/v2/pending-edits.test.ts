@@ -16,7 +16,9 @@ import {
   getExtension,
   listRevisions,
   insertUser,
-  bumpDeveloperOwnership
+  bumpDeveloperOwnership,
+  insertRevision,
+  insertUnpublishedExtension
 } from "./db-fixtures";
 vi.mock("@octokit/request", async () =>
   (await import("../../../mocks/octokit")).octokitRequestMock()
@@ -70,6 +72,66 @@ describe("pending submission replacement", () => {
     }
     expect(await listRevisions(db)).toHaveLength(1);
   });
+  it("lets the owner replace a publisher submission and attributes the replacement to the owner", async () => {
+    await seedDeveloper("dev", "owner");
+    await insertUnpublishedExtension(db, {
+      id: "new-ext",
+      developer_id: "dev"
+    });
+    await insertRevision(db, {
+      id: "publisher-revision",
+      extension_id: "new-ext",
+      developer_id: "dev",
+      submitted_by: "publisher-client",
+      content: JSON.stringify(sampleContent())
+    });
+    expect(
+      (await replace("publisher-revision", "publisher-client")).status
+    ).toBe(403);
+    expect((await getRevision(db, "publisher-revision"))!.submitted_by).toBe(
+      "publisher-client"
+    );
+    const response = await replace("publisher-revision");
+    expect(response.status).toBe(202);
+    const { result } = (await response.json()) as {
+      result: { revision_id: string };
+    };
+    expect((await getRevision(db, result.revision_id))!.submitted_by).toBe(
+      "owner"
+    );
+    expect(await getRevision(db, "publisher-revision")).toBeNull();
+    expect(await listRevisions(db)).toHaveLength(1);
+  });
+  it.each(["new-ext", "New-Ext"])(
+    "returns canonical stored extension casing for %s",
+    async (extensionId) => {
+      await seedDeveloper("dev", "owner");
+      await insertUnpublishedExtension(db, {
+        id: extensionId,
+        developer_id: "dev"
+      });
+      await insertRevision(db, {
+        id: "canonical-revision",
+        extension_id: extensionId,
+        developer_id: "dev",
+        submitted_by: "owner",
+        content: JSON.stringify(sampleContent())
+      });
+      const response = await put(
+        "/extensions/v2/extensions/NEW-EXT/revisions/canonical-revision",
+        await authHeaders("owner"),
+        sampleContent({ name: "Updated" })
+      );
+      expect(response.status).toBe(202);
+      const { result } = (await response.json()) as {
+        result: { id: string; revision_id: string };
+      };
+      expect(result.id).toBe(extensionId);
+      expect((await getRevision(db, result.revision_id))!.extension_id).toBe(
+        result.id
+      );
+    }
+  );
   it("preserves the published version and reviewed history", async () => {
     const approved = await pending();
     expect(

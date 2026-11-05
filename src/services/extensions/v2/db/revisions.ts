@@ -181,18 +181,20 @@ export class ExtensionRevisionsDatabase {
     return { data: { id }, error: null };
   }
 
-  // Replace only the pending identity the owner actually opened. A fresh id
-  // makes any moderator decision prepared against the old content stale.
+  // The active owner can replace any pending submission for their extension,
+  // including one submitted by a publisher client. The replacement attributes
+  // the content to that owner. Matching the expected revision id prevents
+  // stale edits; rotating it invalidates moderator decisions on old content.
   // D1 rolls back the deletion if insertion or admission triggers fail.
   async replacePending(input: {
     extensionId: string;
     revisionId: string;
     callerId: string;
     content: ExtensionContent;
-  }): Promise<DatabaseResult<{ id: string }>> {
+  }): Promise<DatabaseResult<{ id: string; extensionId: string }>> {
     const id = crypto.randomUUID();
     try {
-      const results = await this.db.$client.batch([
+      const results = await this.db.$client.batch<{ extensionId: string }>([
         this.db.$client
           .prepare(
             `
@@ -227,6 +229,7 @@ export class ExtensionRevisionsDatabase {
           SELECT ?, e.id, d.id, ?, 'pending', ?, d.ownership_epoch
           FROM extensions e JOIN developers d ON d.id = e.developer_id
           WHERE LOWER(e.id) = LOWER(?) AND changes() = 1
+          RETURNING extension_id AS extensionId
         `
           )
           .bind(
@@ -236,7 +239,12 @@ export class ExtensionRevisionsDatabase {
             input.extensionId
           )
       ]);
-      if (results[1].meta.changes) return { data: { id }, error: null };
+      const [replacement] = results[1].results;
+      if (replacement)
+        return {
+          data: { id, extensionId: replacement.extensionId },
+          error: null
+        };
       const error = await this.proposeBlockedError(input);
       return {
         data: null,
