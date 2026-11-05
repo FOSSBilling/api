@@ -279,7 +279,7 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
     tags: ["Extensions"],
     summary: "Replace a pending submission for an extension the caller owns",
     description:
-      "The active owner may replace a pending submission even when a publisher client submitted it. The replacement records the owner as submitter. The revisionId must match the pending version being edited.",
+      "The active owner can replace publisher-created submissions. The replacement records the owner as submitter.",
     security: [{ Bearer: [] }],
     middleware: [requireActiveAuth(), paceContentAccount()] as const,
     request: {
@@ -292,7 +292,7 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
       202: {
         content: { "application/json": { schema: AcceptedRevisionSchema } },
         description:
-          "Pending content replaced with a new revision id. The old pending id is removed; reviewed history and published content are unchanged."
+          "Replaced with a new pending revision ID. Published content and reviewed history are unchanged."
       },
       ...authErrorResponses(),
       403: {

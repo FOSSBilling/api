@@ -181,11 +181,9 @@ export class ExtensionRevisionsDatabase {
     return { data: { id }, error: null };
   }
 
-  // The active owner can replace any pending submission for their extension,
-  // including one submitted by a publisher client. The replacement attributes
-  // the content to that owner. Matching the expected revision id prevents
-  // stale edits; rotating it invalidates moderator decisions on old content.
-  // D1 rolls back the deletion if insertion or admission triggers fail.
+  // Owners can replace publisher submissions; attribute the new row to the owner.
+  // A fresh ID invalidates stale edits and reviews. Both writes must be atomic
+  // so admission failures keep the original pending revision.
   async replacePending(input: {
     extensionId: string;
     revisionId: string;

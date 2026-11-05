@@ -64,11 +64,11 @@ An edit cannot rename an extension or move it to another developer. A user owns 
 
 ### Editing a pending submission
 
-An active owner can replace the pending content with `PUT /extensions/{id}/revisions/{revisionId}`, using the same complete content body as `PUT /extensions/{id}`. This human-only endpoint returns `202` with a **new** pending `revision_id`. Only the specified pending revision at the current ownership epoch can be replaced; a stale id or an already reviewed submission returns `409`. Refresh before editing again after a conflict. The response's extension `id` uses the stored canonical casing, regardless of the request path's casing.
+`PUT /extensions/{id}/revisions/{revisionId}` replaces pending content using the same body as `PUT /extensions/{id}`. Only an active human owner can call it, including for publisher-created submissions. The replacement records that owner as `submitted_by` and counts toward their pending-revision and write limits.
 
-Ownership, not the original submitter, grants this permission: the owner can also replace a publisher client's pending submission. The replacement's `submitted_by` is the owner performing the update, and it uses that owner's pending-revision allowance.
+The response is `202` with a new `revision_id` and the extension's canonical `id` casing. The supplied revision must still be pending at the current ownership epoch. A stale or reviewed revision returns `409`; refresh before retrying.
 
-Replacement atomically removes the unreviewed revision and inserts its replacement. Reviewed history and published content are preserved. Rotating the id prevents a moderator's stale approval or rejection from applying to content they have not seen. The original pending submission is restored if insertion fails. Each replacement counts as a new content write for admission and rate limits; it still occupies one pending slot.
+Deletion and insertion run in one transaction: a failed write keeps the original pending revision. The new ID prevents stale edits or moderator decisions from applying to the replacement. Published content and reviewed history stay unchanged.
 
 ## Reads
 
