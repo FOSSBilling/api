@@ -33,7 +33,7 @@
     "better-auth": "^1.7.14",
     "drizzle-orm": "0.45.4",
     "hono": "4.13.16",
-    "semver": "7.8.5",
+    "semver": "7.8.6",
     "zod": "4.6.7"
   },
   "devDependencies": {
@@ -52,7 +52,7 @@
     "typescript": "6.0.3",
     "typescript-eslint": "8.72.1",
     "vitest": "5.0.5",
-    "wrangler": "4.156.1"
+    "wrangler": "4.156.2"
   },
   "overrides": {
     "@esbuild-kit/core-utils": {
