@@ -13,7 +13,13 @@ WITH published AS (
   WHERE e.published_at IS NOT NULL
 ), release_rows AS (
   SELECT p.id, r.key AS release_index, r.type AS release_type,
-    CASE WHEN r.type = 'object' THEN r.value ELSE '{}' END AS release
+    CASE WHEN r.type = 'object' THEN CASE
+      WHEN (json_type(r.value,'$.requires') IS NULL
+        OR (json_type(r.value,'$.requires') = 'object' AND json_type(r.value,'$.requires.fossbilling') IS NULL))
+        AND json_type(r.value,'$.min_fossbilling_version') = 'text'
+        AND length(trim(json_extract(r.value,'$.min_fossbilling_version'))) BETWEEN 1 AND 100
+      THEN json_set(r.value,'$.requires.fossbilling','>=' || trim(json_extract(r.value,'$.min_fossbilling_version')))
+      ELSE r.value END ELSE '{}' END AS release
   FROM published p, json_each(CASE WHEN json_valid(p.releases) THEN p.releases ELSE '[]' END) r
 )
 SELECT p.id, NULL AS release_index, problem.value AS issue
@@ -34,13 +40,13 @@ FROM published p, json_each(json_array(
     THEN 'version: identify exactly one current release matching version or v+version' END
 )) problem WHERE problem.value IS NOT NULL
 UNION ALL
-SELECT id, release_index, 'requires: set explicit FOSSBilling and PHP constraints for this release; missing values are not guessed'
+SELECT id, release_index, 'requires: supply a FOSSBilling constraint or legacy minimum and a valid optional PHP constraint'
 FROM release_rows WHERE release_type != 'object'
   OR COALESCE(json_type(release,'$.requires'),'') != 'object'
   OR COALESCE(json_type(release,'$.requires.fossbilling'),'') != 'text'
-  OR COALESCE(json_type(release,'$.requires.php'),'') != 'text'
   OR COALESCE(length(trim(json_extract(release,'$.requires.fossbilling'))),0) NOT BETWEEN 1 AND 1000
-  OR COALESCE(length(trim(json_extract(release,'$.requires.php'))),0) NOT BETWEEN 1 AND 1000
+  OR (json_type(release,'$.requires.php') IS NOT NULL AND (json_type(release,'$.requires.php') != 'text'
+    OR length(trim(json_extract(release,'$.requires.php'))) NOT BETWEEN 1 AND 1000))
   OR EXISTS (SELECT 1 FROM json_each(CASE WHEN json_type(release,'$.requires') = 'object' THEN json_extract(release,'$.requires') ELSE '{}' END)
     WHERE key NOT IN ('fossbilling','php','modules'))
   OR (json_type(release,'$.requires.modules') IS NOT NULL AND json_type(release,'$.requires.modules') != 'object')
