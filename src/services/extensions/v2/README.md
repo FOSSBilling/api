@@ -138,9 +138,9 @@ Provisioning spans both repos: create the client and its scopes/resource link in
 
 `GET /extensions/v2/extensions/{id}/badges/{type}` returns a public SVG. Types are `version` (latest release tag), `fossbilling` (that release's full `requires.fossbilling` string), and `license` (package license). Requirements are displayed unchanged, including upper bounds, exclusions, and compound ranges.
 
-For example: `/extensions/v2/extensions/branding/badges/fossbilling?color=green`. The optional `color` accepts badge-maker colors, up to 100 characters. Badges are cached for five minutes in browsers and one hour at the CDN, matching v1.
+For example: `/extensions/v2/extensions/branding/badges/fossbilling?color=green`. The optional `color` accepts badge-maker colors, up to 100 characters; unrecognized values use the library's default color. Badges are cached for five minutes in browsers and one hour at the CDN, matching v1.
 
-Missing, unpublished, and delisted extensions return 404. Invalid types or query values return 422; unusable stored badge fields return 409 for manual correction. With no releases, version and requirement badges show `unknown`; license badges still work.
+Missing, unpublished, and delisted extensions return 404. Unsupported badge types or color lengths outside 1–100 return 422; unusable stored badge fields return 409 for manual correction. With no releases, version and requirement badges show `unknown`; license badges still work.
 
 Existing v1 badge URLs and minimum-version output are unchanged. Use v2 for new embeds that need the full requirement.
 

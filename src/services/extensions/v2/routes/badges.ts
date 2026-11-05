@@ -22,7 +22,9 @@ export function registerBadgeRoutes(app: ExtensionsV2App): void {
       },
       404: errorResponse("No published, listed extension with that id"),
       409: errorResponse("Stored badge fields require manual correction"),
-      422: errorResponse("Invalid badge type or color query"),
+      422: errorResponse(
+        "Invalid badge type or color length (1–100 characters)"
+      ),
       500: errorResponse("Database error")
     }
   });

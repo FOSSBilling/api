@@ -75,6 +75,18 @@ describe("v2 public badges", () => {
     expect(await response.text()).toContain('fill="#67ac09"');
   });
 
+  it.each(["not-a-color", "rgb("])(
+    "uses badge-maker's fallback for an unrecognized color %s",
+    async (color) => {
+      const response = await badge(
+        `version?color=${encodeURIComponent(color)}`
+      );
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Content-Type")).toContain("image/svg+xml");
+      expect(await response.text()).toContain('fill="#4b0"');
+    }
+  );
+
   it.each(["missing", "unpublished", "delisted"])(
     "hides %s extensions",
     async (kind) => {
@@ -137,7 +149,12 @@ describe("v2 public badges", () => {
       .prepare("UPDATE extensions SET readme=? WHERE id='example'")
       .bind("x".repeat(300_000))
       .run();
+    const queries: string[] = [];
+    env.DB_EXTENSIONS = wrapD1WithHook(db, (sql) => {
+      queries.push(sql);
+    });
     expect((await badge("fossbilling")).status).toBe(200);
+    expect(queries.join("\n")).not.toMatch(/\breadme\b/i);
   });
 
   it("refuses oversized stored badge fields without truncation", async () => {
