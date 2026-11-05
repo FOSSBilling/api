@@ -142,7 +142,7 @@ For example: `/extensions/v2/extensions/branding/badges/fossbilling?color=green`
 
 Missing, unpublished, and delisted extensions return 404. Unsupported badge types or color lengths outside 1–100 return 422; unusable stored badge fields return 409 for manual correction. With no releases, version and requirement badges show `unknown`; license badges still work.
 
-Existing v1 badge URLs and minimum-version output are unchanged. Use v2 for new embeds that need the full requirement.
+Legacy v1 badge URLs are temporarily rewritten to these endpoints by Cloudflare until 5 February 2027. The old minimum-version URL now displays the full requirement. Use v2 URLs for new embeds; see [v1 retirement](../v1/README.md).
 
 ## Ownership verification
 

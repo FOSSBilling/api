@@ -434,80 +434,41 @@ describe("Extensions API v1", () => {
     });
   });
 
-  describe("GET /:id/badges/:type", () => {
-    it("should return SVG for version badge", async () => {
-      const ctx = createExecutionContext();
-      const res = await app.request(
-        "/extensions/v1/Example/badges/version",
-        {},
-        env,
-        ctx
-      );
-      await waitOnExecutionContext(ctx);
+  it("leaves legacy badge requests to Cloudflare rules", async () => {
+    const ctx = createExecutionContext();
+    const response = await app.request(
+      "/extensions/v1/Example/badges/version",
+      {},
+      env,
+      ctx
+    );
+    await waitOnExecutionContext(ctx);
+    expect(response.status).toBe(404);
+  });
 
-      expect(res.status).toBe(200);
-      expect(res.headers.get("Content-Type")).toContain("image/svg+xml");
-      const svg = await res.text();
-      expect(svg).toContain("<svg");
-      expect(svg).toContain("v0.0.5");
-    });
-
-    it("should return SVG for license badge", async () => {
-      const ctx = createExecutionContext();
-      const res = await app.request(
-        "/extensions/v1/Example/badges/license",
-        {},
-        env,
-        ctx
-      );
-      await waitOnExecutionContext(ctx);
-
-      expect(res.status).toBe(200);
-      const svg = await res.text();
-      expect(svg).toContain("Apache-2.0");
-    });
-
-    it("should return red SVG for unknown badge type", async () => {
-      const ctx = createExecutionContext();
-      const res = await app.request(
-        "/extensions/v1/Example/badges/unknown_type",
-        {},
-        env,
-        ctx
-      );
-      await waitOnExecutionContext(ctx);
-
-      expect(res.status).toBe(200);
-      expect(res.headers.get("Content-Type")).toContain("image/svg+xml");
-    });
-
-    it("should accept custom color param", async () => {
-      const ctx = createExecutionContext();
-      const res = await app.request(
-        "/extensions/v1/Example/badges/version?color=green",
-        {},
-        env,
-        ctx
-      );
-      await waitOnExecutionContext(ctx);
-
-      expect(res.status).toBe(200);
-      const svg = await res.text();
-      expect(svg).toContain("<svg");
-    });
-
-    it("should return 404 for unknown extension", async () => {
-      const ctx = createExecutionContext();
-      const res = await app.request(
-        "/extensions/v1/nonexistent/badges/version",
-        {},
-        env,
-        ctx
-      );
-      await waitOnExecutionContext(ctx);
-
-      expect(res.status).toBe(404);
-    });
+  it("reads the plain-text version without deriving a v1 minimum", async () => {
+    const db = getExtensionsDb(env.DB_EXTENSIONS);
+    await db
+      .update(extensions)
+      .set({
+        releases: JSON.stringify([
+          {
+            tag: "1.0.0",
+            requires: { fossbilling: ">=0.8.9 !=0.9.0" }
+          }
+        ])
+      })
+      .where(eq(extensions.id, "Example"));
+    const ctx = createExecutionContext();
+    const response = await app.request(
+      "/extensions/v1/Example/version",
+      {},
+      env,
+      ctx
+    );
+    await waitOnExecutionContext(ctx);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("1.0.0");
   });
 });
 
@@ -546,14 +507,6 @@ describe("v1 projection failures", () => {
           message: expect.stringContaining("requires manual correction")
         }
       });
-      const badge = await app.request(
-        "/extensions/v1/Example/badges/min_fossbilling_version",
-        {},
-        env,
-        ctx
-      );
-      expect(badge.status).toBe(500);
-      expect(await badge.text()).not.toContain("v0.0.0");
     }
   );
 });

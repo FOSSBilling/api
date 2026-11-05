@@ -190,33 +190,4 @@ describe("v2 public badges", () => {
       }
     });
   });
-
-  it("keeps v1 badge paths, labels, minimums, colors, and unknown-type behavior", async () => {
-    await db
-      .prepare("UPDATE extensions SET releases=?, license=? WHERE id='example'")
-      .bind(JSON.stringify([release("1.0.0", ">=0.8.9 <1.0")]), '"MIT"')
-      .run();
-    const minimum = await get(
-      "/extensions/v1/example/badges/min_fossbilling_version",
-      {}
-    );
-    expect(minimum.status).toBe(200);
-    expect(await minimum.text()).toContain(
-      "Minimum FOSSBilling version: v0.8.9"
-    );
-    const version = await get(
-      "/extensions/v1/example/badges/version?color=green",
-      {}
-    );
-    expect(version.status).toBe(200);
-    const svg = await version.text();
-    expect(svg).toContain("Latest version: v1.0.0");
-    expect(svg).toContain('fill="#67ac09"');
-    expect(
-      await (await get("/extensions/v1/example/badges/license", {})).text()
-    ).toContain("License: MIT");
-    expect(
-      (await get("/extensions/v1/example/badges/unknown", {})).status
-    ).toBe(200);
-  });
 });

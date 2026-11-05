@@ -171,19 +171,13 @@ export class ExtensionsDatabase {
     }
   }
 
-  // Badge/version endpoints read only these two columns, and badges are the
-  // highest-volume path in this service (README embeds + crawlers) - selecting
-  // the full projection would ship every row's readme blob to render a
-  // few-hundred-byte SVG.
-  async getExtensionBadgeData(
+  // The plain-text version endpoint needs only the release tags.
+  async getExtensionVersion(
     id: string
-  ): Promise<
-    DatabaseResult<{ latestRelease: Release | null; license: { name: string } }>
-  > {
-    let rows: { releases: string; license: string }[];
+  ): Promise<DatabaseResult<{ version: string | null }>> {
     try {
-      rows = (await this.db
-        .select({ releases: extensions.releases, license: extensions.license })
+      const [row] = await this.db
+        .select({ releases: extensions.releases })
         .from(extensions)
         .where(
           and(
@@ -191,25 +185,12 @@ export class ExtensionsDatabase {
             isNotNull(extensions.publishedAt),
             isNull(extensions.delistedAt)
           )
-        )) as { releases: string; license: string }[];
-    } catch (error) {
-      return this.databaseError(error);
-    }
-
-    const row = rows[0];
-    if (!row) {
-      return this.notFound(id);
-    }
-
-    try {
-      const releases = sortReleasesDescending(toV1Releases(row.releases));
-      return {
-        data: {
-          latestRelease: releases[0] ?? null,
-          license: toV1License(row.license)
-        },
-        error: null
-      };
+        );
+      if (!row) return this.notFound(id);
+      const releases = sortReleasesDescending(
+        JSON.parse(row.releases!) as ManifestRelease[]
+      );
+      return { data: { version: releases[0]?.tag ?? null }, error: null };
     } catch (error) {
       return this.databaseError(error);
     }
