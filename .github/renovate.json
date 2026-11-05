@@ -18,5 +18,12 @@
   "automergeSchedule": ["at any time"],
   "automergeStrategy": "squash",
   "postUpdateOptions": ["npmDedupe"],
-  "skipInstalls": false
+  "skipInstalls": false,
+  "packageRules": [
+    {
+      "description": "Keep Vitest and coverage on 5.0.x until the Workers plugin releases the fix for https://github.com/cloudflare/workers-sdk/issues/16668",
+      "matchPackageNames": ["vitest", "@vitest/coverage-istanbul"],
+      "allowedVersions": "<5.1.0"
+    }
+  ]
 }
