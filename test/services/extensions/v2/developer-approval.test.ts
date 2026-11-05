@@ -25,7 +25,7 @@ vi.mock("@octokit/request", async () =>
 
 setupExtensionsV2Tests();
 
-const profilePath = "/extensions/v2/developers/dev-developer";
+const profilePath = "/v2/developers/dev-developer";
 
 async function review(headers: Record<string, string>) {
   const response = await get(profilePath, headers);
@@ -43,20 +43,20 @@ async function setupReview() {
   await insertUser(db, { id: "moderator", is_moderator: 1 });
   const moderator = await authHeaders("moderator");
   expect(
-    (await put("/extensions/v2/developers/me", owner, sampleDeveloper())).status
+    (await put("/v2/developers/me", owner, sampleDeveloper())).status
   ).toBe(200);
   return { owner, moderator, reviewed: await review(moderator) };
 }
 
 describe("Developer approval binds to the reviewed profile instance and content", () => {
   it.each([
-    ["profile deletion, same owner", "/extensions/v2/developers/me", "owner"],
+    ["profile deletion, same owner", "/v2/developers/me", "owner"],
     [
       "profile deletion, different owner",
-      "/extensions/v2/developers/me",
+      "/v2/developers/me",
       "replacement-owner"
     ],
-    ["account deletion", "/extensions/v2/users/me", "replacement-owner"]
+    ["account deletion", "/v2/users/me", "replacement-owner"]
   ])(
     "rejects stale approval after %s",
     async (_label, deletionPath, replacementOwner) => {
@@ -65,7 +65,7 @@ describe("Developer approval binds to the reviewed profile instance and content"
       expect(
         (
           await put(
-            "/extensions/v2/developers/me",
+            "/v2/developers/me",
             await authHeaders(replacementOwner),
             sampleDeveloper({ name: "Unreviewed replacement" })
           )
@@ -113,13 +113,11 @@ describe("Developer approval binds to the reviewed profile instance and content"
       ) {
         recreated = true;
         env.DB_EXTENSIONS = db;
-        expect((await del("/extensions/v2/developers/me", owner)).status).toBe(
-          200
-        );
+        expect((await del("/v2/developers/me", owner)).status).toBe(200);
         expect(
           (
             await put(
-              "/extensions/v2/developers/me",
+              "/v2/developers/me",
               owner,
               sampleDeveloper({ name: "Raced replacement" })
             )
@@ -145,13 +143,11 @@ describe("Developer approval binds to the reviewed profile instance and content"
       ) {
         recreated = true;
         env.DB_EXTENSIONS = db;
-        expect((await del("/extensions/v2/developers/me", owner)).status).toBe(
-          200
-        );
+        expect((await del("/v2/developers/me", owner)).status).toBe(200);
         expect(
           (
             await put(
-              "/extensions/v2/developers/me",
+              "/v2/developers/me",
               owner,
               sampleDeveloper({ name: "Replacement" })
             )
@@ -160,7 +156,7 @@ describe("Developer approval binds to the reviewed profile instance and content"
       }
     });
     const edit = await put(
-      "/extensions/v2/developers/me",
+      "/v2/developers/me",
       owner,
       sampleDeveloper({ name: "Paused old edit" })
     );
@@ -204,13 +200,8 @@ describe("Developer approval binds to the reviewed profile instance and content"
     const { owner, moderator, reviewed } = await setupReview();
     for (const name of ["Second version", "Third version"]) {
       expect(
-        (
-          await put(
-            "/extensions/v2/developers/me",
-            owner,
-            sampleDeveloper({ name })
-          )
-        ).status
+        (await put("/v2/developers/me", owner, sampleDeveloper({ name })))
+          .status
       ).toBe(200);
       // Model second-granular timestamps deterministically without timing a test.
       await db
@@ -262,17 +253,17 @@ describe("Developer approval binds to the reviewed profile instance and content"
         result: { approved: boolean };
       };
       const detail = (await (
-        await get("/extensions/v2/extensions/live-ext", {})
+        await get("/v2/extensions/live-ext", {})
       ).json()) as { result: { developer: { approved: boolean } } };
-      const list = (await (
-        await get("/extensions/v2/extensions", {})
-      ).json()) as { result: Array<{ developer: { approved: boolean } }> };
+      const list = (await (await get("/v2/extensions", {})).json()) as {
+        result: Array<{ developer: { approved: boolean } }>;
+      };
       expect(profile.result.approved).toBe(expected);
       expect(detail.result.developer.approved).toBe(expected);
       expect(list.result[0].developer.approved).toBe(expected);
       for (const query of ["scope", "status"]) {
         const queue = (await (
-          await get(`/extensions/v2/developers?${query}=unapproved`, moderator)
+          await get(`/v2/developers?${query}=unapproved`, moderator)
         ).json()) as { result: Array<{ id: string }> };
         expect(queue.result.some((item) => item.id === "dev-developer")).toBe(
           !expected

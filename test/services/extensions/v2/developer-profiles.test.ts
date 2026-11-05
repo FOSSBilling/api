@@ -46,9 +46,9 @@ describe("Extensions API v2", () => {
     it("coalesces identical and concurrent replays without changing approval or history", async () => {
       const headers = await authHeaders("replay-owner");
       const profile = sampleDeveloper({ id: "replay-profile" });
-      expect(
-        (await put("/extensions/v2/developers/me", headers, profile)).status
-      ).toBe(200);
+      expect((await put("/v2/developers/me", headers, profile)).status).toBe(
+        200
+      );
       await db
         .prepare(
           "UPDATE developers SET approved_at = CURRENT_TIMESTAMP, approved_revision = content_revision WHERE id = ?"
@@ -58,7 +58,7 @@ describe("Extensions API v2", () => {
       const before = await getDeveloper(db, profile.id);
       const responses = await Promise.all(
         Array.from({ length: 6 }, () =>
-          put("/extensions/v2/developers/me", headers, profile)
+          put("/v2/developers/me", headers, profile)
         )
       );
       expect(responses.map((r) => r.status)).toEqual(Array(6).fill(200));
@@ -69,9 +69,9 @@ describe("Extensions API v2", () => {
     it("budgets real edits atomically and retains the account budget after deletion", async () => {
       const headers = await authHeaders("budget-owner");
       const profile = sampleDeveloper({ id: "budget-profile" });
-      expect(
-        (await put("/extensions/v2/developers/me", headers, profile)).status
-      ).toBe(200);
+      expect((await put("/v2/developers/me", headers, profile)).status).toBe(
+        200
+      );
       for (let i = 0; i < 18; i++) {
         await db
           .prepare(
@@ -82,7 +82,7 @@ describe("Extensions API v2", () => {
       }
       const raced = await Promise.all(
         ["Last A", "Last B"].map((name) =>
-          put("/extensions/v2/developers/me", headers, { ...profile, name })
+          put("/v2/developers/me", headers, { ...profile, name })
         )
       );
       expect(raced.filter((r) => r.status === 200)).toHaveLength(1);
@@ -96,13 +96,13 @@ describe("Extensions API v2", () => {
       const current = await getDeveloper(db, profile.id);
       expect(
         (
-          await put("/extensions/v2/developers/me", headers, {
+          await put("/v2/developers/me", headers, {
             ...profile,
             name: current!.name
           })
         ).status
       ).toBe(200);
-      const denied = await put("/extensions/v2/developers/me", headers, {
+      const denied = await put("/v2/developers/me", headers, {
         ...profile,
         name: "Over quota"
       });
@@ -111,17 +111,15 @@ describe("Extensions API v2", () => {
       expect(await denied.json()).toMatchObject({
         error: { code: "PROFILE_MUTATION_RATE_LIMITED" }
       });
-      expect((await del("/extensions/v2/developers/me", headers)).status).toBe(
-        200
+      expect((await del("/v2/developers/me", headers)).status).toBe(200);
+      expect((await put("/v2/developers/me", headers, profile)).status).toBe(
+        429
       );
-      expect(
-        (await put("/extensions/v2/developers/me", headers, profile)).status
-      ).toBe(429);
       expect(await listDeveloperHistory(db)).toHaveLength(20);
       expect(
         (
           await put(
-            "/extensions/v2/developers/me",
+            "/v2/developers/me",
             await authHeaders("independent-owner"),
             sampleDeveloper({ id: "independent-profile" })
           )
@@ -140,9 +138,9 @@ describe("Extensions API v2", () => {
           .bind(`old-${i}`, profile.id, "expired-budget-owner")
           .run();
       }
-      expect(
-        (await put("/extensions/v2/developers/me", headers, profile)).status
-      ).toBe(200);
+      expect((await put("/v2/developers/me", headers, profile)).status).toBe(
+        200
+      );
       for (const edit of [
         { name: "New name" },
         { type: "organization" as const },
@@ -151,9 +149,9 @@ describe("Extensions API v2", () => {
         { contact_email: "new@example.com" }
       ]) {
         profile = { ...profile, ...edit };
-        expect(
-          (await put("/extensions/v2/developers/me", headers, profile)).status
-        ).toBe(200);
+        expect((await put("/v2/developers/me", headers, profile)).status).toBe(
+          200
+        );
       }
       expect(await listDeveloperHistory(db)).toHaveLength(26);
       expect((await getDeveloper(db, profile.id))?.content_revision).toBe(6);
@@ -166,16 +164,16 @@ describe("Extensions API v2", () => {
         type: "user",
         name: "Null profile"
       };
-      expect(
-        (await put("/extensions/v2/developers/me", headers, profile)).status
-      ).toBe(200);
-      expect(
-        (await put("/extensions/v2/developers/me", headers, profile)).status
-      ).toBe(200);
+      expect((await put("/v2/developers/me", headers, profile)).status).toBe(
+        200
+      );
+      expect((await put("/v2/developers/me", headers, profile)).status).toBe(
+        200
+      );
       expect(await listDeveloperHistory(db)).toHaveLength(1);
       expect(
         (
-          await put("/extensions/v2/developers/me", headers, {
+          await put("/v2/developers/me", headers, {
             ...profile,
             URL: "https://example.com",
             avatar_url: "https://example.com/avatar",
@@ -183,12 +181,12 @@ describe("Extensions API v2", () => {
           })
         ).status
       ).toBe(200);
-      expect(
-        (await put("/extensions/v2/developers/me", headers, profile)).status
-      ).toBe(200);
-      expect(
-        (await put("/extensions/v2/developers/me", headers, profile)).status
-      ).toBe(200);
+      expect((await put("/v2/developers/me", headers, profile)).status).toBe(
+        200
+      );
+      expect((await put("/v2/developers/me", headers, profile)).status).toBe(
+        200
+      );
       expect(await listDeveloperHistory(db)).toHaveLength(3);
       const current = await getDeveloper(db, profile.id);
       expect(current?.url).toBeNull();
@@ -201,15 +199,15 @@ describe("Extensions API v2", () => {
       const firstHeaders = await authHeaders("rate-limited-account");
 
       for (const id of ["attempt-one", "attempt-two", "attempt-three"]) {
-        const allowed = await put(
-          "/extensions/v2/developers/me",
-          firstHeaders,
-          { id, type: "user", name: id }
-        );
+        const allowed = await put("/v2/developers/me", firstHeaders, {
+          id,
+          type: "user",
+          name: id
+        });
         expect(allowed.status).toBe(403);
       }
 
-      const denied = await put("/extensions/v2/developers/me", firstHeaders, {
+      const denied = await put("/v2/developers/me", firstHeaders, {
         id: "attempt-four",
         type: "user",
         name: "Attempt four"
@@ -226,7 +224,7 @@ describe("Extensions API v2", () => {
       expect(await listDevelopers(db)).toHaveLength(0);
 
       const otherAccount = await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("independent-rate-limit-account"),
         { id: "other-attempt", type: "user", name: "Other attempt" }
       );
@@ -238,7 +236,7 @@ describe("Extensions API v2", () => {
     it("does not charge profile updates against creation allowance", async () => {
       const headers = await authHeaders("update-rate-limit-account");
       const created = await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         headers,
         sampleDeveloper({ id: "update-limit-profile" })
       );
@@ -246,7 +244,7 @@ describe("Extensions API v2", () => {
 
       for (const name of ["First update", "Second update", "Third update"]) {
         const updated = await put(
-          "/extensions/v2/developers/me",
+          "/v2/developers/me",
           headers,
           sampleDeveloper({ id: "update-limit-profile", name })
         );
@@ -254,19 +252,19 @@ describe("Extensions API v2", () => {
       }
       expect(ghRequest).toHaveBeenCalledTimes(1);
 
-      const removed = await del("/extensions/v2/developers/me", headers);
+      const removed = await del("/v2/developers/me", headers);
       expect(removed.status).toBe(200);
       mockGithubEntity("Organization");
 
       for (const id of ["remaining-one", "remaining-two"]) {
-        const allowed = await put("/extensions/v2/developers/me", headers, {
+        const allowed = await put("/v2/developers/me", headers, {
           id,
           type: "user",
           name: id
         });
         expect(allowed.status).toBe(403);
       }
-      const denied = await put("/extensions/v2/developers/me", headers, {
+      const denied = await put("/v2/developers/me", headers, {
         id: "no-allowance",
         type: "user",
         name: "No allowance"
@@ -278,7 +276,7 @@ describe("Extensions API v2", () => {
 
     it("creates a new developer profile, unapproved", async () => {
       const res = await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
@@ -294,13 +292,13 @@ describe("Extensions API v2", () => {
 
     it("updates an existing profile, still unapproved", async () => {
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
 
       const res = await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper({ name: "Renamed Developer" })
       );
@@ -320,12 +318,12 @@ describe("Extensions API v2", () => {
       const headers = await authHeaders("user-1");
       const [resA, resB] = await Promise.all([
         put(
-          "/extensions/v2/developers/me",
+          "/v2/developers/me",
           headers,
           sampleDeveloper({ id: "developer-a" })
         ),
         put(
-          "/extensions/v2/developers/me",
+          "/v2/developers/me",
           headers,
           sampleDeveloper({ id: "developer-b" })
         )
@@ -342,13 +340,13 @@ describe("Extensions API v2", () => {
 
     it("rejects an id that already belongs to someone else", async () => {
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
 
       const res = await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-2"),
         sampleDeveloper()
       );
@@ -374,7 +372,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         headers,
         sampleDeveloper({ id: "raced-developer" })
       );
@@ -392,13 +390,13 @@ describe("Extensions API v2", () => {
 
     it("rejects changing the id on an existing profile", async () => {
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
 
       const res = await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper({ id: "different-id" })
       );
@@ -414,11 +412,11 @@ describe("Extensions API v2", () => {
         github_orgs: JSON.stringify(["acme-org"])
       });
 
-      const res = await put(
-        "/extensions/v2/developers/me",
-        await authHeaders("user-1"),
-        { id: "acme-org", type: "organization", name: "Acme Org" }
-      );
+      const res = await put("/v2/developers/me", await authHeaders("user-1"), {
+        id: "acme-org",
+        type: "organization",
+        name: "Acme Org"
+      });
 
       expect(res.status).toBe(200);
       const created = (await res.json()) as {
@@ -437,7 +435,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
@@ -465,7 +463,7 @@ describe("Extensions API v2", () => {
         });
 
         const res = await put(
-          "/extensions/v2/developers/me",
+          "/v2/developers/me",
           await authHeaders("user-1"),
           { id: "acme-org", type: "organization", name: "Acme Org" }
         );
@@ -487,11 +485,11 @@ describe("Extensions API v2", () => {
         github_orgs_expires_at: "2099-01-01T00:00:00.000Z"
       });
 
-      const res = await put(
-        "/extensions/v2/developers/me",
-        await authHeaders("user-1"),
-        { id: "acme-org", type: "organization", name: "Acme Org" }
-      );
+      const res = await put("/v2/developers/me", await authHeaders("user-1"), {
+        id: "acme-org",
+        type: "organization",
+        name: "Acme Org"
+      });
 
       expect(res.status).toBe(200);
       const body = (await res.json()) as {
@@ -509,11 +507,11 @@ describe("Extensions API v2", () => {
         github_orgs_expires_at: "2099-01-01T00:00:00.000Z"
       });
 
-      const res = await put(
-        "/extensions/v2/developers/me",
-        await authHeaders("user-1"),
-        { id: "acme-org", type: "organization", name: "Acme Org" }
-      );
+      const res = await put("/v2/developers/me", await authHeaders("user-1"), {
+        id: "acme-org",
+        type: "organization",
+        name: "Acme Org"
+      });
 
       expect(res.status).toBe(403);
       const body = (await res.json()) as { error: { code: string } };
@@ -528,16 +526,12 @@ describe("Extensions API v2", () => {
         github_orgs: JSON.stringify(["acme-org"])
       });
 
-      const res = await put(
-        "/extensions/v2/developers/me",
-        await authHeaders("user-1"),
-        {
-          id: "acme-org",
-          type: "organization",
-          name: "Acme Org",
-          URL: "https://acme.example"
-        }
-      );
+      const res = await put("/v2/developers/me", await authHeaders("user-1"), {
+        id: "acme-org",
+        type: "organization",
+        name: "Acme Org",
+        URL: "https://acme.example"
+      });
 
       expect(res.status).toBe(200);
       const created = (await res.json()) as {
@@ -560,16 +554,12 @@ describe("Extensions API v2", () => {
         github_orgs: JSON.stringify(["acme-org"])
       });
 
-      const res = await put(
-        "/extensions/v2/developers/me",
-        await authHeaders("user-1"),
-        {
-          id: "acme-org",
-          type: "organization",
-          name: "Acme Org",
-          URL: "https://acme.example"
-        }
-      );
+      const res = await put("/v2/developers/me", await authHeaders("user-1"), {
+        id: "acme-org",
+        type: "organization",
+        name: "Acme Org",
+        URL: "https://acme.example"
+      });
 
       expect(res.status).toBe(200);
       const created = (await res.json()) as {
@@ -588,16 +578,12 @@ describe("Extensions API v2", () => {
         github_orgs: JSON.stringify(["acme-org"])
       });
 
-      const res = await put(
-        "/extensions/v2/developers/me",
-        await authHeaders("user-1"),
-        {
-          id: "acme-org",
-          type: "organization",
-          name: "Acme Org",
-          URL: "http://acme.example/"
-        }
-      );
+      const res = await put("/v2/developers/me", await authHeaders("user-1"), {
+        id: "acme-org",
+        type: "organization",
+        name: "Acme Org",
+        URL: "http://acme.example/"
+      });
 
       const created = (await res.json()) as {
         result: { github_url_verified?: boolean };
@@ -613,16 +599,12 @@ describe("Extensions API v2", () => {
         github_orgs: JSON.stringify(["acme-org"])
       });
 
-      const res = await put(
-        "/extensions/v2/developers/me",
-        await authHeaders("user-1"),
-        {
-          id: "acme-org",
-          type: "organization",
-          name: "Acme Org",
-          URL: "https://acme.example"
-        }
-      );
+      const res = await put("/v2/developers/me", await authHeaders("user-1"), {
+        id: "acme-org",
+        type: "organization",
+        name: "Acme Org",
+        URL: "https://acme.example"
+      });
 
       const created = (await res.json()) as {
         result: { github_url_verified?: boolean };
@@ -638,16 +620,12 @@ describe("Extensions API v2", () => {
         github_orgs: JSON.stringify(["acme-org"])
       });
 
-      const res = await put(
-        "/extensions/v2/developers/me",
-        await authHeaders("user-1"),
-        {
-          id: "acme-org",
-          type: "organization",
-          name: "Acme Org",
-          URL: "https://acme.example/docs"
-        }
-      );
+      const res = await put("/v2/developers/me", await authHeaders("user-1"), {
+        id: "acme-org",
+        type: "organization",
+        name: "Acme Org",
+        URL: "https://acme.example/docs"
+      });
 
       const created = (await res.json()) as {
         result: { github_url_verified?: boolean };
@@ -663,11 +641,11 @@ describe("Extensions API v2", () => {
         github_orgs: JSON.stringify(["some-other-org"])
       });
 
-      const res = await put(
-        "/extensions/v2/developers/me",
-        await authHeaders("user-1"),
-        { id: "acme-org", type: "organization", name: "Acme Org" }
-      );
+      const res = await put("/v2/developers/me", await authHeaders("user-1"), {
+        id: "acme-org",
+        type: "organization",
+        name: "Acme Org"
+      });
 
       expect(res.status).toBe(403);
       const body = (await res.json()) as { error: { code: string } };
@@ -683,11 +661,11 @@ describe("Extensions API v2", () => {
         github_orgs: JSON.stringify(["acme-org"])
       });
 
-      const res = await put(
-        "/extensions/v2/developers/me",
-        await authHeaders("user-1"),
-        { id: "acme-org", type: "user", name: "Acme Org" }
-      );
+      const res = await put("/v2/developers/me", await authHeaders("user-1"), {
+        id: "acme-org",
+        type: "user",
+        name: "Acme Org"
+      });
 
       expect(res.status).toBe(403);
       const body = (await res.json()) as { error: { code: string } };
@@ -713,7 +691,7 @@ describe("Extensions API v2", () => {
         );
 
         const res = await put(
-          "/extensions/v2/developers/me",
+          "/v2/developers/me",
           await authHeaders("user-1"),
           { id: "unavailable-dev", type: "user", name: "Unavailable" }
         );
@@ -737,7 +715,7 @@ describe("Extensions API v2", () => {
         );
 
         const res = await put(
-          "/extensions/v2/developers/me",
+          "/v2/developers/me",
           await authHeaders("user-1"),
           { id: "unavailable-dev", type: "user", name: "Unavailable" }
         );
@@ -759,7 +737,7 @@ describe("Extensions API v2", () => {
         );
 
         const res = await put(
-          "/extensions/v2/developers/me",
+          "/v2/developers/me",
           await authHeaders("user-1"),
           { id: "invalid-response", type: "user", name: "Invalid" }
         );
@@ -776,11 +754,11 @@ describe("Extensions API v2", () => {
         async () => ({ data: { type: "Bot", blog: null } })
       );
 
-      const res = await put(
-        "/extensions/v2/developers/me",
-        await authHeaders("user-1"),
-        { id: "unsupported-entity", type: "user", name: "Unsupported" }
-      );
+      const res = await put("/v2/developers/me", await authHeaders("user-1"), {
+        id: "unsupported-entity",
+        type: "user",
+        name: "Unsupported"
+      });
 
       expect(res.status).toBe(422);
       const body = (await res.json()) as { error: { code: string } };
@@ -792,11 +770,11 @@ describe("Extensions API v2", () => {
       mockGithubEntity("Organization");
       // No row in users for user-1 — never linked GitHub.
 
-      const res = await put(
-        "/extensions/v2/developers/me",
-        await authHeaders("user-1"),
-        { id: "acme-org", type: "organization", name: "Acme Org" }
-      );
+      const res = await put("/v2/developers/me", await authHeaders("user-1"), {
+        id: "acme-org",
+        type: "organization",
+        name: "Acme Org"
+      });
 
       expect(res.status).toBe(200);
       const created = (await res.json()) as {
@@ -813,11 +791,11 @@ describe("Extensions API v2", () => {
         }
       });
 
-      const res = await put(
-        "/extensions/v2/developers/me",
-        await authHeaders("user-1"),
-        { id: "acme-org", type: "organization", name: "Acme Org" }
-      );
+      const res = await put("/v2/developers/me", await authHeaders("user-1"), {
+        id: "acme-org",
+        type: "organization",
+        name: "Acme Org"
+      });
 
       expect(res.status).toBe(500);
       env.DB_EXTENSIONS = db;
@@ -828,7 +806,7 @@ describe("Extensions API v2", () => {
       "rejects the reserved id %s",
       async (id) => {
         const res = await put(
-          "/extensions/v2/developers/me",
+          "/v2/developers/me",
           await authHeaders("user-1"),
           sampleDeveloper({ id })
         );
@@ -839,13 +817,13 @@ describe("Extensions API v2", () => {
 
     it("clears approval when an approved profile is edited", async () => {
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       const approved = await post(
-        "/extensions/v2/developers/dev-developer/approve",
+        "/v2/developers/dev-developer/approve",
         await authHeaders("mod-1"),
         await developerApproval("dev-developer", 1)
       );
@@ -856,7 +834,7 @@ describe("Extensions API v2", () => {
       expect(approvedBody.result.approved).toBe(true);
 
       const res = await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper({ name: "Edited Again" })
       );
@@ -874,7 +852,7 @@ describe("Extensions API v2", () => {
         github_orgs: JSON.stringify([])
       });
       const created = await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
@@ -885,14 +863,14 @@ describe("Extensions API v2", () => {
 
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       const approved = await post(
-        "/extensions/v2/developers/dev-developer/approve",
+        "/v2/developers/dev-developer/approve",
         await authHeaders("mod-1"),
         await developerApproval("dev-developer", 1)
       );
       expect(approved.status).toBe(200);
 
       const res = await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper({ name: "Edited Again" })
       );
@@ -913,7 +891,7 @@ describe("Extensions API v2", () => {
         github_orgs: JSON.stringify([])
       });
       const created = await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
@@ -924,16 +902,15 @@ describe("Extensions API v2", () => {
 
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await post(
-        "/extensions/v2/developers/dev-developer/approve",
+        "/v2/developers/dev-developer/approve",
         await authHeaders("mod-1"),
         await developerApproval("dev-developer", 1)
       );
 
-      const res = await put(
-        "/extensions/v2/developers/me",
-        await authHeaders("user-1"),
-        { ...sampleDeveloper(), type: "organization" }
-      );
+      const res = await put("/v2/developers/me", await authHeaders("user-1"), {
+        ...sampleDeveloper(),
+        type: "organization"
+      });
 
       expect(res.status).toBe(200);
       const data = (await res.json()) as {
@@ -956,7 +933,7 @@ describe("Extensions API v2", () => {
         github_orgs: JSON.stringify([])
       });
       const created = await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         { ...sampleDeveloper(), URL: "https://acme.example" }
       );
@@ -969,11 +946,10 @@ describe("Extensions API v2", () => {
       expect(createdBody.result.github_org_verified).toBe(true);
       expect(createdBody.result.github_url_verified).toBe(true);
 
-      const res = await put(
-        "/extensions/v2/developers/me",
-        await authHeaders("user-1"),
-        { ...sampleDeveloper(), URL: "https://different.example" }
-      );
+      const res = await put("/v2/developers/me", await authHeaders("user-1"), {
+        ...sampleDeveloper(),
+        URL: "https://different.example"
+      });
 
       expect(res.status).toBe(200);
       const data = (await res.json()) as {
@@ -988,7 +964,7 @@ describe("Extensions API v2", () => {
 
     it("does not update a profile after ownership changes mid-request", async () => {
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
@@ -1009,7 +985,7 @@ describe("Extensions API v2", () => {
       });
 
       const raced = await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper({ name: "Former owner write" })
       );
@@ -1031,7 +1007,7 @@ describe("Extensions API v2", () => {
 
     it("reports an inactive account when deactivated during an existing profile update", async () => {
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
@@ -1053,7 +1029,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper({ name: "Inactive owner write" })
       );
@@ -1083,7 +1059,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         headers,
         sampleDeveloper({ id: "deleted-during-write-profile" })
       );
@@ -1101,7 +1077,7 @@ describe("Extensions API v2", () => {
 
     it("round-trips avatar_url and contact_email", async () => {
       const headers = await authHeaders("user-1");
-      const res = await put("/extensions/v2/developers/me", headers, {
+      const res = await put("/v2/developers/me", headers, {
         ...sampleDeveloper(),
         avatar_url: "https://example.com/avatar.png",
         contact_email: "dev@example.com"
@@ -1124,13 +1100,13 @@ describe("Extensions API v2", () => {
 
     it("updates avatar_url and contact_email on an existing profile", async () => {
       const headers = await authHeaders("user-1");
-      await put("/extensions/v2/developers/me", headers, {
+      await put("/v2/developers/me", headers, {
         ...sampleDeveloper(),
         avatar_url: "https://example.com/old.png",
         contact_email: "old@example.com"
       });
 
-      const res = await put("/extensions/v2/developers/me", headers, {
+      const res = await put("/v2/developers/me", headers, {
         ...sampleDeveloper(),
         avatar_url: "https://example.com/new.png",
         contact_email: "new@example.com"
@@ -1153,7 +1129,7 @@ describe("Extensions API v2", () => {
 
     it("accepts a payload without avatar_url or contact_email", async () => {
       const res = await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
@@ -1174,11 +1150,10 @@ describe("Extensions API v2", () => {
     // the caller. Unknown keys report at the root path - the body has no
     // nesting.
     it("rejects an unknown field in the profile body", async () => {
-      const res = await put(
-        "/extensions/v2/developers/me",
-        await authHeaders("user-1"),
-        { ...sampleDeveloper(), approved: true }
-      );
+      const res = await put("/v2/developers/me", await authHeaders("user-1"), {
+        ...sampleDeveloper(),
+        approved: true
+      });
 
       expect(res.status).toBe(422);
       const body = (await res.json()) as {
@@ -1196,7 +1171,7 @@ describe("Extensions API v2", () => {
   describe("DELETE /developers/me", () => {
     it("deletes a profile with no extensions", async () => {
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
@@ -1207,17 +1182,14 @@ describe("Extensions API v2", () => {
         .bind("modules-publisher", "dev-developer")
         .run();
 
-      const res = await del(
-        "/extensions/v2/developers/me",
-        await authHeaders("user-1")
-      );
+      const res = await del("/v2/developers/me", await authHeaders("user-1"));
       expect(res.status).toBe(200);
       const body = (await res.json()) as {
         result: { id: string; deleted: boolean };
       };
       expect(body.result).toEqual({ id: "dev-developer", deleted: true });
 
-      const getRes = await get("/extensions/v2/developers/dev-developer", {});
+      const getRes = await get("/v2/developers/dev-developer", {});
       expect(getRes.status).toBe(404);
       const mapping = await db
         .prepare("SELECT client_id FROM m2m_publisher_clients")
@@ -1232,7 +1204,7 @@ describe("Extensions API v2", () => {
     // that the profile survives, and that the batch is all-or-nothing.
     it("does not delete a profile whose ownership moved after it was resolved", async () => {
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("owner-before"),
         sampleDeveloper({ id: "raced-delete" })
       );
@@ -1252,7 +1224,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await del(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("owner-before")
       );
       env.DB_EXTENSIONS = db;
@@ -1270,7 +1242,7 @@ describe("Extensions API v2", () => {
 
     it("leaves pending transfers intact when the profile delete is blocked", async () => {
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("owner-before"),
         sampleDeveloper({ id: "raced-delete" })
       );
@@ -1295,7 +1267,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await del(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("owner-before")
       );
       env.DB_EXTENSIONS = db;
@@ -1308,7 +1280,7 @@ describe("Extensions API v2", () => {
 
     it("404s for a caller with no developer profile", async () => {
       const res = await del(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("no-profile-user")
       );
       expect(res.status).toBe(404);
@@ -1319,10 +1291,7 @@ describe("Extensions API v2", () => {
     it("409s when the profile still has published extensions", async () => {
       await seedOwnedExtension();
 
-      const res = await del(
-        "/extensions/v2/developers/me",
-        await authHeaders("owner-1")
-      );
+      const res = await del("/v2/developers/me", await authHeaders("owner-1"));
       expect(res.status).toBe(409);
       const body = (await res.json()) as {
         error: { code: string; message: string };
@@ -1333,24 +1302,21 @@ describe("Extensions API v2", () => {
 
     it("409s when an unpublished extension is still owned", async () => {
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
       expect(
         (
           await post(
-            "/extensions/v2/extensions",
+            "/v2/extensions",
             await authHeaders("user-1"),
             sampleCreate()
           )
         ).status
       ).toBe(201);
 
-      const res = await del(
-        "/extensions/v2/developers/me",
-        await authHeaders("user-1")
-      );
+      const res = await del("/v2/developers/me", await authHeaders("user-1"));
       expect(res.status).toBe(409);
       const body = (await res.json()) as { error: { code: string } };
       expect(body.error.code).toBe("CONFLICT");
@@ -1358,12 +1324,12 @@ describe("Extensions API v2", () => {
 
     it("removes transfer tokens and claims but keeps history", async () => {
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
       await post(
-        "/extensions/v2/developers/dev-developer/transfer",
+        "/v2/developers/dev-developer/transfer",
         await authHeaders("user-1")
       );
       await insertDeveloperClaim(db, {
@@ -1376,10 +1342,7 @@ describe("Extensions API v2", () => {
         reviewed_at: new Date().toISOString()
       });
 
-      const res = await del(
-        "/extensions/v2/developers/me",
-        await authHeaders("user-1")
-      );
+      const res = await del("/v2/developers/me", await authHeaders("user-1"));
       expect(res.status).toBe(200);
 
       expect(
@@ -1401,7 +1364,7 @@ describe("Extensions API v2", () => {
 
     it("refuses to delete if ownership moves away between the lookup and the delete", async () => {
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
@@ -1420,17 +1383,11 @@ describe("Extensions API v2", () => {
         }
       });
 
-      const res = await del(
-        "/extensions/v2/developers/me",
-        await authHeaders("user-1")
-      );
+      const res = await del("/v2/developers/me", await authHeaders("user-1"));
       env.DB_EXTENSIONS = db;
       expect(res.status).toBe(404);
 
-      const stillThere = await get(
-        "/extensions/v2/developers/dev-developer",
-        {}
-      );
+      const stillThere = await get("/v2/developers/dev-developer", {});
       expect(stillThere.status).toBe(200);
       const body = (await stillThere.json()) as { result: { id: string } };
       expect(body.result.id).toBe("dev-developer");
@@ -1438,7 +1395,7 @@ describe("Extensions API v2", () => {
 
     it("reports an inactive owner when the account is deactivated during deletion", async () => {
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
@@ -1454,10 +1411,7 @@ describe("Extensions API v2", () => {
         }
       });
 
-      const res = await del(
-        "/extensions/v2/developers/me",
-        await authHeaders("user-1")
-      );
+      const res = await del("/v2/developers/me", await authHeaders("user-1"));
       env.DB_EXTENSIONS = db;
 
       expect(deactivated).toBe(true);
@@ -1497,7 +1451,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await post(
-        "/extensions/v2/developers/me/reverify?check_url=true",
+        "/v2/developers/me/reverify?check_url=true",
         await authHeaders("user-1")
       );
       env.DB_EXTENSIONS = db;
@@ -1528,7 +1482,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await post(
-        "/extensions/v2/developers/me/reverify",
+        "/v2/developers/me/reverify",
         await authHeaders("user-1")
       );
       expect(res.status).toBe(200);
@@ -1570,7 +1524,7 @@ describe("Extensions API v2", () => {
         });
 
         const res = await post(
-          "/extensions/v2/developers/me/reverify",
+          "/v2/developers/me/reverify",
           await authHeaders("user-1")
         );
         expect(res.status).toBe(200);
@@ -1605,7 +1559,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await post(
-        "/extensions/v2/developers/me/reverify",
+        "/v2/developers/me/reverify",
         await authHeaders("user-1")
       );
       expect(res.status).toBe(200);
@@ -1636,7 +1590,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await post(
-        "/extensions/v2/developers/me/reverify",
+        "/v2/developers/me/reverify",
         await authHeaders("user-1")
       );
       expect(res.status).toBe(200);
@@ -1669,7 +1623,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await post(
-        "/extensions/v2/developers/me/reverify",
+        "/v2/developers/me/reverify",
         await authHeaders("user-1")
       );
       expect(res.status).toBe(200);
@@ -1695,7 +1649,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await post(
-        "/extensions/v2/developers/me/reverify",
+        "/v2/developers/me/reverify",
         await authHeaders("user-1")
       );
       expect(res.status).toBe(200);
@@ -1722,7 +1676,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await post(
-        "/extensions/v2/developers/me/reverify?check_url=true",
+        "/v2/developers/me/reverify?check_url=true",
         await authHeaders("user-1")
       );
       expect(res.status).toBe(200);
@@ -1761,7 +1715,7 @@ describe("Extensions API v2", () => {
         );
 
         const failed = await post(
-          "/extensions/v2/developers/me/reverify?check_url=true",
+          "/v2/developers/me/reverify?check_url=true",
           await authHeaders("user-1")
         );
         expect(failed.status).toBe(expectedStatus);
@@ -1773,7 +1727,7 @@ describe("Extensions API v2", () => {
 
         vi.clearAllMocks();
         const retry = await post(
-          "/extensions/v2/developers/me/reverify?check_url=true",
+          "/v2/developers/me/reverify?check_url=true",
           await authHeaders("user-1")
         );
         expect(retry.status).toBe(429);
@@ -1797,14 +1751,14 @@ describe("Extensions API v2", () => {
       });
 
       const first = await post(
-        "/extensions/v2/developers/me/reverify?check_url=true",
+        "/v2/developers/me/reverify?check_url=true",
         await authHeaders("user-1")
       );
       expect(first.status).toBe(200);
       vi.clearAllMocks();
 
       const second = await post(
-        "/extensions/v2/developers/me/reverify?check_url=true",
+        "/v2/developers/me/reverify?check_url=true",
         await authHeaders("user-1")
       );
       expect(second.status).toBe(429);
@@ -1829,11 +1783,11 @@ describe("Extensions API v2", () => {
       });
 
       const first = await post(
-        "/extensions/v2/developers/me/reverify",
+        "/v2/developers/me/reverify",
         await authHeaders("user-1")
       );
       const second = await post(
-        "/extensions/v2/developers/me/reverify",
+        "/v2/developers/me/reverify",
         await authHeaders("user-1")
       );
       expect(first.status).toBe(200);
@@ -1868,11 +1822,11 @@ describe("Extensions API v2", () => {
       });
 
       const first = await post(
-        "/extensions/v2/developers/me/reverify?check_url=true",
+        "/v2/developers/me/reverify?check_url=true",
         await authHeaders("user-1")
       );
       const second = await post(
-        "/extensions/v2/developers/me/reverify?check_url=true",
+        "/v2/developers/me/reverify?check_url=true",
         await authHeaders("user-2")
       );
       expect(first.status).toBe(200);
@@ -1896,8 +1850,8 @@ describe("Extensions API v2", () => {
 
       const headers = await authHeaders("user-1");
       const [first, second] = await Promise.all([
-        post("/extensions/v2/developers/me/reverify?check_url=true", headers),
-        post("/extensions/v2/developers/me/reverify?check_url=true", headers)
+        post("/v2/developers/me/reverify?check_url=true", headers),
+        post("/v2/developers/me/reverify?check_url=true", headers)
       ]);
 
       const statuses = [first.status, second.status].sort();
@@ -1933,7 +1887,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await post(
-        "/extensions/v2/developers/me/reverify?check_url=true",
+        "/v2/developers/me/reverify?check_url=true",
         await authHeaders("user-1")
       );
       env.DB_EXTENSIONS = db;
@@ -1966,7 +1920,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await post(
-        "/extensions/v2/developers/me/reverify?check_url=true",
+        "/v2/developers/me/reverify?check_url=true",
         await authHeaders("user-1")
       );
       expect(res.status).toBe(200);
@@ -1998,7 +1952,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await post(
-        "/extensions/v2/developers/me/reverify",
+        "/v2/developers/me/reverify",
         await authHeaders("user-1")
       );
       expect(res.status).toBe(200);
@@ -2035,7 +1989,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await post(
-        "/extensions/v2/developers/me/reverify?check_url=true",
+        "/v2/developers/me/reverify?check_url=true",
         await authHeaders("user-1")
       );
       expect(res.status).toBe(200);
@@ -2074,7 +2028,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await post(
-        "/extensions/v2/developers/me/reverify?check_url=true",
+        "/v2/developers/me/reverify?check_url=true",
         await authHeaders("user-1")
       );
       expect(res.status).toBe(200);
@@ -2100,7 +2054,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await post(
-        "/extensions/v2/developers/me/reverify?check_url=false",
+        "/v2/developers/me/reverify?check_url=false",
         await authHeaders("user-1")
       );
       expect(res.status).toBe(200);
@@ -2113,7 +2067,7 @@ describe("Extensions API v2", () => {
 
     it("404s when the caller doesn't own a developer profile", async () => {
       const res = await post(
-        "/extensions/v2/developers/me/reverify",
+        "/v2/developers/me/reverify",
         await authHeaders("user-1")
       );
       expect(res.status).toBe(404);
@@ -2144,7 +2098,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await post(
-        "/extensions/v2/developers/me/reverify",
+        "/v2/developers/me/reverify",
         await authHeaders("user-1")
       );
       env.DB_EXTENSIONS = db;
@@ -2185,7 +2139,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await post(
-        "/extensions/v2/developers/me/reverify",
+        "/v2/developers/me/reverify",
         await authHeaders("user-1")
       );
       env.DB_EXTENSIONS = db;
@@ -2240,7 +2194,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await post(
-        "/extensions/v2/developers/me/reverify",
+        "/v2/developers/me/reverify",
         await authHeaders("user-1")
       );
       env.DB_EXTENSIONS = db;
@@ -2266,7 +2220,7 @@ describe("Extensions API v2", () => {
         approved_at: new Date().toISOString()
       });
 
-      const res = await get("/extensions/v2/developers/public-dev", {});
+      const res = await get("/v2/developers/public-dev", {});
       expect(res.status).toBe(200);
       const body = (await res.json()) as { result: Record<string, unknown> };
       expect(body.result).toEqual({
@@ -2282,14 +2236,14 @@ describe("Extensions API v2", () => {
     });
 
     it("404s for an unknown developer", async () => {
-      const res = await get("/extensions/v2/developers/no-such-developer", {});
+      const res = await get("/v2/developers/no-such-developer", {});
       expect(res.status).toBe(404);
     });
 
     it("marks an unowned developer as unclaimed", async () => {
       await seedUnownedDeveloper("legacy-public");
 
-      const res = await get("/extensions/v2/developers/legacy-public", {});
+      const res = await get("/v2/developers/legacy-public", {});
       expect(res.status).toBe(200);
       expect(await res.json()).toMatchObject({
         result: { id: "legacy-public", unclaimed: true }
@@ -2311,7 +2265,7 @@ describe("Extensions API v2", () => {
         .run();
 
       const res = await get(
-        "/extensions/v2/developers/owned-dev",
+        "/v2/developers/owned-dev",
         await authHeaders("user-1")
       );
       expect(res.status).toBe(200);

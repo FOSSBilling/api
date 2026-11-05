@@ -1,6 +1,8 @@
 # Extensions v2
 
-**Base Path:** `/extensions/v2`
+**Base Path:** `/v2`
+
+All v2 resources use this version-first namespace: `/v2/extensions`, `/v2/developers`, `/v2/users`, and `/v2/m2m`. The previous `/extensions/v2` base is removed; the extensions site, modules publisher, and FOSSBilling installer must switch with the API deployment. Legacy `/extensions/v1` routes keep their existing URLs.
 
 Self-service extension publishing, developer-profile ownership, moderation, and browsing published extensions.
 
@@ -10,8 +12,8 @@ This service owns the complete Extensions domain and its `DB_EXTENSIONS` schema.
 
 Endpoints are not listed here. The service publishes its own contract:
 
-- **OpenAPI document:** `GET /extensions/v2/docs/openapi.json`
-- **Reference UI:** `GET /extensions/v2/docs`
+- **OpenAPI document:** `GET /v2/docs/openapi.json`
+- **Reference UI:** `GET /v2/docs`
 
 ## Manifest contract
 
@@ -136,9 +138,9 @@ Provisioning spans both repos: create the client and its scopes/resource link in
 
 ## Public badges
 
-`GET /extensions/v2/extensions/{id}/badges/{type}` returns a public SVG. Types are `version` (latest release tag), `fossbilling` (that release's full `requires.fossbilling` string), and `license` (package license). Requirements are displayed unchanged, including upper bounds, exclusions, and compound ranges.
+`GET /v2/extensions/{id}/badges/{type}` returns a public SVG. Types are `version` (latest release tag), `fossbilling` (that release's full `requires.fossbilling` string), and `license` (package license). Requirements are displayed unchanged, including upper bounds, exclusions, and compound ranges.
 
-For example: `/extensions/v2/extensions/branding/badges/fossbilling?color=green`. The optional `color` accepts badge-maker colors, up to 100 characters; unrecognized values use the library's default color. Badges are cached for five minutes in browsers and one hour at the CDN, matching v1.
+For example: `/v2/extensions/branding/badges/fossbilling?color=green`. The optional `color` accepts badge-maker colors, up to 100 characters; unrecognized values use the library's default color. Badges are cached for five minutes in browsers and one hour at the CDN, matching v1.
 
 Missing, unpublished, and delisted extensions return 404. Unsupported badge types or color lengths outside 1–100 return 422; unusable stored badge fields return 409 for manual correction. With no releases, version and requirement badges show `unknown`; license badges still work.
 

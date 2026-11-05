@@ -93,7 +93,7 @@ describe("moderation notification emails", () => {
     const calls = stubSmtpApi();
 
     const res = await post(
-      "/extensions/v2/extensions/live-ext/delist",
+      "/v2/extensions/live-ext/delist",
       await authHeaders("mod-1"),
       { reason: "Upstream source removed" }
     );
@@ -118,7 +118,7 @@ describe("moderation notification emails", () => {
     await insertUser(db, { id: "mod-1", is_moderator: 1 });
     await seedLiveExtension();
     await post(
-      "/extensions/v2/extensions/live-ext/delist?notify=false",
+      "/v2/extensions/live-ext/delist?notify=false",
       await authHeaders("mod-1"),
       { reason: "Upstream source removed" }
     );
@@ -126,7 +126,7 @@ describe("moderation notification emails", () => {
     const calls = stubSmtpApi();
 
     const res = await post(
-      "/extensions/v2/extensions/live-ext/relist",
+      "/v2/extensions/live-ext/relist",
       await authHeaders("mod-1"),
       { review_note: "Upstream is back" }
     );
@@ -156,7 +156,7 @@ describe("moderation notification emails", () => {
     const calls = stubSmtpApi();
 
     const res = await post(
-      "/extensions/v2/extensions/LIVE-Ext/delist",
+      "/v2/extensions/LIVE-Ext/delist",
       await authHeaders("mod-1"),
       { reason: "Upstream source removed" }
     );
@@ -176,7 +176,7 @@ describe("moderation notification emails", () => {
     const calls = stubSmtpApi();
 
     const res = await post(
-      "/extensions/v2/extensions/live-ext/delist",
+      "/v2/extensions/live-ext/delist",
       await authHeaders("mod-1"),
       { reason: "Upstream “gone” — domain lapsed" }
     );
@@ -201,7 +201,7 @@ describe("moderation notification emails", () => {
     const calls = stubSmtpApi();
 
     const res = await post(
-      "/extensions/v2/extensions/live-ext/delist?notify=false",
+      "/v2/extensions/live-ext/delist?notify=false",
       await authHeaders("mod-1"),
       { reason: "Upstream source removed" }
     );
@@ -230,7 +230,7 @@ describe("moderation notification emails", () => {
     const calls = stubSmtpApi();
 
     const res = await post(
-      "/extensions/v2/extensions/live-ext/delist",
+      "/v2/extensions/live-ext/delist",
       await authHeaders("mod-1"),
       { reason: "Upstream source removed" }
     );
@@ -252,7 +252,7 @@ describe("moderation notification emails", () => {
     });
 
     const res = await post(
-      "/extensions/v2/extensions/live-ext/delist",
+      "/v2/extensions/live-ext/delist",
       await authHeaders("mod-1"),
       { reason: "Upstream source removed" }
     );
@@ -284,7 +284,7 @@ describe("moderation notification emails", () => {
       owner_user_id: "user-1"
     });
     const created = await post(
-      "/extensions/v2/extensions",
+      "/v2/extensions",
       await authHeaders("user-1"),
       sampleCreate({ extensionId: "reject-me" })
     );
@@ -298,7 +298,7 @@ describe("moderation notification emails", () => {
     const calls = stubSmtpApi();
 
     const res = await post(
-      `/extensions/v2/extensions/${result.id}/revisions/${result.revision_id}/reject`,
+      `/v2/extensions/${result.id}/revisions/${result.revision_id}/reject`,
       await authHeaders("mod-1"),
       { review_note: "Needs a valid license URL" }
     );
@@ -317,7 +317,7 @@ describe("moderation notification emails", () => {
     const calls = stubSmtpApi();
 
     const res = await post(
-      "/extensions/v2/developers/claims/claim-1/approve",
+      "/v2/developers/claims/claim-1/approve",
       await authHeaders("mod-1")
     );
     expect(res.status).toBe(200);
@@ -334,7 +334,7 @@ describe("moderation notification emails", () => {
     const calls = stubSmtpApi();
 
     const res = await post(
-      "/extensions/v2/developers/claims/claim-1/reject",
+      "/v2/developers/claims/claim-1/reject",
       await authHeaders("mod-1"),
       { review_note: "Could not verify ownership" }
     );
@@ -364,7 +364,7 @@ describe("moderation notification emails", () => {
     const calls = stubSmtpApi();
 
     const res = await post(
-      "/extensions/v2/extensions/live-ext/delist",
+      "/v2/extensions/live-ext/delist",
       await authHeaders("mod-1"),
       { reason: "Upstream source removed" }
     );
@@ -385,7 +385,7 @@ describe("moderation notification emails", () => {
     const calls = stubSmtpApi();
 
     const res = await post(
-      "/extensions/v2/extensions/live-ext/delist",
+      "/v2/extensions/live-ext/delist",
       await authHeaders("mod-1"),
       { reason: "Upstream source removed" }
     );
@@ -418,7 +418,7 @@ describe("moderation notification emails", () => {
     const calls = stubSmtpApi();
 
     const res = await post(
-      "/extensions/v2/extensions/live-ext/delist",
+      "/v2/extensions/live-ext/delist",
       await authHeaders("mod-1"),
       { reason: "Upstream source removed" }
     );
@@ -441,7 +441,7 @@ describe("moderation notification emails", () => {
       owner_user_id: "user-1"
     });
     const created = await post(
-      "/extensions/v2/extensions",
+      "/v2/extensions",
       await authHeaders("user-1"),
       sampleCreate({ extensionId: "approve-me" })
     );
@@ -453,7 +453,7 @@ describe("moderation notification emails", () => {
     const calls = stubSmtpApi();
 
     const res = await post(
-      `/extensions/v2/extensions/${result.id}/revisions/${result.revision_id}/approve`,
+      `/v2/extensions/${result.id}/revisions/${result.revision_id}/approve`,
       await authHeaders("mod-1"),
       { review_note: "   " }
     );

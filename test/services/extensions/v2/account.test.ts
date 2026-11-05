@@ -61,7 +61,7 @@ describe("Extensions API v2", () => {
 
     it("rejects ordinary assertions before storing attacker-selected identity", async () => {
       const response = await put(
-        "/extensions/v2/users/me/identity",
+        "/v2/users/me/identity",
         await authHeaders("attacker"),
         identity
       );
@@ -83,7 +83,7 @@ describe("Extensions API v2", () => {
       ["github_orgs_expires_at", "2099-02-01T00:00:00.000Z"]
     ])("rejects tampering with signed %s", async (field, value) => {
       const headers = await identityHeaders("new-identity", identity);
-      const response = await put("/extensions/v2/users/me/identity", headers, {
+      const response = await put("/v2/users/me/identity", headers, {
         ...identity,
         [field as string]: value
       });
@@ -108,7 +108,7 @@ describe("Extensions API v2", () => {
       async (rawBody) => {
         const ctx = createExecutionContext();
         const res = await app.request(
-          "/extensions/v2/users/me/identity",
+          "/v2/users/me/identity",
           {
             method: "PUT",
             headers: await identityHeaders("raw-body", identity),
@@ -142,7 +142,7 @@ describe("Extensions API v2", () => {
         });
         const ctx = createExecutionContext();
         const res = await app.request(
-          "/extensions/v2/users/me/identity",
+          "/v2/users/me/identity",
           {
             method: "PUT",
             headers: {
@@ -161,7 +161,7 @@ describe("Extensions API v2", () => {
 
     it("keeps identity proofs out of user API authorization", async () => {
       const response = await get(
-        "/extensions/v2/users/me",
+        "/v2/users/me",
         await identityHeaders("service-sub", identity)
       );
       expect(response.status).toBe(401);
@@ -223,7 +223,7 @@ describe("Extensions API v2", () => {
         }
       });
 
-      const profile = await patch("/extensions/v2/users/me", headers, {
+      const profile = await patch("/v2/users/me", headers, {
         display_name: "Account Display"
       });
       expect(profile.status).toBe(200);
@@ -236,7 +236,7 @@ describe("Extensions API v2", () => {
         }
       });
 
-      const developer = await get("/extensions/v2/developers/me", headers);
+      const developer = await get("/v2/developers/me", headers);
       expect(developer.status).toBe(200);
       expect(await developer.json()).toEqual({ result: null });
 
@@ -262,7 +262,7 @@ describe("Extensions API v2", () => {
         download_url: "https://example.com/download.zip"
       });
 
-      const owned = await get("/extensions/v2/extensions?scope=mine", headers);
+      const owned = await get("/v2/extensions?scope=mine", headers);
       expect(owned.status).toBe(200);
       expect(await owned.json()).toMatchObject({
         result: [{ id: "account-extension" }],
@@ -270,7 +270,7 @@ describe("Extensions API v2", () => {
       });
 
       const filtered = await get(
-        "/extensions/v2/extensions?scope=mine&developer_id=someone-else",
+        "/v2/extensions?scope=mine&developer_id=someone-else",
         headers
       );
       expect(filtered.status).toBe(422);
@@ -281,7 +281,7 @@ describe("Extensions API v2", () => {
 
     it("validates a mine cursor before returning an empty owner page", async () => {
       const res = await get(
-        "/extensions/v2/extensions?scope=mine&cursor=not-a-cursor",
+        "/v2/extensions?scope=mine&cursor=not-a-cursor",
         await authHeaders("no-developer")
       );
       expect(res.status).toBe(422);
@@ -345,11 +345,11 @@ describe("Extensions API v2", () => {
 
     it("tombstones and later reactivates an account", async () => {
       const headers = await authHeaders("delete-me");
-      const deleted = await del("/extensions/v2/users/me", headers);
+      const deleted = await del("/v2/users/me", headers);
       expect(deleted.status).toBe(200);
       expect(await deleted.json()).toEqual({ result: { deleted: true } });
 
-      const afterDelete = await get("/extensions/v2/users/me", headers);
+      const afterDelete = await get("/v2/users/me", headers);
       expect(afterDelete.status).toBe(200);
       expect(await afterDelete.json()).toMatchObject({
         result: { active: false, display_name: null }
@@ -385,7 +385,7 @@ describe("Extensions API v2", () => {
       expect(row?.deleted_at).toBeTruthy();
 
       const blockedWrite = await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         headers,
         sampleDeveloper({ id: "deleted-developer" })
       );
@@ -414,7 +414,7 @@ describe("Extensions API v2", () => {
       // cleanup statement must run in the same batch or the developers
       // delete would fail on the foreign key.
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("mapping-owner"),
         sampleDeveloper({ id: "mapped-developer" })
       );
@@ -430,7 +430,7 @@ describe("Extensions API v2", () => {
       expect(before).not.toBeNull();
 
       const deleted = await del(
-        "/extensions/v2/users/me",
+        "/v2/users/me",
         await authHeaders("mapping-owner")
       );
       expect(deleted.status).toBe(200);
@@ -444,7 +444,7 @@ describe("Extensions API v2", () => {
     it("blocks deletion while published extensions remain owned", async () => {
       await seedOwnedExtension();
       const headers = await authHeaders("owner-1");
-      const deleted = await del("/extensions/v2/users/me", headers);
+      const deleted = await del("/v2/users/me", headers);
       expect(deleted.status).toBe(409);
       const row = await db
         .prepare("SELECT deleted_at FROM users WHERE id = ?")
@@ -468,7 +468,7 @@ describe("Extensions API v2", () => {
       });
 
       const deleted = await del(
-        "/extensions/v2/users/me",
+        "/v2/users/me",
         await authHeaders("pending-owner")
       );
       expect(deleted.status).toBe(409);
@@ -544,7 +544,7 @@ describe("Extensions API v2", () => {
         .run();
 
       const deleted = await del(
-        "/extensions/v2/users/me",
+        "/v2/users/me",
         await authHeaders("cleanup-user")
       );
       expect(deleted.status).toBe(200);
@@ -618,7 +618,7 @@ describe("Extensions API v2", () => {
 
       try {
         const deleted = await del(
-          "/extensions/v2/users/me",
+          "/v2/users/me",
           await authHeaders("rollback-user")
         );
         expect(deleted.status).toBe(500);

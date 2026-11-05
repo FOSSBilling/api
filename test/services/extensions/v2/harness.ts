@@ -118,11 +118,7 @@ export async function identityHeaders(
 }
 
 export async function syncIdentity(sub: string, body: unknown) {
-  return put(
-    "/extensions/v2/users/me/identity",
-    await identityHeaders(sub, body),
-    body
-  );
+  return put("/v2/users/me/identity", await identityHeaders(sub, body), body);
 }
 
 // The PUT /extensions/{id} body: content only, no id and no developer. Both

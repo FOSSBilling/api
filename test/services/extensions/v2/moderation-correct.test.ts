@@ -30,7 +30,7 @@ vi.mock("@octokit/request", async () =>
 
 setupExtensionsV2Tests();
 
-const PATH = "/extensions/v2/extensions/live-ext/moderator-correct";
+const PATH = "/v2/extensions/live-ext/moderator-correct";
 
 function correctBody(overrides?: Record<string, unknown>) {
   return {
@@ -155,7 +155,7 @@ describe("POST /extensions/{id}/moderator-correct (api#251)", () => {
   it("404s for an unknown extension", async () => {
     await insertUser(db, { id: "mod-1", is_moderator: 1 });
     const res = await post(
-      "/extensions/v2/extensions/no-such-extension/moderator-correct",
+      "/v2/extensions/no-such-extension/moderator-correct",
       await authHeaders("mod-1"),
       correctBody()
     );
@@ -173,7 +173,7 @@ describe("POST /extensions/{id}/moderator-correct (api#251)", () => {
       developer_id: "new-developer"
     });
     const res = await post(
-      "/extensions/v2/extensions/draft-ext/moderator-correct",
+      "/v2/extensions/draft-ext/moderator-correct",
       await authHeaders("mod-1"),
       correctBody()
     );
@@ -203,7 +203,7 @@ describe("POST /extensions/{id}/moderator-correct (api#251)", () => {
   it("409s when a pending revision exists", async () => {
     await seedPublished();
     const edit = await put(
-      "/extensions/v2/extensions/live-ext",
+      "/v2/extensions/live-ext",
       await authHeaders("user-1"),
       sampleContent({ name: "Author Edit" })
     );
@@ -309,7 +309,7 @@ describe("POST /extensions/{id}/moderator-correct (api#251)", () => {
       developer_id: "new-developer"
     });
     const res = await post(
-      "/extensions/v2/extensions/live-EXT/moderator-correct",
+      "/v2/extensions/live-EXT/moderator-correct",
       await authHeaders("mod-1"),
       correctBody()
     );
@@ -323,7 +323,7 @@ describe("POST /extensions/{id}/moderator-correct (api#251)", () => {
     await insertUser(db, { id: "mod-1", is_moderator: 1 });
     await seedDeveloper("new-developer", "user-1");
     const created = await post(
-      "/extensions/v2/extensions",
+      "/v2/extensions",
       await authHeaders("user-1"),
       sampleCreate({ extensionId: "history-ext" })
     );
@@ -334,7 +334,7 @@ describe("POST /extensions/{id}/moderator-correct (api#251)", () => {
     expect(
       (
         await post(
-          `/extensions/v2/extensions/${pending.id}/revisions/${pending.revision_id}/approve?notify=false`,
+          `/v2/extensions/${pending.id}/revisions/${pending.revision_id}/approve?notify=false`,
           await authHeaders("mod-1"),
           {}
         )
@@ -342,7 +342,7 @@ describe("POST /extensions/{id}/moderator-correct (api#251)", () => {
     ).toBe(200);
 
     const res = await post(
-      "/extensions/v2/extensions/history-ext/moderator-correct",
+      "/v2/extensions/history-ext/moderator-correct",
       await authHeaders("mod-1"),
       { ...sampleContent(), readme: "# Corrected", correction_note: "typo" }
     );

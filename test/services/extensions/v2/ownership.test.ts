@@ -43,7 +43,7 @@ describe("Extensions API v2", () => {
   describe("developer transfers", () => {
     it("does not accept transfer capabilities in URL paths", async () => {
       const res = await post(
-        "/extensions/v2/developers/transfers/secret-token/accept",
+        "/v2/developers/transfers/secret-token/accept",
         await authHeaders("user-2")
       );
       expect(res.status).toBe(404);
@@ -51,13 +51,13 @@ describe("Extensions API v2", () => {
 
     it("initiating a second transfer revokes the first token", async () => {
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
 
       const first = await post(
-        "/extensions/v2/developers/dev-developer/transfer",
+        "/v2/developers/dev-developer/transfer",
         await authHeaders("user-1")
       );
       expect(first.status).toBe(200);
@@ -65,13 +65,13 @@ describe("Extensions API v2", () => {
         .result.token;
 
       const second = await post(
-        "/extensions/v2/developers/dev-developer/transfer",
+        "/v2/developers/dev-developer/transfer",
         await authHeaders("user-1")
       );
       expect(second.status).toBe(200);
 
       const acceptFirst = await post(
-        "/extensions/v2/developers/transfers/accept",
+        "/v2/developers/transfers/accept",
         await authHeaders("user-2"),
         { token: firstToken }
       );
@@ -80,26 +80,26 @@ describe("Extensions API v2", () => {
 
     it("accepts a valid token, transferring ownership and clearing approval", async () => {
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await post(
-        "/extensions/v2/developers/dev-developer/approve",
+        "/v2/developers/dev-developer/approve",
         await authHeaders("mod-1"),
         await developerApproval("dev-developer", 1)
       );
 
       const initiate = await post(
-        "/extensions/v2/developers/dev-developer/transfer",
+        "/v2/developers/dev-developer/transfer",
         await authHeaders("user-1")
       );
       const token = ((await initiate.json()) as { result: { token: string } })
         .result.token;
 
       const accept = await post(
-        "/extensions/v2/developers/transfers/accept",
+        "/v2/developers/transfers/accept",
         await authHeaders("user-2"),
         { token }
       );
@@ -114,7 +114,7 @@ describe("Extensions API v2", () => {
       );
 
       const acceptAgain = await post(
-        "/extensions/v2/developers/transfers/accept",
+        "/v2/developers/transfers/accept",
         await authHeaders("user-3"),
         { token }
       );
@@ -126,12 +126,12 @@ describe("Extensions API v2", () => {
 
     it("does not turn a committed transfer into a database error if the profile is deleted before the response lookup", async () => {
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
       const initiate = await post(
-        "/extensions/v2/developers/dev-developer/transfer",
+        "/v2/developers/dev-developer/transfer",
         await authHeaders("user-1")
       );
       const token = ((await initiate.json()) as { result: { token: string } })
@@ -157,7 +157,7 @@ describe("Extensions API v2", () => {
       });
 
       const accept = await post(
-        "/extensions/v2/developers/transfers/accept",
+        "/v2/developers/transfers/accept",
         await authHeaders("user-2"),
         { token }
       );
@@ -172,7 +172,7 @@ describe("Extensions API v2", () => {
 
     it("rejects pending revisions and claims when ownership changes", async () => {
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
@@ -194,14 +194,14 @@ describe("Extensions API v2", () => {
       });
 
       const initiate = await post(
-        "/extensions/v2/developers/dev-developer/transfer",
+        "/v2/developers/dev-developer/transfer",
         await authHeaders("user-1")
       );
       const token = ((await initiate.json()) as { result: { token: string } })
         .result.token;
 
       const accept = await post(
-        "/extensions/v2/developers/transfers/accept",
+        "/v2/developers/transfers/accept",
         await authHeaders("user-2"),
         { token }
       );
@@ -221,7 +221,7 @@ describe("Extensions API v2", () => {
 
     it("reports an inactive owner when the account is deactivated during initiation", async () => {
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
@@ -238,7 +238,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await post(
-        "/extensions/v2/developers/dev-developer/transfer",
+        "/v2/developers/dev-developer/transfer",
         await authHeaders("user-1")
       );
       env.DB_EXTENSIONS = db;
@@ -255,13 +255,13 @@ describe("Extensions API v2", () => {
 
     it("reports an inactive recipient when the account is deactivated during acceptance", async () => {
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
 
       const initiate = await post(
-        "/extensions/v2/developers/dev-developer/transfer",
+        "/v2/developers/dev-developer/transfer",
         await authHeaders("user-1")
       );
       const token = ((await initiate.json()) as { result: { token: string } })
@@ -279,7 +279,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await post(
-        "/extensions/v2/developers/transfers/accept",
+        "/v2/developers/transfers/accept",
         await authHeaders("user-2"),
         { token }
       );
@@ -302,25 +302,25 @@ describe("Extensions API v2", () => {
 
     it("doesn't inherit the previous owner's check_url cooldown after a transfer", async () => {
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
 
       const usedCooldown = await post(
-        "/extensions/v2/developers/me/reverify?check_url=true",
+        "/v2/developers/me/reverify?check_url=true",
         await authHeaders("user-1")
       );
       expect(usedCooldown.status).toBe(200);
 
       const initiate = await post(
-        "/extensions/v2/developers/dev-developer/transfer",
+        "/v2/developers/dev-developer/transfer",
         await authHeaders("user-1")
       );
       const token = ((await initiate.json()) as { result: { token: string } })
         .result.token;
       const accept = await post(
-        "/extensions/v2/developers/transfers/accept",
+        "/v2/developers/transfers/accept",
         await authHeaders("user-2"),
         { token }
       );
@@ -329,7 +329,7 @@ describe("Extensions API v2", () => {
       // user-2 has never called check_url themselves — the previous
       // owner's still-active cooldown must not carry over onto them.
       const res = await post(
-        "/extensions/v2/developers/me/reverify?check_url=true",
+        "/v2/developers/me/reverify?check_url=true",
         await authHeaders("user-2")
       );
       expect(res.status).toBe(200);
@@ -343,7 +343,7 @@ describe("Extensions API v2", () => {
         github_orgs: JSON.stringify([])
       });
       const created = await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         { ...sampleDeveloper(), URL: "https://acme.example" }
       );
@@ -357,13 +357,13 @@ describe("Extensions API v2", () => {
       expect(createdBody.result.github_url_verified).toBe(true);
 
       const initiate = await post(
-        "/extensions/v2/developers/dev-developer/transfer",
+        "/v2/developers/dev-developer/transfer",
         await authHeaders("user-1")
       );
       const token = ((await initiate.json()) as { result: { token: string } })
         .result.token;
       const accept = await post(
-        "/extensions/v2/developers/transfers/accept",
+        "/v2/developers/transfers/accept",
         await authHeaders("user-2"),
         { token }
       );
@@ -380,20 +380,20 @@ describe("Extensions API v2", () => {
 
     it("does not let replaying an already-used token reassign ownership away from a later owner", async () => {
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
 
       const initiate1 = await post(
-        "/extensions/v2/developers/dev-developer/transfer",
+        "/v2/developers/dev-developer/transfer",
         await authHeaders("user-1")
       );
       const token1 = ((await initiate1.json()) as { result: { token: string } })
         .result.token;
 
       const accept1 = await post(
-        "/extensions/v2/developers/transfers/accept",
+        "/v2/developers/transfers/accept",
         await authHeaders("user-2"),
         { token: token1 }
       );
@@ -404,13 +404,13 @@ describe("Extensions API v2", () => {
 
       // dev-developer is legitimately handed off again, to a third user.
       const initiate2 = await post(
-        "/extensions/v2/developers/dev-developer/transfer",
+        "/v2/developers/dev-developer/transfer",
         await authHeaders("user-2")
       );
       const token2 = ((await initiate2.json()) as { result: { token: string } })
         .result.token;
       const accept2 = await post(
-        "/extensions/v2/developers/transfers/accept",
+        "/v2/developers/transfers/accept",
         await authHeaders("user-3"),
         { token: token2 }
       );
@@ -422,7 +422,7 @@ describe("Extensions API v2", () => {
       // Replaying the *first* (already-used) token, by the same user who
       // originally accepted it, must not silently reassign ownership back.
       const replay = await post(
-        "/extensions/v2/developers/transfers/accept",
+        "/v2/developers/transfers/accept",
         await authHeaders("user-2"),
         { token: token1 }
       );
@@ -434,13 +434,13 @@ describe("Extensions API v2", () => {
 
     it("rejects an expired token", async () => {
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
 
       const initiate = await post(
-        "/extensions/v2/developers/dev-developer/transfer",
+        "/v2/developers/dev-developer/transfer",
         await authHeaders("user-1")
       );
       const token = ((await initiate.json()) as { result: { token: string } })
@@ -449,7 +449,7 @@ describe("Extensions API v2", () => {
       await expireAllDeveloperTransfers(db);
 
       const accept = await post(
-        "/extensions/v2/developers/transfers/accept",
+        "/v2/developers/transfers/accept",
         await authHeaders("user-2"),
         { token }
       );
@@ -458,26 +458,26 @@ describe("Extensions API v2", () => {
 
     it("rejects a revoked token", async () => {
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
 
       const initiate = await post(
-        "/extensions/v2/developers/dev-developer/transfer",
+        "/v2/developers/dev-developer/transfer",
         await authHeaders("user-1")
       );
       const token = ((await initiate.json()) as { result: { token: string } })
         .result.token;
 
       const revoke = await post(
-        "/extensions/v2/developers/dev-developer/transfer/revoke",
+        "/v2/developers/dev-developer/transfer/revoke",
         await authHeaders("user-1")
       );
       expect(revoke.status).toBe(200);
 
       const accept = await post(
-        "/extensions/v2/developers/transfers/accept",
+        "/v2/developers/transfers/accept",
         await authHeaders("user-2"),
         { token }
       );
@@ -486,25 +486,25 @@ describe("Extensions API v2", () => {
 
     it("rejects acceptance by a user who already owns a different profile", async () => {
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-2"),
         sampleDeveloper({ id: "other-developer", name: "Other Developer" })
       );
 
       const initiate = await post(
-        "/extensions/v2/developers/dev-developer/transfer",
+        "/v2/developers/dev-developer/transfer",
         await authHeaders("user-1")
       );
       const token = ((await initiate.json()) as { result: { token: string } })
         .result.token;
 
       const accept = await post(
-        "/extensions/v2/developers/transfers/accept",
+        "/v2/developers/transfers/accept",
         await authHeaders("user-2"),
         { token }
       );
@@ -516,20 +516,20 @@ describe("Extensions API v2", () => {
 
     it("rejects the current owner accepting their own transfer link", async () => {
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
 
       const initiate = await post(
-        "/extensions/v2/developers/dev-developer/transfer",
+        "/v2/developers/dev-developer/transfer",
         await authHeaders("user-1")
       );
       const token = ((await initiate.json()) as { result: { token: string } })
         .result.token;
 
       const accept = await post(
-        "/extensions/v2/developers/transfers/accept",
+        "/v2/developers/transfers/accept",
         await authHeaders("user-1"),
         { token }
       );
@@ -541,13 +541,13 @@ describe("Extensions API v2", () => {
 
     it("blocks a non-owner from initiating a transfer", async () => {
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
 
       const res = await post(
-        "/extensions/v2/developers/dev-developer/transfer",
+        "/v2/developers/dev-developer/transfer",
         await authHeaders("intruder")
       );
       expect(res.status).toBe(403);
@@ -555,17 +555,17 @@ describe("Extensions API v2", () => {
 
     it("blocks a non-owner from revoking a transfer", async () => {
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
       await post(
-        "/extensions/v2/developers/dev-developer/transfer",
+        "/v2/developers/dev-developer/transfer",
         await authHeaders("user-1")
       );
 
       const res = await post(
-        "/extensions/v2/developers/dev-developer/transfer/revoke",
+        "/v2/developers/dev-developer/transfer/revoke",
         await authHeaders("intruder")
       );
       expect(res.status).toBe(403);
@@ -580,7 +580,7 @@ describe("Extensions API v2", () => {
       await seedUnownedDeveloper("legacy-developer");
 
       const res = await post(
-        "/extensions/v2/developers/legacy-developer/claim",
+        "/v2/developers/legacy-developer/claim",
         await authHeaders("user-1"),
         { note: "mine", github_org_verified: true }
       );
@@ -604,7 +604,7 @@ describe("Extensions API v2", () => {
       await seedUnownedDeveloper("legacy-developer");
 
       const res = await post(
-        "/extensions/v2/developers/legacy-developer/claim",
+        "/v2/developers/legacy-developer/claim",
         await authHeaders("user-1"),
         { note: "I'm the maintainer, see github.com/x" }
       );
@@ -612,7 +612,7 @@ describe("Extensions API v2", () => {
       const created = (await res.json()) as { result: { id: string } };
 
       const mine = await get(
-        "/extensions/v2/developers/claims?scope=mine",
+        "/v2/developers/claims?scope=mine",
         await authHeaders("user-1")
       );
       expect(mine.status).toBe(200);
@@ -624,7 +624,7 @@ describe("Extensions API v2", () => {
 
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       const pending = await get(
-        "/extensions/v2/developers/claims?scope=pending",
+        "/v2/developers/claims?scope=pending",
         await authHeaders("mod-1")
       );
       expect(pending.status).toBe(200);
@@ -638,7 +638,7 @@ describe("Extensions API v2", () => {
     it("rejects a status filter that disagrees with the pending queue", async () => {
       await seedUnownedDeveloper("legacy-developer");
       await post(
-        "/extensions/v2/developers/legacy-developer/claim",
+        "/v2/developers/legacy-developer/claim",
         await authHeaders("user-1"),
         {}
       );
@@ -647,13 +647,13 @@ describe("Extensions API v2", () => {
       // status only narrows scope=mine; on scope=pending anything but
       // pending/all is a 422 rather than a silently ignored filter.
       const rejected = await get(
-        "/extensions/v2/developers/claims?scope=pending&status=approved",
+        "/v2/developers/claims?scope=pending&status=approved",
         await authHeaders("mod-1")
       );
       expect(rejected.status).toBe(422);
 
       const pending = await get(
-        "/extensions/v2/developers/claims?scope=pending&status=pending",
+        "/v2/developers/claims?scope=pending&status=pending",
         await authHeaders("mod-1")
       );
       expect(pending.status).toBe(200);
@@ -664,13 +664,13 @@ describe("Extensions API v2", () => {
 
     it("rejects claiming a developer that already has an owner", async () => {
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
 
       const res = await post(
-        "/extensions/v2/developers/dev-developer/claim",
+        "/v2/developers/dev-developer/claim",
         await authHeaders("user-2"),
         {}
       );
@@ -703,7 +703,7 @@ describe("Extensions API v2", () => {
         });
 
         const res = await post(
-          "/extensions/v2/developers/acme-org/claim",
+          "/v2/developers/acme-org/claim",
           await authHeaders("user-1"),
           {}
         );
@@ -734,14 +734,14 @@ describe("Extensions API v2", () => {
       await seedUnownedDeveloper("legacy-developer");
 
       const first = await post(
-        "/extensions/v2/developers/legacy-developer/claim",
+        "/v2/developers/legacy-developer/claim",
         await authHeaders("user-1"),
         {}
       );
       expect(first.status).toBe(201);
 
       const second = await post(
-        "/extensions/v2/developers/legacy-developer/claim",
+        "/v2/developers/legacy-developer/claim",
         await authHeaders("user-1"),
         {}
       );
@@ -753,7 +753,7 @@ describe("Extensions API v2", () => {
       await seedUnownedDeveloper("legacy-developer");
 
       await post(
-        "/extensions/v2/developers/legacy-developer/claim",
+        "/v2/developers/legacy-developer/claim",
         await authHeaders("user-1"),
         {}
       );
@@ -761,7 +761,7 @@ describe("Extensions API v2", () => {
       expect(callsAfterFirst).toBeGreaterThan(0);
 
       const second = await post(
-        "/extensions/v2/developers/legacy-developer/claim",
+        "/v2/developers/legacy-developer/claim",
         await authHeaders("user-1"),
         {}
       );
@@ -775,14 +775,14 @@ describe("Extensions API v2", () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
 
       const first = await post(
-        "/extensions/v2/developers/legacy-developer/claim",
+        "/v2/developers/legacy-developer/claim",
         await authHeaders("user-1"),
         {}
       );
       const claimId = ((await first.json()) as { result: { id: string } })
         .result.id;
       await post(
-        `/extensions/v2/developers/claims/${claimId}/reject`,
+        `/v2/developers/claims/${claimId}/reject`,
         await authHeaders("mod-1"),
         { review_note: "Not enough evidence" }
       );
@@ -799,7 +799,7 @@ describe("Extensions API v2", () => {
 
       const claimCountBefore = await countDeveloperClaims(db);
       const retry = await post(
-        "/extensions/v2/developers/legacy-developer/claim",
+        "/v2/developers/legacy-developer/claim",
         await authHeaders("user-1"),
         {}
       );
@@ -813,13 +813,13 @@ describe("Extensions API v2", () => {
     it("rejects a claim from a user who already owns a different profile", async () => {
       await seedUnownedDeveloper("legacy-developer");
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
 
       const res = await post(
-        "/extensions/v2/developers/legacy-developer/claim",
+        "/v2/developers/legacy-developer/claim",
         await authHeaders("user-1"),
         {}
       );
@@ -845,7 +845,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await post(
-        "/extensions/v2/developers/legacy-developer/claim",
+        "/v2/developers/legacy-developer/claim",
         headers,
         {}
       );
@@ -864,14 +864,14 @@ describe("Extensions API v2", () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
 
       const claim1 = await post(
-        "/extensions/v2/developers/legacy-developer/claim",
+        "/v2/developers/legacy-developer/claim",
         await authHeaders("user-1"),
         {}
       );
       const claim1Id = ((await claim1.json()) as { result: { id: string } })
         .result.id;
       const claim2 = await post(
-        "/extensions/v2/developers/legacy-developer/claim",
+        "/v2/developers/legacy-developer/claim",
         await authHeaders("user-2"),
         {}
       );
@@ -892,7 +892,7 @@ describe("Extensions API v2", () => {
       });
 
       const approve = await post(
-        `/extensions/v2/developers/claims/${claim1Id}/approve`,
+        `/v2/developers/claims/${claim1Id}/approve`,
         await authHeaders("mod-1")
       );
       expect(approve.status).toBe(500);
@@ -910,7 +910,7 @@ describe("Extensions API v2", () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
 
       const claim1 = await post(
-        "/extensions/v2/developers/legacy-developer/claim",
+        "/v2/developers/legacy-developer/claim",
         await authHeaders("user-1"),
         {}
       );
@@ -918,7 +918,7 @@ describe("Extensions API v2", () => {
         .result.id;
 
       const claim2 = await post(
-        "/extensions/v2/developers/legacy-developer/claim",
+        "/v2/developers/legacy-developer/claim",
         await authHeaders("user-2"),
         {}
       );
@@ -926,7 +926,7 @@ describe("Extensions API v2", () => {
         .result.id;
 
       const approve = await post(
-        `/extensions/v2/developers/claims/${claim1Id}/approve`,
+        `/v2/developers/claims/${claim1Id}/approve`,
         await authHeaders("mod-1")
       );
       expect(approve.status).toBe(200);
@@ -951,14 +951,14 @@ describe("Extensions API v2", () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
 
       const first = await post(
-        "/extensions/v2/developers/legacy-developer/claim",
+        "/v2/developers/legacy-developer/claim",
         await authHeaders("user-1"),
         {}
       );
       const firstId = ((await first.json()) as { result: { id: string } })
         .result.id;
       const second = await post(
-        "/extensions/v2/developers/legacy-developer/claim",
+        "/v2/developers/legacy-developer/claim",
         await authHeaders("user-2"),
         {}
       );
@@ -967,8 +967,8 @@ describe("Extensions API v2", () => {
       const headers = await authHeaders("mod-1");
 
       const approvals = await Promise.all([
-        post(`/extensions/v2/developers/claims/${firstId}/approve`, headers),
-        post(`/extensions/v2/developers/claims/${secondId}/approve`, headers)
+        post(`/v2/developers/claims/${firstId}/approve`, headers),
+        post(`/v2/developers/claims/${secondId}/approve`, headers)
       ]);
 
       expect(approvals.map(({ status }) => status).sort()).toEqual([200, 409]);
@@ -998,7 +998,7 @@ describe("Extensions API v2", () => {
       });
 
       const claim = await post(
-        "/extensions/v2/developers/legacy-developer/claim",
+        "/v2/developers/legacy-developer/claim",
         await authHeaders("user-1"),
         {}
       );
@@ -1008,7 +1008,7 @@ describe("Extensions API v2", () => {
       expect(claimRow?.github_org_verified).toBe(1);
 
       const approve = await post(
-        `/extensions/v2/developers/claims/${claimId}/approve`,
+        `/v2/developers/claims/${claimId}/approve`,
         await authHeaders("mod-1")
       );
       expect(approve.status).toBe(200);
@@ -1026,7 +1026,7 @@ describe("Extensions API v2", () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
 
       const claim = await post(
-        "/extensions/v2/developers/legacy-developer/claim",
+        "/v2/developers/legacy-developer/claim",
         await authHeaders("user-1"),
         {}
       );
@@ -1034,7 +1034,7 @@ describe("Extensions API v2", () => {
         .result.id;
 
       const reject = await post(
-        `/extensions/v2/developers/claims/${claimId}/reject`,
+        `/v2/developers/claims/${claimId}/reject`,
         await authHeaders("mod-1"),
         { review_note: "Not enough evidence of maintainership" }
       );
@@ -1056,7 +1056,7 @@ describe("Extensions API v2", () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
 
       const claim = await post(
-        "/extensions/v2/developers/legacy-developer/claim",
+        "/v2/developers/legacy-developer/claim",
         await authHeaders("user-1"),
         {}
       );
@@ -1064,7 +1064,7 @@ describe("Extensions API v2", () => {
         .result.id;
 
       const reject = await post(
-        `/extensions/v2/developers/claims/${claimId}/reject`,
+        `/v2/developers/claims/${claimId}/reject`,
         await authHeaders("mod-1"),
         { review_note: "   " }
       );
@@ -1087,7 +1087,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await post(
-        "/extensions/v2/developers/legacy-developer/claim",
+        "/v2/developers/legacy-developer/claim",
         await authHeaders("user-1"),
         {}
       );
@@ -1114,7 +1114,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await post(
-        "/extensions/v2/developers/legacy-user/claim",
+        "/v2/developers/legacy-user/claim",
         await authHeaders("user-1"),
         {}
       );
@@ -1141,7 +1141,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await post(
-        "/extensions/v2/developers/legacy-developer/claim",
+        "/v2/developers/legacy-developer/claim",
         await authHeaders("user-1"),
         {}
       );
@@ -1157,7 +1157,7 @@ describe("Extensions API v2", () => {
       // No row in users for user-1 — never linked GitHub.
 
       const res = await post(
-        "/extensions/v2/developers/legacy-developer/claim",
+        "/v2/developers/legacy-developer/claim",
         await authHeaders("user-1"),
         {}
       );
@@ -1185,7 +1185,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await post(
-        "/extensions/v2/developers/legacy-developer/claim",
+        "/v2/developers/legacy-developer/claim",
         await authHeaders("user-1"),
         {}
       );
@@ -1213,7 +1213,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await post(
-        "/extensions/v2/developers/legacy-developer/claim",
+        "/v2/developers/legacy-developer/claim",
         await authHeaders("user-1"),
         {}
       );
@@ -1229,7 +1229,7 @@ describe("Extensions API v2", () => {
       mockGithubEntityNotFound();
 
       const res = await post(
-        "/extensions/v2/developers/legacy-developer/claim",
+        "/v2/developers/legacy-developer/claim",
         await authHeaders("user-1"),
         {}
       );
@@ -1243,7 +1243,7 @@ describe("Extensions API v2", () => {
     it("blocks non-moderators from the claims queue and review routes", async () => {
       await seedUnownedDeveloper("legacy-developer");
       const claim = await post(
-        "/extensions/v2/developers/legacy-developer/claim",
+        "/v2/developers/legacy-developer/claim",
         await authHeaders("user-1"),
         {}
       );
@@ -1251,19 +1251,19 @@ describe("Extensions API v2", () => {
         .result.id;
 
       const queue = await get(
-        "/extensions/v2/developers/claims?scope=pending",
+        "/v2/developers/claims?scope=pending",
         await authHeaders("intruder")
       );
       expect(queue.status).toBe(403);
 
       const approve = await post(
-        `/extensions/v2/developers/claims/${claimId}/approve`,
+        `/v2/developers/claims/${claimId}/approve`,
         await authHeaders("intruder")
       );
       expect(approve.status).toBe(403);
 
       const reject = await post(
-        `/extensions/v2/developers/claims/${claimId}/reject`,
+        `/v2/developers/claims/${claimId}/reject`,
         await authHeaders("intruder"),
         { review_note: "no" }
       );
@@ -1273,7 +1273,7 @@ describe("Extensions API v2", () => {
     it("lets a claimant cancel their own pending claim", async () => {
       await seedUnownedDeveloper("legacy-developer");
       const claim = await post(
-        "/extensions/v2/developers/legacy-developer/claim",
+        "/v2/developers/legacy-developer/claim",
         await authHeaders("user-1"),
         {}
       );
@@ -1281,7 +1281,7 @@ describe("Extensions API v2", () => {
         .result.id;
 
       const cancel = await post(
-        `/extensions/v2/developers/claims/${claimId}/cancel`,
+        `/v2/developers/claims/${claimId}/cancel`,
         await authHeaders("user-1")
       );
       expect(cancel.status).toBe(200);
@@ -1295,7 +1295,7 @@ describe("Extensions API v2", () => {
     it("rejects cancelling a claim that belongs to someone else", async () => {
       await seedUnownedDeveloper("legacy-developer");
       const claim = await post(
-        "/extensions/v2/developers/legacy-developer/claim",
+        "/v2/developers/legacy-developer/claim",
         await authHeaders("user-1"),
         {}
       );
@@ -1303,7 +1303,7 @@ describe("Extensions API v2", () => {
         .result.id;
 
       const cancel = await post(
-        `/extensions/v2/developers/claims/${claimId}/cancel`,
+        `/v2/developers/claims/${claimId}/cancel`,
         await authHeaders("user-2")
       );
       expect(cancel.status).toBe(404);
@@ -1314,20 +1314,20 @@ describe("Extensions API v2", () => {
       await seedUnownedDeveloper("legacy-developer");
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       const claim = await post(
-        "/extensions/v2/developers/legacy-developer/claim",
+        "/v2/developers/legacy-developer/claim",
         await authHeaders("user-1"),
         {}
       );
       const claimId = ((await claim.json()) as { result: { id: string } })
         .result.id;
       await post(
-        `/extensions/v2/developers/claims/${claimId}/reject`,
+        `/v2/developers/claims/${claimId}/reject`,
         await authHeaders("mod-1"),
         { review_note: "no" }
       );
 
       const cancel = await post(
-        `/extensions/v2/developers/claims/${claimId}/cancel`,
+        `/v2/developers/claims/${claimId}/cancel`,
         await authHeaders("user-1")
       );
       expect(cancel.status).toBe(404);

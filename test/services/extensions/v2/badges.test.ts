@@ -17,7 +17,7 @@ const release = (tag: string, fossbilling: string) => ({
   requires: { fossbilling, php: ">=8.3" }
 });
 const badge = (type: string) =>
-  get(`/extensions/v2/extensions/example/badges/${type}`, {});
+  get(`/v2/extensions/example/badges/${type}`, {});
 
 beforeEach(async () => {
   await insertDeveloper(db, {
@@ -68,7 +68,7 @@ describe("v2 public badges", () => {
 
   it("supports case-insensitive extension lookup and color overrides", async () => {
     const response = await get(
-      "/extensions/v2/extensions/EXAMPLE/badges/version?color=green",
+      "/v2/extensions/EXAMPLE/badges/version?color=green",
       {}
     );
     expect(response.status).toBe(200);
@@ -178,7 +178,7 @@ describe("v2 public badges", () => {
 
   it("publishes the badge contract in OpenAPI", async () => {
     const document = (await (
-      await get("/extensions/v2/docs/openapi.json", {})
+      await get("/v2/docs/openapi.json", {})
     ).json()) as { paths: Record<string, unknown> };
     expect(document.paths["/extensions/{id}/badges/{type}"]).toMatchObject({
       get: {

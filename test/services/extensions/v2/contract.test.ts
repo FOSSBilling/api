@@ -25,15 +25,12 @@ setupExtensionsV2Tests();
 describe("Extensions API v2 contract", () => {
   it("serves static developer routes ahead of /developers/{id}", async () => {
     await put(
-      "/extensions/v2/developers/me",
+      "/v2/developers/me",
       await authHeaders("user-1"),
       sampleDeveloper()
     );
 
-    const me = await get(
-      "/extensions/v2/developers/me",
-      await authHeaders("user-1")
-    );
+    const me = await get("/v2/developers/me", await authHeaders("user-1"));
     expect(me.status).toBe(200);
     await expect(me.json()).resolves.toMatchObject({
       result: { id: "dev-developer" }
@@ -43,7 +40,7 @@ describe("Extensions API v2 contract", () => {
   it("rejects reserved developer ids", async () => {
     for (const reserved of ["me", "claims", "unapproved"]) {
       const res = await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders(`user-${reserved}`),
         sampleDeveloper({ id: reserved })
       );
@@ -57,13 +54,13 @@ describe("Extensions API v2 contract", () => {
 
     // developer_id is public-scope only.
     const scoped = await get(
-      "/extensions/v2/extensions?scope=mine&developer_id=dev-developer",
+      "/v2/extensions?scope=mine&developer_id=dev-developer",
       mod
     );
     expect(scoped.status).toBe(422);
 
     // status/q are all-scope only.
-    const queued = await get("/extensions/v2/extensions?status=published", mod);
+    const queued = await get("/v2/extensions?status=published", mod);
     expect(queued.status).toBe(422);
   });
 
@@ -73,11 +70,11 @@ describe("Extensions API v2 contract", () => {
     const mod = await authHeaders("mod-1");
 
     for (const path of [
-      "/extensions/v2/extensions",
-      "/extensions/v2/revisions",
-      "/extensions/v2/developers",
-      "/extensions/v2/developers/claims?scope=pending",
-      "/extensions/v2/developers/new-developer/history"
+      "/v2/extensions",
+      "/v2/revisions",
+      "/v2/developers",
+      "/v2/developers/claims?scope=pending",
+      "/v2/developers/new-developer/history"
     ]) {
       const res = await get(path, mod);
       expect(res.status).toBe(200);
@@ -105,7 +102,7 @@ describe("Extensions API v2 contract", () => {
     await insertUser(db, { id: "mod-1", is_moderator: 1 });
     const mod = await authHeaders("mod-1");
 
-    const first = await get("/extensions/v2/developers?limit=1", mod);
+    const first = await get("/v2/developers?limit=1", mod);
     expect(first.status).toBe(200);
     const firstBody = (await first.json()) as {
       result: Array<{ id: string }>;
@@ -116,7 +113,7 @@ describe("Extensions API v2 contract", () => {
     expect(firstBody.pagination.next_cursor).toBeTruthy();
 
     const second = await get(
-      `/extensions/v2/developers?limit=1&cursor=${encodeURIComponent(firstBody.pagination.next_cursor as string)}`,
+      `/v2/developers?limit=1&cursor=${encodeURIComponent(firstBody.pagination.next_cursor as string)}`,
       mod
     );
     expect(second.status).toBe(200);
@@ -136,8 +133,8 @@ describe("Extensions API v2 contract", () => {
     const mod = await authHeaders("mod-1");
 
     for (const path of [
-      "/extensions/v2/developers?limit=10&offset=10",
-      "/extensions/v2/developers/claims?scope=pending&limit=10&offset=10"
+      "/v2/developers?limit=10&offset=10",
+      "/v2/developers/claims?scope=pending&limit=10&offset=10"
     ]) {
       const res = await get(path, mod);
       expect(res.status).toBe(422);
@@ -148,12 +145,12 @@ describe("Extensions API v2 contract", () => {
     await seedUnownedDeveloper("legacy-a");
     await seedUnownedDeveloper("legacy-b");
     await post(
-      "/extensions/v2/developers/legacy-a/claim",
+      "/v2/developers/legacy-a/claim",
       await authHeaders("user-1"),
       {}
     );
     await post(
-      "/extensions/v2/developers/legacy-b/claim",
+      "/v2/developers/legacy-b/claim",
       await authHeaders("user-1"),
       {}
     );
@@ -161,7 +158,7 @@ describe("Extensions API v2 contract", () => {
     const mod = await authHeaders("mod-1");
 
     const mine = await get(
-      "/extensions/v2/developers/claims?scope=mine&limit=1",
+      "/v2/developers/claims?scope=mine&limit=1",
       await authHeaders("user-1")
     );
     const mineBody = (await mine.json()) as {
@@ -170,7 +167,7 @@ describe("Extensions API v2 contract", () => {
     expect(mineBody.pagination.has_more).toBe(true);
 
     const crossed = await get(
-      `/extensions/v2/developers/claims?scope=pending&cursor=${encodeURIComponent(mineBody.pagination.next_cursor as string)}`,
+      `/v2/developers/claims?scope=pending&cursor=${encodeURIComponent(mineBody.pagination.next_cursor as string)}`,
       mod
     );
     expect(crossed.status).toBe(422);
@@ -181,23 +178,23 @@ describe("Extensions API v2 contract", () => {
     await seedUnownedDeveloper("legacy-b");
     await seedUnownedDeveloper("legacy-c");
     await post(
-      "/extensions/v2/developers/legacy-a/claim",
+      "/v2/developers/legacy-a/claim",
       await authHeaders("user-1"),
       {}
     );
     await post(
-      "/extensions/v2/developers/legacy-b/claim",
+      "/v2/developers/legacy-b/claim",
       await authHeaders("user-1"),
       {}
     );
     await post(
-      "/extensions/v2/developers/legacy-c/claim",
+      "/v2/developers/legacy-c/claim",
       await authHeaders("user-2"),
       {}
     );
 
     const mine = await get(
-      "/extensions/v2/developers/claims?scope=mine&limit=1",
+      "/v2/developers/claims?scope=mine&limit=1",
       await authHeaders("user-1")
     );
     const mineBody = (await mine.json()) as {
@@ -206,7 +203,7 @@ describe("Extensions API v2 contract", () => {
     expect(mineBody.pagination.has_more).toBe(true);
 
     const crossed = await get(
-      `/extensions/v2/developers/claims?scope=mine&cursor=${encodeURIComponent(mineBody.pagination.next_cursor as string)}`,
+      `/v2/developers/claims?scope=mine&cursor=${encodeURIComponent(mineBody.pagination.next_cursor as string)}`,
       await authHeaders("user-2")
     );
     expect(crossed.status).toBe(422);
@@ -214,34 +211,31 @@ describe("Extensions API v2 contract", () => {
 
   it("rejects a history cursor from another developer", async () => {
     await put(
-      "/extensions/v2/developers/me",
+      "/v2/developers/me",
       await authHeaders("user-1"),
       sampleDeveloper({ id: "dev-a", name: "Dev A" })
     );
     await put(
-      "/extensions/v2/developers/me",
+      "/v2/developers/me",
       await authHeaders("user-1"),
       sampleDeveloper({ id: "dev-a", name: "Dev A Edited" })
     );
     await put(
-      "/extensions/v2/developers/me",
+      "/v2/developers/me",
       await authHeaders("user-2"),
       sampleDeveloper({ id: "dev-b", name: "Dev B" })
     );
     await insertUser(db, { id: "mod-1", is_moderator: 1 });
     const mod = await authHeaders("mod-1");
 
-    const first = await get(
-      "/extensions/v2/developers/dev-a/history?limit=1",
-      mod
-    );
+    const first = await get("/v2/developers/dev-a/history?limit=1", mod);
     const firstBody = (await first.json()) as {
       pagination: { next_cursor: string | null; has_more: boolean };
     };
     expect(firstBody.pagination.has_more).toBe(true);
 
     const crossed = await get(
-      `/extensions/v2/developers/dev-b/history?cursor=${encodeURIComponent(firstBody.pagination.next_cursor as string)}`,
+      `/v2/developers/dev-b/history?cursor=${encodeURIComponent(firstBody.pagination.next_cursor as string)}`,
       mod
     );
     expect(crossed.status).toBe(422);
@@ -253,11 +247,11 @@ describe("Extensions API v2 contract", () => {
     const mod = await authHeaders("mod-1");
 
     for (const path of [
-      "/extensions/v2/extensions?cursor=nope",
-      "/extensions/v2/revisions?cursor=nope",
-      "/extensions/v2/developers?cursor=nope",
-      "/extensions/v2/developers/claims?scope=pending&cursor=nope",
-      "/extensions/v2/developers/new-developer/history?cursor=nope"
+      "/v2/extensions?cursor=nope",
+      "/v2/revisions?cursor=nope",
+      "/v2/developers?cursor=nope",
+      "/v2/developers/claims?scope=pending&cursor=nope",
+      "/v2/developers/new-developer/history?cursor=nope"
     ]) {
       const res = await get(path, mod);
       expect(res.status).toBe(422);

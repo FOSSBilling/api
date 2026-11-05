@@ -77,7 +77,7 @@ async function seedModAndExtension(): Promise<void> {
 // notification behaviour has its own suite (moderation-notify.test.ts).
 async function delist(as: string): Promise<Response> {
   return post(
-    "/extensions/v2/extensions/live-ext/delist?notify=false",
+    "/v2/extensions/live-ext/delist?notify=false",
     await authHeaders(as),
     { reason: "Upstream source removed" }
   );
@@ -108,17 +108,13 @@ describe("CDN cache revalidation on extension mutations", () => {
     const fetcher = stubFrontend();
     const headers = await authHeaders("noop-revalidate-owner");
     const profile = sampleDeveloper({ id: "noop-revalidate-profile" });
-    expect(
-      (await put("/extensions/v2/developers/me", headers, profile)).status
-    ).toBe(200);
+    expect((await put("/v2/developers/me", headers, profile)).status).toBe(200);
     expect(fetcher.fetch).toHaveBeenCalledTimes(1);
-    expect(
-      (await put("/extensions/v2/developers/me", headers, profile)).status
-    ).toBe(200);
+    expect((await put("/v2/developers/me", headers, profile)).status).toBe(200);
     expect(fetcher.fetch).toHaveBeenCalledTimes(1);
     expect(
       (
-        await put("/extensions/v2/developers/me", headers, {
+        await put("/v2/developers/me", headers, {
           ...profile,
           name: "Changed"
         })
@@ -155,7 +151,7 @@ describe("CDN cache revalidation on extension mutations", () => {
     const fetcher = stubFrontend();
 
     const res = await post(
-      "/extensions/v2/extensions/live-ext/relist?notify=false",
+      "/v2/extensions/live-ext/relist?notify=false",
       await authHeaders("mod-1"),
       {}
     );
@@ -175,7 +171,7 @@ describe("CDN cache revalidation on extension mutations", () => {
   it("purges after a revision approval", async () => {
     await seedModAndExtension();
     const created = await post(
-      "/extensions/v2/extensions",
+      "/v2/extensions",
       await authHeaders("user-1"),
       sampleCreate({ extensionId: "approve-rev" })
     );
@@ -186,7 +182,7 @@ describe("CDN cache revalidation on extension mutations", () => {
     const fetcher = stubFrontend();
 
     const res = await post(
-      `/extensions/v2/extensions/${result.id}/revisions/${result.revision_id}/approve?notify=false`,
+      `/v2/extensions/${result.id}/revisions/${result.revision_id}/approve?notify=false`,
       await authHeaders("mod-1"),
       {}
     );
@@ -199,7 +195,7 @@ describe("CDN cache revalidation on extension mutations", () => {
     const fetcher = stubFrontend();
 
     const res = await post(
-      "/extensions/v2/extensions/live-ext/moderator-correct",
+      "/v2/extensions/live-ext/moderator-correct",
       await authHeaders("mod-1"),
       { ...sampleContent(), correction_note: "Fix truncated readme" }
     );
@@ -210,7 +206,7 @@ describe("CDN cache revalidation on extension mutations", () => {
   it("purges after a revision rejection", async () => {
     await seedModAndExtension();
     const created = await post(
-      "/extensions/v2/extensions",
+      "/v2/extensions",
       await authHeaders("user-1"),
       sampleCreate({ extensionId: "reject-rev" })
     );
@@ -221,7 +217,7 @@ describe("CDN cache revalidation on extension mutations", () => {
     const fetcher = stubFrontend();
 
     const res = await post(
-      `/extensions/v2/extensions/${result.id}/revisions/${result.revision_id}/reject?notify=false`,
+      `/v2/extensions/${result.id}/revisions/${result.revision_id}/reject?notify=false`,
       await authHeaders("mod-1"),
       { review_note: "Needs work" }
     );
@@ -247,7 +243,7 @@ describe("CDN cache revalidation on extension mutations", () => {
     const fetcher = stubFrontend();
 
     const res = await post(
-      "/extensions/v2/developers/claims/claim-1/approve?notify=false",
+      "/v2/developers/claims/claim-1/approve?notify=false",
       await authHeaders("mod-1")
     );
     expect(res.status).toBe(200);
@@ -270,7 +266,7 @@ describe("CDN cache revalidation on extension mutations", () => {
     const fetcher = stubFrontend();
 
     const res = await del(
-      "/extensions/v2/extensions/draft-ext",
+      "/v2/extensions/draft-ext",
       await authHeaders("user-1")
     );
     expect(res.status).toBe(200);
@@ -281,7 +277,7 @@ describe("CDN cache revalidation on extension mutations", () => {
     const fetcher = stubFrontend();
 
     const res = await put(
-      "/extensions/v2/developers/me",
+      "/v2/developers/me",
       await authHeaders("user-1"),
       sampleDeveloper()
     );
@@ -303,10 +299,7 @@ describe("CDN cache revalidation on extension mutations", () => {
     });
     const fetcher = stubFrontend();
 
-    const res = await del(
-      "/extensions/v2/developers/me",
-      await authHeaders("user-1")
-    );
+    const res = await del("/v2/developers/me", await authHeaders("user-1"));
     expect(res.status).toBe(200);
     expect(fetchCalls(fetcher)).toHaveLength(1);
   });

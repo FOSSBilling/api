@@ -104,14 +104,14 @@ extensionsV2.route(
       (cachedOpenApiDocument ??= extensionsV2.getOpenAPI31Document({
         openapi: "3.1.0",
         info: {
-          title: "FOSSBilling Extensions API (v2)",
+          title: "FOSSBilling API (extensionsV2)",
           version: "2.0.0",
           description:
             "Self-service extension publishing, ownership, moderation, and public browsing. v1 (/extensions/v1) remains available for existing integrations."
         },
-        servers: [{ url: "/extensions/v2" }]
+        servers: [{ url: "/v2" }]
       })),
-    pageTitle: "FOSSBilling Extensions API (v2)",
+    pageTitle: "FOSSBilling API (extensionsV2)",
     agent: { disabled: true },
     documentDownloadType: "none",
     hideClientButton: true,

@@ -111,12 +111,12 @@ describe("commit-time moderator authority", () => {
           }
         });
         const path = action.startsWith("revision")
-          ? `/extensions/v2/extensions/review-extension/revisions/review-revision/${action.split(" ")[1]}`
+          ? `/v2/extensions/review-extension/revisions/review-revision/${action.split(" ")[1]}`
           : claimAction
-            ? `/extensions/v2/developers/claims/review-claim/${action.split(" ")[1]}`
+            ? `/v2/developers/claims/review-claim/${action.split(" ")[1]}`
             : action === "delist"
-              ? "/extensions/v2/extensions/review-extension/delist"
-              : "/extensions/v2/developers/review-developer/approve";
+              ? "/v2/extensions/review-extension/delist"
+              : "/v2/developers/review-developer/approve";
         const res = await post(path, headers, {
           ...(action.endsWith("reject")
             ? { review_note: "Review decision" }

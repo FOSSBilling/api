@@ -42,7 +42,7 @@ async function createPending(
   overrides?: { extensionId?: string; name?: string }
 ): Promise<{ id: string; revisionId: string }> {
   const res = await post(
-    "/extensions/v2/extensions",
+    "/v2/extensions",
     await authHeaders(user),
     sampleCreate(overrides)
   );
@@ -58,23 +58,20 @@ function reviewPath(
   revisionId: string,
   action: "approve" | "reject"
 ): string {
-  return `/extensions/v2/extensions/${id}/revisions/${revisionId}/${action}`;
+  return `/v2/extensions/${id}/revisions/${revisionId}/${action}`;
 }
 
 describe("Extensions API v2", () => {
   describe("GET /revisions (queue)", () => {
     it("requires moderator access", async () => {
-      const res = await get(
-        "/extensions/v2/revisions",
-        await authHeaders("user-1")
-      );
+      const res = await get("/v2/revisions", await authHeaders("user-1"));
       expect(res.status).toBe(403);
     });
 
     it("identifies invalid cursors", async () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       const res = await get(
-        "/extensions/v2/revisions?cursor=not-a-cursor",
+        "/v2/revisions?cursor=not-a-cursor",
         await authHeaders("mod-1")
       );
       expect(res.status).toBe(422);
@@ -88,10 +85,7 @@ describe("Extensions API v2", () => {
       await seedDeveloper("new-developer", "user-1");
       await createPending("user-1");
 
-      const res = await get(
-        "/extensions/v2/revisions",
-        await authHeaders("mod-1")
-      );
+      const res = await get("/v2/revisions", await authHeaders("mod-1"));
       expect(res.status).toBe(200);
       expect(res.headers.get("Vary")).toBe("Authorization");
       const data = (await res.json()) as {
@@ -114,7 +108,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await get(
-        "/extensions/v2/extensions/live-ext",
+        "/v2/extensions/live-ext",
         await authHeaders("user-2")
       );
       expect(res.status).toBe(200);
@@ -129,7 +123,7 @@ describe("Extensions API v2", () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
 
       const res = await get(
-        "/extensions/v2/extensions/no-such-extension",
+        "/v2/extensions/no-such-extension",
         await authHeaders("mod-1")
       );
       expect(res.status).toBe(404);
@@ -144,7 +138,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await get(
-        "/extensions/v2/extensions/live-ext",
+        "/v2/extensions/live-ext",
         await authHeaders("mod-1")
       );
       expect(res.status).toBe(200);
@@ -162,14 +156,12 @@ describe("Extensions API v2", () => {
         id: "live-ext",
         developer_id: "new-developer"
       });
-      await post(
-        "/extensions/v2/extensions/live-ext/delist",
-        await authHeaders("mod-1"),
-        { reason: "Upstream source removed" }
-      );
+      await post("/v2/extensions/live-ext/delist", await authHeaders("mod-1"), {
+        reason: "Upstream source removed"
+      });
 
       const res = await get(
-        "/extensions/v2/extensions/live-ext",
+        "/v2/extensions/live-ext",
         await authHeaders("mod-1")
       );
       expect(res.status).toBe(200);
@@ -183,7 +175,7 @@ describe("Extensions API v2", () => {
     it("requires moderator access", async () => {
       await seedDeveloper("new-developer", "user-1");
       const res = await get(
-        "/extensions/v2/extensions?scope=all",
+        "/v2/extensions?scope=all",
         await authHeaders("user-1")
       );
       expect(res.status).toBe(403);
@@ -200,11 +192,9 @@ describe("Extensions API v2", () => {
         id: "draft-ext",
         developer_id: "new-developer"
       });
-      await post(
-        "/extensions/v2/extensions/live-ext/delist",
-        await authHeaders("mod-1"),
-        { reason: "Upstream source removed" }
-      );
+      await post("/v2/extensions/live-ext/delist", await authHeaders("mod-1"), {
+        reason: "Upstream source removed"
+      });
       await seedDeveloper("other-developer", "user-2");
       await insertExtension(db, {
         id: "other-ext",
@@ -212,7 +202,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await get(
-        "/extensions/v2/extensions?scope=all",
+        "/v2/extensions?scope=all",
         await authHeaders("mod-1")
       );
       expect(res.status).toBe(200);
@@ -240,13 +230,13 @@ describe("Extensions API v2", () => {
         developer_id: "new-developer"
       });
       await post(
-        "/extensions/v2/extensions/delisted-ext/delist",
+        "/v2/extensions/delisted-ext/delist",
         await authHeaders("mod-1"),
         { reason: "Upstream source removed" }
       );
 
       const published = await get(
-        "/extensions/v2/extensions?scope=all&status=published",
+        "/v2/extensions?scope=all&status=published",
         await authHeaders("mod-1")
       );
       expect(await published.json()).toMatchObject({
@@ -254,7 +244,7 @@ describe("Extensions API v2", () => {
       });
 
       const delisted = await get(
-        "/extensions/v2/extensions?scope=all&status=delisted",
+        "/v2/extensions?scope=all&status=delisted",
         await authHeaders("mod-1")
       );
       expect(await delisted.json()).toMatchObject({
@@ -262,7 +252,7 @@ describe("Extensions API v2", () => {
       });
 
       const unpublished = await get(
-        "/extensions/v2/extensions?scope=all&status=unpublished",
+        "/v2/extensions?scope=all&status=unpublished",
         await authHeaders("mod-1")
       );
       expect(await unpublished.json()).toMatchObject({
@@ -287,7 +277,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await get(
-        "/extensions/v2/extensions?scope=all&q=GATE",
+        "/v2/extensions?scope=all&q=GATE",
         await authHeaders("mod-1")
       );
       expect(res.status).toBe(200);
@@ -307,7 +297,7 @@ describe("Extensions API v2", () => {
       });
 
       const percentRes = await get(
-        `/extensions/v2/extensions?scope=all&${new URLSearchParams({ q: "pay%gate" })}`,
+        `/v2/extensions?scope=all&${new URLSearchParams({ q: "pay%gate" })}`,
         await authHeaders("mod-1")
       );
       expect(percentRes.status).toBe(200);
@@ -316,7 +306,7 @@ describe("Extensions API v2", () => {
       // Unescaped, "_" is a single-character wildcard that would match the
       // "-" in "pay-gate" - this must not happen either.
       const underscoreRes = await get(
-        `/extensions/v2/extensions?scope=all&${new URLSearchParams({ q: "pay_gate" })}`,
+        `/v2/extensions?scope=all&${new URLSearchParams({ q: "pay_gate" })}`,
         await authHeaders("mod-1")
       );
       expect(underscoreRes.status).toBe(200);
@@ -407,9 +397,7 @@ describe("Extensions API v2", () => {
 
       // Until approval the extension exists but is in neither public listing.
       expect((await get("/extensions/v1/new-ext", {})).status).toBe(404);
-      expect((await get("/extensions/v2/extensions/new-ext", {})).status).toBe(
-        404
-      );
+      expect((await get("/v2/extensions/new-ext", {})).status).toBe(404);
 
       const approved = await post(
         reviewPath(id, revisionId, "approve"),
@@ -472,7 +460,7 @@ describe("Extensions API v2", () => {
       const afterFirst = await getExtension(db, first.id);
 
       const edit = await put(
-        `/extensions/v2/extensions/${first.id}`,
+        `/v2/extensions/${first.id}`,
         await authHeaders("user-1"),
         sampleContent({ name: "Second Version" })
       );
@@ -565,7 +553,7 @@ describe("Extensions API v2", () => {
 
       // But it is still readable as history, with the empty releases intact.
       const history = await get(
-        "/extensions/v2/extensions/legacy-ext/revisions/legacy-revision",
+        "/v2/extensions/legacy-ext/revisions/legacy-revision",
         await authHeaders("user-1")
       );
       expect(history.status).toBe(200);
@@ -598,7 +586,7 @@ describe("Extensions API v2", () => {
         review_note: "first decision"
       });
       const second = await put(
-        `/extensions/v2/extensions/${first.id}`,
+        `/v2/extensions/${first.id}`,
         await authHeaders("user-1"),
         sampleContent({ name: "Second" })
       );
@@ -616,7 +604,7 @@ describe("Extensions API v2", () => {
         .run();
 
       const mine = await get(
-        `/extensions/v2/extensions/${first.id}`,
+        `/v2/extensions/${first.id}`,
         await authHeaders("user-1")
       );
       await expect(mine.json()).resolves.toMatchObject({
@@ -703,7 +691,7 @@ describe("Extensions API v2", () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
 
       const edit = await put(
-        "/extensions/v2/extensions/Existing-Ext",
+        "/v2/extensions/Existing-Ext",
         await authHeaders("owner-1"),
         sampleContent()
       );
@@ -771,7 +759,7 @@ describe("Extensions API v2", () => {
       expect(stored?.published_at).toBeNull();
 
       const mine = await get(
-        `/extensions/v2/extensions/${id}`,
+        `/v2/extensions/${id}`,
         await authHeaders("user-1")
       );
       await expect(mine.json()).resolves.toMatchObject({
@@ -797,7 +785,7 @@ describe("Extensions API v2", () => {
       );
 
       const retry = await put(
-        `/extensions/v2/extensions/${id}`,
+        `/v2/extensions/${id}`,
         await authHeaders("user-1"),
         sampleContent({ name: "Fixed" })
       );
@@ -845,7 +833,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await post(
-        "/extensions/v2/extensions/live-ext/delist",
+        "/v2/extensions/live-ext/delist",
         await authHeaders("user-1"),
         { reason: "Upstream source removed" }
       );
@@ -856,7 +844,7 @@ describe("Extensions API v2", () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
 
       const res = await post(
-        "/extensions/v2/extensions/no-such-extension/delist",
+        "/v2/extensions/no-such-extension/delist",
         await authHeaders("mod-1"),
         { reason: "Upstream source removed" }
       );
@@ -872,7 +860,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await post(
-        "/extensions/v2/extensions/draft-ext/delist",
+        "/v2/extensions/draft-ext/delist",
         await authHeaders("mod-1"),
         { reason: "Upstream source removed" }
       );
@@ -888,7 +876,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await post(
-        "/extensions/v2/extensions/live-ext/delist",
+        "/v2/extensions/live-ext/delist",
         await authHeaders("mod-1"),
         { reason: "" }
       );
@@ -904,7 +892,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await post(
-        "/extensions/v2/extensions/live-ext/delist",
+        "/v2/extensions/live-ext/delist",
         await authHeaders("mod-1"),
         { reason: "   " }
       );
@@ -921,7 +909,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await post(
-        "/extensions/v2/extensions/live-ext/delist",
+        "/v2/extensions/live-ext/delist",
         await authHeaders("mod-1"),
         { reason: "Upstream source removed" }
       );
@@ -938,17 +926,15 @@ describe("Extensions API v2", () => {
         "2020-01-01T00:00:00.000Z"
       );
 
-      expect((await get("/extensions/v2/extensions", {})).status).toBe(200);
+      expect((await get("/v2/extensions", {})).status).toBe(200);
       await expect(
-        (await get("/extensions/v2/extensions", {})).json()
+        (await get("/v2/extensions", {})).json()
       ).resolves.toMatchObject({ result: [] });
-      expect((await get("/extensions/v2/extensions/live-ext", {})).status).toBe(
-        404
-      );
+      expect((await get("/v2/extensions/live-ext", {})).status).toBe(404);
 
       // The owner can still see it, plus why it was pulled.
       const mine = await get(
-        "/extensions/v2/extensions/live-ext",
+        "/v2/extensions/live-ext",
         await authHeaders("user-1")
       );
       await expect(mine.json()).resolves.toMatchObject({
@@ -967,11 +953,11 @@ describe("Extensions API v2", () => {
         developer_id: "new-developer"
       });
       const mod = await authHeaders("mod-1");
-      await post("/extensions/v2/extensions/live-ext/delist", mod, {
+      await post("/v2/extensions/live-ext/delist", mod, {
         reason: "First reason"
       });
 
-      const res = await post("/extensions/v2/extensions/live-ext/delist", mod, {
+      const res = await post("/v2/extensions/live-ext/delist", mod, {
         reason: "Second reason"
       });
       expect(res.status).toBe(409);
@@ -992,16 +978,12 @@ describe("Extensions API v2", () => {
         id: "live-ext",
         developer_id: "new-developer"
       });
-      await post(
-        "/extensions/v2/extensions/live-ext/delist",
-        await authHeaders("mod-1"),
-        {
-          reason: "Upstream source removed"
-        }
-      );
+      await post("/v2/extensions/live-ext/delist", await authHeaders("mod-1"), {
+        reason: "Upstream source removed"
+      });
 
       const owner = await get(
-        "/extensions/v2/extensions/live-ext",
+        "/v2/extensions/live-ext",
         await authHeaders("user-1")
       );
       expect(owner.status).toBe(200);
@@ -1011,7 +993,7 @@ describe("Extensions API v2", () => {
       });
 
       const moderator = await get(
-        "/extensions/v2/extensions/live-ext",
+        "/v2/extensions/live-ext",
         await authHeaders("mod-1")
       );
       expect(moderator.status).toBe(200);
@@ -1021,16 +1003,16 @@ describe("Extensions API v2", () => {
       });
 
       const stranger = await get(
-        "/extensions/v2/extensions/live-ext",
+        "/v2/extensions/live-ext",
         await authHeaders("user-2")
       );
       expect(stranger.status).toBe(404);
 
-      const anonymous = await get("/extensions/v2/extensions/live-ext", {});
+      const anonymous = await get("/v2/extensions/live-ext", {});
       expect(anonymous.status).toBe(404);
 
       const strangerRevisions = await get(
-        "/extensions/v2/extensions/live-ext/revisions",
+        "/v2/extensions/live-ext/revisions",
         await authHeaders("user-2")
       );
       expect(strangerRevisions.status).toBe(403);
@@ -1046,7 +1028,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await post(
-        "/extensions/v2/extensions/live-ext/relist",
+        "/v2/extensions/live-ext/relist",
         await authHeaders("user-1"),
         {}
       );
@@ -1057,7 +1039,7 @@ describe("Extensions API v2", () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
 
       const res = await post(
-        "/extensions/v2/extensions/no-such-extension/relist",
+        "/v2/extensions/no-such-extension/relist",
         await authHeaders("mod-1"),
         {}
       );
@@ -1073,7 +1055,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await post(
-        "/extensions/v2/extensions/live-ext/relist",
+        "/v2/extensions/live-ext/relist",
         await authHeaders("mod-1"),
         {}
       );
@@ -1093,15 +1075,12 @@ describe("Extensions API v2", () => {
         developer_id: "new-developer"
       });
       const mod = await authHeaders("mod-1");
-      await post("/extensions/v2/extensions/live-ext/delist", mod, {
+      await post("/v2/extensions/live-ext/delist", mod, {
         reason: "Upstream source removed"
       });
 
       const { "Content-Type": _dropped, ...noContentType } = mod;
-      const res = await post(
-        "/extensions/v2/extensions/live-ext/relist",
-        noContentType
-      );
+      const res = await post("/v2/extensions/live-ext/relist", noContentType);
       expect(res.status).toBe(200);
       await expect(res.json()).resolves.toEqual({
         result: { id: "live-ext", status: "relisted", notified: false }
@@ -1116,15 +1095,15 @@ describe("Extensions API v2", () => {
         developer_id: "new-developer"
       });
       const mod = await authHeaders("mod-1");
-      await post("/extensions/v2/extensions/live-ext/delist", mod, {
+      await post("/v2/extensions/live-ext/delist", mod, {
         reason: "Upstream source removed"
       });
-      expect((await get("/extensions/v2/extensions", {})).status).toBe(200);
+      expect((await get("/v2/extensions", {})).status).toBe(200);
       await expect(
-        (await get("/extensions/v2/extensions", {})).json()
+        (await get("/v2/extensions", {})).json()
       ).resolves.toMatchObject({ result: [] });
 
-      const res = await post("/extensions/v2/extensions/live-ext/relist", mod, {
+      const res = await post("/v2/extensions/live-ext/relist", mod, {
         review_note: "Upstream is back"
       });
       expect(res.status).toBe(200);
@@ -1136,7 +1115,7 @@ describe("Extensions API v2", () => {
         delisted_at: null
       });
       await expect(
-        (await get("/extensions/v2/extensions", {})).json()
+        (await get("/v2/extensions", {})).json()
       ).resolves.toMatchObject({ result: [{ id: "live-ext" }] });
     });
 
@@ -1148,15 +1127,11 @@ describe("Extensions API v2", () => {
         developer_id: "new-developer"
       });
       const mod = await authHeaders("mod-1");
-      await post("/extensions/v2/extensions/live-ext/delist", mod, {
+      await post("/v2/extensions/live-ext/delist", mod, {
         reason: "Upstream source removed"
       });
 
-      const res = await post(
-        "/extensions/v2/extensions/Live-EXT/relist",
-        mod,
-        {}
-      );
+      const res = await post("/v2/extensions/Live-EXT/relist", mod, {});
       expect(res.status).toBe(200);
       await expect(res.json()).resolves.toEqual({
         result: { id: "LIVE-ext", status: "relisted", notified: false }
@@ -1171,7 +1146,7 @@ describe("Extensions API v2", () => {
         developer_id: "new-developer"
       });
       const mod = await authHeaders("mod-1");
-      await post("/extensions/v2/extensions/live-ext/delist", mod, {
+      await post("/v2/extensions/live-ext/delist", mod, {
         reason: "Upstream source removed"
       });
 
@@ -1180,11 +1155,7 @@ describe("Extensions API v2", () => {
         .bind("mod-1")
         .run();
 
-      const res = await post(
-        "/extensions/v2/extensions/live-ext/relist",
-        mod,
-        {}
-      );
+      const res = await post("/v2/extensions/live-ext/relist", mod, {});
       expect(res.status).toBe(403);
       expect(await getExtension(db, "live-ext")).toMatchObject({
         delisted_at: expect.any(String)
@@ -1195,26 +1166,26 @@ describe("Extensions API v2", () => {
   describe("developer moderation", () => {
     it("binds approval to the exact profile revision reviewed", async () => {
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper({ name: "Revision two" })
       );
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
 
       const stale = await post(
-        "/extensions/v2/developers/dev-developer/approve",
+        "/v2/developers/dev-developer/approve",
         await authHeaders("mod-1"),
         await developerApproval("dev-developer", 1)
       );
       expect(stale.status).toBe(409);
 
       const current = await post(
-        "/extensions/v2/developers/dev-developer/approve",
+        "/v2/developers/dev-developer/approve",
         await authHeaders("mod-1"),
         await developerApproval("dev-developer", 2)
       );
@@ -1223,7 +1194,7 @@ describe("Extensions API v2", () => {
 
     it("does not turn an approval diagnosis database failure into not found", async () => {
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
@@ -1236,7 +1207,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await post(
-        "/extensions/v2/developers/dev-developer/approve",
+        "/v2/developers/dev-developer/approve",
         await authHeaders("mod-1"),
         await developerApproval("dev-developer", 999)
       );
@@ -1250,7 +1221,7 @@ describe("Extensions API v2", () => {
 
     it("reports an inactive moderator when the account is deactivated during approval", async () => {
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
@@ -1272,7 +1243,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await post(
-        "/extensions/v2/developers/dev-developer/approve",
+        "/v2/developers/dev-developer/approve",
         await authHeaders("mod-1"),
         await developerApproval("dev-developer", 1)
       );
@@ -1288,14 +1259,14 @@ describe("Extensions API v2", () => {
 
     it("approves a developer and removes it from the unapproved list", async () => {
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
 
       const approve = await post(
-        "/extensions/v2/developers/dev-developer/approve",
+        "/v2/developers/dev-developer/approve",
         await authHeaders("mod-1"),
         await developerApproval("dev-developer", 1)
       );
@@ -1310,7 +1281,7 @@ describe("Extensions API v2", () => {
       });
 
       const unapproved = await get(
-        "/extensions/v2/developers?status=unapproved",
+        "/v2/developers?status=unapproved",
         await authHeaders("mod-1")
       );
       expect(unapproved.status).toBe(200);
@@ -1326,7 +1297,7 @@ describe("Extensions API v2", () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
 
       const res = await post(
-        "/extensions/v2/developers/no-such-developer/approve",
+        "/v2/developers/no-such-developer/approve",
         await authHeaders("mod-1"),
         { expected_revision: 1, expected_generation: "0".repeat(32) }
       );
@@ -1335,7 +1306,7 @@ describe("Extensions API v2", () => {
 
     it("blocks non-moderators from listing unapproved developers", async () => {
       const res = await get(
-        "/extensions/v2/developers?status=unapproved",
+        "/v2/developers?status=unapproved",
         await authHeaders("user-1")
       );
       expect(res.status).toBe(403);
@@ -1343,26 +1314,23 @@ describe("Extensions API v2", () => {
 
     it("lists every developer, approved and unapproved", async () => {
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-2"),
         sampleDeveloper({ id: "other-developer", name: "Other Developer" })
       );
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await post(
-        "/extensions/v2/developers/dev-developer/approve",
+        "/v2/developers/dev-developer/approve",
         await authHeaders("mod-1"),
         await developerApproval("dev-developer", 1)
       );
 
-      const res = await get(
-        "/extensions/v2/developers",
-        await authHeaders("mod-1")
-      );
+      const res = await get("/v2/developers", await authHeaders("mod-1"));
       expect(res.status).toBe(200);
       const body = (await res.json()) as {
         result: Array<{ id: string; approved: boolean }>;
@@ -1380,26 +1348,20 @@ describe("Extensions API v2", () => {
     });
 
     it("blocks non-moderators from listing all developers", async () => {
-      const res = await get(
-        "/extensions/v2/developers",
-        await authHeaders("user-1")
-      );
+      const res = await get("/v2/developers", await authHeaders("user-1"));
       expect(res.status).toBe(403);
     });
 
     it("lists by scope and rejects a conflicting scope/status pair", async () => {
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       const mod = await authHeaders("mod-1");
 
-      const scoped = await get(
-        "/extensions/v2/developers?scope=unapproved",
-        mod
-      );
+      const scoped = await get("/v2/developers?scope=unapproved", mod);
       expect(scoped.status).toBe(200);
       await expect(scoped.json()).resolves.toMatchObject({
         result: [{ id: "dev-developer" }],
@@ -1407,7 +1369,7 @@ describe("Extensions API v2", () => {
       });
 
       const conflict = await get(
-        "/extensions/v2/developers?scope=all&status=unapproved",
+        "/v2/developers?scope=all&status=unapproved",
         mod
       );
       expect(conflict.status).toBe(422);
@@ -1415,19 +1377,19 @@ describe("Extensions API v2", () => {
 
     it("walks the developer list by cursor", async () => {
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper({ id: "aaa-developer", name: "Aaa Developer" })
       );
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-2"),
         sampleDeveloper({ id: "zzz-developer", name: "Zzz Developer" })
       );
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       const mod = await authHeaders("mod-1");
 
-      const first = await get("/extensions/v2/developers?limit=1", mod);
+      const first = await get("/v2/developers?limit=1", mod);
       expect(first.status).toBe(200);
       const firstBody = (await first.json()) as {
         result: Array<{ id: string }>;
@@ -1438,7 +1400,7 @@ describe("Extensions API v2", () => {
       expect(firstBody.pagination.next_cursor).toBeTruthy();
 
       const second = await get(
-        `/extensions/v2/developers?limit=1&cursor=${encodeURIComponent(firstBody.pagination.next_cursor!)}`,
+        `/v2/developers?limit=1&cursor=${encodeURIComponent(firstBody.pagination.next_cursor!)}`,
         mod
       );
       expect(second.status).toBe(200);
@@ -1452,22 +1414,19 @@ describe("Extensions API v2", () => {
         has_more: false
       });
 
-      const bad = await get(
-        "/extensions/v2/developers?cursor=not-a-cursor",
-        mod
-      );
+      const bad = await get("/v2/developers?cursor=not-a-cursor", mod);
       expect(bad.status).toBe(422);
     });
 
     it("blocks non-moderators from approving developers", async () => {
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
 
       const res = await post(
-        "/extensions/v2/developers/dev-developer/approve",
+        "/v2/developers/dev-developer/approve",
         await authHeaders("user-1"),
         await developerApproval("dev-developer", 1)
       );
@@ -1478,14 +1437,14 @@ describe("Extensions API v2", () => {
   describe("GET /developers/{id}/history", () => {
     it("records a history entry for a newly created profile", async () => {
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
 
       const res = await get(
-        "/extensions/v2/developers/dev-developer/history",
+        "/v2/developers/dev-developer/history",
         await authHeaders("mod-1")
       );
 
@@ -1506,14 +1465,14 @@ describe("Extensions API v2", () => {
     // Params omitted fall back to a bounded cursor window (default limit 50).
     it("applies the default pagination window when params are omitted", async () => {
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
 
       const res = await get(
-        "/extensions/v2/developers/dev-developer/history",
+        "/v2/developers/dev-developer/history",
         await authHeaders("mod-1")
       );
 
@@ -1530,12 +1489,12 @@ describe("Extensions API v2", () => {
 
     it("bounds history pages to the requested limit", async () => {
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper({ name: "Original Name" })
       );
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper({ name: "Edited Name" })
       );
@@ -1543,7 +1502,7 @@ describe("Extensions API v2", () => {
       const mod = await authHeaders("mod-1");
 
       const first = await get(
-        "/extensions/v2/developers/dev-developer/history?limit=1",
+        "/v2/developers/dev-developer/history?limit=1",
         mod
       );
       expect(first.status).toBe(200);
@@ -1556,7 +1515,7 @@ describe("Extensions API v2", () => {
       expect(firstBody.pagination.next_cursor).toBeTruthy();
 
       const second = await get(
-        `/extensions/v2/developers/dev-developer/history?limit=1&cursor=${encodeURIComponent(firstBody.pagination.next_cursor as string)}`,
+        `/v2/developers/dev-developer/history?limit=1&cursor=${encodeURIComponent(firstBody.pagination.next_cursor as string)}`,
         mod
       );
       const secondBody = (await second.json()) as {
@@ -1574,7 +1533,7 @@ describe("Extensions API v2", () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
 
       const res = await get(
-        "/extensions/v2/developers/dev-developer/history?cursor=not-a-cursor",
+        "/v2/developers/dev-developer/history?cursor=not-a-cursor",
         await authHeaders("mod-1")
       );
       expect(res.status).toBe(422);
@@ -1582,19 +1541,19 @@ describe("Extensions API v2", () => {
 
     it("orders entries newest-first and snapshots each write", async () => {
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper({ name: "Original Name" })
       );
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper({ name: "Edited Name" })
       );
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
 
       const res = await get(
-        "/extensions/v2/developers/dev-developer/history",
+        "/v2/developers/dev-developer/history",
         await authHeaders("mod-1")
       );
 
@@ -1611,7 +1570,7 @@ describe("Extensions API v2", () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
 
       const res = await get(
-        "/extensions/v2/developers/no-such-developer/history",
+        "/v2/developers/no-such-developer/history",
         await authHeaders("mod-1")
       );
 
@@ -1622,13 +1581,13 @@ describe("Extensions API v2", () => {
 
     it("blocks non-moderators", async () => {
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
 
       const res = await get(
-        "/extensions/v2/developers/dev-developer/history",
+        "/v2/developers/dev-developer/history",
         await authHeaders("user-1")
       );
       expect(res.status).toBe(403);
@@ -1636,13 +1595,13 @@ describe("Extensions API v2", () => {
 
     it("does not record history for a rejected write (id already taken)", async () => {
       await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-1"),
         sampleDeveloper()
       );
 
       const res = await put(
-        "/extensions/v2/developers/me",
+        "/v2/developers/me",
         await authHeaders("user-2"),
         sampleDeveloper()
       );
@@ -1650,7 +1609,7 @@ describe("Extensions API v2", () => {
 
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       const history = await get(
-        "/extensions/v2/developers/dev-developer/history",
+        "/v2/developers/dev-developer/history",
         await authHeaders("mod-1")
       );
       const data = (await history.json()) as { result: unknown[] };
@@ -1661,7 +1620,7 @@ describe("Extensions API v2", () => {
   describe("GET /moderation/counts", () => {
     it("requires moderator access", async () => {
       const res = await get(
-        "/extensions/v2/moderation/counts",
+        "/v2/moderation/counts",
         await authHeaders("user-1")
       );
       expect(res.status).toBe(403);
@@ -1712,7 +1671,7 @@ describe("Extensions API v2", () => {
       });
 
       const res = await get(
-        "/extensions/v2/moderation/counts",
+        "/v2/moderation/counts",
         await authHeaders("mod-1")
       );
       expect(res.status).toBe(200);

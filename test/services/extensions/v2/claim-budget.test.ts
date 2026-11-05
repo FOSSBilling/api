@@ -17,7 +17,7 @@ vi.mock("@octokit/request", async () =>
   (await import("../../../mocks/octokit")).octokitRequestMock()
 );
 setupExtensionsV2Tests();
-const path = "/extensions/v2/developers/target/claim";
+const path = "/v2/developers/target/claim";
 
 describe("durable claim verification budgets", () => {
   it("stops mismatches before GitHub, including after changing targets", async () => {
@@ -29,7 +29,7 @@ describe("durable claim verification budgets", () => {
     for (let i = 0; i < 4; i++) {
       await seedUnownedDeveloper(`target-${i}`);
       const response = await post(
-        `/extensions/v2/developers/target-${i}/claim`,
+        `/v2/developers/target-${i}/claim`,
         headers,
         {}
       );
@@ -46,12 +46,8 @@ describe("durable claim verification budgets", () => {
       expect(response.status).toBe(201);
       const body = (await response.json()) as { result: { id: string } };
       expect(
-        (
-          await post(
-            `/extensions/v2/developers/claims/${body.result.id}/cancel`,
-            headers
-          )
-        ).status
+        (await post(`/v2/developers/claims/${body.result.id}/cancel`, headers))
+          .status
       ).toBe(200);
     }
     expect((await post(path, headers, {})).status).toBe(429);
@@ -77,7 +73,7 @@ describe("durable claim verification budgets", () => {
     expect(
       (
         await post(
-          "/extensions/v2/developers/independent-target/claim",
+          "/v2/developers/independent-target/claim",
           await authHeaders("independent"),
           {}
         )

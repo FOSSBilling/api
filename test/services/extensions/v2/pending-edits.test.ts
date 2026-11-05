@@ -24,11 +24,11 @@ vi.mock("@octokit/request", async () =>
   (await import("../../../mocks/octokit")).octokitRequestMock()
 );
 setupExtensionsV2Tests();
-const root = "/extensions/v2/extensions/new-ext";
+const root = "/v2/extensions/new-ext";
 async function pending() {
   await seedDeveloper("dev", "owner");
   const response = await post(
-    "/extensions/v2/extensions",
+    "/v2/extensions",
     await authHeaders("owner"),
     sampleCreate()
   );
@@ -118,7 +118,7 @@ describe("pending submission replacement", () => {
         content: JSON.stringify(sampleContent())
       });
       const response = await put(
-        "/extensions/v2/extensions/NEW-EXT/revisions/canonical-revision",
+        "/v2/extensions/NEW-EXT/revisions/canonical-revision",
         await authHeaders("owner"),
         sampleContent({ name: "Updated" })
       );

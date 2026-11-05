@@ -10,15 +10,24 @@ vi.mock("@octokit/request", async () =>
 setupExtensionsV2Tests();
 
 describe("Extensions API v2", () => {
+  it.each(["/extensions", "/docs/openapi.json"])(
+    "does not mount the old service base for %s",
+    async (path) => {
+      expect((await get(`/extensions/v2${path}`, {})).status).toBe(404);
+    }
+  );
+
   describe("OpenAPI docs", () => {
     it("serves a generated OpenAPI document", async () => {
-      const res = await get("/extensions/v2/docs/openapi.json", {});
+      const res = await get("/v2/docs/openapi.json", {});
       expect(res.status).toBe(200);
       const spec = (await res.json()) as {
         openapi: string;
+        servers: { url: string }[];
         paths: Record<string, unknown>;
       };
       expect(spec.openapi).toBe("3.1.0");
+      expect(spec.servers).toEqual([{ url: "/v2" }]);
       expect(Object.keys(spec.paths)).toEqual(
         expect.arrayContaining([
           "/extensions",
@@ -62,7 +71,7 @@ describe("Extensions API v2", () => {
     });
 
     it("serves the Scalar API reference UI", async () => {
-      const res = await get("/extensions/v2/docs", {});
+      const res = await get("/v2/docs", {});
       expect(res.status).toBe(200);
       expect(res.headers.get("Content-Type")).toContain("text/html");
     });

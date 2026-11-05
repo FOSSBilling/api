@@ -42,7 +42,7 @@ describe("Extensions API v2", () => {
     it("lists published extensions with the developer embedded", async () => {
       await seedOwnedExtension();
 
-      const res = await get("/extensions/v2/extensions", {});
+      const res = await get("/v2/extensions", {});
       expect(res.status).toBe(200);
       const body = (await res.json()) as {
         result: Array<{
@@ -63,7 +63,7 @@ describe("Extensions API v2", () => {
     it("marks unowned public developers as unclaimed", async () => {
       await seedExtensions(["legacy-extension"]);
 
-      const res = await get("/extensions/v2/extensions", {});
+      const res = await get("/v2/extensions", {});
       expect(res.status).toBe(200);
       const body = (await res.json()) as {
         result: Array<{ developer: { unclaimed: boolean } }>;
@@ -74,11 +74,11 @@ describe("Extensions API v2", () => {
     it("filters by type", async () => {
       await seedOwnedExtension();
 
-      const matching = await get("/extensions/v2/extensions?type=module", {});
+      const matching = await get("/v2/extensions?type=module", {});
       const matchingBody = (await matching.json()) as { result: unknown[] };
       expect(matchingBody.result).toHaveLength(1);
 
-      const nonMatching = await get("/extensions/v2/extensions?type=theme", {});
+      const nonMatching = await get("/v2/extensions?type=theme", {});
       const nonMatchingBody = (await nonMatching.json()) as {
         result: unknown[];
       };
@@ -86,7 +86,7 @@ describe("Extensions API v2", () => {
     });
 
     it("422s on an invalid type filter", async () => {
-      const res = await get("/extensions/v2/extensions?type=not-a-type", {});
+      const res = await get("/v2/extensions?type=not-a-type", {});
       expect(res.status).toBe(422);
     });
 
@@ -94,14 +94,14 @@ describe("Extensions API v2", () => {
       await seedOwnedExtension();
 
       const matching = await get(
-        "/extensions/v2/extensions?developer_id=owner-developer",
+        "/v2/extensions?developer_id=owner-developer",
         {}
       );
       const matchingBody = (await matching.json()) as { result: unknown[] };
       expect(matchingBody.result).toHaveLength(1);
 
       const nonMatching = await get(
-        "/extensions/v2/extensions?developer_id=someone-else",
+        "/v2/extensions?developer_id=someone-else",
         {}
       );
       const nonMatchingBody = (await nonMatching.json()) as {
@@ -113,7 +113,7 @@ describe("Extensions API v2", () => {
     it("returns deterministic first, middle, and final pages", async () => {
       await seedExtensions(["charlie", "Alpha", "bravo", "delta", "echo"]);
 
-      const first = await get("/extensions/v2/extensions?limit=2", {});
+      const first = await get("/v2/extensions?limit=2", {});
       const firstBody = (await first.json()) as {
         result: Array<{ id: string }>;
         pagination: { next_cursor: string | null; has_more: boolean };
@@ -122,7 +122,7 @@ describe("Extensions API v2", () => {
       expect(firstBody.pagination.has_more).toBe(true);
 
       const middle = await get(
-        `/extensions/v2/extensions?limit=2&cursor=${encodeURIComponent(firstBody.pagination.next_cursor!)}`,
+        `/v2/extensions?limit=2&cursor=${encodeURIComponent(firstBody.pagination.next_cursor!)}`,
         {}
       );
       const middleBody = (await middle.json()) as typeof firstBody;
@@ -133,7 +133,7 @@ describe("Extensions API v2", () => {
       expect(middleBody.pagination.has_more).toBe(true);
 
       const final = await get(
-        `/extensions/v2/extensions?limit=2&cursor=${encodeURIComponent(middleBody.pagination.next_cursor!)}`,
+        `/v2/extensions?limit=2&cursor=${encodeURIComponent(middleBody.pagination.next_cursor!)}`,
         {}
       );
       const finalBody = (await final.json()) as typeof firstBody;
@@ -145,23 +145,20 @@ describe("Extensions API v2", () => {
     });
 
     it("rejects invalid cursors", async () => {
-      const res = await get(
-        "/extensions/v2/extensions?cursor=not-a-cursor",
-        {}
-      );
+      const res = await get("/v2/extensions?cursor=not-a-cursor", {});
       expect(res.status).toBe(422);
       expect(await res.json()).toMatchObject({
         error: { code: "INVALID_CURSOR" }
       });
 
-      const blank = await get("/extensions/v2/extensions?cursor=", {});
+      const blank = await get("/v2/extensions?cursor=", {});
       expect(blank.status).toBe(422);
     });
 
     it("supports UTF-8 extension ids in cursors", async () => {
       await seedExtensions(["alpha", "zulu", "éclair", "😀"]);
 
-      const first = await get("/extensions/v2/extensions?limit=3", {});
+      const first = await get("/v2/extensions?limit=3", {});
       const firstBody = (await first.json()) as {
         pagination: { next_cursor: string | null };
       };
@@ -169,7 +166,7 @@ describe("Extensions API v2", () => {
       expect(firstBody.pagination.next_cursor).not.toBeNull();
 
       const second = await get(
-        `/extensions/v2/extensions?limit=3&cursor=${encodeURIComponent(firstBody.pagination.next_cursor!)}`,
+        `/v2/extensions?limit=3&cursor=${encodeURIComponent(firstBody.pagination.next_cursor!)}`,
         {}
       );
       expect(second.status).toBe(200);
@@ -181,12 +178,8 @@ describe("Extensions API v2", () => {
 
     it("accepts the maximum limit and rejects values above it", async () => {
       await seedExtensions(["one"]);
-      expect(
-        (await get("/extensions/v2/extensions?limit=100", {})).status
-      ).toBe(200);
-      expect(
-        (await get("/extensions/v2/extensions?limit=101", {})).status
-      ).toBe(422);
+      expect((await get("/v2/extensions?limit=100", {})).status).toBe(200);
+      expect((await get("/v2/extensions?limit=101", {})).status).toBe(422);
     });
   });
 
@@ -194,7 +187,7 @@ describe("Extensions API v2", () => {
     it("gets a single extension, case-insensitively", async () => {
       await seedOwnedExtension();
 
-      const res = await get("/extensions/v2/extensions/EXISTING-EXT", {});
+      const res = await get("/v2/extensions/EXISTING-EXT", {});
       expect(res.status).toBe(200);
       const body = (await res.json()) as {
         result: {
@@ -218,7 +211,7 @@ describe("Extensions API v2", () => {
     });
 
     it("404s for an unknown extension", async () => {
-      const res = await get("/extensions/v2/extensions/no-such-extension", {});
+      const res = await get("/v2/extensions/no-such-extension", {});
       expect(res.status).toBe(404);
     });
 
@@ -237,11 +230,9 @@ describe("Extensions API v2", () => {
         delist_reason: "Upstream source removed"
       });
 
-      expect(
-        (await get("/extensions/v2/extensions/delisted-ext", {})).status
-      ).toBe(404);
+      expect((await get("/v2/extensions/delisted-ext", {})).status).toBe(404);
 
-      const list = await get("/extensions/v2/extensions", {});
+      const list = await get("/v2/extensions", {});
       await expect(list.json()).resolves.toMatchObject({ result: [] });
     });
   });

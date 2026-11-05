@@ -51,11 +51,10 @@ async function m2mHeaders(
 }
 
 async function registerPublisher(canPublish = true): Promise<Response> {
-  return put(
-    `/extensions/v2/m2m/clients/${CLIENT}`,
-    await authHeaders(MODERATOR),
-    { developer_id: DEVELOPER, can_publish: canPublish }
-  );
+  return put(`/v2/m2m/clients/${CLIENT}`, await authHeaders(MODERATOR), {
+    developer_id: DEVELOPER,
+    can_publish: canPublish
+  });
 }
 
 async function revisionRow(id: string) {
@@ -78,7 +77,7 @@ describe("m2m publisher registration", () => {
   it("requires a moderator", async () => {
     await insertUser(db, { id: OWNER });
     const res = await put(
-      `/extensions/v2/m2m/clients/${CLIENT}`,
+      `/v2/m2m/clients/${CLIENT}`,
       await authHeaders(OWNER),
       { developer_id: DEVELOPER, can_publish: true }
     );
@@ -115,13 +114,13 @@ describe("m2m publisher registration", () => {
     await insertUser(db, { id: MODERATOR, is_moderator: 1 });
     await seedUnownedDeveloper("unclaimed-dev");
     const missing = await put(
-      `/extensions/v2/m2m/clients/${CLIENT}`,
+      `/v2/m2m/clients/${CLIENT}`,
       await authHeaders(MODERATOR),
       { developer_id: "no-such-developer", can_publish: true }
     );
     expect(missing.status).toBe(404);
     const unclaimed = await put(
-      `/extensions/v2/m2m/clients/${CLIENT}`,
+      `/v2/m2m/clients/${CLIENT}`,
       await authHeaders(MODERATOR),
       { developer_id: "unclaimed-dev", can_publish: true }
     );
@@ -132,10 +131,7 @@ describe("m2m publisher registration", () => {
     await insertUser(db, { id: MODERATOR, is_moderator: 1 });
     await seedDeveloper(DEVELOPER, OWNER);
     await registerPublisher();
-    const res = await get(
-      "/extensions/v2/m2m/clients",
-      await authHeaders(MODERATOR)
-    );
+    const res = await get("/v2/m2m/clients", await authHeaders(MODERATOR));
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
       result: Array<{ client_id: string }>;
@@ -158,7 +154,7 @@ describe("m2m publisher writes", () => {
   it("creates an extension under the mapped developer", async () => {
     await registerPublisher();
     const res = await post(
-      "/extensions/v2/extensions",
+      "/v2/extensions",
       await m2mHeaders(["extensions:push"]),
       sampleCreate({ extensionId: "published-ext" })
     );
@@ -185,7 +181,7 @@ describe("m2m publisher writes", () => {
       source: '{"type":"github","repo":"example/existing"}'
     });
     const res = await put(
-      "/extensions/v2/extensions/existing-ext",
+      "/v2/extensions/existing-ext",
       await m2mHeaders(["extensions:push"]),
       sampleContent({ name: "Edited" })
     );
@@ -205,7 +201,7 @@ describe("m2m publisher writes", () => {
       source: '{"type":"github","repo":"example/existing"}'
     });
     const res = await put(
-      "/extensions/v2/extensions/existing-ext",
+      "/v2/extensions/existing-ext",
       await m2mHeaders(["extensions:push"]),
       sampleContent({ name: "Edited" })
     );
@@ -219,7 +215,7 @@ describe("m2m publisher writes", () => {
   it("rejects writes without the required scope", async () => {
     await registerPublisher();
     const res = await post(
-      "/extensions/v2/extensions",
+      "/v2/extensions",
       await m2mHeaders(["extensions:publish"]),
       sampleCreate({ extensionId: "no-push-scope" })
     );
@@ -232,12 +228,9 @@ describe("m2m publisher writes", () => {
 
   it("rejects a revoked mapping without waiting out the token", async () => {
     await registerPublisher();
-    await del(
-      `/extensions/v2/m2m/clients/${CLIENT}`,
-      await authHeaders(MODERATOR)
-    );
+    await del(`/v2/m2m/clients/${CLIENT}`, await authHeaders(MODERATOR));
     const res = await post(
-      "/extensions/v2/extensions",
+      "/v2/extensions",
       await m2mHeaders(["extensions:push"]),
       sampleCreate({ extensionId: "revoked-client" })
     );
@@ -249,17 +242,17 @@ describe("m2m publisher writes", () => {
     // Machine tokens are not a recognized user credential: role-aware reads
     // fall back to the anonymous projection, and mine requires a bearer.
     const mine = await get(
-      "/extensions/v2/extensions?scope=mine",
+      "/v2/extensions?scope=mine",
       await m2mHeaders(["extensions:push"])
     );
     expect(mine.status).toBe(401);
     const profile = await get(
-      "/extensions/v2/users/me",
+      "/v2/users/me",
       await m2mHeaders(["extensions:push"])
     );
     expect(profile.status).toBe(403);
     const queue = await get(
-      "/extensions/v2/revisions",
+      "/v2/revisions",
       await m2mHeaders(["extensions:push"])
     );
     expect(queue.status).toBe(403);
@@ -267,7 +260,7 @@ describe("m2m publisher writes", () => {
 
   it("answers 401 for a token bound to another audience", async () => {
     const res = await post(
-      "/extensions/v2/extensions",
+      "/v2/extensions",
       await m2mHeaders(["extensions:push"], { aud: "https://other.example" }),
       sampleCreate({ extensionId: "wrong-aud" })
     );
@@ -280,7 +273,7 @@ describe("m2m publisher writes", () => {
     await bumpDeveloperOwnership(db, DEVELOPER, "new-owner-1");
 
     const stale = await post(
-      "/extensions/v2/extensions",
+      "/v2/extensions",
       await m2mHeaders(["extensions:push"]),
       sampleCreate({ extensionId: "stale-after-transfer" })
     );
@@ -292,7 +285,7 @@ describe("m2m publisher writes", () => {
     const reregistered = await registerPublisher();
     expect(reregistered.status).toBe(200);
     const res = await post(
-      "/extensions/v2/extensions",
+      "/v2/extensions",
       await m2mHeaders(["extensions:push"]),
       sampleCreate({ extensionId: "rebound-after-transfer" })
     );
@@ -313,7 +306,7 @@ describe("m2m publisher auto-approval", () => {
   it("publishes a pending revision when can_publish is set", async () => {
     await registerPublisher(true);
     const created = await post(
-      "/extensions/v2/extensions",
+      "/v2/extensions",
       await m2mHeaders(["extensions:push", "extensions:publish"]),
       sampleCreate({ extensionId: "auto-published" })
     );
@@ -324,7 +317,7 @@ describe("m2m publisher auto-approval", () => {
     const revisionId = createdBody.result.revision_id;
 
     const approved = await post(
-      `/extensions/v2/extensions/auto-published/revisions/${revisionId}/approve?notify=false`,
+      `/v2/extensions/auto-published/revisions/${revisionId}/approve?notify=false`,
       await m2mHeaders(["extensions:publish"]),
       {}
     );
@@ -349,7 +342,7 @@ describe("m2m publisher auto-approval", () => {
   it("rejects approval when the mapping lacks can_publish", async () => {
     await registerPublisher(false);
     const created = await post(
-      "/extensions/v2/extensions",
+      "/v2/extensions",
       await m2mHeaders(["extensions:push"]),
       sampleCreate({ extensionId: "no-auto-publish" })
     );
@@ -360,7 +353,7 @@ describe("m2m publisher auto-approval", () => {
     const revisionId = createdBody.result.revision_id;
 
     const approved = await post(
-      `/extensions/v2/extensions/no-auto-publish/revisions/${revisionId}/approve?notify=false`,
+      `/v2/extensions/no-auto-publish/revisions/${revisionId}/approve?notify=false`,
       await m2mHeaders(["extensions:publish"]),
       {}
     );
@@ -374,7 +367,7 @@ describe("m2m publisher auto-approval", () => {
   it("rejects approval without the publish scope", async () => {
     await registerPublisher(true);
     const created = await post(
-      "/extensions/v2/extensions",
+      "/v2/extensions",
       await m2mHeaders(["extensions:push"]),
       sampleCreate({ extensionId: "scope-gate" })
     );
@@ -385,7 +378,7 @@ describe("m2m publisher auto-approval", () => {
     const revisionId = createdBody.result.revision_id;
 
     const approved = await post(
-      `/extensions/v2/extensions/scope-gate/revisions/${revisionId}/approve?notify=false`,
+      `/v2/extensions/scope-gate/revisions/${revisionId}/approve?notify=false`,
       await m2mHeaders(["extensions:push"]),
       {}
     );
@@ -399,12 +392,12 @@ describe("m2m publisher auto-approval", () => {
   it("keeps moderator approval working alongside the carve-out", async () => {
     await registerPublisher(true);
     await post(
-      "/extensions/v2/extensions",
+      "/v2/extensions",
       await m2mHeaders(["extensions:push"]),
       sampleCreate({ extensionId: "mod-approved" })
     );
     const pending = await get(
-      "/extensions/v2/revisions?status=pending",
+      "/v2/revisions?status=pending",
       await authHeaders(MODERATOR)
     );
     expect(pending.status).toBe(200);
@@ -413,7 +406,7 @@ describe("m2m publisher auto-approval", () => {
     };
     expect(result).toHaveLength(1);
     const approved = await post(
-      `/extensions/v2/extensions/mod-approved/revisions/${result[0].id}/approve?notify=false`,
+      `/v2/extensions/mod-approved/revisions/${result[0].id}/approve?notify=false`,
       await authHeaders(MODERATOR),
       {}
     );
@@ -444,7 +437,7 @@ describe("m2m write pacing", () => {
       }
     };
     await post(
-      "/extensions/v2/extensions",
+      "/v2/extensions",
       await m2mHeaders(["extensions:push"]),
       sampleCreate({ extensionId: "paced-ext" })
     );

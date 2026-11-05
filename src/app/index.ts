@@ -25,7 +25,7 @@ app.use("*", async (c, next) => {
 
 app.route("/central-alerts/v1", centralAlertsV1);
 app.route("/extensions/v1", extensionsV1);
-app.route("/extensions/v2", extensionsV2);
+app.route("/v2", extensionsV2);
 app.route("/previews/v1", previewsV1);
 app.route("/versions/v1", versionsV1);
 app.route("/stats/v1", statsV1);

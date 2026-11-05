@@ -34,7 +34,7 @@ describe("manifest v1 publishing", () => {
       }
     };
     const created = await post(
-      "/extensions/v2/extensions",
+      "/v2/extensions",
       await authHeaders("user-1"),
       content
     );
@@ -45,19 +45,19 @@ describe("manifest v1 publishing", () => {
     expect(
       (
         await post(
-          `/extensions/v2/extensions/my_module/revisions/${result.revision_id}/approve`,
+          `/v2/extensions/my_module/revisions/${result.revision_id}/approve`,
           await authHeaders("moderator"),
           {}
         )
       ).status
     ).toBe(200);
-    const detail = await get("/extensions/v2/extensions/my_module", {});
+    const detail = await get("/v2/extensions/my_module", {});
     const { result: extension } = (await detail.json()) as {
       result: Record<string, unknown>;
     };
     expect(extension).toMatchObject({ ...content, developer: { id: "owner" } });
     expect(extension).not.toHaveProperty("website");
-    const list = await get("/extensions/v2/extensions?type=module", {});
+    const list = await get("/v2/extensions?type=module", {});
     const { result: items } = (await list.json()) as {
       result: Record<string, unknown>[];
     };
@@ -68,7 +68,7 @@ describe("manifest v1 publishing", () => {
       requires: { fossbilling: ">=1.0.0", php: ">=8.4" }
     };
     const edit = await put(
-      "/extensions/v2/extensions/my_module",
+      "/v2/extensions/my_module",
       await authHeaders("user-1"),
       updated
     );
@@ -79,14 +79,14 @@ describe("manifest v1 publishing", () => {
     expect(
       (
         await post(
-          `/extensions/v2/extensions/my_module/revisions/${revision.revision_id}/approve`,
+          `/v2/extensions/my_module/revisions/${revision.revision_id}/approve`,
           await authHeaders("moderator"),
           {}
         )
       ).status
     ).toBe(200);
     await expect(
-      (await get("/extensions/v2/extensions/my_module", {})).json()
+      (await get("/v2/extensions/my_module", {})).json()
     ).resolves.toMatchObject({
       result: { requires: updated.requires, license: "MIT" }
     });
@@ -116,7 +116,7 @@ describe("manifest v1 publishing", () => {
       releases: fixture.releases.map((release) => ({ ...release, requires }))
     };
     const created = await post(
-      "/extensions/v2/extensions",
+      "/v2/extensions",
       await authHeaders("user-1"),
       content
     );
@@ -127,14 +127,14 @@ describe("manifest v1 publishing", () => {
     expect(
       (
         await post(
-          `/extensions/v2/extensions/${content.id}/revisions/${result.revision_id}/approve`,
+          `/v2/extensions/${content.id}/revisions/${result.revision_id}/approve`,
           await authHeaders("moderator"),
           {}
         )
       ).status
     ).toBe(200);
     const published = (await (
-      await get(`/extensions/v2/extensions/${content.id}`, {})
+      await get(`/v2/extensions/${content.id}`, {})
     ).json()) as { result: typeof content };
     expect(published.result.requires).toEqual(requires);
     expect(published.result.releases[0].requires).toEqual(requires);
@@ -167,11 +167,10 @@ describe("manifest v1 publishing", () => {
 
   it("rejects the retired website key specifically as an unknown root field", async () => {
     await seedDeveloper("owner", "user-1");
-    const response = await post(
-      "/extensions/v2/extensions",
-      await authHeaders("user-1"),
-      { ...sampleCreate(), website: "https://example.com" }
-    );
+    const response = await post("/v2/extensions", await authHeaders("user-1"), {
+      ...sampleCreate(),
+      website: "https://example.com"
+    });
     expect(response.status).toBe(422);
     await expect(response.json()).resolves.toMatchObject({
       error: {
@@ -193,7 +192,7 @@ describe("manifest v1 publishing", () => {
     expect(
       (
         await put(
-          `/extensions/v2/extensions/${id}`,
+          `/v2/extensions/${id}`,
           await authHeaders("user-1"),
           sampleContent()
         )
@@ -240,14 +239,12 @@ describe("manifest v1 publishing", () => {
     ])
       expect(
         (
-          await post("/extensions/v2/extensions", headers, {
+          await post("/v2/extensions", headers, {
             ...content,
             ...invalid
           })
         ).status
       ).toBe(422);
-    expect(
-      (await post("/extensions/v2/extensions", headers, content)).status
-    ).toBe(201);
+    expect((await post("/v2/extensions", headers, content)).status).toBe(201);
   });
 });

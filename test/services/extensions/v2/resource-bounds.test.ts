@@ -52,7 +52,7 @@ setupExtensionsV2Tests();
 async function withdraw(id: string, user = "owner") {
   const ctx = createExecutionContext();
   const result = await app.request(
-    `/extensions/v2/extensions/${id}`,
+    `/v2/extensions/${id}`,
     { method: "DELETE", headers: await authHeaders(user) },
     env,
     ctx
@@ -61,7 +61,7 @@ async function withdraw(id: string, user = "owner") {
   return result;
 }
 async function create(id: string) {
-  return post("/extensions/v2/extensions", await authHeaders("owner"), {
+  return post("/v2/extensions", await authHeaders("owner"), {
     ...sampleCreate(),
     id
   });
@@ -283,7 +283,7 @@ describe("Extension resource admission", () => {
       }
     });
     const response = await app.request(
-      "/extensions/v2/extensions",
+      "/v2/extensions",
       { method: "POST", headers: await authHeaders("owner"), body: stream },
       env
     );
@@ -309,7 +309,7 @@ describe("Extension resource admission", () => {
       }
     });
     const response = await app.request(
-      "/extensions/v2/extensions",
+      "/v2/extensions",
       { method: "POST", headers: await authHeaders("owner"), body: stream },
       env
     );
@@ -321,11 +321,11 @@ describe("Extension resource admission", () => {
     const id = "e".repeat(201);
     expect((await create(id)).status).toBe(422);
     await insertExtension(db, { id, developer_id: "developer" });
-    expect((await get(`/extensions/v2/extensions/${id}`, {})).status).toBe(200);
+    expect((await get(`/v2/extensions/${id}`, {})).status).toBe(200);
     expect(
       (
         await put(
-          `/extensions/v2/extensions/${id}`,
+          `/v2/extensions/${id}`,
           await authHeaders("owner"),
           sampleContent()
         )
@@ -370,7 +370,7 @@ describe("Extension resource admission", () => {
       }
     });
     const res = await app.request(
-      "/extensions/v2/extensions",
+      "/v2/extensions",
       { method: "POST", headers, body: stream },
       env
     );
@@ -390,7 +390,7 @@ describe("Extension resource admission", () => {
     expect(
       (
         await app.request(
-          "/extensions/v2/extensions",
+          "/v2/extensions",
           { method: "POST", headers, body: padded },
           env
         )
@@ -399,7 +399,7 @@ describe("Extension resource admission", () => {
     expect(
       (
         await app.request(
-          "/extensions/v2/extensions",
+          "/v2/extensions",
           { method: "POST", headers, body: padded + " " },
           env
         )
@@ -408,8 +408,8 @@ describe("Extension resource admission", () => {
   });
   it("bounds raw moderator corrections and rejected unknown-field padding", async () => {
     for (const path of [
-      "/extensions/v2/extensions",
-      "/extensions/v2/extensions/live/moderator-correct"
+      "/v2/extensions",
+      "/v2/extensions/live/moderator-correct"
     ]) {
       const response = await app.request(
         path,
@@ -445,11 +445,9 @@ describe("Extension resource admission", () => {
     env.EXTENSION_WRITE_RATE_LIMITER = {
       limit: async ({ key }) => ({ success: !key.startsWith("account:") })
     };
-    const res = await post(
-      "/extensions/v2/extensions",
-      await authHeaders("owner"),
-      { invalid: true }
-    );
+    const res = await post("/v2/extensions", await authHeaders("owner"), {
+      invalid: true
+    });
     expect(res.status).toBe(429);
     expect(res.headers.get("Retry-After")).toBe("60");
     env.EXTENSION_WRITE_RATE_LIMITER = {
@@ -476,12 +474,12 @@ describe("Extension resource admission", () => {
           ? await create("unavailable")
           : operation === "edit"
             ? await put(
-                "/extensions/v2/extensions/live",
+                "/v2/extensions/live",
                 await authHeaders("owner"),
                 sampleContent()
               )
             : await post(
-                "/extensions/v2/extensions/live/moderator-correct",
+                "/v2/extensions/live/moderator-correct",
                 await authHeaders("mod"),
                 { ...sampleContent(), correction_note: "Fix" }
               );
@@ -503,11 +501,7 @@ describe("Extension resource admission", () => {
     await owned();
     const results = await Promise.all([
       ...Array.from({ length: 6 }, (_, i) => create(`concurrent-${i}`)),
-      put(
-        "/extensions/v2/extensions/live",
-        await authHeaders("owner"),
-        sampleContent()
-      )
+      put("/v2/extensions/live", await authHeaders("owner"), sampleContent())
     ]);
     expect(
       results.filter((r) => r.status === 201 || r.status === 202)
@@ -645,7 +639,7 @@ describe("Extension resource admission", () => {
       .bind(MAX_ACCOUNT_BYTES)
       .run();
     const response = await post(
-      `/extensions/v2/extensions/publication/revisions/${revision}/approve?notify=false`,
+      `/v2/extensions/publication/revisions/${revision}/approve?notify=false`,
       await authHeaders("mod"),
       {}
     );
@@ -670,13 +664,7 @@ describe("Extension resource admission", () => {
     const content = { ...sampleCreate(), id: "multibyte", readme: "😀é" };
     const { id: _id, ...stored } = content;
     expect(
-      (
-        await post(
-          "/extensions/v2/extensions",
-          await authHeaders("owner"),
-          content
-        )
-      ).status
+      (await post("/v2/extensions", await authHeaders("owner"), content)).status
     ).toBe(201);
     const bytes = new TextEncoder().encode(JSON.stringify(stored)).byteLength;
     expect(
@@ -720,10 +708,7 @@ describe("Bounded revision reads and maintenance", () => {
       sql.push(query);
     });
     const headers = await authHeaders("mod");
-    const first = await get(
-      "/extensions/v2/revisions?status=rejected&limit=2",
-      headers
-    );
+    const first = await get("/v2/revisions?status=rejected&limit=2", headers);
     const page = (await first.json()) as {
       result: Array<{ id: string; content?: unknown }>;
       pagination: { next_cursor: string };
@@ -731,7 +716,7 @@ describe("Bounded revision reads and maintenance", () => {
     expect(page.result.map((r) => r.id)).toEqual(["a", "b"]);
     expect(page.result.every((r) => !("content" in r))).toBe(true);
     const second = await get(
-      `/extensions/v2/revisions?status=rejected&limit=2&cursor=${encodeURIComponent(page.pagination.next_cursor)}`,
+      `/v2/revisions?status=rejected&limit=2&cursor=${encodeURIComponent(page.pagination.next_cursor)}`,
       headers
     );
     await expect(second.json()).resolves.toMatchObject({
@@ -746,13 +731,13 @@ describe("Bounded revision reads and maintenance", () => {
     expect(
       (
         await get(
-          "/extensions/v2/extensions/live/revisions/a",
+          "/v2/extensions/live/revisions/a",
           await authHeaders("intruder")
         )
       ).status
     ).toBe(403);
     const detail = await get(
-      "/extensions/v2/extensions/live/revisions/a",
+      "/v2/extensions/live/revisions/a",
       await authHeaders("owner")
     );
     await expect(detail.json()).resolves.toMatchObject({
@@ -782,7 +767,7 @@ describe("Bounded revision reads and maintenance", () => {
         created_at: "2000-01-01"
       });
       const detail = await get(
-        `/extensions/v2/extensions/live/revisions/${id}`,
+        `/v2/extensions/live/revisions/${id}`,
         await authHeaders("owner")
       );
       expect(detail.status).toBe(409);
@@ -790,7 +775,7 @@ describe("Bounded revision reads and maintenance", () => {
         error: { code: "CONTENT_UNAVAILABLE" }
       });
       const list = await get(
-        "/extensions/v2/extensions/live/revisions",
+        "/v2/extensions/live/revisions",
         await authHeaders("owner")
       );
       const body = (await list.json()) as {
@@ -814,7 +799,7 @@ describe("Bounded revision reads and maintenance", () => {
       status: "rejected"
     });
     const detail = await get(
-      "/extensions/v2/extensions/live/revisions/unicode-tag",
+      "/v2/extensions/live/revisions/unicode-tag",
       await authHeaders("owner")
     );
     expect(detail.status).toBe(200);
@@ -893,7 +878,7 @@ describe("Bounded revision reads and maintenance", () => {
         .first("bytes")
     ).toBe(after);
     const detail = await get(
-      "/extensions/v2/extensions/live/revisions/old",
+      "/v2/extensions/live/revisions/old",
       await authHeaders("owner")
     );
     await expect(detail.json()).resolves.toMatchObject({
@@ -956,10 +941,7 @@ describe("Bounded revision reads and maintenance", () => {
         reviewed_at: "2000-01-01"
       });
     const headers = await authHeaders("mod");
-    const queue = await get(
-      "/extensions/v2/revisions?status=rejected&limit=100",
-      headers
-    );
+    const queue = await get("/v2/revisions?status=rejected&limit=100", headers);
     const text = await queue.text();
     expect(queue.status).toBe(200);
     const responseBytes = new TextEncoder().encode(text).byteLength;
@@ -970,10 +952,7 @@ describe("Bounded revision reads and maintenance", () => {
     expect(result.every((row) => row.description === content.description)).toBe(
       true
     );
-    const detail = await get(
-      "/extensions/v2/extensions/live/revisions/max-0",
-      headers
-    );
+    const detail = await get("/v2/extensions/live/revisions/max-0", headers);
     const detailBytes = new TextEncoder().encode(
       await detail.text()
     ).byteLength;
@@ -1206,7 +1185,7 @@ describe("Bounded revision reads and maintenance", () => {
       db.prepare(trigger!)
     ]);
     const list = await get(
-      "/extensions/v2/extensions/live/revisions",
+      "/v2/extensions/live/revisions",
       await authHeaders("owner")
     );
     await expect(list.json()).resolves.toMatchObject({
@@ -1219,7 +1198,7 @@ describe("Bounded revision reads and maintenance", () => {
       ]
     });
     const detail = await get(
-      "/extensions/v2/extensions/live/revisions/legacy",
+      "/v2/extensions/live/revisions/legacy",
       await authHeaders("owner")
     );
     expect(detail.status).toBe(409);

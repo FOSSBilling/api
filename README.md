@@ -14,7 +14,7 @@ The worker exposes five services:
 - **Central Alerts** (`/central-alerts/v1`)
   Allows the project to push critical notifications to all FOSSBilling installations—useful for security hotfixes or major announcements.
 
-- **Extensions** (`/extensions/v1`, `/extensions/v2`)
+- **Extensions** (`/extensions/v1`, `/v2`)
   Owns the complete Extensions domain and its `DB_EXTENSIONS` schema. `v2` is authoritative; `v1` is legacy read-only. The separate Extensions site keeps OIDC/session state but accesses this domain through the
   generated HTTPS API client; it must not bind or migrate `DB_EXTENSIONS`.
   See [`src/services/extensions/v2/README.md`](src/services/extensions/v2/README.md).
@@ -45,15 +45,15 @@ Cron and Durable Object code lives with its owning service and is wired in `src/
 
 Each service documents its own endpoints and behaviour:
 
-| Service        | Base path                          | Docs                                                                                   |
-| -------------- | ---------------------------------- | -------------------------------------------------------------------------------------- |
-| Versions       | `/versions/v1`                     | [`src/services/versions/v1/README.md`](src/services/versions/v1/README.md)             |
-| Central Alerts | `/central-alerts/v1`               | [`src/services/central-alerts/v1/README.md`](src/services/central-alerts/v1/README.md) |
-| Stats          | `/stats/v1`                        | [`src/services/stats/v1/README.md`](src/services/stats/v1/README.md)                   |
-| Extensions     | `/extensions/v1`, `/extensions/v2` | [`src/services/extensions/v2/README.md`](src/services/extensions/v2/README.md)         |
-| Previews       | `/previews/v1`                     | [`src/services/previews/v1/README.md`](src/services/previews/v1/README.md)             |
+| Service        | Base path               | Docs                                                                                   |
+| -------------- | ----------------------- | -------------------------------------------------------------------------------------- |
+| Versions       | `/versions/v1`          | [`src/services/versions/v1/README.md`](src/services/versions/v1/README.md)             |
+| Central Alerts | `/central-alerts/v1`    | [`src/services/central-alerts/v1/README.md`](src/services/central-alerts/v1/README.md) |
+| Stats          | `/stats/v1`             | [`src/services/stats/v1/README.md`](src/services/stats/v1/README.md)                   |
+| Extensions     | `/extensions/v1`, `/v2` | [`src/services/extensions/v2/README.md`](src/services/extensions/v2/README.md)         |
+| Previews       | `/previews/v1`          | [`src/services/previews/v1/README.md`](src/services/previews/v1/README.md)             |
 
-Extensions v2 and Previews v1 also publish a live OpenAPI document (`/extensions/v2/docs/openapi.json`, `/previews/v1/docs/openapi.json`) and a reference UI (`/extensions/v2/docs`, `/previews/v1/docs`).
+Extensions v2 and Previews v1 also publish a live OpenAPI document (`/v2/docs/openapi.json`, `/previews/v1/docs/openapi.json`) and a reference UI (`/v2/docs`, `/previews/v1/docs`).
 
 ## Configuration
 
