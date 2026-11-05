@@ -107,7 +107,7 @@ extensionsV2.route(
           title: "FOSSBilling Extensions API (v2)",
           version: "2.0.0",
           description:
-            "Self-service extension publishing, ownership, moderation, and public browsing. v1 (/extensions/v1) remains available for existing integrations."
+            "Self-service extension publishing, ownership, moderation, and public browsing. v1 (/extensions/v1) is deprecated. V1 badge URLs retire on 5 February 2027 at 00:00 UTC; other v1 endpoints remain available until at least six months after a stable FOSSBilling release ships the v2 installer."
         },
         servers: [{ url: "/extensions/v2" }]
       })),
