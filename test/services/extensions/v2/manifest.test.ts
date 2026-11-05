@@ -105,6 +105,42 @@ describe("manifest v1 publishing", () => {
     });
   });
 
+  it("publishes without an additional PHP restriction", async () => {
+    await seedDeveloper("owner", "user-1");
+    await insertUser(db, { id: "moderator", is_moderator: 1 });
+    const fixture = sampleCreate();
+    const requires = { fossbilling: "^0.8.9" };
+    const content = {
+      ...fixture,
+      requires,
+      releases: fixture.releases.map((release) => ({ ...release, requires }))
+    };
+    const created = await post(
+      "/extensions/v2/extensions",
+      await authHeaders("user-1"),
+      content
+    );
+    expect(created.status).toBe(201);
+    const { result } = (await created.json()) as {
+      result: { revision_id: string };
+    };
+    expect(
+      (
+        await post(
+          `/extensions/v2/extensions/${content.id}/revisions/${result.revision_id}/approve`,
+          await authHeaders("moderator"),
+          {}
+        )
+      ).status
+    ).toBe(200);
+    const published = (await (
+      await get(`/extensions/v2/extensions/${content.id}`, {})
+    ).json()) as { result: typeof content };
+    expect(published.result.requires).toEqual(requires);
+    expect(published.result.releases[0].requires).toEqual(requires);
+    expect((await get(`/extensions/v1/${content.id}`, {})).status).toBe(200);
+  });
+
   it("keeps the historical minimum-version field bounded in revision schemas", () => {
     const content = (minimum: string) => ({
       releases: [
@@ -178,7 +214,7 @@ describe("manifest v1 publishing", () => {
       { version: "1.0.0+" + "x".repeat(100) },
       { description: "x".repeat(501) },
       { name: "x".repeat(101) },
-      { requires: { fossbilling: "^1" } },
+      { requires: { fossbilling: "^1", php: null } },
       { requires: { fossbilling: "   ", php: ">=8.3" } },
       { requires: { fossbilling: "^1", php: "   " } },
       {

@@ -21,7 +21,11 @@ const versionConstraint = z
 export const ManifestRequirementsSchema = z
   .object({
     fossbilling: versionConstraint,
-    php: versionConstraint,
+    php: versionConstraint
+      .optional()
+      .describe(
+        "Additional PHP constraint; when omitted, FOSSBilling runtime requirements apply"
+      ),
     modules: z
       .record(z.string().regex(/^[a-z0-9_-]+$/), versionConstraint)
       .optional()

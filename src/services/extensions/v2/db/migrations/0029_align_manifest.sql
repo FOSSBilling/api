@@ -167,7 +167,12 @@ WITH published AS (
   WHERE e.published_at IS NOT NULL
 ), release_rows AS (
   SELECT p.id, r.key AS release_index, r.type AS release_type,
-    CASE WHEN r.type = 'object' THEN r.value ELSE '{}' END AS release
+    CASE WHEN r.type = 'object' THEN CASE
+      WHEN json_type(r.value,'$.requires') IS NULL
+        AND json_type(r.value,'$.min_fossbilling_version') = 'text'
+        AND length(trim(json_extract(r.value,'$.min_fossbilling_version'))) BETWEEN 1 AND 100
+      THEN json_set(r.value,'$.requires',json_object('fossbilling','>=' || trim(json_extract(r.value,'$.min_fossbilling_version'))))
+      ELSE r.value END ELSE '{}' END AS release
   FROM published p, json_each(CASE WHEN json_valid(p.releases) THEN p.releases ELSE '[]' END) r
 )
 SELECT p.id, NULL AS release_index, problem.value AS issue
@@ -188,13 +193,13 @@ FROM published p, json_each(json_array(
     THEN 'version: identify exactly one current release matching version or v+version' END
 )) problem WHERE problem.value IS NOT NULL
 UNION ALL
-SELECT id, release_index, 'requires: set explicit FOSSBilling and PHP constraints for this release; missing values are not guessed'
+SELECT id, release_index, 'requires: supply a FOSSBilling constraint or legacy minimum and a valid optional PHP constraint'
 FROM release_rows WHERE release_type != 'object'
   OR COALESCE(json_type(release,'$.requires'),'') != 'object'
   OR COALESCE(json_type(release,'$.requires.fossbilling'),'') != 'text'
-  OR COALESCE(json_type(release,'$.requires.php'),'') != 'text'
   OR COALESCE(length(trim(json_extract(release,'$.requires.fossbilling'))),0) NOT BETWEEN 1 AND 1000
-  OR COALESCE(length(trim(json_extract(release,'$.requires.php'))),0) NOT BETWEEN 1 AND 1000
+  OR (json_type(release,'$.requires.php') IS NOT NULL AND (json_type(release,'$.requires.php') != 'text'
+    OR length(trim(json_extract(release,'$.requires.php'))) NOT BETWEEN 1 AND 1000))
   OR EXISTS (SELECT 1 FROM json_each(CASE WHEN json_type(release,'$.requires') = 'object' THEN json_extract(release,'$.requires') ELSE '{}' END)
     WHERE key NOT IN ('fossbilling','php','modules'))
   OR (json_type(release,'$.requires.modules') IS NOT NULL AND json_type(release,'$.requires.modules') != 'object')
@@ -212,6 +217,37 @@ DROP TABLE _manifest_migration_check;
 --> statement-breakpoint
 DROP VIEW _manifest_migration_issues;
 --> statement-breakpoint
+-- Preserve legacy minimums as lower-bound constraints. No extra PHP constraint
+-- means the extension inherits the PHP requirements of its FOSSBilling runtime.
+UPDATE extensions SET releases = (
+  SELECT json_group_array(json(CASE
+    WHEN r.type = 'object' AND json_type(r.value,'$.requires') IS NULL
+      AND json_type(r.value,'$.min_fossbilling_version') = 'text'
+      AND length(trim(json_extract(r.value,'$.min_fossbilling_version'))) BETWEEN 1 AND 100
+    THEN json_set(r.value,'$.requires',json_object('fossbilling','>=' || trim(json_extract(r.value,'$.min_fossbilling_version'))))
+    ELSE r.value END))
+  FROM json_each(CASE WHEN json_valid(extensions.releases) THEN extensions.releases ELSE '[]' END) r
+) WHERE published_at IS NOT NULL AND json_valid(releases) AND json_type(releases) = 'array';
+--> statement-breakpoint
+-- Composer requirements from the distributed release packages:
+-- https://github.com/ChristianGabs/btcpay-fossbilling/releases (0.1.3-0.1.5)
+-- https://github.com/OpenReceive/openreceive/releases/tag/v0.4.29
+UPDATE extensions SET releases = (
+  SELECT json_group_array(json(CASE
+    WHEN json_extract(value,'$.tag') IN ('0.1.3','0.1.4','0.1.5')
+      AND json_type(value,'$.requires.php') IS NULL
+    THEN json_set(value,'$.requires.php','>=8.1') ELSE value END))
+  FROM json_each(extensions.releases)
+) WHERE id = 'BTCPay' AND published_at IS NOT NULL;
+--> statement-breakpoint
+UPDATE extensions SET releases = (
+  SELECT json_group_array(json(CASE
+    WHEN json_extract(value,'$.tag') = '0.4.29'
+      AND json_type(value,'$.requires.php') IS NULL
+    THEN json_set(value,'$.requires.php','^8.2') ELSE value END))
+  FROM json_each(extensions.releases)
+) WHERE id = 'openreceive' AND published_at IS NOT NULL;
+--> statement-breakpoint
 UPDATE extensions SET
   type = CASE WHEN type = 'mod' THEN 'module' ELSE type END,
   license = json_quote(CASE WHEN json_type(license) = 'object'
@@ -225,7 +261,8 @@ UPDATE extensions SET
   )
 WHERE published_at IS NOT NULL;
 --> statement-breakpoint
--- Requirements have been explicitly reviewed. Remove only the obsolete v1 field.
+-- Requirements retain the legacy minimum or an explicit constraint.
+-- Remove only the obsolete v1 field.
 UPDATE extensions SET releases = (
   SELECT json_group_array(json(json_remove(value,'$.min_fossbilling_version')))
   FROM json_each(extensions.releases)

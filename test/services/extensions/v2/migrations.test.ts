@@ -1004,8 +1004,7 @@ it("migrates published manifest metadata without changing reviewed audit bodies"
       {
         tag: "1.0.0",
         date: "2026-01-01",
-        download_url: "https://example.com/a.zip",
-        min_fossbilling_version: "0.8.9"
+        download_url: "https://example.com/a.zip"
       },
       { ...olderRelease, min_fossbilling_version: "0.7.0" }
     ]);
@@ -1036,7 +1035,7 @@ it("migrates published manifest metadata without changing reviewed audit bodies"
       {
         id: "legacy",
         release_index: 0,
-        issue: expect.stringContaining("set explicit FOSSBilling and PHP")
+        issue: expect.stringContaining("supply a FOSSBilling constraint")
       }
     ]);
     // Existing over-quota collections must survive a structural backfill.
@@ -1052,7 +1051,7 @@ it("migrates published manifest metadata without changing reviewed audit bodies"
     expect(
       db.prepare("SELECT type FROM extensions WHERE id='legacy'").get()?.type
     ).toBe("mod");
-    const incompleteCorrection = `UPDATE extensions SET releases=json_set(releases,'$[0].requires',json('{"fossbilling":">=0.8.9"}')) WHERE id='legacy';`;
+    const incompleteCorrection = `UPDATE extensions SET releases=json_set(releases,'$[0].requires',json('{"fossbilling":">=0.8.9","php":null}')) WHERE id='legacy';`;
     db.exec("BEGIN");
     expect(() =>
       db.exec(
@@ -1205,7 +1204,9 @@ it.each([
   ],
   [
     "releases",
-    JSON.stringify([{ tag: "1.0.0", requires: { fossbilling: ">=0.8.9" } }]),
+    JSON.stringify([
+      { tag: "1.0.0", requires: { fossbilling: ">=0.8.9", php: null } }
+    ]),
     "requires:",
     0
   ],
@@ -1273,3 +1274,73 @@ it.each([
     }
   }
 );
+
+it("inherits FOSSBilling runtime requirements when migrating legacy minimums", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec("PRAGMA foreign_keys=ON");
+    for (const name of migrationNames.filter((name) => name < "0029"))
+      db.exec(migration(name));
+    db.exec(
+      "INSERT INTO developers(id,type,name) VALUES('dev','organization','Developer')"
+    );
+    for (const [id, tag, minimum] of [
+      ["legacy", "1.0.0", "0.6"],
+      ["BTCPay", "0.1.5", "0.6"],
+      ["openreceive", "0.4.29", "0.8.0"]
+    ] as const) {
+      const releases = [
+        {
+          tag,
+          date: "2026-01-01",
+          download_url: "https://example.com/release.zip",
+          min_fossbilling_version: minimum
+        }
+      ];
+      db.prepare(
+        `INSERT INTO extensions(id,developer_id,type,name,description,releases,website,license,readme,source,version,download_url,published_at)
+        VALUES(?,'dev','mod','Legacy','Description',?,'','{"name":"MIT"}','README','{}',?,'https://example.com/release.zip','now')`
+      ).run(id, JSON.stringify(releases), tag);
+      // The read-only report accepts a convertible legacy lower bound.
+      expect(
+        db
+          .prepare(
+            readFileSync(
+              join(migrationsDirectory, "../manifest-preflight.sql"),
+              "utf8"
+            )
+          )
+          .all()
+      ).toEqual([]);
+    }
+    db.exec("BEGIN");
+    db.exec(migration("0029_align_manifest.sql"));
+    db.exec("COMMIT");
+    for (const [id, expected] of [
+      ["legacy", { fossbilling: ">=0.6" }],
+      ["BTCPay", { fossbilling: ">=0.6", php: ">=8.1" }],
+      ["openreceive", { fossbilling: ">=0.8.0", php: "^8.2" }]
+    ] as const) {
+      const row = db
+        .prepare("SELECT releases,manifest FROM extensions WHERE id=?")
+        .get(id)!;
+      const releases = JSON.parse(row.releases as string);
+      expect(releases[0].requires).toEqual(expected);
+      expect(releases[0]).not.toHaveProperty("min_fossbilling_version");
+      expect(JSON.parse(row.manifest as string).requires).toEqual(expected);
+    }
+    expect(
+      db
+        .prepare(
+          readFileSync(
+            join(migrationsDirectory, "../resource-inventory.sql"),
+            "utf8"
+          )
+        )
+        .all()
+    ).toEqual([]);
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+  } finally {
+    db.close();
+  }
+});
