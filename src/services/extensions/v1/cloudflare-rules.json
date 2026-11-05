@@ -55,7 +55,22 @@
     "rules": [
       {
         "ref": "extensions_v1_sunset",
-        "description": "Extensions v1 EOL 2027-02-05; remove with v1 service",
+        "description": "Extensions v1 badge URLs EOL 2027-02-05",
+        "expression": "(http.host eq \"api.fossbilling.net\" and raw.http.request.uri.path wildcard \"/extensions/v1/*/badges/*\")",
+        "action": "rewrite",
+        "action_parameters": {
+          "headers": {
+            "sunset": {
+              "operation": "set",
+              "value": "Fri, 05 Feb 2027 00:00:00 GMT"
+            }
+          }
+        },
+        "enabled": true
+      },
+      {
+        "ref": "extensions_v1_deprecation",
+        "description": "Extensions v1 deprecation; retirement follows a stable v2 installer release",
         "expression": "(http.host eq \"api.fossbilling.net\" and (raw.http.request.uri.path eq \"/extensions/v1\" or starts_with(raw.http.request.uri.path, \"/extensions/v1/\")))",
         "action": "rewrite",
         "action_parameters": {
@@ -63,10 +78,6 @@
             "deprecation": {
               "operation": "set",
               "value": "@1793836800"
-            },
-            "sunset": {
-              "operation": "set",
-              "value": "Fri, 05 Feb 2027 00:00:00 GMT"
             },
             "link": {
               "operation": "add",

@@ -15,7 +15,7 @@ The worker exposes five services:
   Allows the project to push critical notifications to all FOSSBilling installations—useful for security hotfixes or major announcements.
 
 - **Extensions** (`/extensions/v1`, `/extensions/v2`)
-  Owns the complete Extensions domain and its `DB_EXTENSIONS` schema. `v2` is authoritative; `v1` is deprecated and reaches EOL on **5 February 2027** ([migration details](src/services/extensions/v1/README.md)). The separate Extensions site keeps OIDC/session state but accesses this domain through the
+  Owns the complete Extensions domain and its `DB_EXTENSIONS` schema. `v2` is authoritative. `v1` is deprecated; its badge URLs retire on **5 February 2027** ([migration and retirement policy](src/services/extensions/v1/README.md)). The separate Extensions site keeps OIDC/session state but accesses this domain through the
   generated HTTPS API client; it must not bind or migrate `DB_EXTENSIONS`.
   See [`src/services/extensions/v2/README.md`](src/services/extensions/v2/README.md).
 
