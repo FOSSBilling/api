@@ -8,11 +8,11 @@ Upgrade integrations to [extensions v2](../v2/README.md) before EOL. Older FOSSB
 
 ## Migration
 
-| v1 endpoint         | v2 replacement                                                |
-| ------------------- | ------------------------------------------------------------- |
-| `GET /list`         | `GET /extensions/v2/extensions`                               |
-| `GET /{id}`         | `GET /extensions/v2/extensions/{id}`                          |
-| `GET /{id}/version` | Read the selected release's `tag` from the v2 detail response |
+| v1 endpoint         | v2 replacement                                                                |
+| ------------------- | ----------------------------------------------------------------------------- |
+| `GET /list`         | `GET /extensions/v2/extensions`                                               |
+| `GET /{id}`         | `GET /extensions/v2/extensions/{id}`                                          |
+| `GET /{id}/version` | Read the latest release's tag (`releases[0].tag`) from the v2 detail response |
 
 V2 lists use cursor pagination, not v1 limit/offset pagination. Use type `module` instead of `mod`. Releases carry full `requires.fossbilling` constraints; consumers must evaluate that constraint rather than a derived minimum.
 
