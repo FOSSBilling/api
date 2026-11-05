@@ -54,12 +54,21 @@ An extension exists from `POST /extensions`, not from approval. There is no sepa
 
 - `POST /extensions` creates the record and reserves its id. It stays out of public listings until its first revision is approved.
 - `PUT /extensions/{id}` proposes an edit. Published content is unchanged until approval. One unreviewed revision per extension at a time.
+- `PUT /extensions/{id}/revisions/{revisionId}` lets the active owner replace that pending revision; see [Editing a pending submission](#editing-a-pending-submission).
 - `DELETE /extensions/{id}` withdraws an unpublished extension and releases its id. Published extensions cannot be withdrawn by owners.
 - `POST /extensions/{id}/revisions/{revisionId}/approve` publishes. `reject` leaves published content untouched.
 - `POST /extensions/{id}/delist` (moderator-only) hides a published extension for cause without deleting content or history. `POST /extensions/{id}/relist` restores it. Both accept `?notify=false`.
 - `POST /extensions/{id}/moderator-correct` (moderator-only) fixes live extension content corruption without waiting for the author. Writes an already-approved revision, leaves `published_at` and ownership untouched. Requires a published, listed extension with no pending revision (409 otherwise). No `?notify` option and no author email; the fix is recorded in revision history.
 
 An edit cannot rename an extension or move it to another developer. A user owns at most one developer profile, so no request body names one.
+
+### Editing a pending submission
+
+`PUT /extensions/{id}/revisions/{revisionId}` replaces pending content using the same body as `PUT /extensions/{id}`. Only an active human owner can call it, including for publisher-created submissions. The replacement records that owner as `submitted_by` and counts toward their pending-revision and write limits.
+
+The response is `202` with a new `revision_id` and the extension's canonical `id` casing. The supplied revision must still be pending at the current ownership epoch. A stale or reviewed revision returns `409`; refresh before retrying.
+
+Deletion and insertion run in one transaction: a failed write keeps the original pending revision. The new ID prevents stale edits or moderator decisions from applying to the replacement. Published content and reviewed history stay unchanged.
 
 ## Reads
 
