@@ -26,10 +26,10 @@ The Worker no longer handles `/extensions/v1/{id}/badges/{type}`. Cloudflare URL
 | `license`                 | `license`     |
 | `min_fossbilling_version` | `fossbilling` |
 
-The minimum-version URL now displays the full requirement with the FOSSBilling label. Badge type matching remains case-insensitive at the edge; rendering and parameter validation use v2 behavior. Unknown types have no compatibility rewrite. Local requests and service bindings bypass these zone rules and have no v1 badge handler.
+The minimum-version URL now displays the full requirement. Types match case-insensitively; v2 handles rendering and validation. Unknown types have no rewrite. Local requests and service bindings bypass the rules and have no v1 badge handler.
 
-[cloudflare-rules.json](cloudflare-rules.json) records the Cloudflare API payloads. The URL rewrite ruleset is `f603898b72c84b4cb728ed935e23f043`; rule refs begin `extensions_v1_badge_`. Keep these rules enabled before deploying the Worker change.
+[cloudflare-rules.json](cloudflare-rules.json) records the Cloudflare API payloads. The URL rewrite ruleset is `f603898b72c84b4cb728ed935e23f043`; rule refs begin `extensions_v1_badge_`. Deploy these rules before removing the Worker handler.
 
-The response-header ruleset is `d2f24f1a139d4087b11de7bed3f6549c` (rule ref `extensions_v1_sunset`). It matches the original v1 path and adds `Deprecation`, `Sunset: Fri, 05 Feb 2027 00:00:00 GMT`, and a successor-version link. Direct v2 requests do not receive these headers. These headers announce the date; they do not automatically disable endpoints.
+The response-header ruleset is `d2f24f1a139d4087b11de7bed3f6549c` (rule ref `extensions_v1_sunset`). It matches original v1 URLs, including rewritten badges, and adds `Deprecation`, `Sunset`, and a link to the v2 docs. Endpoint removal at EOL is manual.
 
 At EOL, remove the remaining v1 service and mount, its list-cache invalidation, and the four temporary Cloudflare rules. Delete only these rules by ref, preserving any other rules subsequently added to the zone rulesets.
