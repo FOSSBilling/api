@@ -32,12 +32,12 @@
     "badge-maker": "6.0.0",
     "better-auth": "^1.7.14",
     "drizzle-orm": "0.45.4",
-    "hono": "4.13.14",
+    "hono": "4.13.16",
     "semver": "7.8.5",
     "zod": "4.6.7"
   },
   "devDependencies": {
-    "@cloudflare/vitest-plugin": "1.4.11",
+    "@cloudflare/vitest-plugin": "1.4.12",
     "@eslint/js": "10.0.1",
     "@types/node": "26.6.6",
     "@types/semver": "7.8.0",
@@ -52,7 +52,7 @@
     "typescript": "6.0.3",
     "typescript-eslint": "8.72.1",
     "vitest": "5.0.5",
-    "wrangler": "4.156.0"
+    "wrangler": "4.156.1"
   },
   "overrides": {
     "@esbuild-kit/core-utils": {
