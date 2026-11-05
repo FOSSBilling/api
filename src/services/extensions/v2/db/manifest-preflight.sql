@@ -14,10 +14,11 @@ WITH published AS (
 ), release_rows AS (
   SELECT p.id, r.key AS release_index, r.type AS release_type,
     CASE WHEN r.type = 'object' THEN CASE
-      WHEN json_type(r.value,'$.requires') IS NULL
+      WHEN (json_type(r.value,'$.requires') IS NULL
+        OR (json_type(r.value,'$.requires') = 'object' AND json_type(r.value,'$.requires.fossbilling') IS NULL))
         AND json_type(r.value,'$.min_fossbilling_version') = 'text'
         AND length(trim(json_extract(r.value,'$.min_fossbilling_version'))) BETWEEN 1 AND 100
-      THEN json_set(r.value,'$.requires',json_object('fossbilling','>=' || trim(json_extract(r.value,'$.min_fossbilling_version'))))
+      THEN json_set(r.value,'$.requires.fossbilling','>=' || trim(json_extract(r.value,'$.min_fossbilling_version')))
       ELSE r.value END ELSE '{}' END AS release
   FROM published p, json_each(CASE WHEN json_valid(p.releases) THEN p.releases ELSE '[]' END) r
 )

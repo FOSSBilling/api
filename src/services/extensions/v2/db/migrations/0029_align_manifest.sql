@@ -168,10 +168,11 @@ WITH published AS (
 ), release_rows AS (
   SELECT p.id, r.key AS release_index, r.type AS release_type,
     CASE WHEN r.type = 'object' THEN CASE
-      WHEN json_type(r.value,'$.requires') IS NULL
+      WHEN (json_type(r.value,'$.requires') IS NULL
+        OR (json_type(r.value,'$.requires') = 'object' AND json_type(r.value,'$.requires.fossbilling') IS NULL))
         AND json_type(r.value,'$.min_fossbilling_version') = 'text'
         AND length(trim(json_extract(r.value,'$.min_fossbilling_version'))) BETWEEN 1 AND 100
-      THEN json_set(r.value,'$.requires',json_object('fossbilling','>=' || trim(json_extract(r.value,'$.min_fossbilling_version'))))
+      THEN json_set(r.value,'$.requires.fossbilling','>=' || trim(json_extract(r.value,'$.min_fossbilling_version')))
       ELSE r.value END ELSE '{}' END AS release
   FROM published p, json_each(CASE WHEN json_valid(p.releases) THEN p.releases ELSE '[]' END) r
 )
@@ -221,10 +222,11 @@ DROP VIEW _manifest_migration_issues;
 -- means the extension inherits the PHP requirements of its FOSSBilling runtime.
 UPDATE extensions SET releases = (
   SELECT json_group_array(json(CASE
-    WHEN r.type = 'object' AND json_type(r.value,'$.requires') IS NULL
+    WHEN r.type = 'object' AND (json_type(r.value,'$.requires') IS NULL
+        OR (json_type(r.value,'$.requires') = 'object' AND json_type(r.value,'$.requires.fossbilling') IS NULL))
       AND json_type(r.value,'$.min_fossbilling_version') = 'text'
       AND length(trim(json_extract(r.value,'$.min_fossbilling_version'))) BETWEEN 1 AND 100
-    THEN json_set(r.value,'$.requires',json_object('fossbilling','>=' || trim(json_extract(r.value,'$.min_fossbilling_version'))))
+    THEN json_set(r.value,'$.requires.fossbilling','>=' || trim(json_extract(r.value,'$.min_fossbilling_version')))
     ELSE r.value END))
   FROM json_each(CASE WHEN json_valid(extensions.releases) THEN extensions.releases ELSE '[]' END) r
 ) WHERE published_at IS NOT NULL AND json_valid(releases) AND json_type(releases) = 'array';
@@ -234,7 +236,7 @@ UPDATE extensions SET releases = (
 -- https://github.com/OpenReceive/openreceive/releases/tag/v0.4.29
 UPDATE extensions SET releases = (
   SELECT json_group_array(json(CASE
-    WHEN json_extract(value,'$.tag') IN ('0.1.3','0.1.4','0.1.5')
+    WHEN json_extract(value,'$.tag') IN ('0.1.3','v0.1.3','0.1.4','v0.1.4','0.1.5','v0.1.5')
       AND json_type(value,'$.requires.php') IS NULL
     THEN json_set(value,'$.requires.php','>=8.1') ELSE value END))
   FROM json_each(extensions.releases)
@@ -242,7 +244,7 @@ UPDATE extensions SET releases = (
 --> statement-breakpoint
 UPDATE extensions SET releases = (
   SELECT json_group_array(json(CASE
-    WHEN json_extract(value,'$.tag') = '0.4.29'
+    WHEN json_extract(value,'$.tag') IN ('0.4.29','v0.4.29')
       AND json_type(value,'$.requires.php') IS NULL
     THEN json_set(value,'$.requires.php','^8.2') ELSE value END))
   FROM json_each(extensions.releases)

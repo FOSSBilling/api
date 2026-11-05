@@ -1275,72 +1275,102 @@ it.each([
   }
 );
 
-it("inherits FOSSBilling runtime requirements when migrating legacy minimums", () => {
-  const db = new DatabaseSync(":memory:");
-  try {
-    db.exec("PRAGMA foreign_keys=ON");
-    for (const name of migrationNames.filter((name) => name < "0029"))
-      db.exec(migration(name));
-    db.exec(
-      "INSERT INTO developers(id,type,name) VALUES('dev','organization','Developer')"
-    );
-    for (const [id, tag, minimum] of [
-      ["legacy", "1.0.0", "0.6"],
-      ["BTCPay", "0.1.5", "0.6"],
-      ["openreceive", "0.4.29", "0.8.0"]
-    ] as const) {
-      const releases = [
+it.each(["", "v"])(
+  "migrates legacy requirements with %s-prefixed release tags",
+  (prefix) => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      db.exec("PRAGMA foreign_keys=ON");
+      for (const name of migrationNames.filter((name) => name < "0029"))
+        db.exec(migration(name));
+      db.exec(
+        "INSERT INTO developers(id,type,name) VALUES('dev','organization','Developer')"
+      );
+      const fixtures = [
         {
-          tag,
-          date: "2026-01-01",
-          download_url: "https://example.com/release.zip",
-          min_fossbilling_version: minimum
+          id: "legacy",
+          tags: ["1.0.0"],
+          minimum: "0.6",
+          initial: undefined,
+          expected: { fossbilling: ">=0.6" }
+        },
+        {
+          id: "BTCPay",
+          tags: ["0.1.5", "0.1.4", "0.1.3"],
+          minimum: "0.6",
+          initial: undefined,
+          expected: { fossbilling: ">=0.6", php: ">=8.1" }
+        },
+        {
+          id: "openreceive",
+          tags: ["0.4.29"],
+          minimum: "0.8.0",
+          initial: undefined,
+          expected: { fossbilling: ">=0.8.0", php: "^8.2" }
+        },
+        {
+          id: "partial",
+          tags: ["1.0.0"],
+          minimum: "0.6",
+          initial: { php: ">=8.4", modules: { branding: "^1" } },
+          expected: {
+            fossbilling: ">=0.6",
+            php: ">=8.4",
+            modules: { branding: "^1" }
+          }
         }
       ];
-      db.prepare(
-        `INSERT INTO extensions(id,developer_id,type,name,description,releases,website,license,readme,source,version,download_url,published_at)
+      for (const fixture of fixtures) {
+        const releases = fixture.tags.map((tag) => ({
+          tag: prefix + tag,
+          date: "2026-01-01",
+          download_url: "https://example.com/release.zip",
+          min_fossbilling_version: fixture.minimum,
+          requires: fixture.initial
+        }));
+        db.prepare(
+          `INSERT INTO extensions(id,developer_id,type,name,description,releases,website,license,readme,source,version,download_url,published_at)
         VALUES(?,'dev','mod','Legacy','Description',?,'','{"name":"MIT"}','README','{}',?,'https://example.com/release.zip','now')`
-      ).run(id, JSON.stringify(releases), tag);
-      // The read-only report accepts a convertible legacy lower bound.
+        ).run(fixture.id, JSON.stringify(releases), fixture.tags[0]);
+      }
+      const preflight = readFileSync(
+        join(migrationsDirectory, "../manifest-preflight.sql"),
+        "utf8"
+      );
+      expect(db.prepare(preflight).all()).toEqual([]);
+      db.exec("BEGIN");
+      db.exec(migration("0029_align_manifest.sql"));
+      db.exec("COMMIT");
+      expect(db.prepare(preflight).all()).toEqual([]);
+      for (const fixture of fixtures) {
+        const row = db
+          .prepare("SELECT releases,manifest FROM extensions WHERE id=?")
+          .get(fixture.id)!;
+        const releases = JSON.parse(row.releases as string);
+        expect(releases.map((release: { tag: string }) => release.tag)).toEqual(
+          fixture.tags.map((tag) => prefix + tag)
+        );
+        for (const release of releases) {
+          expect(release.requires).toEqual(fixture.expected);
+          expect(release).not.toHaveProperty("min_fossbilling_version");
+        }
+        expect(JSON.parse(row.manifest as string).requires).toEqual(
+          fixture.expected
+        );
+      }
       expect(
         db
           .prepare(
             readFileSync(
-              join(migrationsDirectory, "../manifest-preflight.sql"),
+              join(migrationsDirectory, "../resource-inventory.sql"),
               "utf8"
             )
           )
           .all()
       ).toEqual([]);
+      expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      db.close();
     }
-    db.exec("BEGIN");
-    db.exec(migration("0029_align_manifest.sql"));
-    db.exec("COMMIT");
-    for (const [id, expected] of [
-      ["legacy", { fossbilling: ">=0.6" }],
-      ["BTCPay", { fossbilling: ">=0.6", php: ">=8.1" }],
-      ["openreceive", { fossbilling: ">=0.8.0", php: "^8.2" }]
-    ] as const) {
-      const row = db
-        .prepare("SELECT releases,manifest FROM extensions WHERE id=?")
-        .get(id)!;
-      const releases = JSON.parse(row.releases as string);
-      expect(releases[0].requires).toEqual(expected);
-      expect(releases[0]).not.toHaveProperty("min_fossbilling_version");
-      expect(JSON.parse(row.manifest as string).requires).toEqual(expected);
-    }
-    expect(
-      db
-        .prepare(
-          readFileSync(
-            join(migrationsDirectory, "../resource-inventory.sql"),
-            "utf8"
-          )
-        )
-        .all()
-    ).toEqual([]);
-    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-  } finally {
-    db.close();
   }
-});
+);
