@@ -806,8 +806,8 @@ export class ExtensionRevisionsDatabase {
 
   // The column list publish shares with ExtensionsDatabase.moderatorCorrect()
   // in db/extensions.ts; the two differ only in published_at handling and how
-  // the row is matched (exact id here, LOWER(id) there, because corrections
-  // address legacy rows). Change the projection in both places together.
+  // the row is matched (exact UUID here, LOWER(identifier) there).
+  // Change the projection in both places together.
   private buildPublishStmt(
     content: ExtensionContent,
     revisionId: string,

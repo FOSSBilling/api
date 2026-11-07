@@ -563,11 +563,8 @@ export class ExtensionsDatabase {
     };
   }
 
-  // Light authorisation probe for the merged public/owner detail read and
-  // the revisions route: deciding which view a caller gets - and learning
-  // the canonical id for exact-match scoped queries - must not cost the
-  // full owner view (two revision joins plus up to 256 KiB of
-  // pendingContent).
+  // Check ownership for detail and revision reads without loading the full
+  // owner view, including its revision joins and pending content.
   async getOwnership(
     id: string
   ): Promise<DatabaseResult<{ ownerUserId: string | null }>> {
