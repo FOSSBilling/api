@@ -570,13 +570,10 @@ export class ExtensionsDatabase {
   // pendingContent).
   async getOwnership(
     id: string
-  ): Promise<
-    DatabaseResult<{ extensionId: string; ownerUserId: string | null }>
-  > {
+  ): Promise<DatabaseResult<{ ownerUserId: string | null }>> {
     try {
       const rows = await this.db
         .select({
-          extensionId: extensions.id,
           ownerUserId: developers.ownerUserId
         })
         .from(extensions)
@@ -586,7 +583,7 @@ export class ExtensionsDatabase {
       const row = rows[0];
       if (!row) return notFound(id);
       return {
-        data: { extensionId: row.extensionId, ownerUserId: row.ownerUserId },
+        data: row,
         error: null
       };
     } catch (error) {
@@ -1213,7 +1210,7 @@ export class ExtensionsDatabase {
       // The UPDATE below is the column list publish shares with
       // ExtensionRevisionsDatabase.approve() in db/revisions.ts; the two
       // differ only in published_at handling and how the row is matched
-      // (LOWER(id) here, because corrections must address legacy
+      // (LOWER(identifier) here, because corrections must address legacy
       // differently-cased rows). Change the projection in both places together.
       const publishStmt = toD1Statement(this.db.$client, {
         sql: `UPDATE extensions
@@ -1241,20 +1238,23 @@ export class ExtensionsDatabase {
         ]
       });
 
-      results = await this.db.$client.batch([correctStmt, publishStmt]);
+      results = await this.db.$client.batch<{
+        extension_id: string;
+        identifier: string;
+      }>([correctStmt, publishStmt]);
     } catch (error) {
       return contentAdmissionError("moderatorCorrect", error);
     }
 
-    if (!results[0]?.meta?.changes) {
+    const corrected = results[0].results[0];
+    if (!corrected) {
       return this.moderatorCorrectBlockedError(id, moderatorId);
     }
 
     return {
       data: {
-        id: (results[0].results[0] as { extension_id: string }).extension_id,
-        identifier: (results[0].results[0] as { identifier: string })
-          .identifier,
+        id: corrected.extension_id,
+        identifier: corrected.identifier,
         revisionId
       },
       error: null

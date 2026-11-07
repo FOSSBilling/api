@@ -1441,14 +1441,18 @@ describe("directory UUID identities", () => {
         .get() as { developer_id: string };
       expect(deletedHistory.developer_id).toMatch(pattern);
       expect(deletedHistory.developer_id).not.toBe(developer.id);
-      for (const index of [
-        "idx_extensions_public_order",
-        "idx_extensions_type_public_order"
-      ]) {
-        const row = db
-          .prepare("SELECT sql FROM sqlite_master WHERE name=?")
-          .get(index) as { sql: string };
-        expect(row.sql).toContain("lower(identifier),id");
+      for (const filter of ["", " AND type='module'"]) {
+        const plan = db
+          .prepare(
+            `EXPLAIN QUERY PLAN
+          SELECT id FROM extensions
+          WHERE published_at IS NOT NULL AND delisted_at IS NULL${filter}
+          ORDER BY lower(identifier), id LIMIT 50`
+          )
+          .all() as Array<{ detail: string }>;
+        expect(plan.map((row) => row.detail).join(" ")).not.toContain(
+          "TEMP B-TREE"
+        );
       }
       db.prepare(
         "INSERT INTO extension_revisions(id,extension_id,developer_id,submitted_by,content,status) VALUES ('new-revision',?,?, 'owner','{}','approved')"

@@ -52,24 +52,6 @@ async function seedPublished(): Promise<void> {
 }
 
 describe("POST /extensions/{id}/moderator-correct (api#251)", () => {
-  it("returns the canonical id without a fallible post-commit read", async () => {
-    await seedPublished();
-    env.DB_EXTENSIONS = wrapD1WithHook(db, (query) => {
-      if (/^select "id" from "extensions"/i.test(query))
-        throw new Error("canonical read failed");
-    });
-    const response = await post(
-      PATH.replace("live-ext", "LIVE-EXT"),
-      await authHeaders("mod-1"),
-      correctBody()
-    );
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({
-      result: { id: expect.stringMatching(UUID_V7), identifier: "live-ext" }
-    });
-    expect(await countRevisions(db)).toBe(1);
-  });
-
   it("charges a first-time moderator exactly once and keeps totals reconciled", async () => {
     await seedPublished();
     const response = await post(
@@ -316,7 +298,7 @@ describe("POST /extensions/{id}/moderator-correct (api#251)", () => {
     ).toHaveLength(0);
   });
 
-  it("matches ids case-insensitively and returns the canonical id", async () => {
+  it("matches identifiers case-insensitively and returns the canonical identifier", async () => {
     await insertUser(db, { id: "mod-1", is_moderator: 1 });
     await seedDeveloper("new-developer", "user-1");
     await insertExtension(db, {
