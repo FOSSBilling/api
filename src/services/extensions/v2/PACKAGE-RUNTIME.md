@@ -18,14 +18,23 @@ npm run packages:dev
 npm run packages:demo -- --fresh
 ```
 
-A fresh run verifies private job status, package and icon access before approval,
-owner preview security headers, review and approval, the public ZIP checksum and
-icon, and a private manifest correction using the stored source.
+A fresh run verifies private job status, private package and API preview access
+before approval, preview security headers, review and approval, the public ZIP
+checksum and icon, and a private manifest correction using the stored source.
 
 Worker and Node tests additionally cover archive limits and corruption, queue
 retries and duplicate delivery, interrupted leases, ownership changes and
 publisher revocation. The directory tests cover the private job proxy and polling
 failures; publisher tests cover completion, rejection and the polling deadline.
+
+## Real B2 smoke test
+
+A local Worker smoke test against both real B2 buckets on 7 November 2026
+verified pending SVG/AVIF/PNG CDN delivery, checksums, security headers and cache
+hits. Approval and manifest corrections reused existing images. Cleanup removed
+abandoned object versions while preserving referenced objects. Test objects and
+CDN cache entries were removed afterward. No Worker deployment or production
+database changes were made.
 
 ## Before production enablement
 

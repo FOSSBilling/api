@@ -626,11 +626,10 @@ export class ExtensionsDatabase {
     }
   }
 
-  // Creates the extension record and its first pending revision as one
-  // transaction. The revision insert is gated on `changes() = 1` from the
-  // preceding statement (SQLite's per-connection changes()), so an id
-  // collision or a failed ownership guard leaves neither row behind. See
-  // toD1Statement for why this is raw sql rather than two builder calls.
+  // Creates the first pending revision, reusing a package draft when present.
+  // The batch gates the revision insert on changes() = 1, so a conflicting
+  // identifier or failed ownership guard cannot create a revision. A package
+  // draft is reused only when it has never been submitted.
   async create(
     input: CreateExtensionInput
   ): Promise<
@@ -660,7 +659,11 @@ export class ExtensionsDatabase {
                   SELECT COUNT(*) FROM extension_revisions
                   WHERE submitted_by = ? AND status = 'pending'
                 ) < ?
-              ON CONFLICT DO NOTHING`,
+              ON CONFLICT (lower(identifier)) DO UPDATE SET updated_at=CURRENT_TIMESTAMP
+              WHERE extensions.developer_id=excluded.developer_id
+                AND extensions.published_at IS NULL
+                AND NOT EXISTS (SELECT 1 FROM extension_revisions r WHERE r.extension_id=extensions.id)
+              RETURNING id`,
         params: [
           extensionId,
           input.identifier,
@@ -676,19 +679,22 @@ export class ExtensionsDatabase {
       const revisionStmt = toD1Statement(this.db.$client, {
         sql: `INSERT INTO extension_revisions
                 (id, extension_id, developer_id, submitted_by, status, content, ownership_epoch)
-              SELECT ?, ?, ?, ?, 'pending', ?, ?
-              WHERE changes() = 1`,
+              SELECT ?, e.id, ?, ?, 'pending', ?, ? FROM extensions e
+              WHERE lower(e.identifier)=lower(?) AND changes() = 1`,
         params: [
           revisionId,
-          extensionId,
           input.developerId,
           input.submittedBy,
           JSON.stringify(input.content),
-          input.ownershipEpoch
+          input.ownershipEpoch,
+          input.identifier
         ]
       });
 
-      results = await this.db.$client.batch([extensionStmt, revisionStmt]);
+      results = await this.db.$client.batch<{ id: string }>([
+        extensionStmt,
+        revisionStmt
+      ]);
     } catch (error) {
       return contentAdmissionError("create", error);
     }
@@ -702,7 +708,11 @@ export class ExtensionsDatabase {
     }
 
     return {
-      data: { id: extensionId, identifier: input.identifier, revisionId },
+      data: {
+        id: results[0].results[0].id,
+        identifier: input.identifier,
+        revisionId
+      },
       error: null
     };
   }
@@ -771,7 +781,11 @@ export class ExtensionsDatabase {
                   SELECT COUNT(*) FROM extension_revisions
                   WHERE submitted_by = ? AND status = 'pending'
                 ) < ?
-              ON CONFLICT DO NOTHING`,
+              ON CONFLICT (lower(identifier)) DO UPDATE SET updated_at=CURRENT_TIMESTAMP
+              WHERE extensions.developer_id=excluded.developer_id
+                AND extensions.published_at IS NULL
+                AND NOT EXISTS (SELECT 1 FROM extension_revisions r WHERE r.extension_id=extensions.id)
+              RETURNING id`,
         params: [
           extensionId,
           input.identifier,
@@ -785,20 +799,23 @@ export class ExtensionsDatabase {
       const revisionStmt = toD1Statement(this.db.$client, {
         sql: `INSERT INTO extension_revisions
                 (id, extension_id, developer_id, submitted_by, status, content, ownership_epoch)
-              SELECT ?, ?, d.id, ?, 'pending', ?, d.ownership_epoch
-              FROM developers d
-              WHERE d.id = ?
+              SELECT ?, e.id, d.id, ?, 'pending', ?, d.ownership_epoch
+              FROM developers d JOIN extensions e ON e.developer_id=d.id
+              WHERE d.id = ? AND lower(e.identifier)=lower(?)
                 AND changes() = 1`,
         params: [
           revisionId,
-          extensionId,
           input.submittedBy,
           JSON.stringify(input.content),
-          input.developerId
+          input.developerId,
+          input.identifier
         ]
       });
 
-      results = await this.db.$client.batch([extensionStmt, revisionStmt]);
+      results = await this.db.$client.batch<{ id: string }>([
+        extensionStmt,
+        revisionStmt
+      ]);
     } catch (error) {
       return contentAdmissionError("createAsPublisher", error);
     }
@@ -815,7 +832,11 @@ export class ExtensionsDatabase {
     }
 
     return {
-      data: { id: extensionId, identifier: input.identifier, revisionId },
+      data: {
+        id: results[0].results[0].id,
+        identifier: input.identifier,
+        revisionId
+      },
       error: null
     };
   }

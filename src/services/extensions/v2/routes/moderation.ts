@@ -1,4 +1,4 @@
-import { scheduleIconPublication } from "../packages/public-assets";
+import { schedulePublishedIconUpdate } from "../packages/public-assets";
 import {
   paceContentAccount,
   requireApproveAccess,
@@ -119,7 +119,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
       const status = statusFromWriteErrorCode(error?.code);
       return c.json(errorBody(error, "Unable to approve revision"), status);
     }
-    scheduleIconPublication(c, id);
+    schedulePublishedIconUpdate(c, id);
     const notified = await notifyAuthor(c, extDb, query, {
       kind: "revision-approved",
       extensionId: id,
@@ -418,7 +418,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
       const status = statusFromContentWriteError(error?.code);
       return c.json(errorBody(error, "Unable to correct extension"), status);
     }
-    scheduleIconPublication(c, id);
+    schedulePublishedIconUpdate(c, id);
     revalidateExtensions(c);
     return c.json(
       {

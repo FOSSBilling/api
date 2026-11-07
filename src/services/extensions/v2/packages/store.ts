@@ -1,6 +1,6 @@
 import { PackageError } from "./errors";
 import type { Context } from "hono";
-import { b2PackageStore } from "./b2-store";
+import { b2ObjectStore } from "./b2-store";
 import { getPlatform } from "../../../../lib/middleware";
 
 export interface PackageStore {
@@ -51,7 +51,8 @@ export function configuredPackageStore(
       !getEnv("EXTENSION_PACKAGES_S3_ENDPOINT") ||
       !getEnv("EXTENSION_PACKAGES_S3_PREFIX") ||
       getEnv("EXTENSION_PACKAGES_S3_PREFIX") === "local" ||
-      !env.EXTENSION_IMAGE_BUCKET ||
+      !getEnv("EXTENSION_ASSETS_S3_ENDPOINT") ||
+      !getEnv("EXTENSION_ASSETS_PUBLIC_URL") ||
       !env.PACKAGE_IMAGES
     ) {
       throw new PackageError(
@@ -61,27 +62,30 @@ export function configuredPackageStore(
       );
     }
   }
-  const remote = getEnv("EXTENSION_PACKAGES_S3_ENDPOINT")
-    ? b2PackageStore((name) => getEnv(name))
+  const packages = getEnv("EXTENSION_PACKAGES_S3_ENDPOINT")
+    ? b2ObjectStore(getEnv, "packages")
     : null;
-  const packages = env.EXTENSION_PACKAGE_BUCKET;
-  const images = env.EXTENSION_IMAGE_BUCKET;
-  const bucketFor = (key: string) => {
-    const bucket = key.startsWith("icons/") ? images : packages;
+  const assets = getEnv("EXTENSION_ASSETS_S3_ENDPOINT")
+    ? b2ObjectStore(getEnv, "assets")
+    : null;
+  const bucket = env.EXTENSION_PACKAGE_BUCKET;
+  if (!packages && !bucket) return null;
+  const localBucket = () => {
     if (!bucket)
       throw new PackageError(
         "PACKAGES_DISABLED",
-        "Package or image storage is not configured",
+        "Storage is not configured",
         503
       );
     return bucket;
   };
-  if (!remote && !packages) return null;
+  const remoteFor = (key: string) =>
+    key.startsWith("extensions/") ? assets : packages;
   return {
     async put(key, bytes, checksum) {
-      if (remote && !key.startsWith("icons/"))
-        return remote.put(key, bytes, checksum);
-      const result = await bucketFor(key).put(key, bytes, {
+      const remote = remoteFor(key);
+      if (remote) return remote.put(key, bytes, checksum);
+      const result = await localBucket().put(key, bytes, {
         onlyIf: { etagDoesNotMatch: "*" },
         sha256: checksum,
         httpMetadata: {
@@ -98,8 +102,9 @@ export function configuredPackageStore(
       if (!result) throw new Error("Package object already exists");
     },
     async get(key, checksum) {
-      if (remote && !key.startsWith("icons/")) return remote.get(key, checksum);
-      const object = await bucketFor(key).get(key);
+      const remote = remoteFor(key);
+      if (remote) return remote.get(key, checksum);
+      const object = await localBucket().get(key);
       if (!object) return null;
       if (checksum) {
         const actual = object.checksums.sha256;
@@ -120,8 +125,9 @@ export function configuredPackageStore(
       return object.body;
     },
     async delete(key) {
-      if (remote && !key.startsWith("icons/")) return remote.delete(key);
-      await bucketFor(key).delete(key);
+      const remote = remoteFor(key);
+      if (remote) return remote.delete(key);
+      await localBucket().delete(key);
     }
   };
 }

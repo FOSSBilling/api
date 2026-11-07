@@ -1,3 +1,4 @@
+import { v7 as uuidv7 } from "uuid";
 import type { PublisherContext } from "../middleware";
 import { sanitizeSvg } from "@zeropress/svg-hush/workerd";
 import {
@@ -75,11 +76,8 @@ export async function reserveObject(
   extensionId: string,
   bytes: Uint8Array<ArrayBuffer>,
   checksum: string,
-  suffix?: "avif" | "png" | "svg"
+  id: string = crypto.randomUUID()
 ) {
-  const id = suffix
-    ? `icons/${crypto.randomUUID()}.${suffix}`
-    : crypto.randomUUID();
   const result = await db
     .prepare(
       `INSERT INTO package_objects (id,created_by,bytes)
@@ -277,8 +275,35 @@ export async function buildStoredPackage(input: {
         );
     }
   }
+  // Reserve the permanent identity only after ZIP and icon validation succeeds.
+  await db
+    .prepare(
+      `INSERT INTO extensions (id,identifier,developer_id,created_by)
+    SELECT ?,?,?,? WHERE ${ownerPredicate()} ON CONFLICT DO NOTHING`
+    )
+    .bind(
+      uuidv7(),
+      manifest.id,
+      owner.id,
+      owner.owner_user_id,
+      ...ownerParams(owner, manifest.id)
+    )
+    .run();
+  const extension = await db
+    .prepare(
+      "SELECT id FROM extensions WHERE lower(identifier)=lower(?) AND developer_id=?"
+    )
+    .bind(manifest.id, owner.id)
+    .first<{ id: string }>();
+  if (!extension)
+    throw new PackageError(
+      "FORBIDDEN",
+      "Extension ownership changed while preparing the package",
+      403
+    );
   await storePackageIcon({
     db,
+    extensionId: extension.id,
     store,
     owner,
     manifest,
@@ -334,6 +359,7 @@ export async function buildStoredPackage(input: {
 }
 
 async function storePackageIcon(input: {
+  extensionId: string;
   db: D1Database;
   store: PackageStore;
   owner: PackageOwner;
@@ -349,6 +375,7 @@ async function storePackageIcon(input: {
       .first()
   )
     return;
+  const assetId = crypto.randomUUID();
   const objects: {
     format: IconVariant["format"];
     id: string;
@@ -365,7 +392,7 @@ async function storePackageIcon(input: {
         manifest.id,
         bytes,
         checksum,
-        format
+        `extensions/${input.extensionId}/icons/${assetId}.${format}`
       ),
       checksum
     });

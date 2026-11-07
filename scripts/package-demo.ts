@@ -273,7 +273,7 @@ if (action === "setup") {
         unpublishedCorrection: next.id,
         sourceId: artifact.source_id,
         checks:
-          "Private queue status, private package and icon, approval, public checksum and icon, immutable correction"
+          "Private queue status, private package and API preview, approval, public checksum and icon, immutable correction"
       },
       null,
       2

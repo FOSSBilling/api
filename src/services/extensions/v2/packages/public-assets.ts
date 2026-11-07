@@ -1,190 +1,70 @@
 import { logError } from "../../../../lib/logger";
 import { revalidateExtensions } from "../revalidate";
-import type { ExtensionContent } from "../schemas/extensions";
-import { AwsClient } from "aws4fetch";
 import type { Context } from "hono";
 import { getPlatform } from "../../../../lib/middleware";
-import { ARTIFACT_SELECT, type ArtifactRow } from "../db/packages";
-import { latestRelease } from "../../../../lib/releases";
 import { PackageError } from "./errors";
-import { boundedBytes, packageStore } from "./store";
 
-// Only called for committed, published content. Uploads and pending previews
-// always use the private image bucket, even when B2 is configured.
-export async function publishExtensionIcon(
+// Publishing changes the listing URL only; icons are already stored in B2.
+async function updatePublishedIconUrl(
   c: Context<{ Bindings: CloudflareBindings }>,
   extensionId: string
 ) {
   extensionId = extensionId.toLowerCase();
   const platform = getPlatform(c);
-  const endpoint = platform.getEnv("EXTENSION_ASSETS_S3_ENDPOINT");
-  if (!endpoint) return;
-  const get = (name: string) => {
-    const value = platform.getEnv(`EXTENSION_ASSETS_${name}`);
-    if (!value)
-      throw new PackageError(
-        "ASSETS_UNAVAILABLE",
-        "Asset storage configuration is incomplete",
-        503
-      );
-    return value;
-  };
   const row = await c.env.DB_EXTENSIONS.prepare(
-    "SELECT id,releases,published_revision_id FROM extensions WHERE lower(identifier)=? AND published_at IS NOT NULL AND delisted_at IS NULL"
+    `
+    SELECT e.published_revision_id, coalesce(i.svg_object_id,i.png_object_id) AS object_key
+    FROM extensions e
+    JOIN package_artifacts a ON a.download_url=e.download_url AND a.published_at IS NOT NULL
+    JOIN package_sources s ON s.id=a.source_id AND s.extension_identifier=lower(e.identifier)
+    JOIN package_icons i ON i.source_id=s.id
+    WHERE lower(e.identifier)=? AND e.published_at IS NOT NULL AND e.delisted_at IS NULL
+  `
   )
     .bind(extensionId)
-    .first<{ id: string; releases: string; published_revision_id: string }>();
-  if (!row) return;
-  const latest = latestRelease(
-    JSON.parse(row.releases) as ExtensionContent["releases"]
-  );
-  if (!latest?.artifact_id) return;
-  const artifact = await c.env.DB_EXTENSIONS.prepare(
-    `${ARTIFACT_SELECT} WHERE a.id=? AND a.published_at IS NOT NULL AND s.extension_identifier=?`
-  )
-    .bind(latest.artifact_id, extensionId)
-    .first<ArtifactRow>();
+    .first<{ published_revision_id: string; object_key: string | null }>();
+  if (!row?.object_key) return;
+  const base = platform.getEnv("EXTENSION_ASSETS_PUBLIC_URL");
+  if (!base)
+    throw new PackageError(
+      "ASSETS_UNAVAILABLE",
+      "Public asset URL is not configured",
+      503
+    );
+  const publicBase = new URL(base);
   if (
-    !artifact?.icon_source_id ||
-    (!artifact.svg_object_id && !artifact.png_object_id)
-  )
-    return;
-  const store = packageStore(c);
-  if (!store) return;
-  const origin = new URL(endpoint);
-  const publicBase = new URL(get("PUBLIC_URL"));
-  if (
-    origin.protocol !== "https:" ||
     publicBase.protocol !== "https:" ||
-    origin.username ||
-    origin.password ||
     publicBase.username ||
     publicBase.password ||
-    origin.search ||
     publicBase.search ||
-    origin.hash ||
-    publicBase.hash ||
-    origin.pathname !== "/"
+    publicBase.hash
   )
     throw new PackageError(
       "ASSETS_UNAVAILABLE",
-      "Asset storage URLs must use HTTPS without credentials or query parameters",
+      "Invalid public asset URL",
       503
     );
-  const bucket = get("S3_BUCKET");
-  if (!/^[a-zA-Z0-9-]+$/.test(bucket))
-    throw new PackageError(
-      "ASSETS_UNAVAILABLE",
-      "Invalid asset bucket name",
-      503
-    );
-  const aws = new AwsClient({
-    accessKeyId: get("S3_ACCESS_KEY_ID"),
-    secretAccessKey: get("S3_SECRET_ACCESS_KEY"),
-    region: get("S3_REGION"),
-    service: "s3",
-    retries: 0
-  });
-  // The icon shares its immutable source UUID across formats and manifest revisions.
-  const assetId = artifact.icon_source_id;
-  let iconUrl: string | undefined;
-  for (const format of artifact.svg_object_id
-    ? (["svg"] as const)
-    : (["avif", "png"] as const)) {
-    const key = artifact[`${format}_object_id`];
-    const checksum = artifact[`${format}_sha256`];
-    if (!key || !checksum)
-      throw new PackageError(
-        "ASSETS_UNAVAILABLE",
-        "Prepared asset is unavailable",
-        503
-      );
-    const objectKey = `extensions/${row.id}/icons/${assetId}.${format}`;
-    const url = new URL(`${publicBase.href.replace(/\/$/, "")}/${objectKey}`)
-      .href;
-    const contentType = format === "svg" ? "image/svg+xml" : `image/${format}`;
-    const cacheKey = `extension-asset:${url}`;
-    if (!(await c.env.CACHE_KV.get(cacheKey))) {
-      const target = new URL(`/${bucket}/${objectKey}`, origin);
-      const head = await fetch(
-        await aws.sign(target, {
-          method: "HEAD",
-          redirect: "manual",
-          signal: AbortSignal.timeout(5000)
-        })
-      );
-      if (
-        head.status !== 404 &&
-        (!head.ok || head.headers.get("x-amz-meta-sha256") !== checksum)
-      ) {
-        await head.body?.cancel();
-        throw new PackageError(
-          "ASSETS_UNAVAILABLE",
-          "Unable to verify public asset storage",
-          503
-        );
-      }
-      if (head.status === 404) {
-        const bytes = await boundedBytes(
-          await store.get(key, checksum),
-          4 * 1024 * 1024
-        );
-        if (!bytes.length)
-          throw new PackageError(
-            "ASSETS_UNAVAILABLE",
-            "Prepared asset is unavailable",
-            503
-          );
-        const response = await fetch(
-          await aws.sign(target, {
-            method: "PUT",
-            body: bytes,
-            redirect: "manual",
-            signal: AbortSignal.timeout(5000),
-            headers: {
-              "Content-Type": contentType,
-              "Cache-Control": "public, max-age=31536000, immutable",
-              "x-amz-content-sha256": checksum,
-              "x-amz-meta-sha256": checksum
-            }
-          })
-        );
-        await response.body?.cancel();
-        if (!response.ok)
-          throw new PackageError(
-            "ASSETS_UNAVAILABLE",
-            "Public asset upload failed",
-            503
-          );
-      }
-      await head.body?.cancel();
-      await c.env.CACHE_KV.put(cacheKey, "ready", { expirationTtl: 86400 });
-    }
-    // PNG is the fallback URL; the directory offers its AVIF sibling via <picture>.
-    if (format !== "avif") iconUrl = url;
-  }
-  if (iconUrl) {
-    const updated = await c.env.DB_EXTENSIONS.prepare(
-      "UPDATE extensions SET icon_url=? WHERE lower(identifier)=? AND published_revision_id=? AND delisted_at IS NULL AND icon_url IS NOT ?"
-    )
-      .bind(iconUrl, extensionId, row.published_revision_id, iconUrl)
-      .run();
-    return Boolean(updated.meta.changes);
-  }
+  const iconUrl = `${publicBase.href.replace(/\/$/, "")}/${row.object_key}`;
+  const updated = await c.env.DB_EXTENSIONS.prepare(
+    "UPDATE extensions SET icon_url=? WHERE lower(identifier)=? AND published_revision_id=? AND delisted_at IS NULL AND icon_url IS NOT ?"
+  )
+    .bind(iconUrl, extensionId, row.published_revision_id, iconUrl)
+    .run();
+  return Boolean(updated.meta.changes);
 }
 
-export function scheduleIconPublication(
+export function schedulePublishedIconUpdate(
   c: Context<{ Bindings: CloudflareBindings }>,
   extensionId: string
 ) {
   if (!getPlatform(c).getEnv("EXTENSION_ASSETS_S3_ENDPOINT")) return;
   c.executionCtx.waitUntil(
-    publishExtensionIcon(c, extensionId)
+    updatePublishedIconUrl(c, extensionId)
       .then((changed) => {
         if (changed) revalidateExtensions(c);
       })
       .catch((error) => {
-        logError("extensions/packages", "Icon publication failed", {
+        logError("extensions/packages", "Published icon URL update failed", {
           extensionId,
           error: error instanceof Error ? error.message : String(error)
         });

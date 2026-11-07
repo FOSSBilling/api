@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { b2PackageStore } from "../../../../src/services/extensions/v2/packages/b2-store";
+import { b2ObjectStore } from "../../../../src/services/extensions/v2/packages/b2-store";
 import {
   sha256,
   PACKAGE_LIMITS
@@ -14,13 +14,14 @@ const config: Record<string, string> = {
   SECRET_ACCESS_KEY: "test-secret"
 };
 const store = (overrides: Record<string, string | undefined> = {}) =>
-  b2PackageStore(
+  b2ObjectStore(
     (name) =>
-      ({ ...config, ...overrides })[name.replace("EXTENSION_PACKAGES_S3_", "")]
+      ({ ...config, ...overrides })[name.replace("EXTENSION_PACKAGES_S3_", "")],
+    "packages"
   );
 afterEach(() => vi.unstubAllGlobals());
 
-describe("private B2 package storage", () => {
+describe("B2 object storage", () => {
   it("signs ZIP writes and verifies downloaded bytes", async () => {
     const bytes = new Uint8Array(new TextEncoder().encode("synthetic ZIP"));
     const checksum = await sha256(bytes);
@@ -55,6 +56,60 @@ describe("private B2 package storage", () => {
     expect(requests[0].headers.get("Cache-Control")).toBe("private, no-store");
     expect(requests[0].headers.get("x-amz-content-sha256")).toBe(checksum);
   });
+
+  it.each(["svg", "avif", "png"])(
+    "stores and cleans up public %s assets under their UUID path",
+    async (format) => {
+      const bytes = new Uint8Array(new TextEncoder().encode("prepared image"));
+      const checksum = await sha256(bytes);
+      const key = `extensions/${objectId}/icons/${objectId}.${format}`;
+      const requests: Request[] = [];
+      vi.stubGlobal("fetch", async (request: Request) => {
+        requests.push(request);
+        return new Response(request.method === "GET" ? bytes : null, {
+          headers: {
+            "x-amz-meta-sha256": checksum,
+            "x-amz-version-id": "asset-version"
+          }
+        });
+      });
+      const storage = b2ObjectStore(
+        (name) =>
+          name === "EXTENSION_ASSETS_PUBLIC_URL"
+            ? "https://assets.example.test"
+            : { ...config, BUCKET: "public-assets" }[
+                name.replace("EXTENSION_ASSETS_S3_", "")
+              ],
+        "assets"
+      );
+      await storage.put(key, bytes, checksum);
+      expect(await new Response(await storage.get(key, checksum)).text()).toBe(
+        "prepared image"
+      );
+      await storage.delete(key);
+      expect(requests.map((r) => r.method)).toEqual([
+        "PUT",
+        "GET",
+        "HEAD",
+        "DELETE"
+      ]);
+      for (const request of requests) {
+        expect(new URL(request.url).pathname).toBe(`/public-assets/${key}`);
+        expect(request.headers.get("Authorization")).toContain(
+          "AWS4-HMAC-SHA256"
+        );
+      }
+      expect(requests[0].headers.get("Content-Type")).toBe(
+        format === "svg" ? "image/svg+xml" : `image/${format}`
+      );
+      expect(requests[0].headers.get("Cache-Control")).toBe(
+        "public, max-age=31536000, immutable"
+      );
+      expect(new URL(requests[3].url).searchParams.get("versionId")).toBe(
+        "asset-version"
+      );
+    }
+  );
 
   it("rejects corrupted bodies even when checksum metadata matches", async () => {
     const checksum = await sha256(

@@ -3,7 +3,7 @@
 Authors upload ready-to-install distribution ZIPs, with any compilation already
 complete. The API validates and repacks them with directory-generated manifests,
 then publishes them through the existing revision review. It never runs uploaded
-code or package build scripts. Package storage uses the private B2 bucket when configured, otherwise Wrangler's local R2 emulator. Pending images continue to use the private image binding.
+code or package build scripts. Package storage uses the private B2 bucket when configured, otherwise Wrangler's local R2 emulator. Prepared icons use the public asset bucket, including icons for pending submissions.
 Package routes are disabled by default. Local development and production enablement are separate modes.
 
 ## Run the local demo
@@ -130,8 +130,10 @@ conflicts and corrupt archives are rejected. Checksums cover the final stored ZI
 
 Include at most one root `icon.svg`, `icon.png`, `icon.webp`, or `icon.avif`.
 There is no manifest icon field; packages without an icon use the generic icon.
-Packaging prepares display images once in `EXTENSION_IMAGE_BUCKET`, shared by
-all artifacts using the same source. The original icon stays unchanged in the ZIP.
+Packaging prepares display images once and stores them in `fb-extensions-assets`.
+The original icon stays unchanged in the ZIP. A new extension receives its permanent
+UUIDv7 draft identity after package validation, before the first icon is stored.
+The first review submission reuses that draft identity.
 
 SVGs are sanitized with Cloudflare svg-hush through the pinned `@zeropress/svg-hush`
 Workers adapter and served directly. SVG inputs are bounded by the ZIP expansion
@@ -141,13 +143,19 @@ transparency without enlarging small images. Requests prefer SVG when present,
 otherwise AVIF when explicitly accepted, with PNG fallback. They read stored
 images directly and never reopen a ZIP.
 
-Pending previews use the private image route with authorization, private cache
-headers, `nosniff`, and a sandboxed Content Security Policy. They are never copied
-to public B2. After approval, a background publication job copies the selected
-icon to B2, then updates the published listing to its direct CDN URL. A failed
-copy retains the existing image route; subsequent published-image reads retry.
-The revision ID is checked before changing the listing URL, so a slow copy
-cannot overwrite a newer publication.
+All prepared icons, including pending ones, use
+`extensions/<extension UUID>/icons/<asset UUID>.<format>` in the public asset bucket.
+One asset UUID identifies all format variants; manifest corrections reuse them.
+UUID paths are unlisted, not access control: anyone given the direct URL can read
+the image before approval. ZIPs and package metadata remain private until approved.
+The API preview route still checks ownership and returns private cache headers,
+`nosniff`, and a sandboxed Content Security Policy.
+
+Icons are uploaded during packaging, with immutable public cache headers. An asset
+upload failure fails the job; it never switches to another storage backend.
+Approval updates the listing to the existing CDN URL and performs no image copy.
+The revision ID is checked before changing the listing URL to avoid overwriting a
+newer publication.
 
 ## Private B2 package testing
 
@@ -168,7 +176,7 @@ EXTENSION_PACKAGES_S3_PREFIX="local"
 Keep this bucket private. Use a separate development key restricted to the bucket
 with read, write and delete-file permissions. No public URL or domain is required.
 Use `EXTENSION_PACKAGES_MODE=local` only outside production. The committed production configuration remains disabled.
-With no S3 endpoint, ZIPs use the local R2 binding. An incomplete S3 configuration
+Without S3 endpoints, ZIPs and prepared icons use the same local R2 emulator binding. An incomplete S3 configuration
 or upstream failure returns 503 rather than silently switching storage backends.
 
 R2 validates the supplied SHA-256 when writing and returns that checksum as
@@ -179,14 +187,14 @@ Source and built ZIPs use `local/packages/<object-id>`. Object IDs are allocated
 once by D1 before upload. Uploads carry a signed SHA-256 payload and private cache
 headers. Reads are bounded to 17 MiB and verify artifact bytes before returning a
 ZIP through the existing permission-checked download route. B2 URLs and credentials
-are never returned to visitors. Images still use the separate private image
-binding, with only approved display images copied to the public asset bucket.
+are never returned to visitors. Images use the separate public asset bucket and
+its CDN hostname, including before approval.
 
 Cleanup identifies the stored B2 version and deletes it explicitly. Deleting only
 by name would leave billable versions behind. Failed deletion retains the D1
 reservation for retry.
 
-## B2 and Cloudflare testing
+## B2 asset and Cloudflare testing
 
 Add these to the local API's ignored `.dev.vars` (use
 `.dev.vars.packages-local` for the standalone API demo):
@@ -200,7 +208,9 @@ EXTENSION_ASSETS_S3_SECRET_ACCESS_KEY="your-applicationKey"
 EXTENSION_ASSETS_PUBLIC_URL="https://extensions-assets.fossbilling.net"
 ```
 
-An unset endpoint disables B2 publication. Public object keys use
+Restrict the asset key to this bucket with read, write and delete-file permissions.
+Pending API previews read these stored objects; cleanup deletes abandoned versions.
+An unset endpoint keeps assets in the local emulator instead of B2. Public object keys use
 `extensions/<extension UUID>/icons/<asset UUID>.<format>`, for example:
 
 ```text
@@ -208,13 +218,13 @@ https://extensions-assets.fossbilling.net/extensions/019a0000-0000-7000-8000-000
 ```
 
 The parent is the extension record's UUID, not its public identifier. The icon
-record uses its immutable package-source UUID as its asset identity. All format
-variants share that identity, and manifest-only edits reuse the same image URL.
+record allocates an immutable asset UUID when its display images are prepared.
+All format variants share that identity, and manifest-only edits reuse the same image URL.
 A different source gets a new asset UUID. Uploads set
 `Cache-Control: public, max-age=31536000, immutable` and retain each file's SHA-256
 in object metadata for verification.
-The API checks existing objects before uploading and caches successful checks in
-KV. Directory pages use direct CDN images with AVIF/PNG `<picture>` fallback,
+Package source records retain the prepared image keys, so retries and metadata
+corrections reuse existing images. Directory pages use direct CDN images with AVIF/PNG `<picture>` fallback,
 bypassing the directory image transformer.
 
 The bucket is public. The hostname-scoped Cloudflare response-header rule
@@ -226,8 +236,8 @@ Content-Security-Policy: sandbox; default-src 'none'; style-src 'unsafe-inline';
 X-Content-Type-Options: nosniff
 ```
 
-Only approved assets enter this bucket. Delisting stops access through the API,
-but does not revoke previously published public image URLs or cached copies.
+Prepared assets enter this bucket during packaging, before approval. Delisting
+stops access through the API, but does not revoke direct image URLs or cached copies.
 Keep B2 daily caps and alerts configured for download and transaction charges.
 
 ## Production configuration (prepared locally)
@@ -238,10 +248,9 @@ created by a local build or type-generation command.
 
 Before deployment (including an automatic deployment after merge):
 
-1. Provision the `extension-packages` Queue and the private R2 bucket `fb-extensions-private-images` used by
-   `EXTENSION_IMAGE_BUCKET`. Do not attach a public domain or enable public R2
-   access. This stores prepared pending icons; ZIPs remain in private B2.
-   The bindings must exist even while package mode is disabled; that flag blocks
+1. Provision the `extension-packages` Queue. No R2 image bucket is needed;
+   ZIPs use private B2 and prepared icons use the public B2 asset bucket.
+   The queue binding must exist even while package mode is disabled; that flag blocks
    application routes, not deployment-time binding validation.
 2. Supply `EXTENSION_PACKAGES_S3_ACCESS_KEY_ID` and
    `EXTENSION_PACKAGES_S3_SECRET_ACCESS_KEY` as Worker secrets for
@@ -258,15 +267,14 @@ Before deployment (including an automatic deployment after merge):
    merging a disabled API alone does not make package submission available.
 
 Production requires HTTPS download URLs with the `/extensions/v2` base path,
-complete private B2 credentials, an explicit non-`local` object prefix, private
-image storage and the Images binding. An incomplete configuration fails with 503;
+complete credentials for both B2 buckets, an explicit non-`local` ZIP object prefix,
+a public asset URL and the Images binding. An incomplete configuration fails with 503;
 it cannot fall back to local ZIP storage. Private package objects use the `production` prefix in this configuration.
 Public image objects use the UUID-based layout described above.
 
 The disabled mode blocks package reads as well as writes. Once managed releases
 are published, disabling it also stops their API downloads and private previews;
-it is not an upload-only pause switch. Public CDN images already published remain
-accessible independently.
+it is not an upload-only pause switch. Prepared CDN images remain accessible independently, even for pending packages.
 
 Local validation and the remaining production measurements are summarized in
 [PACKAGE-RUNTIME.md](PACKAGE-RUNTIME.md). Local queue success does not establish

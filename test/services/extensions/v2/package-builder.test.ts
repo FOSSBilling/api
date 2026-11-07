@@ -243,9 +243,11 @@ describe("local directory package builder", () => {
       const source = await zip([[filename, "unique-contents"]], {
         level: 0
       });
-      const offset = new TextDecoder()
-        .decode(source)
-        .indexOf("unique-contents");
+      const contents = new TextEncoder().encode("unique-contents");
+      // ZIP headers are binary: decoded string offsets are not byte offsets.
+      const offset = source.findIndex((_, index) =>
+        contents.every((byte, part) => source[index + part] === byte)
+      );
       expect(offset).toBeGreaterThan(0);
       source[offset] ^= 1;
       await expect(buildExtensionPackage(source, manifest)).rejects.toThrow();

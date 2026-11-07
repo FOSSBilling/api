@@ -23,7 +23,7 @@
   "keep_vars": true,
   "vars": {
     "ENVIRONMENT": "production",
-    // Enable only after the private image bucket and B2 secrets are provisioned.
+    // Enable only after the queue, Images binding and B2 secrets are configured.
     "EXTENSION_PACKAGES_MODE": "disabled",
     "EXTENSION_PACKAGES_BASE_URL": "https://api.fossbilling.net/extensions/v2",
     "EXTENSION_PACKAGES_S3_ENDPOINT": "https://s3.eu-central-003.backblazeb2.com",
@@ -90,11 +90,6 @@
     {
       "binding": "DOWNLOAD_BUCKET",
       "bucket_name": "fossbilling-download"
-    },
-    {
-      // Private prepared icons, including pending submissions. Provision before deployment.
-      "binding": "EXTENSION_IMAGE_BUCKET",
-      "bucket_name": "fb-extensions-private-images"
     }
   ],
   "services": [
@@ -187,10 +182,6 @@
         {
           "binding": "EXTENSION_PACKAGE_BUCKET",
           "bucket_name": "extension-packages-local"
-        },
-        {
-          "binding": "EXTENSION_IMAGE_BUCKET",
-          "bucket_name": "extension-images-local"
         }
       ],
       "durable_objects": {

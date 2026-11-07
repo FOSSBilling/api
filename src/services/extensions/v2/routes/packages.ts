@@ -2,7 +2,6 @@ import { PackageJobsDatabase } from "../db/package-jobs";
 import { dispatchPackageJob, type PackageJob } from "../packages/jobs";
 import { canonicalJson } from "../db/packages";
 import { sha256 } from "../package-builder";
-import { scheduleIconPublication } from "../packages/public-assets";
 import { createRoute, z } from "@hono/zod-openapi";
 import type { Context, MiddlewareHandler } from "hono";
 import { getAuth } from "../../../../lib/auth";
@@ -446,8 +445,6 @@ export function registerPackageRoutes(app: ExtensionsV2App) {
             throw new PackageError("NOT_FOUND", "Package not found", 404);
           if (!download && !icon) return c.json(artifactResponse(row), 200);
           if (icon) {
-            if (row.published_at)
-              scheduleIconPublication(c, row.extension_identifier);
             const avif = (c.req.header("Accept") ?? "")
               .split(",")
               .some((part) => {
