@@ -47,8 +47,8 @@ export async function resolveExtensionEmail(
       .from(extensions)
       .innerJoin(developers, eq(extensions.developerId, developers.id))
       .leftJoin(users, eq(developers.ownerUserId, users.id))
-      // Moderation routes pass the raw URL param, and ids are matched
-      // case-insensitively everywhere else (LOWER(id) = LOWER(id)) - mixed
+      // Moderation routes pass the raw URL param, and public identifiers are
+      // matched case-insensitively (LOWER(identifier)) - mixed
       // case is a supported input, not a miss.
       .where(sql`LOWER(${extensions.identifier}) = LOWER(${extensionId})`);
 
@@ -72,7 +72,7 @@ export async function resolveDeveloperProfileEmail(
   db: ExtensionsDb,
   developerId: string
 ): Promise<{
-  to: string;
+  to: string | null;
   developerIdentifier: string;
   developerName?: string;
 } | null> {
@@ -91,7 +91,6 @@ export async function resolveDeveloperProfileEmail(
     if (!row) return null;
 
     const to = pickEmail(row.contactEmail, row.accountEmail);
-    if (!to) return null;
     return {
       to,
       developerIdentifier: row.developerIdentifier,

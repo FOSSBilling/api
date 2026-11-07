@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "67cf78d3-42a6-4777-a988-ebf2d8c4f9a9",
-  "prevId": "3603892c-439a-4576-b6a3-95113bf62442",
+  "id": "78430a63-8fd0-4d21-a557-33958d0386f8",
+  "prevId": "93fb9a02-8924-42e3-a428-55fd316dbfc9",
   "tables": {
     "claim_verification_budgets": {
       "name": "claim_verification_budgets",
@@ -395,6 +395,13 @@
           "notNull": true,
           "autoincrement": false
         },
+        "identifier": {
+          "name": "identifier",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
         "type": {
           "name": "type",
           "type": "text",
@@ -535,6 +542,11 @@
         }
       },
       "indexes": {
+        "idx_developers_identifier_nocase": {
+          "name": "idx_developers_identifier_nocase",
+          "columns": ["lower(\"identifier\")"],
+          "isUnique": true
+        },
         "idx_developers_owner_unique": {
           "name": "idx_developers_owner_unique",
           "columns": ["owner_user_id"],
@@ -923,6 +935,13 @@
           "notNull": true,
           "autoincrement": false
         },
+        "identifier": {
+          "name": "identifier",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
         "developer_id": {
           "name": "developer_id",
           "type": "text",
@@ -1080,25 +1099,25 @@
           "columns": ["published_revision_id"],
           "isUnique": false
         },
-        "idx_extensions_id_nocase": {
-          "name": "idx_extensions_id_nocase",
-          "columns": ["lower(\"id\")"],
+        "idx_extensions_identifier_nocase": {
+          "name": "idx_extensions_identifier_nocase",
+          "columns": ["lower(\"identifier\")"],
           "isUnique": true
         },
         "idx_extensions_developer_order": {
           "name": "idx_extensions_developer_order",
-          "columns": ["developer_id", "lower(\"id\")", "id"],
+          "columns": ["developer_id", "lower(\"identifier\")", "id"],
           "isUnique": false
         },
         "idx_extensions_public_order": {
           "name": "idx_extensions_public_order",
-          "columns": ["lower(\"id\")", "id"],
+          "columns": ["lower(\"identifier\")", "id"],
           "isUnique": false,
           "where": "\"extensions\".\"published_at\" IS NOT NULL AND \"extensions\".\"delisted_at\" IS NULL"
         },
         "idx_extensions_type_public_order": {
           "name": "idx_extensions_type_public_order",
-          "columns": ["type", "lower(\"id\")", "id"],
+          "columns": ["type", "lower(\"identifier\")", "id"],
           "isUnique": false,
           "where": "\"extensions\".\"published_at\" IS NOT NULL AND \"extensions\".\"delisted_at\" IS NULL"
         }
@@ -1403,199 +1422,6 @@
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
-    "package_jobs": {
-      "name": "package_jobs",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "fingerprint": {
-          "name": "fingerprint",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "owner_user_id": {
-          "name": "owner_user_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "owner": {
-          "name": "owner",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "manifest": {
-          "name": "manifest",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "source_id": {
-          "name": "source_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "upload_object_id": {
-          "name": "upload_object_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "upload_sha256": {
-          "name": "upload_sha256",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "status": {
-          "name": "status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "'queued'"
-        },
-        "attempts": {
-          "name": "attempts",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": 0
-        },
-        "lease_id": {
-          "name": "lease_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "lease_until": {
-          "name": "lease_until",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "artifact_id": {
-          "name": "artifact_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "error_code": {
-          "name": "error_code",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "error_message": {
-          "name": "error_message",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "error_status": {
-          "name": "error_status",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "enqueued_at": {
-          "name": "enqueued_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "CURRENT_TIMESTAMP"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "CURRENT_TIMESTAMP"
-        }
-      },
-      "indexes": {
-        "idx_package_jobs_fingerprint": {
-          "name": "idx_package_jobs_fingerprint",
-          "columns": ["fingerprint"],
-          "isUnique": true,
-          "where": "\"package_jobs\".\"status\" != 'failed'"
-        },
-        "idx_package_jobs_owner": {
-          "name": "idx_package_jobs_owner",
-          "columns": ["owner_user_id"],
-          "isUnique": false
-        },
-        "idx_package_jobs_dispatch": {
-          "name": "idx_package_jobs_dispatch",
-          "columns": ["status", "enqueued_at"],
-          "isUnique": false
-        },
-        "idx_package_jobs_upload_object": {
-          "name": "idx_package_jobs_upload_object",
-          "columns": ["upload_object_id"],
-          "isUnique": false
-        }
-      },
-      "foreignKeys": {
-        "package_jobs_upload_object_id_package_objects_id_fk": {
-          "name": "package_jobs_upload_object_id_package_objects_id_fk",
-          "tableFrom": "package_jobs",
-          "tableTo": "package_objects",
-          "columnsFrom": ["upload_object_id"],
-          "columnsTo": ["id"],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "package_jobs_artifact_id_package_artifacts_id_fk": {
-          "name": "package_jobs_artifact_id_package_artifacts_id_fk",
-          "tableFrom": "package_jobs",
-          "tableTo": "package_artifacts",
-          "columnsFrom": ["artifact_id"],
-          "columnsTo": ["id"],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {
-        "package_jobs_status_check": {
-          "name": "package_jobs_status_check",
-          "value": "\"package_jobs\".\"status\" IN ('queued','processing','ready','failed')"
-        }
-      }
-    },
     "package_objects": {
       "name": "package_objects",
       "columns": {
@@ -1666,8 +1492,8 @@
           "notNull": true,
           "autoincrement": false
         },
-        "extension_id": {
-          "name": "extension_id",
+        "extension_identifier": {
+          "name": "extension_identifier",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
@@ -1706,12 +1532,12 @@
       "indexes": {
         "idx_package_source_version": {
           "name": "idx_package_source_version",
-          "columns": ["profile_generation", "extension_id", "version"],
+          "columns": ["profile_generation", "extension_identifier", "version"],
           "isUnique": true
         },
         "idx_package_sources_extension": {
           "name": "idx_package_sources_extension",
-          "columns": ["extension_id"],
+          "columns": ["extension_identifier"],
           "isUnique": false
         },
         "idx_package_sources_object": {
@@ -1848,6 +1674,13 @@
   },
   "internal": {
     "indexes": {
+      "idx_developers_identifier_nocase": {
+        "columns": {
+          "lower(\"identifier\")": {
+            "isExpression": true
+          }
+        }
+      },
       "idx_extension_revisions_extension_page": {
         "columns": {
           "\"created_at\" desc": {
@@ -1868,30 +1701,30 @@
           }
         }
       },
-      "idx_extensions_id_nocase": {
+      "idx_extensions_identifier_nocase": {
         "columns": {
-          "lower(\"id\")": {
+          "lower(\"identifier\")": {
             "isExpression": true
           }
         }
       },
       "idx_extensions_developer_order": {
         "columns": {
-          "lower(\"id\")": {
+          "lower(\"identifier\")": {
             "isExpression": true
           }
         }
       },
       "idx_extensions_public_order": {
         "columns": {
-          "lower(\"id\")": {
+          "lower(\"identifier\")": {
             "isExpression": true
           }
         }
       },
       "idx_extensions_type_public_order": {
         "columns": {
-          "lower(\"id\")": {
+          "lower(\"identifier\")": {
             "isExpression": true
           }
         }

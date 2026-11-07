@@ -9,6 +9,7 @@ import {
   db,
   authHeaders,
   post,
+  del,
   get,
   put,
   sampleContent,
@@ -1531,7 +1532,7 @@ describe("Extensions API v2", () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
 
       const res = await get(
-        "/extensions/v2/developers/dev-developer/history",
+        `/extensions/v2/developers/${(await getDeveloper(db, "dev-developer"))!.id}/history`,
         await authHeaders("mod-1")
       );
 
@@ -1561,7 +1562,7 @@ describe("Extensions API v2", () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
 
       const res = await get(
-        "/extensions/v2/developers/dev-developer/history",
+        `/extensions/v2/developers/${(await getDeveloper(db, "dev-developer"))!.id}/history`,
         await authHeaders("mod-1")
       );
 
@@ -1591,7 +1592,7 @@ describe("Extensions API v2", () => {
       const mod = await authHeaders("mod-1");
 
       const first = await get(
-        "/extensions/v2/developers/dev-developer/history?limit=1",
+        `/extensions/v2/developers/${(await getDeveloper(db, "dev-developer"))!.id}/history?limit=1`,
         mod
       );
       expect(first.status).toBe(200);
@@ -1604,7 +1605,7 @@ describe("Extensions API v2", () => {
       expect(firstBody.pagination.next_cursor).toBeTruthy();
 
       const second = await get(
-        `/extensions/v2/developers/dev-developer/history?limit=1&cursor=${encodeURIComponent(firstBody.pagination.next_cursor as string)}`,
+        `/extensions/v2/developers/${(await getDeveloper(db, "dev-developer"))!.id}/history?limit=1&cursor=${encodeURIComponent(firstBody.pagination.next_cursor as string)}`,
         mod
       );
       const secondBody = (await second.json()) as {
@@ -1622,7 +1623,7 @@ describe("Extensions API v2", () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
 
       const res = await get(
-        "/extensions/v2/developers/dev-developer/history?cursor=not-a-cursor",
+        "/extensions/v2/developers/019a0000-0000-7000-8000-000000000000/history?cursor=not-a-cursor",
         await authHeaders("mod-1")
       );
       expect(res.status).toBe(422);
@@ -1642,7 +1643,7 @@ describe("Extensions API v2", () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
 
       const res = await get(
-        "/extensions/v2/developers/dev-developer/history",
+        `/extensions/v2/developers/${(await getDeveloper(db, "dev-developer"))!.id}/history`,
         await authHeaders("mod-1")
       );
 
@@ -1655,11 +1656,55 @@ describe("Extensions API v2", () => {
       expect(data.result[1].name).toBe("Original Name");
     });
 
+    it("keeps deleted-profile history separate when its identifier is reused", async () => {
+      const owner = await authHeaders("user-1");
+      const created = await put(
+        "/extensions/v2/developers/me",
+        owner,
+        sampleDeveloper()
+      );
+      expect(created.status).toBe(200);
+      const { result: original } = (await created.json()) as {
+        result: { id: string };
+      };
+      expect((await del("/extensions/v2/developers/me", owner)).status).toBe(
+        200
+      );
+      const recreated = await put(
+        "/extensions/v2/developers/me",
+        owner,
+        sampleDeveloper({ name: "Replacement" })
+      );
+      expect(recreated.status).toBe(200);
+      const { result: replacement } = (await recreated.json()) as {
+        result: { id: string };
+      };
+      expect(replacement.id).not.toBe(original.id);
+      await insertUser(db, { id: "mod-1", is_moderator: 1 });
+      const mod = await authHeaders("mod-1");
+      for (const [id, name] of [
+        [original.id, "Dev Developer"],
+        [replacement.id, "Replacement"]
+      ]) {
+        const response = await get(
+          `/extensions/v2/developers/${id.toUpperCase()}/history`,
+          mod
+        );
+        expect(response.status).toBe(200);
+        const body = (await response.json()) as {
+          result: Array<{ developer_id: string; name: string }>;
+        };
+        expect(body.result).toEqual([
+          expect.objectContaining({ developer_id: id, name })
+        ]);
+      }
+    });
+
     it("returns an empty array for a developer with no history", async () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
 
       const res = await get(
-        "/extensions/v2/developers/no-such-developer/history",
+        "/extensions/v2/developers/019a0000-0000-7000-8000-000000000000/history",
         await authHeaders("mod-1")
       );
 
@@ -1676,7 +1721,7 @@ describe("Extensions API v2", () => {
       );
 
       const res = await get(
-        "/extensions/v2/developers/dev-developer/history",
+        `/extensions/v2/developers/${(await getDeveloper(db, "dev-developer"))!.id}/history`,
         await authHeaders("user-1")
       );
       expect(res.status).toBe(403);
@@ -1698,7 +1743,7 @@ describe("Extensions API v2", () => {
 
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       const history = await get(
-        "/extensions/v2/developers/dev-developer/history",
+        `/extensions/v2/developers/${(await getDeveloper(db, "dev-developer"))!.id}/history`,
         await authHeaders("mod-1")
       );
       const data = (await history.json()) as { result: unknown[] };

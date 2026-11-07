@@ -615,29 +615,20 @@ describe("Extension resource admission", () => {
       await seedDeveloper("developer", "owner");
       expect((await create("first")).status).toBe(201);
       await ageEvents();
+      const usageSubject =
+        scope === "developer" ? (await getDeveloper(db, subject))!.id : subject;
       const original = await db
         .prepare(
           `SELECT ${column} AS value FROM extension_resource_usage WHERE scope=? AND subject=?`
         )
-        .bind(
-          scope,
-          scope === "developer"
-            ? (await getDeveloper(db, subject))!.id
-            : subject
-        )
+        .bind(scope, usageSubject)
         .first<number>("value");
       try {
         await db
           .prepare(
             `UPDATE extension_resource_usage SET ${column}=? WHERE scope=? AND subject=?`
           )
-          .bind(
-            limit,
-            scope,
-            scope === "developer"
-              ? (await getDeveloper(db, subject))!.id
-              : subject
-          )
+          .bind(limit, scope, usageSubject)
           .run();
         expect((await create("blocked")).status).toBe(409);
         expect(await countExtensions(db)).toBe(1);
@@ -649,13 +640,7 @@ describe("Extension resource admission", () => {
           .prepare(
             `UPDATE extension_resource_usage SET ${column}=? WHERE scope=? AND subject=?`
           )
-          .bind(
-            original,
-            scope,
-            scope === "developer"
-              ? (await getDeveloper(db, subject))!.id
-              : subject
-          )
+          .bind(original, scope, usageSubject)
           .run();
       }
     }

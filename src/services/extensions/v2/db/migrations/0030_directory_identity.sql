@@ -2,7 +2,12 @@
 -- Rebuild children before parents so D1 can enforce foreign keys throughout.
 CREATE TABLE _developers_ids AS SELECT id AS identifier,
  substr(timestamp,1,8)||'-'||substr(timestamp,9,4)||'-7'||substr(entropy,1,3)||'-'||substr('89ab',1+(abs(random() % 4)),1)||substr(entropy,4,3)||'-'||substr(entropy,7,12) AS id
- FROM (SELECT id,printf('%012x',CAST(unixepoch(created_at)*1000 AS INTEGER)) AS timestamp,lower(hex(randomblob(9))) AS entropy FROM developers);
+ FROM (SELECT id,printf('%012x',CAST(unixepoch(created_at)*1000 AS INTEGER)) AS timestamp,lower(hex(randomblob(9))) AS entropy FROM (
+   SELECT id,created_at FROM developers
+   UNION ALL
+   SELECT developer_id, min(changed_at) FROM developer_history
+   WHERE developer_id NOT IN (SELECT id FROM developers) GROUP BY developer_id
+ ));
 --> statement-breakpoint
 CREATE TABLE _extensions_ids AS SELECT id AS identifier,
  substr(timestamp,1,8)||'-'||substr(timestamp,9,4)||'-7'||substr(entropy,1,3)||'-'||substr('89ab',1+(abs(random() % 4)),1)||substr(entropy,4,3)||'-'||substr(entropy,7,12) AS id
@@ -69,8 +74,6 @@ DROP TRIGGER resource_extensions_update;
 DROP TRIGGER extensions_published_manifest_insert;
 --> statement-breakpoint
 DROP TRIGGER extensions_published_manifest_update;
---> statement-breakpoint
-DROP TRIGGER publish_package_artifacts;
 --> statement-breakpoint
 DROP TABLE extension_revisions;
 --> statement-breakpoint
@@ -286,9 +289,9 @@ CREATE INDEX idx_extension_revisions_retention ON extension_revisions(compacted_
 --> statement-breakpoint
 CREATE INDEX `idx_m2m_publisher_clients_developer` ON `m2m_publisher_clients` (`developer_id`);
 --> statement-breakpoint
-CREATE INDEX idx_extensions_public_order ON extensions (lower(id),id) WHERE published_at IS NOT NULL AND delisted_at IS NULL;
+CREATE INDEX idx_extensions_public_order ON extensions (lower(identifier),id) WHERE published_at IS NOT NULL AND delisted_at IS NULL;
 --> statement-breakpoint
-CREATE INDEX idx_extensions_type_public_order ON extensions (type,lower(id),id) WHERE published_at IS NOT NULL AND delisted_at IS NULL;
+CREATE INDEX idx_extensions_type_public_order ON extensions (type,lower(identifier),id) WHERE published_at IS NOT NULL AND delisted_at IS NULL;
 --> statement-breakpoint
 CREATE UNIQUE INDEX idx_developers_identifier_nocase ON developers(lower(identifier));
 --> statement-breakpoint
@@ -649,23 +652,7 @@ CREATE TRIGGER extensions_published_manifest_update BEFORE UPDATE OF published_a
 WHEN NEW.published_at IS NOT NULL AND NEW.manifest IS NULL
 BEGIN SELECT RAISE(ABORT,'extensions_published_manifest_required'); END;
 --> statement-breakpoint
-CREATE TRIGGER publish_package_artifacts AFTER UPDATE OF published_revision_id ON extensions
-WHEN NEW.published_revision_id IS NOT NULL AND NEW.published_revision_id IS NOT OLD.published_revision_id
-BEGIN
-  UPDATE package_artifacts SET published_at=CURRENT_TIMESTAMP
-  WHERE published_at IS NULL AND id IN (
-    SELECT json_extract(value,'$.artifact_id') FROM json_each(NEW.releases)
-  ) AND source_id IN (
-    SELECT s.id FROM package_sources s JOIN developers d ON d.profile_generation=s.profile_generation
-    WHERE s.extension_id=lower(NEW.identifier) AND d.id=NEW.developer_id
-  );
-END;
---> statement-breakpoint
 UPDATE extension_resource_usage SET subject=(SELECT id FROM _developers_ids WHERE identifier=subject) WHERE scope='developer' AND subject IN (SELECT identifier FROM _developers_ids);
---> statement-breakpoint
-UPDATE package_jobs SET owner=json_set(owner,'$.id',(SELECT id FROM _developers_ids WHERE identifier=json_extract(owner,'$.id'))) WHERE json_extract(owner,'$.id') IN (SELECT identifier FROM _developers_ids);
---> statement-breakpoint
-ALTER TABLE package_sources RENAME COLUMN extension_id TO extension_identifier;
 --> statement-breakpoint
 DROP TABLE _developers_backup;
 --> statement-breakpoint

@@ -1,6 +1,5 @@
 import { v7 as uuidv7 } from "uuid";
-import { packageIconUrl } from "./packages";
-import { validatePackageContent } from "./packages";
+import { packageIconUrl, validatePackageContent } from "./packages";
 import { MAX_CONTENT_BYTES } from "../resource-limits";
 import { and, asc, eq, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
@@ -307,7 +306,9 @@ type ExtensionCursor = {
 // Public identifiers order the directory; the UUID breaks ties.
 const extensionCursor = createCursorCodec<ExtensionCursor>(
   (parsed): parsed is ExtensionCursor =>
-    typeof parsed.id === "string" && typeof parsed.identifier === "string"
+    typeof parsed.id === "string" &&
+    typeof parsed.identifier === "string" &&
+    parsed.identifier === parsed.identifier.toLowerCase()
 );
 
 export interface CreateExtensionInput {
@@ -563,20 +564,14 @@ export class ExtensionsDatabase {
     };
   }
 
-  // Light authorisation probe for the merged public/owner detail read and
-  // the revisions route: deciding which view a caller gets - and learning
-  // the canonical id for exact-match scoped queries - must not cost the
-  // full owner view (two revision joins plus up to 256 KiB of
-  // pendingContent).
+  // Check ownership for detail and revision reads without loading the full
+  // owner view, including its revision joins and pending content.
   async getOwnership(
     id: string
-  ): Promise<
-    DatabaseResult<{ extensionId: string; ownerUserId: string | null }>
-  > {
+  ): Promise<DatabaseResult<{ ownerUserId: string | null }>> {
     try {
       const rows = await this.db
         .select({
-          extensionId: extensions.id,
           ownerUserId: developers.ownerUserId
         })
         .from(extensions)
@@ -586,7 +581,7 @@ export class ExtensionsDatabase {
       const row = rows[0];
       if (!row) return notFound(id);
       return {
-        data: { extensionId: row.extensionId, ownerUserId: row.ownerUserId },
+        data: row,
         error: null
       };
     } catch (error) {
@@ -1234,7 +1229,7 @@ export class ExtensionsDatabase {
       // The UPDATE below is the column list publish shares with
       // ExtensionRevisionsDatabase.approve() in db/revisions.ts; the two
       // differ only in published_at handling and how the row is matched
-      // (LOWER(id) here, because corrections must address legacy
+      // (LOWER(identifier) here, because corrections must address legacy
       // differently-cased rows). Change the projection in both places together.
       const publishStmt = toD1Statement(this.db.$client, {
         sql: `UPDATE extensions
@@ -1262,20 +1257,23 @@ export class ExtensionsDatabase {
         ]
       });
 
-      results = await this.db.$client.batch([correctStmt, publishStmt]);
+      results = await this.db.$client.batch<{
+        extension_id: string;
+        identifier: string;
+      }>([correctStmt, publishStmt]);
     } catch (error) {
       return contentAdmissionError("moderatorCorrect", error);
     }
 
-    if (!results[0]?.meta?.changes) {
+    const corrected = results[0].results[0];
+    if (!corrected) {
       return this.moderatorCorrectBlockedError(id, moderatorId);
     }
 
     return {
       data: {
-        id: (results[0].results[0] as { extension_id: string }).extension_id,
-        identifier: (results[0].results[0] as { identifier: string })
-          .identifier,
+        id: corrected.extension_id,
+        identifier: corrected.identifier,
         revisionId
       },
       error: null

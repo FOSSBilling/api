@@ -81,7 +81,7 @@ export async function sendModerationNotification(
         db,
         input.developerId
       );
-      if (!recipient) {
+      if (!recipient?.to) {
         logError("email", "No address for developer notification", {
           developerId: input.developerId,
           kind: input.kind

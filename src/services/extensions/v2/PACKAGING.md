@@ -260,8 +260,8 @@ Before deployment (including an automatic deployment after merge):
 Production requires HTTPS download URLs with the `/extensions/v2` base path,
 complete private B2 credentials, an explicit non-`local` object prefix, private
 image storage and the Images binding. An incomplete configuration fails with 503;
-it cannot fall back to local ZIP storage. Both B2 buckets use the `production`
-prefix in this configuration. Existing local objects keep the `local` prefix.
+it cannot fall back to local ZIP storage. Private package objects use the `production` prefix in this configuration.
+Public image objects use the UUID-based layout described above.
 
 The disabled mode blocks package reads as well as writes. Once managed releases
 are published, disabling it also stops their API downloads and private previews;

@@ -504,7 +504,15 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
     summary: "List the write history of a developer profile",
     security: [{ Bearer: [] }],
     middleware: [requireModerator()] as const,
-    request: { params: IdParamSchema, query: CursorPaginationQuerySchema },
+    request: {
+      params: z.object({
+        id: z
+          .uuidv7()
+          .toLowerCase()
+          .openapi({ description: "Internal developer UUID" })
+      }),
+      query: CursorPaginationQuerySchema
+    },
     responses: {
       200: {
         content: {

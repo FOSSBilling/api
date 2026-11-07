@@ -523,6 +523,9 @@ describe("Extensions API v2 writes", () => {
       );
 
       expect(res.status).toBe(202);
+      await expect(res.json()).resolves.toMatchObject({
+        result: { identifier: "Existing-Ext" }
+      });
       // The revision must hang off the stored spelling, not the requested one.
       const [revision] = await listRevisions(db);
       expect(revision.extension_id).toBe(

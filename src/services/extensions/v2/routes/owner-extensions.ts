@@ -1,5 +1,5 @@
 import type { Context } from "hono";
-import type { DatabaseResult } from "../../../../lib/interfaces";
+import type { DatabaseError } from "../../../../lib/interfaces";
 import {
   errorBody,
   listErrorStatus,
@@ -47,29 +47,23 @@ import { ExtensionsV2App } from "./app";
 
 // Both history and detail authorize against current account/profile state;
 // their actual data queries repeat this guard to contain mid-request changes.
-async function revisionReadAccess(
+async function revisionReadError(
   c: Context<{ Bindings: CloudflareBindings }>,
-  id: string
-): Promise<DatabaseResult<{ extensionId: string }>> {
+  identifier: string
+): Promise<DatabaseError | null> {
   const db = getExtensionsDb(c.env.DB_EXTENSIONS);
   const auth = getAuth(c);
   const [ownership, access] = await Promise.all([
-    new ExtensionsDatabase(db).getOwnership(id),
+    new ExtensionsDatabase(db).getOwnership(identifier),
     new UsersDatabase(db).moderatorAccess(auth.userId)
   ]);
-  if (ownership.error || !ownership.data) return ownership;
-  if (access.error) return { data: null, error: access.error };
-  if (!access.data?.active)
-    return {
-      data: null,
-      error: { code: "ACCOUNT_INACTIVE", message: "Active account required" }
-    };
+  if (ownership.error) return ownership.error;
+  if (access.error) return access.error;
+  if (!access.data.active)
+    return { code: "ACCOUNT_INACTIVE", message: "Active account required" };
   if (ownership.data.ownerUserId !== auth.userId && !access.data.moderator)
-    return {
-      data: null,
-      error: { code: "FORBIDDEN", message: "You do not own this extension" }
-    };
-  return { data: { extensionId: ownership.data.extensionId }, error: null };
+    return { code: "FORBIDDEN", message: "You do not own this extension" };
+  return null;
 }
 
 const AcceptedRevisionResultSchema = z.object({
@@ -281,7 +275,7 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
     return c.json(
       {
         result: {
-          identifier: id,
+          identifier: data.identifier,
           revision_id: data.id,
           status: "pending" as const
         }
@@ -459,14 +453,14 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
     const auth = getAuth(c);
     const { id } = c.req.valid("param");
     const { limit, cursor } = c.req.valid("query");
-    const access = await revisionReadAccess(c, id);
-    if (access.error || !access.data)
+    const accessError = await revisionReadError(c, id);
+    if (accessError)
       return c.json(
-        errorBody(access.error, "Unable to read revisions"),
-        access.error?.code === "NOT_FOUND"
+        errorBody(accessError, "Unable to read revisions"),
+        accessError.code === "NOT_FOUND"
           ? 404
-          : access.error?.code === "FORBIDDEN" ||
-              access.error?.code === "ACCOUNT_INACTIVE"
+          : accessError.code === "FORBIDDEN" ||
+              accessError.code === "ACCOUNT_INACTIVE"
             ? 403
             : 500
       );
@@ -529,14 +523,14 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
   app.openapi(revisionDetailRoute, async (c) => {
     const auth = getAuth(c);
     const { id, revisionId } = c.req.valid("param");
-    const access = await revisionReadAccess(c, id);
-    if (access.error || !access.data)
+    const accessError = await revisionReadError(c, id);
+    if (accessError)
       return c.json(
-        errorBody(access.error, "Unable to read revisions"),
-        access.error?.code === "NOT_FOUND"
+        errorBody(accessError, "Unable to read revisions"),
+        accessError.code === "NOT_FOUND"
           ? 404
-          : access.error?.code === "FORBIDDEN" ||
-              access.error?.code === "ACCOUNT_INACTIVE"
+          : accessError.code === "FORBIDDEN" ||
+              accessError.code === "ACCOUNT_INACTIVE"
             ? 403
             : 500
       );

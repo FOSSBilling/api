@@ -999,6 +999,8 @@ describe("Extensions API v2", () => {
         sampleDeveloper()
       );
 
+      const developerId = (await getDeveloper(db, "dev-developer"))!.id;
+
       // Fires when upsertOwn's existing-profile UPDATE (identified by
       // touching content_revision but not ownership_epoch, which only the
       // ownership-transfer statements touch) is about to run - the DB
@@ -1030,7 +1032,7 @@ describe("Extensions API v2", () => {
       );
       expect(
         (await listDeveloperHistory(db)).filter(
-          (row) => row.name === "Dev Developer"
+          (row) => row.developer_id === developerId
         )
       ).toHaveLength(1);
     });

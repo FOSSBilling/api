@@ -11,7 +11,7 @@ import {
   seedDeveloper,
   seedUnownedDeveloper
 } from "./harness";
-import { insertDeveloper, insertUser } from "./db-fixtures";
+import { getDeveloper, insertDeveloper, insertUser } from "./db-fixtures";
 
 // Hoisted so no v2 suite can make a real GitHub call.
 vi.mock("@octokit/request", async () =>
@@ -71,6 +71,17 @@ describe("Extensions API v2 contract", () => {
     expect(queued.status).toBe(422);
   });
 
+  it("rejects unknown extension list filters", async () => {
+    for (const query of [
+      "developer_id=someone",
+      "developer_identifer=someone"
+    ]) {
+      expect((await get(`/extensions/v2/extensions?${query}`, {})).status).toBe(
+        422
+      );
+    }
+  });
+
   it("answers every list with the cursor envelope", async () => {
     await seedDeveloper("new-developer", "user-1");
     await insertUser(db, { id: "mod-1", is_moderator: 1 });
@@ -81,7 +92,7 @@ describe("Extensions API v2 contract", () => {
       "/extensions/v2/revisions",
       "/extensions/v2/developers",
       "/extensions/v2/developers/claims?scope=pending",
-      "/extensions/v2/developers/new-developer/history"
+      `/extensions/v2/developers/${(await getDeveloper(db, "new-developer"))!.id}/history`
     ]) {
       const res = await get(path, mod);
       expect(res.status).toBe(200);
@@ -240,7 +251,7 @@ describe("Extensions API v2 contract", () => {
     const mod = await authHeaders("mod-1");
 
     const first = await get(
-      "/extensions/v2/developers/dev-a/history?limit=1",
+      `/extensions/v2/developers/${(await getDeveloper(db, "dev-a"))!.id}/history?limit=1`,
       mod
     );
     const firstBody = (await first.json()) as {
@@ -249,7 +260,7 @@ describe("Extensions API v2 contract", () => {
     expect(firstBody.pagination.has_more).toBe(true);
 
     const crossed = await get(
-      `/extensions/v2/developers/dev-b/history?cursor=${encodeURIComponent(firstBody.pagination.next_cursor as string)}`,
+      `/extensions/v2/developers/${(await getDeveloper(db, "dev-b"))!.id}/history?cursor=${encodeURIComponent(firstBody.pagination.next_cursor as string)}`,
       mod
     );
     expect(crossed.status).toBe(422);
@@ -265,7 +276,7 @@ describe("Extensions API v2 contract", () => {
       "/extensions/v2/revisions?cursor=nope",
       "/extensions/v2/developers?cursor=nope",
       "/extensions/v2/developers/claims?scope=pending&cursor=nope",
-      "/extensions/v2/developers/new-developer/history?cursor=nope"
+      `/extensions/v2/developers/${(await getDeveloper(db, "new-developer"))!.id}/history?cursor=nope`
     ]) {
       const res = await get(path, mod);
       expect(res.status).toBe(422);

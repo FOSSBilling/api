@@ -196,7 +196,7 @@ describe("m2m publisher writes", () => {
   it("proposes an edit to an extension of the mapped developer", async () => {
     await registerPublisher();
     await insertExtension(db, {
-      identifier: "existing-ext",
+      identifier: "Existing-Ext",
       developer_identifier: DEVELOPER,
       name: "Existing",
       source: '{"type":"github","repo":"example/existing"}'
@@ -208,8 +208,9 @@ describe("m2m publisher writes", () => {
     );
     expect(res.status).toBe(202);
     const body = (await res.json()) as {
-      result: { revision_id: string };
+      result: { revision_id: string; identifier: string };
     };
+    expect(body.result.identifier).toBe("Existing-Ext");
     const revision = await revisionRow(body.result.revision_id);
     expect(revision?.submitted_by).toBe(`m2m:${CLIENT}`);
     const repeated = await put(

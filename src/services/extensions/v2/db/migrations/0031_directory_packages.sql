@@ -25,7 +25,7 @@ CREATE INDEX `idx_package_objects_creator` ON `package_objects` (`created_by`);-
 CREATE TABLE `package_sources` (
 	`id` text PRIMARY KEY NOT NULL,
 	`profile_generation` text NOT NULL,
-	`extension_id` text NOT NULL,
+	`extension_identifier` text NOT NULL,
 	`version` text NOT NULL,
 	`sha256` text NOT NULL,
 	`object_id` text NOT NULL,
@@ -33,7 +33,7 @@ CREATE TABLE `package_sources` (
 	FOREIGN KEY (`object_id`) REFERENCES `package_objects`(`id`) ON UPDATE no action ON DELETE no action
 );
 --> statement-breakpoint
-CREATE UNIQUE INDEX `idx_package_source_version` ON `package_sources` (`profile_generation`,`extension_id`,`version`);
+CREATE UNIQUE INDEX `idx_package_source_version` ON `package_sources` (`profile_generation`,`extension_identifier`,`version`);
 --> statement-breakpoint
 CREATE TRIGGER package_sources_immutable BEFORE UPDATE ON package_sources
 BEGIN SELECT RAISE(ABORT, 'package_source_immutable'); END;
@@ -52,12 +52,12 @@ BEGIN
     SELECT json_extract(value,'$.artifact_id') FROM json_each(NEW.releases)
   ) AND source_id IN (
     SELECT s.id FROM package_sources s JOIN developers d ON d.profile_generation=s.profile_generation
-    WHERE s.extension_id=lower(NEW.id) AND d.id=NEW.developer_id
+    WHERE s.extension_identifier=lower(NEW.identifier) AND d.id=NEW.developer_id
   );
 END;
 
 --> statement-breakpoint
-CREATE INDEX idx_package_sources_extension ON package_sources(extension_id);
+CREATE INDEX idx_package_sources_extension ON package_sources(extension_identifier);
 --> statement-breakpoint
 CREATE UNIQUE INDEX idx_package_sources_object ON package_sources(object_id);
 --> statement-breakpoint

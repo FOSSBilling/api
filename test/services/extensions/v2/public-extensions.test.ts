@@ -165,6 +165,20 @@ describe("Extensions API v2", () => {
       expect(blank.status).toBe(422);
     });
 
+    it("rejects a cursor whose identifier is not normalized", async () => {
+      const cursor = btoa(
+        JSON.stringify({ v: 1, id: "example", identifier: "Example" })
+      );
+      const response = await get(
+        `/extensions/v2/extensions?cursor=${encodeURIComponent(cursor)}`,
+        {}
+      );
+      expect(response.status).toBe(422);
+      await expect(response.json()).resolves.toMatchObject({
+        error: { code: "INVALID_CURSOR" }
+      });
+    });
+
     it("supports UTF-8 extension ids in cursors", async () => {
       await seedExtensions(["alpha", "zulu", "éclair", "😀"]);
 

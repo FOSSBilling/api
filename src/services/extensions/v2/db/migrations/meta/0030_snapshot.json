@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "3603892c-439a-4576-b6a3-95113bf62442",
+  "id": "93fb9a02-8924-42e3-a428-55fd316dbfc9",
   "prevId": "522dcadb-834f-4249-9e4e-611e233a50d2",
   "tables": {
     "claim_verification_budgets": {
@@ -395,6 +395,13 @@
           "notNull": true,
           "autoincrement": false
         },
+        "identifier": {
+          "name": "identifier",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
         "type": {
           "name": "type",
           "type": "text",
@@ -535,6 +542,11 @@
         }
       },
       "indexes": {
+        "idx_developers_identifier_nocase": {
+          "name": "idx_developers_identifier_nocase",
+          "columns": ["lower(\"identifier\")"],
+          "isUnique": true
+        },
         "idx_developers_owner_unique": {
           "name": "idx_developers_owner_unique",
           "columns": ["owner_user_id"],
@@ -923,6 +935,13 @@
           "notNull": true,
           "autoincrement": false
         },
+        "identifier": {
+          "name": "identifier",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
         "developer_id": {
           "name": "developer_id",
           "type": "text",
@@ -1080,25 +1099,25 @@
           "columns": ["published_revision_id"],
           "isUnique": false
         },
-        "idx_extensions_id_nocase": {
-          "name": "idx_extensions_id_nocase",
-          "columns": ["lower(\"id\")"],
+        "idx_extensions_identifier_nocase": {
+          "name": "idx_extensions_identifier_nocase",
+          "columns": ["lower(\"identifier\")"],
           "isUnique": true
         },
         "idx_extensions_developer_order": {
           "name": "idx_extensions_developer_order",
-          "columns": ["developer_id", "lower(\"id\")", "id"],
+          "columns": ["developer_id", "lower(\"identifier\")", "id"],
           "isUnique": false
         },
         "idx_extensions_public_order": {
           "name": "idx_extensions_public_order",
-          "columns": ["lower(\"id\")", "id"],
+          "columns": ["lower(\"identifier\")", "id"],
           "isUnique": false,
           "where": "\"extensions\".\"published_at\" IS NOT NULL AND \"extensions\".\"delisted_at\" IS NULL"
         },
         "idx_extensions_type_public_order": {
           "name": "idx_extensions_type_public_order",
-          "columns": ["type", "lower(\"id\")", "id"],
+          "columns": ["type", "lower(\"identifier\")", "id"],
           "isUnique": false,
           "where": "\"extensions\".\"published_at\" IS NOT NULL AND \"extensions\".\"delisted_at\" IS NULL"
         }
@@ -1202,345 +1221,6 @@
           "value": "\"m2m_publisher_clients\".\"ownership_epoch\" >= 1"
         }
       }
-    },
-    "package_artifacts": {
-      "name": "package_artifacts",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "source_id": {
-          "name": "source_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "manifest": {
-          "name": "manifest",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "manifest_hash": {
-          "name": "manifest_hash",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "sha256": {
-          "name": "sha256",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "object_id": {
-          "name": "object_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "download_url": {
-          "name": "download_url",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "published_at": {
-          "name": "published_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "CURRENT_TIMESTAMP"
-        }
-      },
-      "indexes": {
-        "idx_package_artifact_manifest": {
-          "name": "idx_package_artifact_manifest",
-          "columns": ["source_id", "manifest_hash"],
-          "isUnique": true
-        },
-        "idx_package_artifacts_object": {
-          "name": "idx_package_artifacts_object",
-          "columns": ["object_id"],
-          "isUnique": true
-        }
-      },
-      "foreignKeys": {
-        "package_artifacts_source_id_package_sources_id_fk": {
-          "name": "package_artifacts_source_id_package_sources_id_fk",
-          "tableFrom": "package_artifacts",
-          "tableTo": "package_sources",
-          "columnsFrom": ["source_id"],
-          "columnsTo": ["id"],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "package_artifacts_object_id_package_objects_id_fk": {
-          "name": "package_artifacts_object_id_package_objects_id_fk",
-          "tableFrom": "package_artifacts",
-          "tableTo": "package_objects",
-          "columnsFrom": ["object_id"],
-          "columnsTo": ["id"],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {}
-    },
-    "package_icons": {
-      "name": "package_icons",
-      "columns": {
-        "source_id": {
-          "name": "source_id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "avif_object_id": {
-          "name": "avif_object_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "avif_sha256": {
-          "name": "avif_sha256",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "png_object_id": {
-          "name": "png_object_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "png_sha256": {
-          "name": "png_sha256",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "svg_object_id": {
-          "name": "svg_object_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "svg_sha256": {
-          "name": "svg_sha256",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "package_icons_source_id_package_sources_id_fk": {
-          "name": "package_icons_source_id_package_sources_id_fk",
-          "tableFrom": "package_icons",
-          "tableTo": "package_sources",
-          "columnsFrom": ["source_id"],
-          "columnsTo": ["id"],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "package_icons_avif_object_id_package_objects_id_fk": {
-          "name": "package_icons_avif_object_id_package_objects_id_fk",
-          "tableFrom": "package_icons",
-          "tableTo": "package_objects",
-          "columnsFrom": ["avif_object_id"],
-          "columnsTo": ["id"],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "package_icons_png_object_id_package_objects_id_fk": {
-          "name": "package_icons_png_object_id_package_objects_id_fk",
-          "tableFrom": "package_icons",
-          "tableTo": "package_objects",
-          "columnsFrom": ["png_object_id"],
-          "columnsTo": ["id"],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "package_icons_svg_object_id_package_objects_id_fk": {
-          "name": "package_icons_svg_object_id_package_objects_id_fk",
-          "tableFrom": "package_icons",
-          "tableTo": "package_objects",
-          "columnsFrom": ["svg_object_id"],
-          "columnsTo": ["id"],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {}
-    },
-    "package_objects": {
-      "name": "package_objects",
-      "columns": {
-        "deleting": {
-          "name": "deleting",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": 0
-        },
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "created_by": {
-          "name": "created_by",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "bytes": {
-          "name": "bytes",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "CURRENT_TIMESTAMP"
-        }
-      },
-      "indexes": {
-        "idx_package_objects_creator": {
-          "name": "idx_package_objects_creator",
-          "columns": ["created_by"],
-          "isUnique": false
-        }
-      },
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {}
-    },
-    "package_sources": {
-      "name": "package_sources",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "profile_generation": {
-          "name": "profile_generation",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "extension_id": {
-          "name": "extension_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "version": {
-          "name": "version",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "sha256": {
-          "name": "sha256",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "object_id": {
-          "name": "object_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "CURRENT_TIMESTAMP"
-        }
-      },
-      "indexes": {
-        "idx_package_source_version": {
-          "name": "idx_package_source_version",
-          "columns": ["profile_generation", "extension_id", "version"],
-          "isUnique": true
-        },
-        "idx_package_sources_extension": {
-          "name": "idx_package_sources_extension",
-          "columns": ["extension_id"],
-          "isUnique": false
-        },
-        "idx_package_sources_object": {
-          "name": "idx_package_sources_object",
-          "columns": ["object_id"],
-          "isUnique": true
-        }
-      },
-      "foreignKeys": {
-        "package_sources_object_id_package_objects_id_fk": {
-          "name": "package_sources_object_id_package_objects_id_fk",
-          "tableFrom": "package_sources",
-          "tableTo": "package_objects",
-          "columnsFrom": ["object_id"],
-          "columnsTo": ["id"],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {}
     },
     "users": {
       "name": "users",
@@ -1655,6 +1335,13 @@
   },
   "internal": {
     "indexes": {
+      "idx_developers_identifier_nocase": {
+        "columns": {
+          "lower(\"identifier\")": {
+            "isExpression": true
+          }
+        }
+      },
       "idx_extension_revisions_extension_page": {
         "columns": {
           "\"created_at\" desc": {
@@ -1675,30 +1362,30 @@
           }
         }
       },
-      "idx_extensions_id_nocase": {
+      "idx_extensions_identifier_nocase": {
         "columns": {
-          "lower(\"id\")": {
+          "lower(\"identifier\")": {
             "isExpression": true
           }
         }
       },
       "idx_extensions_developer_order": {
         "columns": {
-          "lower(\"id\")": {
+          "lower(\"identifier\")": {
             "isExpression": true
           }
         }
       },
       "idx_extensions_public_order": {
         "columns": {
-          "lower(\"id\")": {
+          "lower(\"identifier\")": {
             "isExpression": true
           }
         }
       },
       "idx_extensions_type_public_order": {
         "columns": {
-          "lower(\"id\")": {
+          "lower(\"identifier\")": {
             "isExpression": true
           }
         }

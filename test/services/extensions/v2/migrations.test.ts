@@ -1380,11 +1380,12 @@ describe("directory UUID identities", () => {
     const db = new DatabaseSync(":memory:");
     try {
       db.exec("PRAGMA foreign_keys=ON");
-      for (const name of migrationNames.filter((name) => name < "0032"))
+      for (const name of migrationNames.filter((name) => name < "0030"))
         db.exec(migration(name));
       db.exec(`
         INSERT INTO users(id,created_at,updated_at) VALUES ('owner',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP);
         INSERT INTO developers(id,type,name,owner_user_id,created_at) VALUES ('studio','user','Studio','owner','2026-11-01 00:00:00');
+        INSERT INTO developer_history(id,developer_id,type,name,changed_by) VALUES ('deleted-history','deleted-studio','user','Deleted','owner');
         INSERT INTO extensions(id,developer_id,created_by) VALUES ('example','studio','owner');
         INSERT INTO extension_revisions(id,extension_id,developer_id,submitted_by,content) VALUES ('revision','example','studio','owner','{}');
         INSERT INTO developer_claims(id,developer_id,claimant_id) VALUES ('claim','studio','owner');
@@ -1396,7 +1397,7 @@ describe("directory UUID identities", () => {
         )
         .get();
       db.exec("BEGIN");
-      db.exec(migration("0032_directory_identity.sql"));
+      db.exec(migration("0030_directory_identity.sql"));
       db.exec("COMMIT");
       const developer = db
         .prepare("SELECT id,identifier FROM developers")
@@ -1433,6 +1434,43 @@ describe("directory UUID identities", () => {
           )
           .get(developer.id)
       ).toEqual(before);
+      const deletedHistory = db
+        .prepare(
+          "SELECT developer_id FROM developer_history WHERE id='deleted-history'"
+        )
+        .get() as { developer_id: string };
+      expect(deletedHistory.developer_id).toMatch(pattern);
+      expect(deletedHistory.developer_id).not.toBe(developer.id);
+      for (const filter of ["", " AND type='module'"]) {
+        const plan = db
+          .prepare(
+            `EXPLAIN QUERY PLAN
+          SELECT id FROM extensions
+          WHERE published_at IS NOT NULL AND delisted_at IS NULL${filter}
+          ORDER BY lower(identifier), id LIMIT 50`
+          )
+          .all() as Array<{ detail: string }>;
+        expect(plan.map((row) => row.detail).join(" ")).not.toContain(
+          "TEMP B-TREE"
+        );
+      }
+      db.prepare(
+        "INSERT INTO extension_revisions(id,extension_id,developer_id,submitted_by,content,status) VALUES ('new-revision',?,?, 'owner','{}','approved')"
+      ).run(extension.id, developer.id);
+      expect(
+        db
+          .prepare(
+            "SELECT revisions FROM extension_resource_usage WHERE scope='developer' AND subject=?"
+          )
+          .get(developer.id)
+      ).toEqual({ revisions: Number(before!.revisions) + 1 });
+      expect(
+        db
+          .prepare(
+            "SELECT subject FROM extension_resource_usage WHERE scope='developer'"
+          )
+          .all()
+      ).toEqual([{ subject: developer.id }]);
       expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
     } finally {
       db.close();
