@@ -113,6 +113,20 @@ export async function validatePackageContent(
     return fail(
       "The latest release needs a directory-built package; upload its source ZIP first"
     );
+  const artifactIds = [
+    ...new Set(
+      content.releases.flatMap((release) =>
+        release.artifact_id ? [release.artifact_id] : []
+      )
+    )
+  ];
+  const rows = await db
+    .prepare(
+      `${ARTIFACT_SELECT} JOIN developers d ON d.profile_generation=s.profile_generation WHERE a.id IN (SELECT value FROM json_each(?)) AND s.extension_id=? AND d.id=?`
+    )
+    .bind(JSON.stringify(artifactIds), id, developerId)
+    .all<ArtifactRow>();
+  const artifacts = new Map(rows.results.map((row) => [row.id, row]));
   const versions = new Set<string>();
   for (const release of content.releases) {
     const version = release.tag.replace(/^v/, "");
@@ -128,12 +142,7 @@ export async function validatePackageContent(
         );
       continue;
     }
-    const artifact = await db
-      .prepare(
-        `${ARTIFACT_SELECT} JOIN developers d ON d.profile_generation=s.profile_generation WHERE a.id=? AND s.extension_id=? AND d.id=?`
-      )
-      .bind(release.artifact_id, id, developerId)
-      .first<ArtifactRow>();
+    const artifact = artifacts.get(release.artifact_id);
     if (
       !artifact ||
       artifact.version !== version ||

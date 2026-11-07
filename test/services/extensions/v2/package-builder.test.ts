@@ -50,6 +50,22 @@ async function contents(bytes: Uint8Array<ArrayBuffer>) {
 }
 
 describe("local directory package builder", () => {
+  it("rejects overlong and deeply nested paths before walking ancestors", async () => {
+    for (const path of [
+      "a/".repeat(20000) + "file.php",
+      "a/".repeat(PACKAGE_LIMITS.pathDepth) + "file.php",
+      "a".repeat(PACKAGE_LIMITS.pathLength + 1)
+    ]) {
+      await expect(
+        buildExtensionPackage(await zip([[path, "file"]]), manifest)
+      ).rejects.toThrow(/path exceeds/);
+    }
+    const path = "a/".repeat(PACKAGE_LIMITS.pathDepth - 1) + "file.php";
+    expect(
+      (await buildExtensionPackage(await zip([[path, "file"]]), manifest))
+        .sourceFileCount
+    ).toBe(1);
+  });
   it("replaces the manifest and preserves every source file", async () => {
     const source = await zip([
       ["manifest.json", "old metadata"],

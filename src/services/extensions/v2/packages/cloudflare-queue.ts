@@ -1,3 +1,4 @@
+import { logError } from "../../../../lib/logger";
 import { createCloudflareBindings } from "../../../../lib/adapters/cloudflare";
 import { CloudflareQueueAdapter } from "../../../../lib/adapters/cloudflare/queue";
 import { PackageJobsDatabase } from "../db/package-jobs";
@@ -44,12 +45,20 @@ export async function prepareQueuedPackage(
       "Package ownership changed while queued",
       403
     );
-  const source = job.uploadObjectId
-    ? await boundedBytes(
-        await store.get(job.uploadObjectId, job.uploadSha256 ?? undefined),
-        PACKAGE_LIMITS.sourceBytes
-      )
-    : undefined;
+  let source: Uint8Array<ArrayBuffer> | undefined;
+  if (job.uploadObjectId) {
+    const body = await store.get(
+      job.uploadObjectId,
+      job.uploadSha256 ?? undefined
+    );
+    if (!body)
+      throw new PackageError(
+        "SOURCE_UNAVAILABLE",
+        "Queued source ZIP is unavailable",
+        503
+      );
+    source = await boundedBytes(body, PACKAGE_LIMITS.sourceBytes);
+  }
   const artifact = await buildStoredPackage({
     db: env.DB_EXTENSIONS,
     store,
@@ -103,6 +112,14 @@ export async function recoverPackageJobs(env: CloudflareBindings) {
   const jobs = new PackageJobsDatabase(env.DB_EXTENSIONS);
   await jobs.expire();
   const queue = new CloudflareQueueAdapter(env.EXTENSION_PACKAGE_QUEUE);
-  for (const id of await jobs.pending())
-    await dispatchPackageJob(jobs, queue, id);
+  for (const id of await jobs.pending()) {
+    try {
+      await dispatchPackageJob(jobs, queue, id);
+    } catch (error) {
+      logError("extensions/packages", "Package job dispatch failed", {
+        jobId: id,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
 }

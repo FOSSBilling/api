@@ -86,7 +86,13 @@ export default {
     _event: ScheduledController,
     env: CloudflareBindings
   ): Promise<void> => {
-    await recoverPackageJobs(env);
+    try {
+      await recoverPackageJobs(env);
+    } catch (error) {
+      logError("extensions/packages", "Package job recovery failed", {
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
     const db = getExtensionsDb(env.DB_EXTENSIONS);
     await maintainExtensionResources(db, {
       mode: env.EXTENSIONS_RETENTION_MODE

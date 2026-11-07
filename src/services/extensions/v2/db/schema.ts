@@ -635,6 +635,7 @@ export const packageJobs = sqliteTable(
       .on(table.fingerprint)
       .where(sql`${table.status} != 'failed'`),
     index("idx_package_jobs_owner").on(table.ownerUserId),
+    index("idx_package_jobs_upload_object").on(table.uploadObjectId),
     index("idx_package_jobs_dispatch").on(table.status, table.enqueuedAt),
     check(
       "package_jobs_status_check",

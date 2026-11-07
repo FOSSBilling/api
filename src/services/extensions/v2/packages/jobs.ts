@@ -1,3 +1,4 @@
+import { logError } from "../../../../lib/logger";
 import type { IMessageQueue } from "../../../../lib/interfaces";
 import type { Manifest } from "../schemas/manifest";
 import type { PackageOwner } from "./build";
@@ -65,6 +66,11 @@ export async function processPackageJob(
     await jobs.complete(id, lease, artifactId);
     return "ack";
   } catch (cause) {
+    if (!(cause instanceof PackageError))
+      logError("extensions/packages", "Package preparation failed", {
+        jobId: id,
+        error: cause instanceof Error ? cause.message : String(cause)
+      });
     const error =
       cause instanceof PackageError
         ? { code: cause.code, message: cause.message, status: cause.status }

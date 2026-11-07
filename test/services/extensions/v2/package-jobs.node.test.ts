@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   dispatchPackageJob,
   processPackageJob,
@@ -68,6 +68,8 @@ function repository() {
   return { job, jobs };
 }
 
+afterEach(() => vi.restoreAllMocks());
+
 describe("provider-independent package job processing", () => {
   it("publishes only an identifier through the queue interface", async () => {
     const { jobs, job } = repository();
@@ -75,6 +77,28 @@ describe("provider-independent package job processing", () => {
     await dispatchPackageJob(jobs, { send }, job.id);
     expect(send).toHaveBeenCalledWith({ jobId: job.id });
     expect(jobs.markEnqueued).toHaveBeenCalledWith(job.id);
+  });
+  it("leaves an actively leased job unchanged when another delivery arrives", async () => {
+    const { jobs, job } = repository();
+    job.status = "processing";
+    const prepare = vi.fn();
+    expect(await processPackageJob(jobs, job.id, prepare)).toBe("busy");
+    expect(job.status).toBe("processing");
+    expect(job.attempts).toBe(0);
+    expect(prepare).not.toHaveBeenCalled();
+  });
+  it("terminates jobs interrupted beyond the processing attempt limit", async () => {
+    const { jobs, job } = repository();
+    job.attempts = 3;
+    const prepare = vi.fn();
+    expect(await processPackageJob(jobs, job.id, prepare)).toBe("ack");
+    expect(job.attempts).toBe(4);
+    expect(job.status).toBe("failed");
+    expect(job.error).toMatchObject({
+      code: "PACKAGE_UNAVAILABLE",
+      status: 503
+    });
+    expect(prepare).not.toHaveBeenCalled();
   });
   it("does not run completed jobs twice", async () => {
     const { jobs, job } = repository();
@@ -86,12 +110,21 @@ describe("provider-independent package job processing", () => {
   });
   it("retries transient failures with a bounded attempt count", async () => {
     const { jobs, job } = repository();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     const prepare = vi.fn().mockRejectedValue(new Error("storage unavailable"));
     expect(await processPackageJob(jobs, job.id, prepare)).toBe("retry");
     expect(await processPackageJob(jobs, job.id, prepare)).toBe("retry");
     expect(await processPackageJob(jobs, job.id, prepare)).toBe("ack");
     expect(job.status).toBe("failed");
     expect(job.error?.message).not.toContain("storage unavailable");
+    expect(logged).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({
+          jobId: job.id,
+          error: "storage unavailable"
+        })
+      })
+    );
   });
   it("does not retry invalid packages or revoked ownership", async () => {
     for (const status of [422, 403] as const) {

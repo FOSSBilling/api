@@ -52,7 +52,7 @@ BEGIN
     SELECT json_extract(value,'$.artifact_id') FROM json_each(NEW.releases)
   ) AND source_id IN (
     SELECT s.id FROM package_sources s JOIN developers d ON d.profile_generation=s.profile_generation
-    WHERE lower(s.extension_id)=lower(NEW.id) AND d.id=NEW.developer_id
+    WHERE s.extension_id=lower(NEW.id) AND d.id=NEW.developer_id
   );
 END;
 
@@ -80,3 +80,13 @@ CREATE TABLE `package_icons` (
 --> statement-breakpoint
 CREATE TRIGGER package_icons_immutable BEFORE UPDATE ON package_icons
 BEGIN SELECT RAISE(ABORT, 'Package icons are immutable'); END;
+
+--> statement-breakpoint
+CREATE TRIGGER package_sources_no_delete BEFORE DELETE ON package_sources
+BEGIN SELECT RAISE(ABORT, 'package_source_immutable'); END;
+--> statement-breakpoint
+CREATE TRIGGER package_artifacts_no_delete BEFORE DELETE ON package_artifacts
+BEGIN SELECT RAISE(ABORT, 'package_artifact_immutable'); END;
+--> statement-breakpoint
+CREATE TRIGGER package_icons_no_delete BEFORE DELETE ON package_icons
+BEGIN SELECT RAISE(ABORT, 'package_icons_immutable'); END;

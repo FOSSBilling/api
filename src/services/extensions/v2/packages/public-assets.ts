@@ -1,3 +1,4 @@
+import { logError } from "../../../../lib/logger";
 import { revalidateExtensions } from "../revalidate";
 import type { ExtensionContent } from "../schemas/extensions";
 import { sha256 } from "../package-builder";
@@ -15,6 +16,7 @@ export async function publishExtensionIcon(
   c: Context<{ Bindings: CloudflareBindings }>,
   extensionId: string
 ) {
+  extensionId = extensionId.toLowerCase();
   const platform = getPlatform(c);
   const endpoint = platform.getEnv("EXTENSION_ASSETS_S3_ENDPOINT");
   if (!endpoint) return;
@@ -192,10 +194,11 @@ export function scheduleIconPublication(
       .then((changed) => {
         if (changed) revalidateExtensions(c);
       })
-      .catch(() => {
-        console.error(
-          "[packages] Icon publication failed; existing image delivery remains available"
-        );
+      .catch((error) => {
+        logError("extensions/packages", "Icon publication failed", {
+          extensionId,
+          error: error instanceof Error ? error.message : String(error)
+        });
       })
   );
 }

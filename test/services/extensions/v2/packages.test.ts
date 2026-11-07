@@ -1,6 +1,9 @@
 import { PackageJobsDatabase } from "../../../../src/services/extensions/v2/db/package-jobs";
 import { processPackageJob } from "../../../../src/services/extensions/v2/packages/jobs";
-import { prepareQueuedPackage } from "../../../../src/services/extensions/v2/packages/cloudflare-queue";
+import {
+  recoverPackageJobs,
+  prepareQueuedPackage
+} from "../../../../src/services/extensions/v2/packages/cloudflare-queue";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:workers";
 import {
@@ -24,7 +27,10 @@ import {
 import { PackageArtifactSchema } from "../../../../src/services/extensions/v2/schemas/packages";
 import { ManifestSchema } from "../../../../src/services/extensions/v2/schemas/manifest";
 import { ExtensionContentSchema } from "../../../../src/services/extensions/v2/schemas/extensions";
-import { contentManifest } from "../../../../src/services/extensions/v2/db/packages";
+import {
+  validatePackageContent,
+  contentManifest
+} from "../../../../src/services/extensions/v2/db/packages";
 import { sha256 } from "../../../../src/services/extensions/v2/package-builder";
 import {
   setupExtensionsV2Tests,
@@ -147,6 +153,7 @@ async function finishJob(response: Response): Promise<Response> {
       `${root}/packages/${job.artifactId}`,
       await authHeaders("owner")
     );
+    if (read.status !== 200) return read;
     return new Response(await read.text(), {
       status: 201,
       headers: { "Content-Type": "application/json" }
@@ -475,6 +482,66 @@ describe("queued package preparation", () => {
     await dispatchPackageJob(jobs, { send }, ids[0]);
     expect(send).toHaveBeenCalledWith({ jobId: ids[0] });
     expect(await jobs.pending()).toEqual([]);
+  });
+  it("continues recovery after one queue dispatch fails", async () => {
+    await upload(manifest(), undefined, undefined, "owner", false);
+    await upload(
+      { ...manifest(), version: "2.0.0" },
+      undefined,
+      undefined,
+      "owner",
+      false
+    );
+    await db.prepare("UPDATE package_jobs SET enqueued_at=NULL").run();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.mocked(env.EXTENSION_PACKAGE_QUEUE.send)
+      .mockClear()
+      .mockRejectedValueOnce(new Error("queue unavailable"));
+    await recoverPackageJobs(env);
+    expect(env.EXTENSION_PACKAGE_QUEUE.send).toHaveBeenCalledTimes(2);
+    expect(await new PackageJobsDatabase(db).pending()).toHaveLength(1);
+    expect(logged).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({ error: "queue unavailable" })
+      })
+    );
+  });
+  it("retries a missing staged upload and completes when storage recovers", async () => {
+    const source = await zip();
+    const response = await upload(
+      manifest(),
+      source,
+      undefined,
+      "owner",
+      false
+    );
+    const { result } = (await response.json()) as { result: { id: string } };
+    const jobs = new PackageJobsDatabase(db);
+    const job = (await jobs.get(result.id))!;
+    await bucket().delete(job.uploadObjectId!);
+    expect(
+      await processPackageJob(jobs, job.id, (job) =>
+        prepareQueuedPackage(env, job)
+      )
+    ).toBe("retry");
+    expect(await jobs.get(job.id)).toMatchObject({
+      status: "queued",
+      attempts: 1,
+      error: { code: "SOURCE_UNAVAILABLE", status: 503 }
+    });
+    await bucket().put(job.uploadObjectId!, source, {
+      sha256: job.uploadSha256!
+    });
+    expect(
+      await processPackageJob(jobs, job.id, (job) =>
+        prepareQueuedPackage(env, job)
+      )
+    ).toBe("ack");
+    expect(await jobs.get(job.id)).toMatchObject({
+      status: "ready",
+      attempts: 2,
+      error: null
+    });
   });
   it("recovers an expired processing lease without accepting stale completion", async () => {
     const response = await upload(
@@ -1016,6 +1083,29 @@ describe("stored directory packages", () => {
       "https://extensions-assets.fossbilling.net/tests-"
     );
   });
+  it("publishes an icon when a valid extension ID is supplied in uppercase", async () => {
+    configureB2();
+    const fetch = vi.fn(
+      async (request: Request) =>
+        new Response(null, { status: request.method === "HEAD" ? 404 : 200 })
+    );
+    vi.stubGlobal("fetch", fetch);
+    const artifact = await built(manifest(), await iconSource());
+    const revision = await submitted(artifact);
+    await insertUser(db, { id: "moderator", is_moderator: 1 });
+    expect(
+      (
+        await post(
+          `${root}/extensions/PACKAGE-DEMO/revisions/${revision}/approve`,
+          await authHeaders("moderator"),
+          {}
+        )
+      ).status
+    ).toBe(200);
+    expect((await getExtension(db, "package-demo"))?.icon_url).toMatch(
+      /^https:\/\/extensions-assets\.fossbilling\.net\//
+    );
+  });
   it("publishes AVIF and PNG with one immutable image identity for browser fallback", async () => {
     const remote = configureB2();
     const artifact = await built(manifest(), await iconSource("png"));
@@ -1210,6 +1300,57 @@ describe("stored directory packages", () => {
     ).rejects.toThrow("immutable");
   });
 
+  it("retains immutable package rows after job history is pruned", async () => {
+    const artifact = await built();
+    expect((await approve(await submitted(artifact))).status).toBe(200);
+    await db.prepare("DELETE FROM package_jobs").run();
+    for (const [table, column, id] of [
+      ["package_artifacts", "id", artifact.id],
+      ["package_sources", "id", artifact.source_id],
+      ["package_icons", "source_id", artifact.source_id]
+    ])
+      await expect(
+        db.prepare(`DELETE FROM ${table} WHERE ${column}=?`).bind(id).run()
+      ).rejects.toThrow("immutable");
+    expect(
+      (
+        await post(
+          `${root}/packages/cleanup`,
+          await authHeaders("moderator"),
+          {}
+        )
+      ).status
+    ).toBe(200);
+    expect(
+      (await get(`${root}/packages/${artifact.id}/download`, {})).status
+    ).toBe(200);
+  });
+  it("fetches artifact references together for a 100-release submission and rejects unknown artifacts", async () => {
+    const artifact = await built();
+    const first = { ...content(artifact).releases[0], is_latest: true };
+    const releases = [
+      first,
+      ...Array.from({ length: 99 }, (_, i) => ({
+        ...first,
+        is_latest: false,
+        tag: `${i + 2}.0.0`,
+        artifact_id: crypto.randomUUID()
+      }))
+    ];
+    const prepared = vi.spyOn(db, "prepare");
+    const error = await validatePackageContent(
+      db,
+      "package-demo",
+      "developer",
+      ExtensionContentSchema.parse({ ...content(artifact), releases })
+    );
+    expect(error?.message).toBe("Release does not match its package artifact");
+    const artifactQueries = prepared.mock.calls
+      .map(([sql]) => sql)
+      .filter((sql) => sql.includes("FROM package_artifacts"));
+    expect(artifactQueries).toHaveLength(2); // publication state + the complete artifact set
+    expect(artifactQueries[1]).toContain("json_each(?)");
+  });
   it("revalidates the artifact at approval rather than trusting submission-time checks", async () => {
     const artifact = await built();
     const revision = await submitted(artifact);

@@ -26,3 +26,5 @@ CREATE TABLE `package_jobs` (
 CREATE UNIQUE INDEX `idx_package_jobs_fingerprint` ON `package_jobs` (`fingerprint`) WHERE "package_jobs"."status" != 'failed';--> statement-breakpoint
 CREATE INDEX `idx_package_jobs_owner` ON `package_jobs` (`owner_user_id`);--> statement-breakpoint
 CREATE INDEX `idx_package_jobs_dispatch` ON `package_jobs` (`status`,`enqueued_at`);
+--> statement-breakpoint
+CREATE INDEX `idx_package_jobs_upload_object` ON `package_jobs` (`upload_object_id`);

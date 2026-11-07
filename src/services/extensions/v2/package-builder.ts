@@ -10,7 +10,9 @@ import { ManifestSchema } from "./schemas/manifest";
 export const PACKAGE_LIMITS = {
   sourceBytes: 5 * 1024 * 1024,
   expandedBytes: 16 * 1024 * 1024,
-  entries: 500
+  entries: 500,
+  pathLength: 1024,
+  pathDepth: 32
 } as const;
 
 const zipOptions = {
@@ -30,20 +32,23 @@ export async function sha256(bytes: Uint8Array<ArrayBuffer>) {
 
 function validatePath(filename: string, directory: boolean) {
   const path = directory ? filename.replace(/\/$/, "") : filename;
+  if (path.length > PACKAGE_LIMITS.pathLength)
+    throw new Error("Package path exceeds length limit");
+  const parts = path.split("/");
+  if (parts.length > PACKAGE_LIMITS.pathDepth)
+    throw new Error("Package path exceeds depth limit");
   if (
     !path ||
     /[\\:<>"|?*]/.test(path) ||
     [...path].some(
       (char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127
     ) ||
-    path.split("/").some((part) => !part || part === "." || part === "..") ||
-    path
-      .split("/")
-      .some(
-        (part) =>
-          /[. ]$/.test(part) ||
-          /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part)
-      )
+    parts.some((part) => !part || part === "." || part === "..") ||
+    parts.some(
+      (part) =>
+        /[. ]$/.test(part) ||
+        /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part)
+    )
   ) {
     throw new Error(`Unsafe package path: ${filename}`);
   }

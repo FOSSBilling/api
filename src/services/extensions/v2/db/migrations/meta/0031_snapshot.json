@@ -1560,6 +1560,11 @@
           "name": "idx_package_jobs_dispatch",
           "columns": ["status", "enqueued_at"],
           "isUnique": false
+        },
+        "idx_package_jobs_upload_object": {
+          "name": "idx_package_jobs_upload_object",
+          "columns": ["upload_object_id"],
+          "isUnique": false
         }
       },
       "foreignKeys": {

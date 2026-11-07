@@ -122,6 +122,7 @@ size validation, then their original compressed payloads are copied unchanged
 with normalized ZIP headers. Only the generated manifest is compressed. It never runs
 scripts from the archive. Input is limited to 5 MiB, 500 entries and 16 MiB of
 actual decompressed data; multipart requests are capped at 6 MiB before parsing.
+Paths are limited to 1,024 characters and 32 components.
 Encrypted entries, symlinks, unsafe paths, duplicate/colliding names, file/directory
 conflicts and corrupt archives are rejected. Checksums cover the final stored ZIP.
 
@@ -133,8 +134,8 @@ Packaging prepares display images once in `EXTENSION_IMAGE_BUCKET`, shared by
 all artifacts using the same source. The original icon stays unchanged in the ZIP.
 
 SVGs are sanitized with Cloudflare svg-hush through the pinned `@zeropress/svg-hush`
-Workers adapter and served directly. SVG input is capped at 2 MiB and sanitized
-output at 4 MiB. Raster inputs use the local `PACKAGE_IMAGES` binding to produce
+Workers adapter and served directly. SVG inputs are bounded by the ZIP expansion
+limit; there is no separate SVG size cap. Raster inputs use the local `PACKAGE_IMAGES` binding to produce
 AVIF and PNG variants within 256 × 256 pixels, preserving proportions and
 transparency without enlarging small images. Requests prefer SVG when present,
 otherwise AVIF when explicitly accepted, with PNG fallback. They read stored
@@ -169,6 +170,10 @@ with read, write and delete-file permissions. No public URL or domain is require
 Use `EXTENSION_PACKAGES_MODE=local` only outside production. The committed production configuration remains disabled.
 With no S3 endpoint, ZIPs use the local R2 binding. An incomplete S3 configuration
 or upstream failure returns 503 rather than silently switching storage backends.
+
+R2 validates the supplied SHA-256 when writing and returns that checksum as
+object metadata. Its adapter checks this metadata on reads without rehashing the
+response body. The B2 adapter additionally hashes the downloaded bytes.
 
 Source and built ZIPs use `local/packages/<object-id>`. Object IDs are allocated
 once by D1 before upload. Uploads carry a signed SHA-256 payload and private cache
