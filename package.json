@@ -22,13 +22,19 @@
     "test:node": "vitest run --config vitest.node.config.ts",
     "test:all": "npm run test && npm run test:node",
     "test:coverage": "vitest run --coverage",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "packages:setup": "tsx scripts/package-demo.ts setup",
+    "packages:dev": "wrangler dev --env packages-local --local --ip 127.0.0.1 --port 8789 --persist-to .wrangler/package-demo",
+    "packages:demo": "tsx scripts/package-demo.ts exercise"
   },
   "dependencies": {
     "@hono/zod-openapi": "1.6.3",
     "@octokit/graphql": "9.0.5",
     "@octokit/request": "10.0.16",
     "@scalar/hono-api-reference": "0.12.17",
+    "@zeropress/svg-hush": "0.1.1",
+    "@zip.js/zip.js": "2.24.0",
+    "aws4fetch": "1.0.20",
     "badge-maker": "6.0.0",
     "better-auth": "^1.7.14",
     "drizzle-orm": "0.45.4",
@@ -49,6 +55,7 @@
     "eslint-config-prettier": "10.1.8",
     "jiti": "2.7.0",
     "prettier": "3.9.10",
+    "tsx": "4.23.15",
     "typescript": "6.0.3",
     "typescript-eslint": "8.72.1",
     "vitest": "5.0.5",

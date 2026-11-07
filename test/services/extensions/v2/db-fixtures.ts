@@ -133,6 +133,13 @@ async function clearDeveloperHistory(db: D1Database): Promise<void> {
 }
 
 export async function resetExtensionsDb(db: D1Database): Promise<void> {
+  await db.batch([
+    db.prepare("DELETE FROM package_jobs"),
+    db.prepare("DELETE FROM package_artifacts"),
+    db.prepare("DELETE FROM package_icons"),
+    db.prepare("DELETE FROM package_sources"),
+    db.prepare("DELETE FROM package_objects")
+  ]);
   await db.prepare("DELETE FROM extension_write_events").run();
   await db.prepare("DELETE FROM claim_verification_budgets").run();
   await clearDeveloperHistory(db);

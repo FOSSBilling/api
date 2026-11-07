@@ -25,7 +25,6 @@ describe("manifest v1 publishing", () => {
     const content = {
       ...sampleCreate({ extensionId: "my_module" }),
       author: { name: "Package Author", url: "https://author.example.com" },
-      icon_url: "assets/icon.svg",
       license: "MIT OR Apache-2.0",
       requires: {
         fossbilling: "^0.8.9 || ^1.0",

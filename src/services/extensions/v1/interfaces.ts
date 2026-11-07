@@ -54,6 +54,7 @@ export type User = {
 
 export type Release = {
   tag: string;
+  is_latest?: boolean;
   date: string;
   download_url: string;
   changelog_url?: string;

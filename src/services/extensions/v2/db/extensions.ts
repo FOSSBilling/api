@@ -1,3 +1,5 @@
+import { packageIconUrl } from "./packages";
+import { validatePackageContent } from "./packages";
 import { MAX_CONTENT_BYTES } from "../resource-limits";
 import { and, asc, eq, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
@@ -636,6 +638,13 @@ export class ExtensionsDatabase {
 
     let results;
     try {
+      const packageError = await validatePackageContent(
+        this.db.$client,
+        input.extensionId,
+        input.developerId,
+        input.content
+      );
+      if (packageError) return { data: null, error: packageError };
       const extensionStmt = toD1Statement(this.db.$client, {
         sql: `INSERT INTO extensions (id, developer_id, created_by, created_at, updated_at)
               SELECT ?, d.id, d.owner_user_id, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
@@ -728,6 +737,13 @@ export class ExtensionsDatabase {
 
     let results;
     try {
+      const packageError = await validatePackageContent(
+        this.db.$client,
+        input.extensionId,
+        input.developerId,
+        input.content
+      );
+      if (packageError) return { data: null, error: packageError };
       const extensionStmt = toD1Statement(this.db.$client, {
         sql: `INSERT INTO extensions (id, developer_id, created_by, created_at, updated_at)
               SELECT ?, d.id, d.owner_user_id, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
@@ -1155,6 +1171,13 @@ export class ExtensionsDatabase {
 
     let results;
     try {
+      const packageError = await validatePackageContent(
+        this.db.$client,
+        id,
+        undefined,
+        valid
+      );
+      if (packageError) return { data: null, error: packageError };
       const correctStmt = toD1Statement(this.db.$client, {
         sql: `INSERT INTO extension_revisions
                 (id, extension_id, developer_id, submitted_by, status, content,
@@ -1205,7 +1228,7 @@ export class ExtensionsDatabase {
           JSON.stringify(valid.releases),
           valid.homepage_url ?? "",
           JSON.stringify(valid.license),
-          valid.icon_url ?? null,
+          packageIconUrl(valid),
           valid.readme,
           JSON.stringify(valid.source),
           valid.version,

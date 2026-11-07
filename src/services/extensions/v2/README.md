@@ -17,9 +17,9 @@ Endpoints are not listed here. The service publishes its own contract:
 
 New v2 writes use the [FOSSBilling manifest v1 fields](https://github.com/FOSSBilling/modules/blob/main/manifest.schema.json): `manifest_version: 1`, `type: "module"` (replacing `mod`; standalone `hook` entries require manual reclassification), `author: {name, url?}`, a string `license`, optional `homepage_url` (replacing `website`), and `requires: {fossbilling, php, modules?}`. IDs allow lowercase letters, digits, underscores, and hyphens, up to 64 characters. Names are limited to 100 characters, descriptions to 500, and versions use SemVer without a `v` prefix.
 
-`icon_url` is an optional path relative to the package root, as in `icon.svg`; it cannot be an absolute URL, absolute path, or contain `..` or backslashes. Consumers resolve package assets against their trusted distribution source. Historical icons may still be absolute URLs.
+Icons are discovered by convention: include one of `icon.svg`, `icon.png`, `icon.webp`, or `icon.avif` at the package root. The manifest and publishing input have no icon field. Public responses may include a computed `icon_url` for display; it is not editable. Directory packages without an icon return a generic fallback.
 
-API publishing fields `readme`, `source`, `download_url`, and `releases` remain alongside the manifest metadata. Each release carries its own `requires` object instead of `min_fossbilling_version`. Constraints are retained verbatim, including Composer ranges and module dependencies; package CI remains responsible for semantic constraint/license validation and confirming that icon files exist. The API adds size bounds to metadata (author names: 200 characters; license and requirement strings: 1,000; URLs and icon paths: 2,048).
+API publishing fields `readme`, `source`, `download_url`, and `releases` remain alongside the manifest metadata. Each release carries its own `requires` object instead of `min_fossbilling_version`. Constraints are retained verbatim, including Composer ranges and module dependencies; package CI remains responsible for semantic constraint/license validation. The API adds size bounds to metadata (author names: 200 characters; license and requirement strings: 1,000; URLs: 2,048).
 
 `requires.fossbilling` is mandatory. `requires.php` is an optional additional restriction: when omitted, FOSSBilling’s PHP requirements apply; when supplied, both the core and extension constraints must be satisfied.
 
@@ -48,7 +48,7 @@ After applying the prepared migration, run the read-only `db/resource-inventory.
 
 Apply the migration and API deployment in a controlled cutover: the old Worker expects object licenses, while the new Worker requires the added metadata column.
 
-This changes the v2 request/response contract: regenerate the Extensions site's client and update CI publishers together with the API rollout. The modules publisher must stop translating `module` to `mod` and send the manifest fields directly. Package-relative icons use v1's empty-string fallback. The v1 adapter continues to return `mod`, `website`, object licenses, and minimum release versions; constraints are converted to their earliest matching SemVer version. A malformed, unsatisfiable, or Composer-only constraint with no representable v1 minimum produces an explicit error identifying the release for manual correction; it is never replaced with `0.0.0`.
+This changes the v2 request/response contract: regenerate the Extensions site's client and update CI publishers together with the API rollout. The modules publisher must stop translating `module` to `mod` and send the manifest fields directly. Icons follow the package filename convention. The v1 adapter continues to return `mod`, `website`, object licenses, and minimum release versions; constraints are converted to their earliest matching SemVer version. A malformed, unsatisfiable, or Composer-only constraint with no representable v1 minimum produces an explicit error identifying the release for manual correction; it is never replaced with `0.0.0`.
 
 The frontend revalidation tags are `extensions` and `developers`, shared with the Extensions site. Deploy the API and site tag change together. New code calls `revalidateExtensions(c)`.
 
@@ -126,7 +126,7 @@ Assertions use HS256 with issuer `fossbilling-extensions`, audience `fossbilling
 
 Machine clients (CI publishers) authenticate with short-lived access tokens from the central auth service's `client_credentials` grant, bound to this API via RFC 8707 `resource=https://api.fossbilling.net`. Tokens are RFC 9068 JWTs (`typ: at+jwt`, EdDSA) carrying `client_id` and `scope`; verification is local via the issuer's JWKS (`M2M_*` variables, root README), so revocation takes effect at token expiry (10 minutes).
 
-Two scopes gate the machine surface: `extensions:push` covers `POST /extensions` and `PUT /extensions/{id}`; `extensions:publish` additionally covers approving a pending revision on the mapped developer's own extension — the one carve-out from moderator-only approval. Machine tokens are answered 403 on account, moderator, and ownership routes; on public reads they are served the anonymous projection. Bindings are bound to the developer's ownership epoch at registration, so an ownership transfer goes stale and a moderator must re-register before the client writes again.
+Two scopes gate the machine surface: `extensions:push` covers `POST /extensions`, `PUT /extensions/{id}`, and package builds through `POST /packages`; `extensions:publish` additionally covers approving a pending revision on the mapped developer's own extension — the one carve-out from moderator-only approval. Machine tokens are answered 403 on account, moderator, and ownership routes; on public reads they are served the anonymous projection. Bindings are bound to the developer's ownership epoch at registration, so an ownership transfer goes stale and a moderator must re-register before the client writes again.
 
 A moderator binds a client to a developer profile with `PUT /m2m/clients/{client_id}` (`developer_id`, `can_publish`), lists bindings with `GET /m2m/clients`, and revokes with `DELETE /m2m/clients/{client_id}`. A revoked client's tokens still verify but fail authorization on the next write. Each binding also creates a synthetic internal user (`m2m:<client_id>`) that anchors revision foreign keys; it is not an account and cannot sign in.
 
@@ -203,3 +203,9 @@ Reconcile and re-run; the migration touches nothing before these checks.
 ## Code layout
 
 See `AGENTS.md` for `routes/`, `db/`, `schemas/`, `github/`, and `middleware.ts`. This service is the reference layout for larger services.
+
+## Directory-built packages (local development)
+
+See [PACKAGING.md](./PACKAGING.md) for the authenticated upload/build API,
+immutable artifacts, moderation integration, local test-data setup and storage
+limits. Production package routes remain disabled until storage is configured.

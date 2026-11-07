@@ -1,3 +1,7 @@
+import {
+  consumePackageJobs,
+  recoverPackageJobs
+} from "../services/extensions/v2/packages/cloudflare-queue";
 import { getExtensionsDb } from "../lib/db";
 import {
   maintainExtensionResources,
@@ -75,12 +79,14 @@ app.all("/*", (c) => {
 });
 
 export default {
+  queue: consumePackageJobs,
   fetch: app.fetch,
   request: app.request.bind(app),
   scheduled: async (
     _event: ScheduledController,
     env: CloudflareBindings
   ): Promise<void> => {
+    await recoverPackageJobs(env);
     const db = getExtensionsDb(env.DB_EXTENSIONS);
     await maintainExtensionResources(db, {
       mode: env.EXTENSIONS_RETENTION_MODE

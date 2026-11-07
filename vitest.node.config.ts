@@ -5,7 +5,8 @@ export default defineConfig({
     environment: "node",
     include: [
       "test/lib/adapters/node/**/*.test.ts",
-      "test/services/extensions/v2/migrations.test.ts"
+      "test/services/extensions/v2/migrations.test.ts",
+      "test/services/extensions/v2/package-jobs.node.test.ts"
     ],
     testTimeout: 10000,
 

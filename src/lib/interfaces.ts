@@ -21,7 +21,12 @@ export interface IEnvironment {
   get(key: string): string | undefined;
 }
 
+export interface IMessageQueue {
+  send(body: unknown): Promise<void>;
+}
+
 export interface IPlatformBindings {
+  queues?: Record<string, IMessageQueue>;
   caches: Record<string, ICache>;
   environment: IEnvironment;
 }

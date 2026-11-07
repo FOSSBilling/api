@@ -2,7 +2,7 @@ import { ZodError } from "zod";
 import { and, isNotNull, isNull, sql } from "drizzle-orm";
 import { ExtensionsDb } from "../../../../lib/db";
 import { DatabaseResult } from "../../../../lib/interfaces";
-import { sortReleasesDescending } from "../../../../lib/releases";
+import { latestRelease } from "../../../../lib/releases";
 import { BadgeDataSchema } from "../schemas/badges";
 import { MAX_CONTENT_BYTES } from "../resource-limits";
 import { databaseError } from "./errors";
@@ -51,7 +51,7 @@ export class ExtensionBadgesDatabase {
       });
       return {
         data: {
-          latestRelease: sortReleasesDescending(data.releases)[0] ?? null,
+          latestRelease: latestRelease(data.releases) ?? null,
           license: data.license
         },
         error: null

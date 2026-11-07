@@ -2,7 +2,7 @@ import { z } from "@hono/zod-openapi";
 import { httpUrl } from "./common";
 
 // Package metadata follows FOSSBilling/modules manifest.schema.json (v1).
-// Package paths are kept relative; serving an icon is a publisher concern.
+// Icons use fixed filenames at the package root, outside the manifest.
 export const MANIFEST_EXTENSION_TYPES = [
   "module",
   "theme",
@@ -59,12 +59,6 @@ export const ManifestSchema = z
       .max(1000)
       .regex(/^[A-Za-z0-9.\-+_:() |]+$/),
     homepage_url: httpUrl().optional(),
-    icon_url: z
-      .string()
-      .min(1)
-      .max(2048)
-      .regex(/^(?!\/)(?![a-zA-Z][a-zA-Z0-9+.-]*:)(?!.*\.\.)[^\\]+$/)
-      .optional(),
     requires: ManifestRequirementsSchema
   })
   .strict()

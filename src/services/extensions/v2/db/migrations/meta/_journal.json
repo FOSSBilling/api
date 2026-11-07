@@ -113,6 +113,20 @@
       "when": 1793793600000,
       "tag": "0029_align_manifest",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "6",
+      "when": 1793901703593,
+      "tag": "0030_directory_packages",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "6",
+      "when": 1793931547450,
+      "tag": "0031_package_jobs",
+      "breakpoints": true
     }
   ]
 }

@@ -188,7 +188,6 @@ describe("Extension resource admission", () => {
       "releases",
       "website",
       "license",
-      "icon_url",
       "readme",
       "source",
       "version",
