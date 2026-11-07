@@ -1,3 +1,4 @@
+import { UUID_V7 } from "./db-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import {
   createExecutionContext,
@@ -39,6 +40,7 @@ import {
 } from "./harness";
 import {
   insertExtension,
+  getDeveloper,
   insertRevision,
   insertUser,
   countExtensions,
@@ -63,12 +65,15 @@ async function withdraw(id: string, user = "owner") {
 async function create(id: string) {
   return post("/extensions/v2/extensions", await authHeaders("owner"), {
     ...sampleCreate(),
-    id
+    identifier: id
   });
 }
 async function owned() {
   await seedDeveloper("developer", "owner");
-  await insertExtension(db, { id: "live", developer_id: "developer" });
+  await insertExtension(db, {
+    identifier: "live",
+    developer_identifier: "developer"
+  });
 }
 async function ageEvents(seconds = 120) {
   await db
@@ -79,8 +84,8 @@ async function ageEvents(seconds = 120) {
 async function insertHistory(id: string, status = "rejected") {
   await insertRevision(db, {
     id,
-    extension_id: "live",
-    developer_id: "developer",
+    extension_identifier: "live",
+    developer_identifier: "developer",
     submitted_by: "owner",
     content: JSON.stringify(sampleContent()),
     status,
@@ -130,11 +135,13 @@ describe("Extension resource admission", () => {
   it("keeps oversized published extensions visible as published cards", async () => {
     await owned();
     await db
-      .prepare("UPDATE extensions SET readme=? WHERE id='live'")
+      .prepare("UPDATE extensions SET readme=? WHERE identifier='live'")
       .bind("x".repeat(MAX_CONTENT_BYTES + 1))
       .run();
     const extensions = new ExtensionsDatabase(getExtensionsDb(db));
-    const list = await extensions.listOwned({ developerId: "developer" });
+    const list = await extensions.listOwned({
+      developerId: (await getDeveloper(db, "developer"))!.id
+    });
     expect(list.error).toBeNull();
     expect(list.data?.items[0].published).not.toBeNull();
     expect(
@@ -174,8 +181,8 @@ describe("Extension resource admission", () => {
         .first()
     ).toEqual({
       submitted_by: "owner",
-      developer_id: "developer",
-      extension_id: "live",
+      developer_id: expect.stringMatching(UUID_V7),
+      extension_id: expect.stringMatching(UUID_V7),
       id: "fixed-attribution"
     });
   });
@@ -256,7 +263,9 @@ describe("Extension resource admission", () => {
     ];
     for (let i = 0; i < columns.length; i++) {
       await db
-        .prepare(`UPDATE extensions SET ${columns[i]}=? WHERE id='live'`)
+        .prepare(
+          `UPDATE extensions SET ${columns[i]}=? WHERE identifier='live'`
+        )
         .bind(values[i])
         .run();
       await reconcile();
@@ -270,7 +279,7 @@ describe("Extension resource admission", () => {
       .bind(JSON.stringify({ ...content, readme: "😀" }))
       .run();
     await reconcile();
-    await db.prepare("DELETE FROM extensions WHERE id='live'").run();
+    await db.prepare("DELETE FROM extensions WHERE identifier='live'").run();
     await reconcile();
   });
   it("preserves overflow status when stream cancellation rejects", async () => {
@@ -295,7 +304,7 @@ describe("Extension resource admission", () => {
   it("accepts a valid JSON body delivered in small chunks", async () => {
     await owned();
     const bytes = new TextEncoder().encode(
-      JSON.stringify({ ...sampleCreate(), id: "chunked" })
+      JSON.stringify({ ...sampleCreate(), identifier: "chunked" })
     );
     let position = 0;
     const stream = new ReadableStream<Uint8Array>({
@@ -320,7 +329,10 @@ describe("Extension resource admission", () => {
     await owned();
     const id = "e".repeat(201);
     expect((await create(id)).status).toBe(422);
-    await insertExtension(db, { id, developer_id: "developer" });
+    await insertExtension(db, {
+      identifier: id,
+      developer_identifier: "developer"
+    });
     expect((await get(`/extensions/v2/extensions/${id}`, {})).status).toBe(200);
     expect(
       (
@@ -380,7 +392,7 @@ describe("Extension resource admission", () => {
   });
   it("accepts the exact raw-byte cap and rejects one byte more without Content-Length", async () => {
     await seedDeveloper("developer", "owner");
-    const body = JSON.stringify({ ...sampleCreate(), id: "exact" });
+    const body = JSON.stringify({ ...sampleCreate(), identifier: "exact" });
     const padded =
       body +
       " ".repeat(
@@ -526,7 +538,9 @@ describe("Extension resource admission", () => {
       expect((await create(`churn-${i}`)).status).toBe(201);
       expect((await withdraw(`churn-${i}`)).status).toBe(200);
     }
-    await db.prepare("DELETE FROM developers WHERE id='developer'").run();
+    await db
+      .prepare("DELETE FROM developers WHERE identifier = 'developer'")
+      .run();
     await seedDeveloper("replacement", "owner");
     await db
       .prepare("UPDATE users SET deleted_at=CURRENT_TIMESTAMP WHERE id='owner'")
@@ -605,14 +619,25 @@ describe("Extension resource admission", () => {
         .prepare(
           `SELECT ${column} AS value FROM extension_resource_usage WHERE scope=? AND subject=?`
         )
-        .bind(scope, subject)
+        .bind(
+          scope,
+          scope === "developer"
+            ? (await getDeveloper(db, subject))!.id
+            : subject
+        )
         .first<number>("value");
       try {
         await db
           .prepare(
             `UPDATE extension_resource_usage SET ${column}=? WHERE scope=? AND subject=?`
           )
-          .bind(limit, scope, subject)
+          .bind(
+            limit,
+            scope,
+            scope === "developer"
+              ? (await getDeveloper(db, subject))!.id
+              : subject
+          )
           .run();
         expect((await create("blocked")).status).toBe(409);
         expect(await countExtensions(db)).toBe(1);
@@ -624,7 +649,13 @@ describe("Extension resource admission", () => {
           .prepare(
             `UPDATE extension_resource_usage SET ${column}=? WHERE scope=? AND subject=?`
           )
-          .bind(original, scope, subject)
+          .bind(
+            original,
+            scope,
+            scope === "developer"
+              ? (await getDeveloper(db, subject))!.id
+              : subject
+          )
           .run();
       }
     }
@@ -635,7 +666,7 @@ describe("Extension resource admission", () => {
     expect((await create("publication")).status).toBe(201);
     const revision = await db
       .prepare(
-        "SELECT id FROM extension_revisions WHERE extension_id='publication'"
+        "SELECT id FROM extension_revisions WHERE extension_id=(SELECT id FROM extensions WHERE identifier='publication')"
       )
       .first<string>("id");
     await db
@@ -661,14 +692,20 @@ describe("Extension resource admission", () => {
     ).toBe("pending");
     expect(
       await db
-        .prepare("SELECT published_at FROM extensions WHERE id='publication'")
+        .prepare(
+          "SELECT published_at FROM extensions WHERE identifier='publication'"
+        )
         .first("published_at")
     ).toBeNull();
   });
   it("accounts UTF-8 bytes exactly and releases them transactionally without shifting account charges", async () => {
     await seedDeveloper("developer", "owner");
-    const content = { ...sampleCreate(), id: "multibyte", readme: "😀é" };
-    const { id: _id, ...stored } = content;
+    const content = {
+      ...sampleCreate(),
+      identifier: "multibyte",
+      readme: "😀é"
+    };
+    const { identifier: _identifier, ...stored } = content;
     expect(
       (
         await post(
@@ -689,7 +726,7 @@ describe("Extension resource admission", () => {
     await insertUser(db, { id: "recipient" });
     await db
       .prepare(
-        "UPDATE developers SET owner_user_id='recipient' WHERE id='developer'"
+        "UPDATE developers SET owner_user_id='recipient' WHERE identifier = 'developer'"
       )
       .run();
     expect(
@@ -774,8 +811,8 @@ describe("Bounded revision reads and maintenance", () => {
     ] as const) {
       await insertRevision(db, {
         id,
-        extension_id: "live",
-        developer_id: "developer",
+        extension_identifier: "live",
+        developer_identifier: "developer",
         submitted_by: "owner",
         content: JSON.stringify({ ...sampleContent(), releases }),
         status: "rejected",
@@ -805,8 +842,8 @@ describe("Bounded revision reads and maintenance", () => {
     await owned();
     await insertRevision(db, {
       id: "unicode-tag",
-      extension_id: "live",
-      developer_id: "developer",
+      extension_identifier: "live",
+      developer_identifier: "developer",
       submitted_by: "owner",
       content: JSON.stringify({
         releases: [{ ...sampleContent().releases[0], tag: "😀".repeat(100) }]
@@ -827,21 +864,21 @@ describe("Bounded revision reads and maintenance", () => {
     for (const id of ["old", "published"]) await insertHistory(id, "approved");
     await db
       .prepare(
-        "UPDATE extensions SET published_revision_id='published' WHERE id='live'"
+        "UPDATE extensions SET published_revision_id='published' WHERE identifier='live'"
       )
       .run();
     await insertRevision(db, {
       id: "pending",
-      extension_id: "live",
-      developer_id: "developer",
+      extension_identifier: "live",
+      developer_identifier: "developer",
       submitted_by: "owner",
       content: JSON.stringify(sampleContent()),
       created_at: "2000-01-01 00:00:00"
     });
     await insertRevision(db, {
       id: "recent",
-      extension_id: "live",
-      developer_id: "developer",
+      extension_identifier: "live",
+      developer_identifier: "developer",
       submitted_by: "owner",
       content: JSON.stringify(sampleContent()),
       status: "rejected",
@@ -931,7 +968,10 @@ describe("Bounded revision reads and maintenance", () => {
   it("bounds response amplification for 100 maximum-sized bodies", async () => {
     await owned();
     await seedDeveloper("second", "second-owner");
-    await insertExtension(db, { id: "second-live", developer_id: "second" });
+    await insertExtension(db, {
+      identifier: "second-live",
+      developer_identifier: "second"
+    });
     await insertUser(db, { id: "mod", is_moderator: 1 });
     const content = {
       ...sampleContent(),
@@ -947,8 +987,8 @@ describe("Bounded revision reads and maintenance", () => {
     for (let i = 0; i < 100; i++)
       await insertRevision(db, {
         id: `max-${i}`,
-        extension_id: i < 50 ? "live" : "second-live",
-        developer_id: i < 50 ? "developer" : "second",
+        extension_identifier: i < 50 ? "live" : "second-live",
+        developer_identifier: i < 50 ? "developer" : "second",
         submitted_by: i < 50 ? "owner" : "second-owner",
         content: JSON.stringify(content),
         status: "rejected",
@@ -1085,7 +1125,7 @@ describe("Bounded revision reads and maintenance", () => {
     async (source, type) => {
       await owned();
       await db
-        .prepare("UPDATE extensions SET source=? WHERE id='live'")
+        .prepare("UPDATE extensions SET source=? WHERE identifier='live'")
         .bind(JSON.stringify(source))
         .run();
       const extensions = new ExtensionsDatabase(getExtensionsDb(db));
@@ -1095,7 +1135,7 @@ describe("Bounded revision reads and maintenance", () => {
       expect(publicCard?.source).toEqual({ type, repo: "example/repo" });
       expect(ExtensionListItemSchema.safeParse(publicCard).success).toBe(true);
       const ownerCards = await extensions.listOwned({
-        developerId: "developer"
+        developerId: (await getDeveloper(db, "developer"))!.id
       });
       expect(ownerCards.error).toBeNull();
       const ownerCard = ownerCards.data?.items[0];
@@ -1106,7 +1146,9 @@ describe("Bounded revision reads and maintenance", () => {
       expect(OwnedExtensionListItemSchema.safeParse(ownerCard).success).toBe(
         true
       );
-      expect((await extensions.getById("live")).data?.source).toEqual(source);
+      expect((await extensions.getByIdentifier("live")).data?.source).toEqual(
+        source
+      );
     }
   );
   it("preserves under-limit legacy fields in public and owner details", async () => {
@@ -1116,7 +1158,7 @@ describe("Bounded revision reads and maintenance", () => {
     const source = { type: "custom", repo: "R".repeat(5000) };
     await db
       .prepare(
-        "UPDATE extensions SET website=?, license=?, source=? WHERE id='live'"
+        "UPDATE extensions SET website=?, license=?, source=? WHERE identifier='live'"
       )
       .bind(website, JSON.stringify(license), JSON.stringify(source))
       .run();
@@ -1130,7 +1172,7 @@ describe("Bounded revision reads and maintenance", () => {
       license: "L".repeat(1000),
       source: { type: "custom", repo: "R".repeat(500) }
     });
-    const publicDetail = await extensions.getById("live");
+    const publicDetail = await extensions.getByIdentifier("live");
     expect(publicDetail.error).toBeNull();
     expect(publicDetail.data).toMatchObject({
       homepage_url: website,
@@ -1151,12 +1193,12 @@ describe("Bounded revision reads and maintenance", () => {
     const download = "https://example.test/" + "y".repeat(3000);
     await db
       .prepare(
-        "UPDATE extensions SET website=?,download_url=?,releases=? WHERE id='live'"
+        "UPDATE extensions SET website=?,download_url=?,releases=? WHERE identifier='live'"
       )
       .bind(homepage, download, JSON.stringify(sampleContent().releases))
       .run();
     const extensions = new ExtensionsDatabase(getExtensionsDb(db));
-    const detail = await extensions.getById("live");
+    const detail = await extensions.getByIdentifier("live");
     expect(detail.error).toBeNull();
     expect(ExtensionSchema.safeParse(detail.data).success).toBe(true);
     expect(detail.data).toMatchObject({

@@ -1,3 +1,7 @@
+import { v7 as uuidv7 } from "uuid";
+
+export const UUID_V7 =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 // Raw-SQL test fixtures against the real local D1 (see
 // test/utils/apply-migrations.ts) - deliberately not going through Drizzle,
 // since these exist to seed/read rows for assertions, not to exercise the
@@ -6,6 +10,7 @@
 
 export interface DeveloperRow {
   id: string;
+  identifier: string;
   type: string;
   name: string;
   url: string | null;
@@ -28,6 +33,7 @@ export interface DeveloperRow {
 
 export interface ExtensionRow {
   id: string;
+  identifier: string;
   developer_id: string;
   published_at: string | null;
   published_revision_id: string | null;
@@ -212,7 +218,11 @@ export async function ensureUser(db: D1Database, id: string): Promise<void> {
 
 export async function insertDeveloper(
   db: D1Database,
-  row: Partial<DeveloperRow> & { id: string; type: string; name: string }
+  row: Omit<Partial<DeveloperRow>, "id"> & {
+    identifier: string;
+    type: string;
+    name: string;
+  }
 ): Promise<void> {
   if (row.owner_user_id) {
     await ensureUser(db, row.owner_user_id);
@@ -221,14 +231,15 @@ export async function insertDeveloper(
   await db
     .prepare(
       `INSERT INTO developers
-         (id, type, name, url, owner_user_id, approved_at, created_at, updated_at,
+         (id, identifier, type, name, url, owner_user_id, approved_at, created_at, updated_at,
           avatar_url, contact_email, ownership_epoch, content_revision,
           approved_revision, approved_by, github_org_verified, github_verification_note,
           github_verified_at, github_url_verified)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .bind(
-      row.id,
+      uuidv7(),
+      row.identifier,
       row.type,
       row.name,
       row.url ?? null,
@@ -258,21 +269,25 @@ export async function insertDeveloper(
 // together, which is what extensions_published_content_check requires.
 export async function insertExtension(
   db: D1Database,
-  row: Partial<ExtensionRow> & { id: string; developer_id: string }
+  row: Omit<Partial<ExtensionRow>, "id" | "developer_id"> & {
+    identifier: string;
+    developer_identifier: string;
+  }
 ): Promise<void> {
   const now = new Date().toISOString();
   await db
     .prepare(
       `INSERT INTO extensions
-         (id, developer_id, published_at, published_revision_id, type, name,
+         (id, identifier, developer_id, published_at, published_revision_id, type, name,
           description, releases, website, license, icon_url, readme, source,
           version, download_url, created_at, updated_at, delisted_at,
           delist_reason, manifest)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .bind(
-      row.id,
-      row.developer_id,
+      uuidv7(),
+      row.identifier,
+      (await getDeveloper(db, row.developer_identifier))!.id,
       row.published_at !== undefined ? row.published_at : now,
       row.published_revision_id ?? null,
       row.type ?? "module",
@@ -304,24 +319,30 @@ export async function insertExtension(
 // published_at. This is the state a POST /extensions leaves behind.
 export async function insertUnpublishedExtension(
   db: D1Database,
-  row: { id: string; developer_id: string; created_at?: string }
+  row: { identifier: string; developer_identifier: string; created_at?: string }
 ): Promise<void> {
   const now = new Date().toISOString();
   await db
     .prepare(
-      `INSERT INTO extensions (id, developer_id, created_at, updated_at)
-       VALUES (?, ?, ?, ?)`
+      `INSERT INTO extensions (id, identifier, developer_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?)`
     )
-    .bind(row.id, row.developer_id, row.created_at ?? now, now)
+    .bind(
+      uuidv7(),
+      row.identifier,
+      (await getDeveloper(db, row.developer_identifier))!.id,
+      row.created_at ?? now,
+      now
+    )
     .run();
 }
 
 export async function insertRevision(
   db: D1Database,
-  row: Partial<RevisionRow> & {
+  row: Omit<Partial<RevisionRow>, "developer_id" | "extension_id"> & {
     id: string;
-    extension_id: string;
-    developer_id: string;
+    extension_identifier: string;
+    developer_identifier: string;
     submitted_by: string;
     content: string;
   }
@@ -339,8 +360,8 @@ export async function insertRevision(
     )
     .bind(
       row.id,
-      row.extension_id,
-      row.developer_id,
+      (await getExtension(db, row.extension_identifier))!.id,
+      (await getDeveloper(db, row.developer_identifier))!.id,
       row.submitted_by,
       row.status ?? "pending",
       row.content,
@@ -355,9 +376,9 @@ export async function insertRevision(
 
 export async function insertDeveloperClaim(
   db: D1Database,
-  row: Partial<DeveloperClaimRow> & {
+  row: Omit<Partial<DeveloperClaimRow>, "developer_id"> & {
     id: string;
-    developer_id: string;
+    developer_identifier: string;
     claimant_id: string;
   }
 ): Promise<void> {
@@ -374,7 +395,7 @@ export async function insertDeveloperClaim(
     )
     .bind(
       row.id,
-      row.developer_id,
+      (await getDeveloper(db, row.developer_identifier))!.id,
       row.claimant_id,
       row.status ?? "pending",
       row.note ?? null,
@@ -390,9 +411,9 @@ export async function insertDeveloperClaim(
 
 export async function insertDeveloperTransfer(
   db: D1Database,
-  row: Partial<DeveloperTransferRow> & {
+  row: Omit<Partial<DeveloperTransferRow>, "developer_id"> & {
     id: string;
-    developer_id: string;
+    developer_identifier: string;
     created_by: string;
     token_hash: string;
     expires_at: string;
@@ -411,7 +432,7 @@ export async function insertDeveloperTransfer(
     )
     .bind(
       row.id,
-      row.developer_id,
+      (await getDeveloper(db, row.developer_identifier))!.id,
       row.token_hash,
       row.created_by,
       row.created_at ?? new Date().toISOString(),
@@ -425,9 +446,9 @@ export async function insertDeveloperTransfer(
 
 export async function insertDeveloperHistory(
   db: D1Database,
-  row: Partial<DeveloperHistoryRow> & {
+  row: Omit<Partial<DeveloperHistoryRow>, "developer_id"> & {
     id: string;
-    developer_id: string;
+    developer_identifier: string;
     type: string;
     name: string;
     changed_by: string;
@@ -442,7 +463,7 @@ export async function insertDeveloperHistory(
     )
     .bind(
       row.id,
-      row.developer_id,
+      (await getDeveloper(db, row.developer_identifier))!.id,
       row.type,
       row.name,
       row.url ?? null,
@@ -454,11 +475,11 @@ export async function insertDeveloperHistory(
 
 export async function getDeveloper(
   db: D1Database,
-  id: string
+  identifier: string
 ): Promise<DeveloperRow | null> {
   return db
-    .prepare("SELECT * FROM developers WHERE id = ?")
-    .bind(id)
+    .prepare("SELECT * FROM developers WHERE lower(identifier) = lower(?)")
+    .bind(identifier)
     .first<DeveloperRow>();
 }
 
@@ -485,11 +506,11 @@ export async function countExtensions(db: D1Database): Promise<number> {
 
 export async function getExtension(
   db: D1Database,
-  id: string
+  identifier: string
 ): Promise<ExtensionRow | null> {
   return db
-    .prepare("SELECT * FROM extensions WHERE id = ?")
-    .bind(id)
+    .prepare("SELECT * FROM extensions WHERE lower(identifier) = lower(?)")
+    .bind(identifier)
     .first<ExtensionRow>();
 }
 
@@ -585,7 +606,7 @@ export async function bumpDeveloperOwnership(
   await ensureUser(db, newOwnerUserId);
   await db
     .prepare(
-      "UPDATE developers SET owner_user_id = ?, ownership_epoch = ownership_epoch + 1 WHERE id = ?"
+      "UPDATE developers SET owner_user_id = ?, ownership_epoch = ownership_epoch + 1 WHERE identifier = ?"
     )
     .bind(newOwnerUserId, developerId)
     .run();

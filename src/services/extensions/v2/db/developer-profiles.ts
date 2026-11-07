@@ -1,3 +1,4 @@
+import { v7 as uuidv7 } from "uuid";
 import { and, asc, desc, eq, gt, isNull, lt, or, sql, SQL } from "drizzle-orm";
 import { DatabaseResult } from "../../../../lib/interfaces";
 import { ExtensionsDb } from "../../../../lib/db";
@@ -60,6 +61,7 @@ type DeveloperRow = typeof developers.$inferSelect;
 function parseDeveloperRow(row: DeveloperRow): DeveloperProfile {
   return {
     id: row.id,
+    identifier: row.identifier,
     type: row.type as DeveloperProfile["type"],
     name: row.name,
     URL: row.url ?? undefined,
@@ -157,7 +159,7 @@ export class DeveloperProfilesDatabase {
   }
 
   // githubToken — see the comment on verifyGithubOwnership(). Only consulted
-  // when creating a brand-new profile (developer.id is immutable once
+  // when creating a brand-new profile (the identifier is immutable once
   // owned, so an update can't need re-verifying); guards against squatting
   // on an id that matches a real GitHub org/user the caller doesn't control,
   // the one gap claim() alone can't close since it only ever applies to
@@ -177,9 +179,15 @@ export class DeveloperProfilesDatabase {
           .select()
           .from(developers)
           .where(eq(developers.ownerUserId, userId)),
-        this.db.select().from(developers).where(eq(developers.id, developer.id))
+        this.db
+          .select()
+          .from(developers)
+          .where(
+            sql`lower(${developers.identifier}) = lower(${developer.identifier})`
+          )
       ]);
       const isCreating = !existingOwn;
+      const developerId = existingOwn?.id ?? uuidv7();
 
       let githubOrgVerified: number | null = null;
       let githubUrlVerified: number | null = null;
@@ -219,7 +227,7 @@ export class DeveloperProfilesDatabase {
 
         const check = await verifyGithubOwnership(
           this.db,
-          developer.id,
+          developer.identifier,
           developer.type,
           userId,
           githubToken,
@@ -250,13 +258,13 @@ export class DeveloperProfilesDatabase {
         // a deletion can win between that check and this statement.
         mainStmt = toD1Statement(this.db.$client, {
           sql: `INSERT INTO developers (
-                  id, type, name, url, avatar_url, contact_email,
+                  id, identifier, type, name, url, avatar_url, contact_email,
                   owner_user_id, approved_at, created_at, updated_at,
                   github_org_verified,
                   github_verification_note, github_verified_at,
                   github_url_verified
                 )
-                SELECT ?, ?, ?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP,
+                SELECT ?, ?, ?, ?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP,
                        CURRENT_TIMESTAMP, ?, ?,
                        CASE WHEN ? IS NULL THEN NULL ELSE CURRENT_TIMESTAMP END,
                        ?
@@ -271,7 +279,8 @@ export class DeveloperProfilesDatabase {
                 )
                 ON CONFLICT DO NOTHING`,
           params: [
-            developer.id,
+            developerId,
+            developer.identifier,
             developer.type,
             developer.name,
             developer.URL ?? null,
@@ -288,7 +297,7 @@ export class DeveloperProfilesDatabase {
           ]
         });
       } else {
-        if (developer.id !== existingOwn.id) {
+        if (developer.identifier !== existingOwn.identifier) {
           return {
             data: null,
             error: {
@@ -336,7 +345,7 @@ export class DeveloperProfilesDatabase {
           })
           .where(
             and(
-              eq(developers.id, developer.id),
+              eq(developers.id, developerId),
               eq(developers.ownerUserId, userId),
               // Pin approval/verification decisions to the version read above.
               eq(developers.contentRevision, existingOwn.contentRevision),
@@ -373,7 +382,7 @@ export class DeveloperProfilesDatabase {
               WHERE changes() = 1`,
         params: [
           crypto.randomUUID(),
-          developer.id,
+          developerId,
           developer.type,
           developer.name,
           developer.URL ?? null,
@@ -396,7 +405,7 @@ export class DeveloperProfilesDatabase {
           .from(developers)
           .where(
             and(
-              eq(developers.id, developer.id),
+              eq(developers.id, developerId),
               eq(developers.ownerUserId, userId),
               sql`EXISTS (SELECT 1 FROM ${users} WHERE ${users.id} = ${userId}
             AND ${users.deletedAt} IS NULL)`
@@ -411,7 +420,11 @@ export class DeveloperProfilesDatabase {
         }
         return {
           data: null,
-          error: await this.upsertBlockedError(userId, developer.id, isCreating)
+          error: await this.upsertBlockedError(
+            userId,
+            developer.identifier,
+            isCreating
+          )
         };
       }
 
@@ -420,7 +433,7 @@ export class DeveloperProfilesDatabase {
         .from(developers)
         .where(
           and(
-            eq(developers.id, developer.id),
+            eq(developers.id, developerId),
             eq(developers.ownerUserId, userId)
           )
         );
@@ -462,7 +475,7 @@ export class DeveloperProfilesDatabase {
         this.db
           .select({ id: developers.id })
           .from(developers)
-          .where(eq(developers.id, developerId)),
+          .where(sql`lower(${developers.identifier}) = lower(${developerId})`),
         this.db
           .select({ id: developers.id })
           .from(developers)
@@ -669,19 +682,26 @@ export class DeveloperProfilesDatabase {
     }
   }
 
-  async getById(
-    id: string
+  getById(id: string) {
+    return this.getProfile(eq(developers.id, id));
+  }
+
+  getByIdentifier(identifier: string) {
+    return this.getProfile(
+      sql`lower(${developers.identifier}) = lower(${identifier})`
+    );
+  }
+
+  private async getProfile(
+    condition: SQL
   ): Promise<DatabaseResult<DeveloperProfile & { unclaimed: boolean }>> {
     try {
-      const [row] = await this.db
-        .select()
-        .from(developers)
-        .where(eq(developers.id, id));
+      const [row] = await this.db.select().from(developers).where(condition);
       if (!row) {
         return {
           data: null,
           error: {
-            message: `Cannot find developer by id: ${id}`,
+            message: "Developer not found",
             code: "NOT_FOUND"
           }
         };
@@ -828,7 +848,9 @@ export class DeveloperProfilesDatabase {
     expectedRevision: number,
     expectedGeneration: string,
     reviewerId: string
-  ): Promise<DatabaseResult<{ id: string; approved: true }>> {
+  ): Promise<
+    DatabaseResult<{ id: string; identifier: string; approved: true }>
+  > {
     let result;
     try {
       result = await this.db
@@ -840,7 +862,7 @@ export class DeveloperProfilesDatabase {
         })
         .where(
           and(
-            eq(developers.id, id),
+            sql`lower(${developers.identifier}) = lower(${id})`,
             eq(developers.contentRevision, expectedRevision),
             eq(developers.profileGeneration, expectedGeneration),
             sql`EXISTS (
@@ -849,16 +871,17 @@ export class DeveloperProfilesDatabase {
                 AND ${users.isModerator} = 1
             )`
           )
-        );
+        )
+        .returning({ id: developers.id, identifier: developers.identifier });
     } catch (error) {
       return databaseError("approve", error);
     }
 
-    if (!result.meta?.changes) {
+    if (!result[0]) {
       const actorError = await moderatorActorError(this.db, reviewerId);
       if (actorError) return { data: null, error: actorError };
 
-      const existing = await this.getById(id);
+      const existing = await this.getByIdentifier(id);
       if (existing.error) {
         // A failed diagnostic lookup is not evidence that the developer is
         // missing. Preserve database errors (and any other lookup error) so
@@ -876,7 +899,7 @@ export class DeveloperProfilesDatabase {
       };
     }
 
-    return { data: { id, approved: true }, error: null };
+    return { data: { ...result[0], approved: true }, error: null };
   }
 
   // Newest-first keyset pages of one developer's audit history.
@@ -919,7 +942,9 @@ export class DeveloperProfilesDatabase {
 
     let rows;
     try {
-      const conditions = [eq(developerHistory.developerId, developerId)];
+      const conditions = [
+        sql`${developerHistory.developerId} = (SELECT id FROM developers WHERE identifier=${developerId})`
+      ];
       if (decoded) {
         conditions.push(
           or(
@@ -1006,6 +1031,7 @@ export class DeveloperProfilesDatabase {
       const [row] = await this.db
         .select({
           id: developers.id,
+          identifier: developers.identifier,
           type: developers.type,
           url: developers.url
         })
@@ -1102,7 +1128,7 @@ export class DeveloperProfilesDatabase {
 
       const matches = matchesClaimant(
         row.type as Developer["type"],
-        row.id,
+        row.identifier,
         identity.data
       );
 
@@ -1124,7 +1150,10 @@ export class DeveloperProfilesDatabase {
       if (!matches) {
         writeUrlVerified = true;
       } else if (checkUrl) {
-        const entity = await checkGithubEntity(row.id, githubToken ?? "");
+        const entity = await checkGithubEntity(
+          row.identifier,
+          githubToken ?? ""
+        );
         // An unavailable lookup is explicitly inconclusive, not a disproof,
         // so it leaves the stored URL verification signal untouched rather
         // than clearing a real prior verification over a transient failure.

@@ -6,6 +6,10 @@ Self-service extension publishing, developer-profile ownership, moderation, and 
 
 This service owns the complete Extensions domain and its `DB_EXTENSIONS` schema. The separate Extensions site keeps OIDC/session state but reaches this domain through the generated HTTPS API client; it must not bind or migrate `DB_EXTENSIONS`.
 
+## Directory Identity
+
+Extensions and developers have generated UUIDv7 `id` primary keys and separate, globally unique `identifier` fields. Database relationships and machine publisher bindings use UUIDs. Public profile/extension paths use identifiers; `name` is the editable display name. Creation requests supply `identifier`, never the internal ID. The package manifest's `id` remains the public extension identifier.
+
 ## Endpoints
 
 Endpoints are not listed here. The service publishes its own contract:
@@ -37,7 +41,7 @@ For example, after checking an affected package's actual requirements, an operat
 UPDATE extensions
 SET releases = json_set(releases, '$[0].requires',
   json('{"fossbilling":">=0.8.9","php":">=8.3"}'))
-WHERE id = 'affected-extension';
+WHERE identifier = 'affected-extension';
 ```
 
 Use the ID, index, and verified constraints from the preflight investigation; the values above are examples. Re-run the query until it returns no rows.

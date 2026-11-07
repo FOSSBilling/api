@@ -20,7 +20,7 @@ const developerId = () =>
 
 export const DeveloperSchema = z
   .object({
-    id: developerId(),
+    identifier: developerId(),
     type: z.enum(["user", "organization"]),
     name: z.string().min(1).max(120),
     URL: httpUrl().optional(),
@@ -43,6 +43,7 @@ export const DeveloperInputSchema =
   DeveloperSchema.strict().openapi("DeveloperInput");
 
 export const DeveloperProfileSchema = DeveloperSchema.extend({
+  id: z.uuidv7(),
   approved: z.boolean(),
   content_revision: z.int().positive(),
   profile_generation: ProfileGenerationSchema,
@@ -107,6 +108,7 @@ export function toPublicDeveloper(
 ): PublicDeveloper {
   return {
     id: profile.id,
+    identifier: profile.identifier,
     type: profile.type,
     name: profile.name,
     URL: profile.URL,

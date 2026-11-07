@@ -75,13 +75,13 @@ describe("pending submission replacement", () => {
   it("lets the owner replace a publisher submission and attributes the replacement to the owner", async () => {
     await seedDeveloper("dev", "owner");
     await insertUnpublishedExtension(db, {
-      id: "new-ext",
-      developer_id: "dev"
+      identifier: "new-ext",
+      developer_identifier: "dev"
     });
     await insertRevision(db, {
       id: "publisher-revision",
-      extension_id: "new-ext",
-      developer_id: "dev",
+      extension_identifier: "new-ext",
+      developer_identifier: "dev",
       submitted_by: "publisher-client",
       content: JSON.stringify(sampleContent())
     });
@@ -107,13 +107,13 @@ describe("pending submission replacement", () => {
     async (extensionId) => {
       await seedDeveloper("dev", "owner");
       await insertUnpublishedExtension(db, {
-        id: extensionId,
-        developer_id: "dev"
+        identifier: extensionId,
+        developer_identifier: "dev"
       });
       await insertRevision(db, {
         id: "canonical-revision",
-        extension_id: extensionId,
-        developer_id: "dev",
+        extension_identifier: extensionId,
+        developer_identifier: "dev",
         submitted_by: "owner",
         content: JSON.stringify(sampleContent())
       });
@@ -124,11 +124,11 @@ describe("pending submission replacement", () => {
       );
       expect(response.status).toBe(202);
       const { result } = (await response.json()) as {
-        result: { id: string; revision_id: string };
+        result: { id: string; identifier: string; revision_id: string };
       };
-      expect(result.id).toBe(extensionId);
+      expect(result.identifier).toBe(extensionId);
       expect((await getRevision(db, result.revision_id))!.extension_id).toBe(
-        result.id
+        (await getExtension(db, extensionId))!.id
       );
     }
   );

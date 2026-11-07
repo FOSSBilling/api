@@ -62,6 +62,7 @@ export async function sendModerationNotification(
         return false;
       }
       developerName = developerEmail?.developerName;
+      developerId = developerEmail?.developerIdentifier;
     } else if (input.extensionId) {
       const recipient = await resolveExtensionEmail(db, input.extensionId);
       if (!recipient) {
@@ -73,7 +74,7 @@ export async function sendModerationNotification(
       }
       to = recipient.to;
       extensionName = recipient.extensionName;
-      developerId = recipient.developerId;
+      developerId = recipient.developerIdentifier;
       developerName = recipient.developerName;
     } else if (input.developerId) {
       const recipient = await resolveDeveloperProfileEmail(
@@ -89,6 +90,7 @@ export async function sendModerationNotification(
       }
       to = recipient.to;
       developerName = recipient.developerName;
+      developerId = recipient.developerIdentifier;
     } else {
       logError("email", "Notification missing extension and developer", {
         kind: input.kind

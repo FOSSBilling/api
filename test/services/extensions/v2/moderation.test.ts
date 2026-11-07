@@ -1,3 +1,4 @@
+import { UUID_V7 } from "./db-fixtures";
 import { describe, it, expect, vi } from "vitest";
 import { env } from "cloudflare:workers";
 import { wrapD1WithHook } from "./db-interceptor";
@@ -48,9 +49,9 @@ async function createPending(
   );
   expect(res.status).toBe(201);
   const { result } = (await res.json()) as {
-    result: { id: string; revision_id: string };
+    result: { id: string; identifier: string; revision_id: string };
   };
-  return { id: result.id, revisionId: result.revision_id };
+  return { id: result.identifier, revisionId: result.revision_id };
 }
 
 function reviewPath(
@@ -100,7 +101,7 @@ describe("Extensions API v2", () => {
       expect(data.result).toHaveLength(1);
       expect(data.result[0]).toMatchObject({
         status: "pending",
-        extension_id: "new-ext"
+        extension_id: expect.stringMatching(UUID_V7)
       });
     });
   });
@@ -109,8 +110,8 @@ describe("Extensions API v2", () => {
     it("serves the public projection to unrelated callers for a published extension", async () => {
       await seedDeveloper("new-developer", "user-1");
       await insertExtension(db, {
-        id: "live-ext",
-        developer_id: "new-developer"
+        identifier: "live-ext",
+        developer_identifier: "new-developer"
       });
 
       const res = await get(
@@ -119,9 +120,9 @@ describe("Extensions API v2", () => {
       );
       expect(res.status).toBe(200);
       const data = (await res.json()) as {
-        result: { id: string; pending_revision?: unknown };
+        result: { id: string; identifier: string; pending_revision?: unknown };
       };
-      expect(data.result.id).toBe("live-ext");
+      expect(data.result.identifier).toBe("live-ext");
       expect("pending_revision" in data.result).toBe(false);
     });
 
@@ -139,8 +140,8 @@ describe("Extensions API v2", () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await seedDeveloper("new-developer", "user-1");
       await insertExtension(db, {
-        id: "LIVE-ext",
-        developer_id: "new-developer"
+        identifier: "LIVE-ext",
+        developer_identifier: "new-developer"
       });
 
       const res = await get(
@@ -149,9 +150,13 @@ describe("Extensions API v2", () => {
       );
       expect(res.status).toBe(200);
       const data = (await res.json()) as {
-        result: { id: string; published: { name: string } | null };
+        result: {
+          id: string;
+          identifier: string;
+          published: { name: string } | null;
+        };
       };
-      expect(data.result.id).toBe("LIVE-ext");
+      expect(data.result.identifier).toBe("LIVE-ext");
       expect(data.result.published?.name).toBe("Extension");
     });
 
@@ -159,8 +164,8 @@ describe("Extensions API v2", () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await seedDeveloper("new-developer", "user-1");
       await insertExtension(db, {
-        id: "live-ext",
-        developer_id: "new-developer"
+        identifier: "live-ext",
+        developer_identifier: "new-developer"
       });
       await post(
         "/extensions/v2/extensions/live-ext/delist",
@@ -193,12 +198,12 @@ describe("Extensions API v2", () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await seedDeveloper("new-developer", "user-1");
       await insertExtension(db, {
-        id: "live-ext",
-        developer_id: "new-developer"
+        identifier: "live-ext",
+        developer_identifier: "new-developer"
       });
       await insertUnpublishedExtension(db, {
-        id: "draft-ext",
-        developer_id: "new-developer"
+        identifier: "draft-ext",
+        developer_identifier: "new-developer"
       });
       await post(
         "/extensions/v2/extensions/live-ext/delist",
@@ -207,8 +212,8 @@ describe("Extensions API v2", () => {
       );
       await seedDeveloper("other-developer", "user-2");
       await insertExtension(db, {
-        id: "other-ext",
-        developer_id: "other-developer"
+        identifier: "other-ext",
+        developer_identifier: "other-developer"
       });
 
       const res = await get(
@@ -216,8 +221,10 @@ describe("Extensions API v2", () => {
         await authHeaders("mod-1")
       );
       expect(res.status).toBe(200);
-      const body = (await res.json()) as { result: Array<{ id: string }> };
-      expect(body.result.map((r) => r.id)).toEqual([
+      const body = (await res.json()) as {
+        result: Array<{ id: string; identifier: string }>;
+      };
+      expect(body.result.map((r) => r.identifier)).toEqual([
         "draft-ext",
         "live-ext",
         "other-ext"
@@ -228,16 +235,16 @@ describe("Extensions API v2", () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await seedDeveloper("new-developer", "user-1");
       await insertExtension(db, {
-        id: "live-ext",
-        developer_id: "new-developer"
+        identifier: "live-ext",
+        developer_identifier: "new-developer"
       });
       await insertExtension(db, {
-        id: "delisted-ext",
-        developer_id: "new-developer"
+        identifier: "delisted-ext",
+        developer_identifier: "new-developer"
       });
       await insertUnpublishedExtension(db, {
-        id: "draft-ext",
-        developer_id: "new-developer"
+        identifier: "draft-ext",
+        developer_identifier: "new-developer"
       });
       await post(
         "/extensions/v2/extensions/delisted-ext/delist",
@@ -250,7 +257,7 @@ describe("Extensions API v2", () => {
         await authHeaders("mod-1")
       );
       expect(await published.json()).toMatchObject({
-        result: [{ id: "live-ext" }]
+        result: [{ id: expect.stringMatching(UUID_V7), identifier: "live-ext" }]
       });
 
       const delisted = await get(
@@ -258,7 +265,9 @@ describe("Extensions API v2", () => {
         await authHeaders("mod-1")
       );
       expect(await delisted.json()).toMatchObject({
-        result: [{ id: "delisted-ext" }]
+        result: [
+          { id: expect.stringMatching(UUID_V7), identifier: "delisted-ext" }
+        ]
       });
 
       const unpublished = await get(
@@ -266,7 +275,9 @@ describe("Extensions API v2", () => {
         await authHeaders("mod-1")
       );
       expect(await unpublished.json()).toMatchObject({
-        result: [{ id: "draft-ext" }]
+        result: [
+          { id: expect.stringMatching(UUID_V7), identifier: "draft-ext" }
+        ]
       });
     });
 
@@ -274,16 +285,16 @@ describe("Extensions API v2", () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await seedDeveloper("new-developer", "user-1");
       await insertExtension(db, {
-        id: "paygate",
-        developer_id: "new-developer"
+        identifier: "paygate",
+        developer_identifier: "new-developer"
       });
       await insertExtension(db, {
-        id: "other-gateway",
-        developer_id: "new-developer"
+        identifier: "other-gateway",
+        developer_identifier: "new-developer"
       });
       await insertExtension(db, {
-        id: "unrelated",
-        developer_id: "new-developer"
+        identifier: "unrelated",
+        developer_identifier: "new-developer"
       });
 
       const res = await get(
@@ -291,8 +302,10 @@ describe("Extensions API v2", () => {
         await authHeaders("mod-1")
       );
       expect(res.status).toBe(200);
-      const body = (await res.json()) as { result: Array<{ id: string }> };
-      expect(body.result.map((r) => r.id).sort()).toEqual([
+      const body = (await res.json()) as {
+        result: Array<{ id: string; identifier: string }>;
+      };
+      expect(body.result.map((r) => r.identifier).sort()).toEqual([
         "other-gateway",
         "paygate"
       ]);
@@ -302,8 +315,8 @@ describe("Extensions API v2", () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await seedDeveloper("new-developer", "user-1");
       await insertExtension(db, {
-        id: "pay-gate",
-        developer_id: "new-developer"
+        identifier: "pay-gate",
+        developer_identifier: "new-developer"
       });
 
       const percentRes = await get(
@@ -432,7 +445,11 @@ describe("Extensions API v2", () => {
       const v1Res = await get("/extensions/v1/new-ext", {});
       expect(v1Res.status).toBe(200);
       const v1Body = (await v1Res.json()) as {
-        result: { id: string; author: { id: string } };
+        result: {
+          id: string;
+          identifier: string;
+          author: { id: string; identifier: string };
+        };
       };
       expect(v1Body.result.id).toBe("new-ext");
       expect(v1Body.result.author.id).toBe("new-developer");
@@ -538,13 +555,13 @@ describe("Extensions API v2", () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await seedDeveloper("new-developer", "user-1");
       await insertUnpublishedExtension(db, {
-        id: "legacy-ext",
-        developer_id: "new-developer"
+        identifier: "legacy-ext",
+        developer_identifier: "new-developer"
       });
       await insertRevision(db, {
         id: "legacy-revision",
-        extension_id: "legacy-ext",
-        developer_id: "new-developer",
+        extension_identifier: "legacy-ext",
+        developer_identifier: "new-developer",
         submitted_by: "user-1",
         // Carried through by migration 0021 from a submission written under
         // rules that required far less than today's.
@@ -689,15 +706,15 @@ describe("Extensions API v2", () => {
     // cannot fork a second, lowercase one.
     it("edits a mixed-case legacy extension in place", async () => {
       await insertDeveloper(db, {
-        id: "owner-developer",
+        identifier: "owner-developer",
         type: "user",
         name: "Owner",
         url: null,
         owner_user_id: "owner-1"
       });
       await insertExtension(db, {
-        id: "Existing-Ext",
-        developer_id: "owner-developer",
+        identifier: "Existing-Ext",
+        developer_identifier: "owner-developer",
         name: "Existing"
       });
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
@@ -840,8 +857,8 @@ describe("Extensions API v2", () => {
     it("requires moderator access", async () => {
       await seedDeveloper("new-developer", "user-1");
       await insertExtension(db, {
-        id: "live-ext",
-        developer_id: "new-developer"
+        identifier: "live-ext",
+        developer_identifier: "new-developer"
       });
 
       const res = await post(
@@ -867,8 +884,8 @@ describe("Extensions API v2", () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await seedDeveloper("new-developer", "user-1");
       await insertUnpublishedExtension(db, {
-        id: "draft-ext",
-        developer_id: "new-developer"
+        identifier: "draft-ext",
+        developer_identifier: "new-developer"
       });
 
       const res = await post(
@@ -883,8 +900,8 @@ describe("Extensions API v2", () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await seedDeveloper("new-developer", "user-1");
       await insertExtension(db, {
-        id: "live-ext",
-        developer_id: "new-developer"
+        identifier: "live-ext",
+        developer_identifier: "new-developer"
       });
 
       const res = await post(
@@ -899,8 +916,8 @@ describe("Extensions API v2", () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await seedDeveloper("new-developer", "user-1");
       await insertExtension(db, {
-        id: "live-ext",
-        developer_id: "new-developer"
+        identifier: "live-ext",
+        developer_identifier: "new-developer"
       });
 
       const res = await post(
@@ -915,8 +932,8 @@ describe("Extensions API v2", () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await seedDeveloper("new-developer", "user-1");
       await insertExtension(db, {
-        id: "LIVE-ext",
-        developer_id: "new-developer",
+        identifier: "LIVE-ext",
+        developer_identifier: "new-developer",
         updated_at: "2020-01-01T00:00:00.000Z"
       });
 
@@ -927,7 +944,12 @@ describe("Extensions API v2", () => {
       );
       expect(res.status).toBe(200);
       await expect(res.json()).resolves.toEqual({
-        result: { id: "live-ext", status: "delisted", notified: false }
+        result: {
+          id: expect.stringMatching(UUID_V7),
+          identifier: "LIVE-ext",
+          status: "delisted",
+          notified: false
+        }
       });
 
       // Case-insensitively addressed, like every other extension route.
@@ -963,8 +985,8 @@ describe("Extensions API v2", () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await seedDeveloper("new-developer", "user-1");
       await insertExtension(db, {
-        id: "live-ext",
-        developer_id: "new-developer"
+        identifier: "live-ext",
+        developer_identifier: "new-developer"
       });
       const mod = await authHeaders("mod-1");
       await post("/extensions/v2/extensions/live-ext/delist", mod, {
@@ -989,8 +1011,8 @@ describe("Extensions API v2", () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await seedDeveloper("new-developer", "user-1");
       await insertExtension(db, {
-        id: "live-ext",
-        developer_id: "new-developer"
+        identifier: "live-ext",
+        developer_identifier: "new-developer"
       });
       await post(
         "/extensions/v2/extensions/live-ext/delist",
@@ -1041,8 +1063,8 @@ describe("Extensions API v2", () => {
     it("requires moderator access", async () => {
       await seedDeveloper("new-developer", "user-1");
       await insertExtension(db, {
-        id: "live-ext",
-        developer_id: "new-developer"
+        identifier: "live-ext",
+        developer_identifier: "new-developer"
       });
 
       const res = await post(
@@ -1068,8 +1090,8 @@ describe("Extensions API v2", () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await seedDeveloper("new-developer", "user-1");
       await insertExtension(db, {
-        id: "live-ext",
-        developer_id: "new-developer"
+        identifier: "live-ext",
+        developer_identifier: "new-developer"
       });
 
       const res = await post(
@@ -1089,8 +1111,8 @@ describe("Extensions API v2", () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await seedDeveloper("new-developer", "user-1");
       await insertExtension(db, {
-        id: "live-ext",
-        developer_id: "new-developer"
+        identifier: "live-ext",
+        developer_identifier: "new-developer"
       });
       const mod = await authHeaders("mod-1");
       await post("/extensions/v2/extensions/live-ext/delist", mod, {
@@ -1104,7 +1126,12 @@ describe("Extensions API v2", () => {
       );
       expect(res.status).toBe(200);
       await expect(res.json()).resolves.toEqual({
-        result: { id: "live-ext", status: "relisted", notified: false }
+        result: {
+          id: expect.stringMatching(UUID_V7),
+          identifier: "live-ext",
+          status: "relisted",
+          notified: false
+        }
       });
     });
 
@@ -1112,8 +1139,8 @@ describe("Extensions API v2", () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await seedDeveloper("new-developer", "user-1");
       await insertExtension(db, {
-        id: "live-ext",
-        developer_id: "new-developer"
+        identifier: "live-ext",
+        developer_identifier: "new-developer"
       });
       const mod = await authHeaders("mod-1");
       await post("/extensions/v2/extensions/live-ext/delist", mod, {
@@ -1129,7 +1156,12 @@ describe("Extensions API v2", () => {
       });
       expect(res.status).toBe(200);
       await expect(res.json()).resolves.toEqual({
-        result: { id: "live-ext", status: "relisted", notified: false }
+        result: {
+          id: expect.stringMatching(UUID_V7),
+          identifier: "live-ext",
+          status: "relisted",
+          notified: false
+        }
       });
 
       expect(await getExtension(db, "live-ext")).toMatchObject({
@@ -1137,15 +1169,17 @@ describe("Extensions API v2", () => {
       });
       await expect(
         (await get("/extensions/v2/extensions", {})).json()
-      ).resolves.toMatchObject({ result: [{ id: "live-ext" }] });
+      ).resolves.toMatchObject({
+        result: [{ id: expect.stringMatching(UUID_V7), identifier: "live-ext" }]
+      });
     });
 
     it("answers with the stored canonical id for a mixed-case path", async () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await seedDeveloper("new-developer", "user-1");
       await insertExtension(db, {
-        id: "LIVE-ext",
-        developer_id: "new-developer"
+        identifier: "LIVE-ext",
+        developer_identifier: "new-developer"
       });
       const mod = await authHeaders("mod-1");
       await post("/extensions/v2/extensions/live-ext/delist", mod, {
@@ -1159,7 +1193,12 @@ describe("Extensions API v2", () => {
       );
       expect(res.status).toBe(200);
       await expect(res.json()).resolves.toEqual({
-        result: { id: "LIVE-ext", status: "relisted", notified: false }
+        result: {
+          id: expect.stringMatching(UUID_V7),
+          identifier: "LIVE-ext",
+          status: "relisted",
+          notified: false
+        }
       });
     });
 
@@ -1167,8 +1206,8 @@ describe("Extensions API v2", () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await seedDeveloper("new-developer", "user-1");
       await insertExtension(db, {
-        id: "live-ext",
-        developer_id: "new-developer"
+        identifier: "live-ext",
+        developer_identifier: "new-developer"
       });
       const mod = await authHeaders("mod-1");
       await post("/extensions/v2/extensions/live-ext/delist", mod, {
@@ -1301,10 +1340,11 @@ describe("Extensions API v2", () => {
       );
       expect(approve.status).toBe(200);
       const approveBody = (await approve.json()) as {
-        result: { id: string; approved: boolean };
+        result: { id: string; identifier: string; approved: boolean };
       };
       expect(approveBody.result).toEqual({
-        id: "dev-developer",
+        id: expect.stringMatching(UUID_V7),
+        identifier: "dev-developer",
         approved: true,
         notified: false
       });
@@ -1315,9 +1355,9 @@ describe("Extensions API v2", () => {
       );
       expect(unapproved.status).toBe(200);
       const unapprovedBody = (await unapproved.json()) as {
-        result: Array<{ id: string }>;
+        result: Array<{ id: string; identifier: string }>;
       };
-      expect(unapprovedBody.result.map((a) => a.id)).not.toContain(
+      expect(unapprovedBody.result.map((a) => a.identifier)).not.toContain(
         "dev-developer"
       );
     });
@@ -1365,17 +1405,17 @@ describe("Extensions API v2", () => {
       );
       expect(res.status).toBe(200);
       const body = (await res.json()) as {
-        result: Array<{ id: string; approved: boolean }>;
+        result: Array<{ id: string; identifier: string; approved: boolean }>;
       };
-      expect(body.result.map((a) => a.id).sort()).toEqual([
+      expect(body.result.map((a) => a.identifier).sort()).toEqual([
         "dev-developer",
         "other-developer"
       ]);
-      expect(body.result.find((a) => a.id === "dev-developer")?.approved).toBe(
-        true
-      );
       expect(
-        body.result.find((a) => a.id === "other-developer")?.approved
+        body.result.find((a) => a.identifier === "dev-developer")?.approved
+      ).toBe(true);
+      expect(
+        body.result.find((a) => a.identifier === "other-developer")?.approved
       ).toBe(false);
     });
 
@@ -1402,7 +1442,9 @@ describe("Extensions API v2", () => {
       );
       expect(scoped.status).toBe(200);
       await expect(scoped.json()).resolves.toMatchObject({
-        result: [{ id: "dev-developer" }],
+        result: [
+          { id: expect.stringMatching(UUID_V7), identifier: "dev-developer" }
+        ],
         pagination: { next_cursor: null, has_more: false }
       });
 
@@ -1430,10 +1472,12 @@ describe("Extensions API v2", () => {
       const first = await get("/extensions/v2/developers?limit=1", mod);
       expect(first.status).toBe(200);
       const firstBody = (await first.json()) as {
-        result: Array<{ id: string }>;
+        result: Array<{ id: string; identifier: string }>;
         pagination: { next_cursor: string | null; has_more: boolean };
       };
-      expect(firstBody.result.map((d) => d.id)).toEqual(["aaa-developer"]);
+      expect(firstBody.result.map((d) => d.identifier)).toEqual([
+        "aaa-developer"
+      ]);
       expect(firstBody.pagination.has_more).toBe(true);
       expect(firstBody.pagination.next_cursor).toBeTruthy();
 
@@ -1443,10 +1487,12 @@ describe("Extensions API v2", () => {
       );
       expect(second.status).toBe(200);
       const secondBody = (await second.json()) as {
-        result: Array<{ id: string }>;
+        result: Array<{ id: string; identifier: string }>;
         pagination: { next_cursor: string | null; has_more: boolean };
       };
-      expect(secondBody.result.map((d) => d.id)).toEqual(["zzz-developer"]);
+      expect(secondBody.result.map((d) => d.identifier)).toEqual([
+        "zzz-developer"
+      ]);
       expect(secondBody.pagination).toEqual({
         next_cursor: null,
         has_more: false
@@ -1498,7 +1544,9 @@ describe("Extensions API v2", () => {
         }>;
       };
       expect(data.result).toHaveLength(1);
-      expect(data.result[0].developer_id).toBe("dev-developer");
+      expect(data.result[0].developer_id).toBe(
+        (await getDeveloper(db, "dev-developer"))!.id
+      );
       expect(data.result[0].name).toBe("Dev Developer");
       expect(data.result[0].changed_by).toBe("user-1");
     });
@@ -1671,31 +1719,31 @@ describe("Extensions API v2", () => {
       await insertUser(db, { id: "mod-1", is_moderator: 1 });
       await seedDeveloper("new-developer", "user-1");
       await insertExtension(db, {
-        id: "live-ext",
-        developer_id: "new-developer"
+        identifier: "live-ext",
+        developer_identifier: "new-developer"
       });
       await insertExtension(db, {
-        id: "gone-ext",
-        developer_id: "new-developer",
+        identifier: "gone-ext",
+        developer_identifier: "new-developer",
         delisted_at: new Date().toISOString(),
         delist_reason: "Upstream source removed"
       });
       await insertUnpublishedExtension(db, {
-        id: "draft-ext",
-        developer_id: "new-developer"
+        identifier: "draft-ext",
+        developer_identifier: "new-developer"
       });
       const content = JSON.stringify(sampleContent());
       await insertRevision(db, {
         id: "pending-revision",
-        extension_id: "live-ext",
-        developer_id: "new-developer",
+        extension_identifier: "live-ext",
+        developer_identifier: "new-developer",
         submitted_by: "user-1",
         content
       });
       await insertRevision(db, {
         id: "approved-revision",
-        extension_id: "live-ext",
-        developer_id: "new-developer",
+        extension_identifier: "live-ext",
+        developer_identifier: "new-developer",
         submitted_by: "user-1",
         status: "approved",
         reviewer_id: "mod-1",
@@ -1703,8 +1751,8 @@ describe("Extensions API v2", () => {
       });
       await insertRevision(db, {
         id: "rejected-revision",
-        extension_id: "live-ext",
-        developer_id: "new-developer",
+        extension_identifier: "live-ext",
+        developer_identifier: "new-developer",
         submitted_by: "user-1",
         status: "rejected",
         reviewer_id: "mod-1",

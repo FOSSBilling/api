@@ -1,3 +1,4 @@
+import { UUID_V7 } from "./db-fixtures";
 import app from "../../../../src/app";
 import { env } from "cloudflare:workers";
 import {
@@ -24,6 +25,7 @@ import {
 } from "./harness";
 import {
   insertUser,
+  getDeveloper,
   insertDeveloper,
   insertExtension,
   insertUnpublishedExtension,
@@ -241,15 +243,15 @@ describe("Extensions API v2", () => {
       expect(await developer.json()).toEqual({ result: null });
 
       await insertDeveloper(db, {
-        id: "account-developer",
+        identifier: "account-developer",
         type: "user",
         name: "Account Developer",
         owner_user_id: "account-1"
       });
       await insertExtension(db, {
-        id: "account-extension",
+        identifier: "account-extension",
         type: "module",
-        developer_id: "account-developer",
+        developer_identifier: "account-developer",
         name: "Account Extension",
         description: "description",
         releases: "[]",
@@ -265,12 +267,17 @@ describe("Extensions API v2", () => {
       const owned = await get("/extensions/v2/extensions?scope=mine", headers);
       expect(owned.status).toBe(200);
       expect(await owned.json()).toMatchObject({
-        result: [{ id: "account-extension" }],
+        result: [
+          {
+            id: expect.stringMatching(UUID_V7),
+            identifier: "account-extension"
+          }
+        ],
         pagination: { has_more: false, next_cursor: null }
       });
 
       const filtered = await get(
-        "/extensions/v2/extensions?scope=mine&developer_id=someone-else",
+        "/extensions/v2/extensions?scope=mine&developer_identifier=someone-else",
         headers
       );
       expect(filtered.status).toBe(422);
@@ -422,7 +429,10 @@ describe("Extensions API v2", () => {
         .prepare(
           "INSERT INTO m2m_publisher_clients (client_id, developer_id, can_publish) VALUES (?, ?, 1)"
         )
-        .bind("modules-publisher", "mapped-developer")
+        .bind(
+          "modules-publisher",
+          (await getDeveloper(db, "mapped-developer"))!.id
+        )
         .run();
       const before = await db
         .prepare("SELECT developer_id FROM m2m_publisher_clients")
@@ -456,13 +466,13 @@ describe("Extensions API v2", () => {
     it("blocks deletion while an unpublished extension is still owned", async () => {
       await seedDeveloper("pending-developer", "pending-owner");
       await insertUnpublishedExtension(db, {
-        id: "pending-ext",
-        developer_id: "pending-developer"
+        identifier: "pending-ext",
+        developer_identifier: "pending-developer"
       });
       await insertRevision(db, {
         id: "pending-revision",
-        extension_id: "pending-ext",
-        developer_id: "pending-developer",
+        extension_identifier: "pending-ext",
+        developer_identifier: "pending-developer",
         submitted_by: "pending-owner",
         content: JSON.stringify(sampleContent())
       });
@@ -487,37 +497,37 @@ describe("Extensions API v2", () => {
       await seedUnownedDeveloper("claim-target");
       await insertDeveloperTransfer(db, {
         id: "cleanup-transfer",
-        developer_id: "cleanup-developer",
+        developer_identifier: "cleanup-developer",
         token_hash: "cleanup-token-hash",
         created_by: "cleanup-user",
         expires_at: "2099-01-01 00:00:00"
       });
       await insertDeveloperClaim(db, {
         id: "cleanup-owned-claim",
-        developer_id: "cleanup-developer",
+        developer_identifier: "cleanup-developer",
         claimant_id: "cleanup-user"
       });
       await insertDeveloperClaim(db, {
         id: "cleanup-pending-claim",
-        developer_id: "claim-target",
+        developer_identifier: "claim-target",
         claimant_id: "cleanup-user"
       });
       // Under claim-target, a developer this user does not own - which is the
       // only way a pending revision survives the "no owned extensions" guard.
       await insertUnpublishedExtension(db, {
-        id: "cleanup-pending-ext",
-        developer_id: "claim-target"
+        identifier: "cleanup-pending-ext",
+        developer_identifier: "claim-target"
       });
       await insertRevision(db, {
         id: "cleanup-pending-revision",
-        extension_id: "cleanup-pending-ext",
-        developer_id: "claim-target",
+        extension_identifier: "cleanup-pending-ext",
+        developer_identifier: "claim-target",
         submitted_by: "cleanup-user",
         content: JSON.stringify(sampleContent())
       });
       await insertDeveloperHistory(db, {
         id: "cleanup-history",
-        developer_id: "cleanup-developer",
+        developer_identifier: "cleanup-developer",
         type: "user",
         name: "Before deletion",
         changed_by: "cleanup-user"
@@ -569,7 +579,7 @@ describe("Extensions API v2", () => {
       expect(await listDeveloperHistory(db)).toEqual([
         expect.objectContaining({
           id: "cleanup-history",
-          developer_id: "cleanup-developer",
+          developer_id: expect.stringMatching(UUID_V7),
           changed_by: "cleanup-user"
         })
       ]);
@@ -601,7 +611,7 @@ describe("Extensions API v2", () => {
       await seedDeveloper("rollback-developer", "rollback-user");
       await insertDeveloperTransfer(db, {
         id: "rollback-transfer",
-        developer_id: "rollback-developer",
+        developer_identifier: "rollback-developer",
         token_hash: "rollback-token-hash",
         created_by: "rollback-user",
         expires_at: "2099-01-01 00:00:00"

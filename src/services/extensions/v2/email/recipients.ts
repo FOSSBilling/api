@@ -32,14 +32,14 @@ export async function resolveExtensionEmail(
 ): Promise<{
   to: string;
   extensionName?: string;
-  developerId: string;
+  developerIdentifier: string;
   developerName?: string;
 } | null> {
   try {
     const [row] = await db
       .select({
         extensionName: extensions.name,
-        developerId: extensions.developerId,
+        developerIdentifier: developers.identifier,
         developerName: developers.name,
         contactEmail: developers.contactEmail,
         accountEmail: users.email
@@ -50,7 +50,7 @@ export async function resolveExtensionEmail(
       // Moderation routes pass the raw URL param, and ids are matched
       // case-insensitively everywhere else (LOWER(id) = LOWER(id)) - mixed
       // case is a supported input, not a miss.
-      .where(sql`LOWER(${extensions.id}) = LOWER(${extensionId})`);
+      .where(sql`LOWER(${extensions.identifier}) = LOWER(${extensionId})`);
 
     if (!row) return null;
 
@@ -60,7 +60,7 @@ export async function resolveExtensionEmail(
     return {
       to,
       extensionName: row.extensionName ?? undefined,
-      developerId: row.developerId,
+      developerIdentifier: row.developerIdentifier,
       developerName: row.developerName
     };
   } catch {
@@ -71,10 +71,15 @@ export async function resolveExtensionEmail(
 export async function resolveDeveloperProfileEmail(
   db: ExtensionsDb,
   developerId: string
-): Promise<{ to: string; developerName?: string } | null> {
+): Promise<{
+  to: string;
+  developerIdentifier: string;
+  developerName?: string;
+} | null> {
   try {
     const [row] = await db
       .select({
+        developerIdentifier: developers.identifier,
         developerName: developers.name,
         contactEmail: developers.contactEmail,
         accountEmail: users.email
@@ -87,7 +92,11 @@ export async function resolveDeveloperProfileEmail(
 
     const to = pickEmail(row.contactEmail, row.accountEmail);
     if (!to) return null;
-    return { to, developerName: row.developerName };
+    return {
+      to,
+      developerIdentifier: row.developerIdentifier,
+      developerName: row.developerName
+    };
   } catch {
     return null;
   }
