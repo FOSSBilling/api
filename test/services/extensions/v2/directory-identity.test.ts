@@ -75,6 +75,7 @@ describe("directory identity", () => {
       headers,
       sampleDeveloper()
     );
+    expect(response.status).toBe(200);
     const before = (
       (await response.json()) as { result: { id: string; identifier: string } }
     ).result;

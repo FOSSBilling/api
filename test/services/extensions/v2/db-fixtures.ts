@@ -600,14 +600,14 @@ export async function expireAllDeveloperTransfers(
 // reproduces it exactly.
 export async function bumpDeveloperOwnership(
   db: D1Database,
-  developerId: string,
+  developerIdentifier: string,
   newOwnerUserId: string
 ): Promise<void> {
   await ensureUser(db, newOwnerUserId);
   await db
     .prepare(
-      "UPDATE developers SET owner_user_id = ?, ownership_epoch = ownership_epoch + 1 WHERE identifier = ?"
+      "UPDATE developers SET owner_user_id = ?, ownership_epoch = ownership_epoch + 1 WHERE lower(identifier) = lower(?)"
     )
-    .bind(newOwnerUserId, developerId)
+    .bind(newOwnerUserId, developerIdentifier)
     .run();
 }

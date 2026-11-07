@@ -2,7 +2,12 @@
 -- Rebuild children before parents so D1 can enforce foreign keys throughout.
 CREATE TABLE _developers_ids AS SELECT id AS identifier,
  substr(timestamp,1,8)||'-'||substr(timestamp,9,4)||'-7'||substr(entropy,1,3)||'-'||substr('89ab',1+(abs(random() % 4)),1)||substr(entropy,4,3)||'-'||substr(entropy,7,12) AS id
- FROM (SELECT id,printf('%012x',CAST(unixepoch(created_at)*1000 AS INTEGER)) AS timestamp,lower(hex(randomblob(9))) AS entropy FROM developers);
+ FROM (SELECT id,printf('%012x',CAST(unixepoch(created_at)*1000 AS INTEGER)) AS timestamp,lower(hex(randomblob(9))) AS entropy FROM (
+   SELECT id,created_at FROM developers
+   UNION ALL
+   SELECT developer_id, min(changed_at) FROM developer_history
+   WHERE developer_id NOT IN (SELECT id FROM developers) GROUP BY developer_id
+ ));
 --> statement-breakpoint
 CREATE TABLE _extensions_ids AS SELECT id AS identifier,
  substr(timestamp,1,8)||'-'||substr(timestamp,9,4)||'-7'||substr(entropy,1,3)||'-'||substr('89ab',1+(abs(random() % 4)),1)||substr(entropy,4,3)||'-'||substr(entropy,7,12) AS id
@@ -284,9 +289,9 @@ CREATE INDEX idx_extension_revisions_retention ON extension_revisions(compacted_
 --> statement-breakpoint
 CREATE INDEX `idx_m2m_publisher_clients_developer` ON `m2m_publisher_clients` (`developer_id`);
 --> statement-breakpoint
-CREATE INDEX idx_extensions_public_order ON extensions (lower(id),id) WHERE published_at IS NOT NULL AND delisted_at IS NULL;
+CREATE INDEX idx_extensions_public_order ON extensions (lower(identifier),id) WHERE published_at IS NOT NULL AND delisted_at IS NULL;
 --> statement-breakpoint
-CREATE INDEX idx_extensions_type_public_order ON extensions (type,lower(id),id) WHERE published_at IS NOT NULL AND delisted_at IS NULL;
+CREATE INDEX idx_extensions_type_public_order ON extensions (type,lower(identifier),id) WHERE published_at IS NOT NULL AND delisted_at IS NULL;
 --> statement-breakpoint
 CREATE UNIQUE INDEX idx_developers_identifier_nocase ON developers(lower(identifier));
 --> statement-breakpoint

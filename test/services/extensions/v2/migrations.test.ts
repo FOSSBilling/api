@@ -1385,6 +1385,7 @@ describe("directory UUID identities", () => {
       db.exec(`
         INSERT INTO users(id,created_at,updated_at) VALUES ('owner',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP);
         INSERT INTO developers(id,type,name,owner_user_id,created_at) VALUES ('studio','user','Studio','owner','2026-11-01 00:00:00');
+        INSERT INTO developer_history(id,developer_id,type,name,changed_by) VALUES ('deleted-history','deleted-studio','user','Deleted','owner');
         INSERT INTO extensions(id,developer_id,created_by) VALUES ('example','studio','owner');
         INSERT INTO extension_revisions(id,extension_id,developer_id,submitted_by,content) VALUES ('revision','example','studio','owner','{}');
         INSERT INTO developer_claims(id,developer_id,claimant_id) VALUES ('claim','studio','owner');
@@ -1433,6 +1434,39 @@ describe("directory UUID identities", () => {
           )
           .get(developer.id)
       ).toEqual(before);
+      const deletedHistory = db
+        .prepare(
+          "SELECT developer_id FROM developer_history WHERE id='deleted-history'"
+        )
+        .get() as { developer_id: string };
+      expect(deletedHistory.developer_id).toMatch(pattern);
+      expect(deletedHistory.developer_id).not.toBe(developer.id);
+      for (const index of [
+        "idx_extensions_public_order",
+        "idx_extensions_type_public_order"
+      ]) {
+        const row = db
+          .prepare("SELECT sql FROM sqlite_master WHERE name=?")
+          .get(index) as { sql: string };
+        expect(row.sql).toContain("lower(identifier),id");
+      }
+      db.prepare(
+        "INSERT INTO extension_revisions(id,extension_id,developer_id,submitted_by,content,status) VALUES ('new-revision',?,?, 'owner','{}','approved')"
+      ).run(extension.id, developer.id);
+      expect(
+        db
+          .prepare(
+            "SELECT revisions FROM extension_resource_usage WHERE scope='developer' AND subject=?"
+          )
+          .get(developer.id)
+      ).toEqual({ revisions: Number(before!.revisions) + 1 });
+      expect(
+        db
+          .prepare(
+            "SELECT subject FROM extension_resource_usage WHERE scope='developer'"
+          )
+          .all()
+      ).toEqual([{ subject: developer.id }]);
       expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
     } finally {
       db.close();

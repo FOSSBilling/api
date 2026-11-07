@@ -146,12 +146,12 @@ export class ExtensionRevisionsDatabase {
     extensionId: string;
     callerId: string;
     content: ExtensionContent;
-  }): Promise<DatabaseResult<{ id: string }>> {
+  }): Promise<DatabaseResult<{ id: string; identifier: string }>> {
     const id = crypto.randomUUID();
 
     let result;
     try {
-      result = await this.db.run(sql`
+      result = await this.db.all<{ identifier: string }>(sql`
         INSERT INTO ${extensionRevisions}
              (id, extension_id, developer_id, submitted_by, status, content, ownership_epoch)
            SELECT ${id}, e.id, d.id, ${input.callerId}, 'pending', ${JSON.stringify(input.content)}, d.ownership_epoch
@@ -168,12 +168,13 @@ export class ExtensionRevisionsDatabase {
                WHERE submitted_by = ${input.callerId} AND status = 'pending'
              ) < ${MAX_PENDING_REVISIONS_PER_USER}
         ON CONFLICT DO NOTHING
+        RETURNING (SELECT identifier FROM extensions WHERE id=extension_id) AS identifier
       `);
     } catch (error) {
       return contentAdmissionError("propose", error);
     }
 
-    if (!result.meta?.changes) {
+    if (!result[0]) {
       try {
         return { data: null, error: await this.proposeBlockedError(input) };
       } catch (error) {
@@ -181,7 +182,7 @@ export class ExtensionRevisionsDatabase {
       }
     }
 
-    return { data: { id }, error: null };
+    return { data: { id, identifier: result[0].identifier }, error: null };
   }
 
   // Owners can replace publisher submissions; attribute the new row to the owner.
@@ -329,12 +330,12 @@ export class ExtensionRevisionsDatabase {
     submittedBy: string;
     developerId: string;
     content: ExtensionContent;
-  }): Promise<DatabaseResult<{ id: string }>> {
+  }): Promise<DatabaseResult<{ id: string; identifier: string }>> {
     const id = crypto.randomUUID();
 
     let result;
     try {
-      result = await this.db.run(sql`
+      result = await this.db.all<{ identifier: string }>(sql`
         INSERT INTO ${extensionRevisions}
              (id, extension_id, developer_id, submitted_by, status, content, ownership_epoch)
            SELECT ${id}, e.id, d.id, ${input.submittedBy}, 'pending', ${JSON.stringify(input.content)}, d.ownership_epoch
@@ -362,12 +363,13 @@ export class ExtensionRevisionsDatabase {
                WHERE submitted_by = ${input.submittedBy} AND status = 'pending'
              ) < ${MAX_PENDING_REVISIONS_PER_USER}
         ON CONFLICT DO NOTHING
+        RETURNING (SELECT identifier FROM extensions WHERE id=extension_id) AS identifier
       `);
     } catch (error) {
       return contentAdmissionError("proposeAsPublisher", error);
     }
 
-    if (!result.meta?.changes) {
+    if (!result[0]) {
       try {
         return {
           data: null,
@@ -378,7 +380,7 @@ export class ExtensionRevisionsDatabase {
       }
     }
 
-    return { data: { id }, error: null };
+    return { data: { id, identifier: result[0].identifier }, error: null };
   }
 
   private async proposeAsPublisherBlockedError(input: {

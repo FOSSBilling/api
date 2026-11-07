@@ -921,12 +921,7 @@ export class DeveloperProfilesDatabase {
   > {
     const limit = page?.limit ?? 50;
     const decoded = page?.cursor ? historyCursor.decode(page.cursor) : null;
-    // Case-insensitive like the id matching everywhere else: ids are
-    // lowercase slugs by schema, but adopted rows predate that.
-    if (
-      page?.cursor &&
-      (!decoded || decoded.d.toLowerCase() !== developerId.toLowerCase())
-    ) {
+    if (page?.cursor && (!decoded || decoded.d !== developerId)) {
       return {
         data: null,
         error: { message: "Invalid pagination cursor", code: "INVALID_CURSOR" }
@@ -942,9 +937,7 @@ export class DeveloperProfilesDatabase {
 
     let rows;
     try {
-      const conditions = [
-        sql`${developerHistory.developerId} = (SELECT id FROM developers WHERE identifier=${developerId})`
-      ];
+      const conditions = [eq(developerHistory.developerId, developerId)];
       if (decoded) {
         conditions.push(
           or(

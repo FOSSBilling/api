@@ -350,6 +350,7 @@ describe("moderation notification emails", () => {
     });
     const body = JSON.parse(String(calls[0].init.body));
     expect(body.to).toBe("claimant@example.com");
+    expect(body.body).toContain("legacy-dev");
   });
 
   it("notifies the claimant with the reason on claim rejection", async () => {
@@ -368,6 +369,7 @@ describe("moderation notification emails", () => {
     });
     const body = JSON.parse(String(calls[0].init.body));
     expect(body.to).toBe("claimant@example.com");
+    expect(body.body).toContain("legacy-dev");
     expect(body.body).toContain("Could not verify ownership");
   });
 

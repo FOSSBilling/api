@@ -281,7 +281,7 @@ export const ExtensionListQuerySchema = z.object({
 // Unified list query for the merged GET /extensions (optional auth,
 // role-aware). scope selects the projection: public (published extension
 // cards, anonymous allowed), mine (caller's own Owned rows), all (moderator's
-// view of all Owned rows). developer_id is public-only, status/q are
+// view of all Owned rows). developer_identifier is public-only, status/q are
 // all-only; mismatched combinations are rejected with 422 so a caller cannot
 // silently get a different projection than requested.
 export const ExtensionListScopeSchema = z.enum(["public", "mine", "all"]);
@@ -318,9 +318,9 @@ export const UnifiedExtensionListQuerySchema = ExtensionListQuerySchema.extend({
     .openapi({
       param: { name: "q", in: "query" },
       description:
-        "All scope only: case-insensitive substring match on the extension id"
+        "All scope only: case-insensitive substring match on the extension identifier"
     })
-});
+}).strict();
 
 // Merged GET /extensions returns one of the two list shapes depending on
 // ?scope=. A union (not two routes) because the only caller is controlled;

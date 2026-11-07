@@ -281,7 +281,7 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
     return c.json(
       {
         result: {
-          identifier: id,
+          identifier: data.identifier,
           revision_id: data.id,
           status: "pending" as const
         }

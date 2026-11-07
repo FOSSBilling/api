@@ -305,7 +305,9 @@ type ExtensionCursor = {
 // Public identifiers order the directory; the UUID breaks ties.
 const extensionCursor = createCursorCodec<ExtensionCursor>(
   (parsed): parsed is ExtensionCursor =>
-    typeof parsed.id === "string" && typeof parsed.identifier === "string"
+    typeof parsed.id === "string" &&
+    typeof parsed.identifier === "string" &&
+    parsed.identifier === parsed.identifier.toLowerCase()
 );
 
 export interface CreateExtensionInput {
