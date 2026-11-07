@@ -1374,3 +1374,106 @@ it.each(["", "v"])(
     }
   }
 );
+
+describe("directory UUID identities", () => {
+  it("preserves populated relationships and resource accounting in a D1 transaction", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      db.exec("PRAGMA foreign_keys=ON");
+      for (const name of migrationNames.filter((name) => name < "0030"))
+        db.exec(migration(name));
+      db.exec(`
+        INSERT INTO users(id,created_at,updated_at) VALUES ('owner',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP);
+        INSERT INTO developers(id,type,name,owner_user_id,created_at) VALUES ('studio','user','Studio','owner','2026-11-01 00:00:00');
+        INSERT INTO developer_history(id,developer_id,type,name,changed_by) VALUES ('deleted-history','deleted-studio','user','Deleted','owner');
+        INSERT INTO extensions(id,developer_id,created_by) VALUES ('example','studio','owner');
+        INSERT INTO extension_revisions(id,extension_id,developer_id,submitted_by,content) VALUES ('revision','example','studio','owner','{}');
+        INSERT INTO developer_claims(id,developer_id,claimant_id) VALUES ('claim','studio','owner');
+        INSERT INTO m2m_publisher_clients(client_id,developer_id,can_publish) VALUES ('publisher','studio',1);
+      `);
+      const before = db
+        .prepare(
+          "SELECT bytes,extensions,revisions FROM extension_resource_usage WHERE scope='developer' AND subject='studio'"
+        )
+        .get();
+      db.exec("BEGIN");
+      db.exec(migration("0030_directory_identity.sql"));
+      db.exec("COMMIT");
+      const developer = db
+        .prepare("SELECT id,identifier FROM developers")
+        .get() as { id: string; identifier: string };
+      const extension = db
+        .prepare("SELECT id,identifier,developer_id FROM extensions")
+        .get() as { id: string; identifier: string; developer_id: string };
+      const pattern =
+        /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+      expect(developer).toEqual({
+        id: expect.stringMatching(pattern),
+        identifier: "studio"
+      });
+      expect(extension).toEqual({
+        id: expect.stringMatching(pattern),
+        identifier: "example",
+        developer_id: developer.id
+      });
+      expect(
+        db
+          .prepare("SELECT extension_id,developer_id FROM extension_revisions")
+          .get()
+      ).toEqual({ extension_id: extension.id, developer_id: developer.id });
+      expect(
+        db.prepare("SELECT developer_id FROM developer_claims").get()
+      ).toEqual({ developer_id: developer.id });
+      expect(
+        db.prepare("SELECT developer_id FROM m2m_publisher_clients").get()
+      ).toEqual({ developer_id: developer.id });
+      expect(
+        db
+          .prepare(
+            "SELECT bytes,extensions,revisions FROM extension_resource_usage WHERE scope='developer' AND subject=?"
+          )
+          .get(developer.id)
+      ).toEqual(before);
+      const deletedHistory = db
+        .prepare(
+          "SELECT developer_id FROM developer_history WHERE id='deleted-history'"
+        )
+        .get() as { developer_id: string };
+      expect(deletedHistory.developer_id).toMatch(pattern);
+      expect(deletedHistory.developer_id).not.toBe(developer.id);
+      for (const filter of ["", " AND type='module'"]) {
+        const plan = db
+          .prepare(
+            `EXPLAIN QUERY PLAN
+          SELECT id FROM extensions
+          WHERE published_at IS NOT NULL AND delisted_at IS NULL${filter}
+          ORDER BY lower(identifier), id LIMIT 50`
+          )
+          .all() as Array<{ detail: string }>;
+        expect(plan.map((row) => row.detail).join(" ")).not.toContain(
+          "TEMP B-TREE"
+        );
+      }
+      db.prepare(
+        "INSERT INTO extension_revisions(id,extension_id,developer_id,submitted_by,content,status) VALUES ('new-revision',?,?, 'owner','{}','approved')"
+      ).run(extension.id, developer.id);
+      expect(
+        db
+          .prepare(
+            "SELECT revisions FROM extension_resource_usage WHERE scope='developer' AND subject=?"
+          )
+          .get(developer.id)
+      ).toEqual({ revisions: Number(before!.revisions) + 1 });
+      expect(
+        db
+          .prepare(
+            "SELECT subject FROM extension_resource_usage WHERE scope='developer'"
+          )
+          .all()
+      ).toEqual([{ subject: developer.id }]);
+      expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+});

@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, isNull, lt, or, sql, SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gt, lt, or, sql, SQL } from "drizzle-orm";
 import { DatabaseResult } from "../../../../lib/interfaces";
 import { ExtensionsDb } from "../../../../lib/db";
 import { createCursorCodec } from "./cursor";
@@ -117,123 +117,99 @@ export class DeveloperClaimsDatabase {
   }
 
   async claim(
-    developerId: string,
+    identifier: string,
     claimantId: string,
     note?: string,
     githubToken?: string
   ): Promise<DatabaseResult<DeveloperClaim>> {
     try {
-      let githubOrgVerified: number | null = null;
-      let githubVerificationNote: string | null = null;
-
       const [developer] = await this.db
-        .select({ type: developers.type })
+        .select({
+          id: developers.id,
+          identifier: developers.identifier,
+          owner: developers.ownerUserId,
+          type: developers.type
+        })
         .from(developers)
+        .where(sql`lower(${developers.identifier}) = lower(${identifier})`);
+
+      if (!developer)
+        return {
+          data: null,
+          error: { code: "NOT_FOUND", message: "Developer not found" }
+        };
+      const developerId = developer.id;
+      if (developer.owner !== null)
+        return {
+          data: null,
+          error: await this.claimIneligibilityError(developerId, claimantId)
+        };
+      // Reject duplicates before spending the GitHub verification budget.
+      // The insert below rechecks ownership and claimant eligibility.
+      const [hasPendingClaim] = await this.db
+        .select({ one: sql`1` })
+        .from(developerClaims)
         .where(
-          and(eq(developers.id, developerId), isNull(developers.ownerUserId))
+          and(
+            eq(developerClaims.developerId, developerId),
+            eq(developerClaims.claimantId, claimantId),
+            eq(developerClaims.status, "pending")
+          )
         );
 
-      if (developer) {
-        // Cheap short-circuit ahead of the GitHub lookup below: a claimant
-        // replaying an already-pending claim on this id would otherwise
-        // trigger a fresh GitHub API call every time, purely to be told the
-        // INSERT's own guard rejects it as a duplicate — letting one caller
-        // burn through the shared service-level GitHub quota for free. This
-        // is safe precisely because it only ever *returns* here when the
-        // read observes `pending` — it never falls through to verification
-        // or the INSERT in that case, so it can't itself create an
-        // unverified claim. Anything else (no claim yet, or one already
-        // resolved to approved/rejected) always continues through full
-        // verification below. A pending claim that resolves between this
-        // read and the response going out can make the message stale
-        // relative to that instant, but never lets a row get created
-        // without verification.
-        const [hasPendingClaim] = await this.db
-          .select({ one: sql`1` })
-          .from(developerClaims)
-          .where(
-            and(
-              eq(developerClaims.developerId, developerId),
-              eq(developerClaims.claimantId, claimantId),
-              eq(developerClaims.status, "pending")
-            )
-          );
+      if (hasPendingClaim) {
+        return {
+          data: null,
+          error: {
+            code: "CONFLICT",
+            message: "You already have a pending claim on this profile"
+          }
+        };
+      }
 
-        if (hasPendingClaim) {
-          return {
-            data: null,
-            error: {
-              code: "CONFLICT",
-              message: "You already have a pending claim on this profile"
-            }
-          };
-        }
+      if (!(await reserveClaimVerification(this.db, claimantId, developerId))) {
+        return {
+          data: null,
+          error: {
+            code: "RATE_LIMITED",
+            message: "Claim verification allowance exhausted; try again later"
+          }
+        };
+      }
 
-        if (
-          !(await reserveClaimVerification(this.db, claimantId, developerId))
-        ) {
-          return {
-            data: null,
-            error: {
-              code: "RATE_LIMITED",
-              message: "Claim verification allowance exhausted; try again later"
-            }
-          };
-        }
+      const check = await verifyGithubOwnership(
+        this.db,
+        developer.identifier,
+        developer.type as Developer["type"],
+        claimantId,
+        githubToken
+      );
 
-        const check = await verifyGithubOwnership(
-          this.db,
-          developerId,
-          developer.type as Developer["type"],
-          claimantId,
-          githubToken
-        );
+      if ("error" in check) {
+        return { data: null, error: check.error };
+      }
 
-        if ("error" in check) {
-          return { data: null, error: check.error };
-        }
-
-        if (check.mismatch) {
-          return {
-            data: null,
-            error: {
-              code: "GITHUB_MISMATCH",
-              message:
-                "Your linked GitHub account doesn't match this developer's GitHub organization or username, so it can't be claimed automatically. Make sure you're signed in with the right GitHub account, then try again."
-            }
-          };
-        }
-
-        githubOrgVerified = check.githubOrgVerified;
-        githubVerificationNote = check.note;
+      if (check.mismatch) {
+        return {
+          data: null,
+          error: {
+            code: "GITHUB_MISMATCH",
+            message:
+              "Your linked GitHub account doesn't match this developer's GitHub organization or username, so it can't be claimed automatically. Make sure you're signed in with the right GitHub account, then try again."
+          }
+        };
       }
 
       const id = crypto.randomUUID();
-      let result;
-      try {
-        // Both eligibility checks are folded into the INSERT itself, rather
-        // than a separate SELECT beforehand — a caller who loses eligibility
-        // (developer gets claimed/transferred, or the caller picks up a
-        // different profile) between an up-front check and the write could
-        // otherwise still slip a stale claim through. (The SELECT above is
-        // only used to decide the GitHub verification signal, and is always
-        // re-checked here — it can't itself grant eligibility.) Kept as raw
-        // sql: an INSERT...SELECT...WHERE EXISTS isn't expressible via
-        // .insert().values().
-        // ON CONFLICT DO NOTHING turns a lost race against the pending-claim
-        // partial unique index into changes = 0, which the ineligibility
-        // diagnosis below already has to explain.
-        result = await this.db.run(sql`
-          INSERT INTO ${developerClaims} (id, developer_id, claimant_id, note, github_org_verified, github_verification_note)
-             SELECT ${id}, ${developerId}, ${claimantId}, ${note ?? null}, ${githubOrgVerified}, ${githubVerificationNote}
-             WHERE EXISTS (SELECT 1 FROM ${developers} WHERE id = ${developerId} AND owner_user_id IS NULL)
-               AND NOT EXISTS (SELECT 1 FROM ${developers} WHERE owner_user_id = ${claimantId})
-               AND EXISTS (SELECT 1 FROM ${users} WHERE ${users.id} = ${claimantId} AND ${users.deletedAt} IS NULL)
-          ON CONFLICT DO NOTHING
-        `);
-      } catch (error) {
-        return databaseError("claim", error);
-      }
+      // Ownership can change during verification; keep eligibility checks in the write.
+      const result = await this.db.run(sql`
+        INSERT INTO ${developerClaims} (id, developer_id, claimant_id, note, github_org_verified, github_verification_note)
+           SELECT ${id}, ${developerId}, ${claimantId}, ${note ?? null}, ${check.githubOrgVerified}, ${check.note}
+           WHERE EXISTS (SELECT 1 FROM ${developers} WHERE id = ${developerId} AND owner_user_id IS NULL)
+             AND NOT EXISTS (SELECT 1 FROM ${developers} WHERE owner_user_id = ${claimantId})
+             AND EXISTS (SELECT 1 FROM ${users} WHERE ${users.id} = ${claimantId} AND ${users.deletedAt} IS NULL)
+        ON CONFLICT DO NOTHING
+      `);
 
       if (!result.meta?.changes) {
         return {
@@ -379,6 +355,7 @@ export class DeveloperClaimsDatabase {
       const rows = await this.db
         .select({
           claim: developerClaims,
+          developerIdentifier: developers.identifier,
           developerName: developers.name,
           developerType: developers.type,
           claimantName: users.name,
@@ -406,6 +383,7 @@ export class DeveloperClaimsDatabase {
         data: {
           items: pageRows.map((row) => ({
             ...parseClaimRow(row.claim),
+            developer_identifier: row.developerIdentifier,
             developer_name: row.developerName,
             developer_type:
               row.developerType as PendingDeveloperClaim["developer_type"],

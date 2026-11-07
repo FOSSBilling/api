@@ -158,14 +158,14 @@ export function sampleCreate(overrides?: {
   name?: string;
 }) {
   return {
-    id: overrides?.extensionId ?? "new-ext",
+    identifier: overrides?.extensionId ?? "new-ext",
     ...sampleContent(overrides)
   };
 }
 
 export function sampleDeveloper(overrides?: { id?: string; name?: string }) {
   return {
-    id: overrides?.id ?? "dev-developer",
+    identifier: overrides?.id ?? "dev-developer",
     type: "user",
     name: overrides?.name ?? "Dev Developer",
     URL: "https://example.com"
@@ -179,7 +179,7 @@ export async function seedDeveloper(
   ownerUserId: string
 ): Promise<void> {
   await insertDeveloper(db, {
-    id,
+    identifier: id,
     type: "user",
     name: "Developer",
     url: null,
@@ -192,7 +192,7 @@ export async function seedUnownedDeveloper(
   name = "Legacy Developer"
 ): Promise<void> {
   await insertDeveloper(db, {
-    id,
+    identifier: id,
     type: "user",
     name,
     url: null,
@@ -202,15 +202,15 @@ export async function seedUnownedDeveloper(
 
 export async function seedOwnedExtension(): Promise<void> {
   await insertDeveloper(db, {
-    id: "owner-developer",
+    identifier: "owner-developer",
     type: "user",
     name: "Owner",
     url: null,
     owner_user_id: "owner-1"
   });
   await insertExtension(db, {
-    id: "existing-ext",
-    developer_id: "owner-developer",
+    identifier: "existing-ext",
+    developer_identifier: "owner-developer",
     name: "Existing",
     source: '{"type":"github","repo":"example/existing"}'
   });

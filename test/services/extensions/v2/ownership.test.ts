@@ -105,9 +105,9 @@ describe("Extensions API v2", () => {
       );
       expect(accept.status).toBe(200);
       const accepted = (await accept.json()) as {
-        result: { id: string; approved: boolean };
+        result: { id: string; identifier: string; approved: boolean };
       };
-      expect(accepted.result.id).toBe("dev-developer");
+      expect(accepted.result.identifier).toBe("dev-developer");
       expect(accepted.result.approved).toBe(false);
       expect((await getDeveloper(db, "dev-developer"))?.owner_user_id).toBe(
         "user-2"
@@ -146,11 +146,13 @@ describe("Extensions API v2", () => {
         ) {
           deleted = true;
           await db
-            .prepare("DELETE FROM developer_transfers WHERE developer_id = ?")
+            .prepare(
+              "DELETE FROM developer_transfers WHERE developer_id = (SELECT id FROM developers WHERE identifier=?)"
+            )
             .bind("dev-developer")
             .run();
           await db
-            .prepare("DELETE FROM developers WHERE id = ?")
+            .prepare("DELETE FROM developers WHERE identifier = ?")
             .bind("dev-developer")
             .run();
         }
@@ -178,17 +180,17 @@ describe("Extensions API v2", () => {
       );
       await insertDeveloperClaim(db, {
         id: "transfer-pending-claim",
-        developer_id: "dev-developer",
+        developer_identifier: "dev-developer",
         claimant_id: "user-3"
       });
       await insertUnpublishedExtension(db, {
-        id: "transfer-pending-ext",
-        developer_id: "dev-developer"
+        identifier: "transfer-pending-ext",
+        developer_identifier: "dev-developer"
       });
       await insertRevision(db, {
         id: "transfer-pending-revision",
-        extension_id: "transfer-pending-ext",
-        developer_id: "dev-developer",
+        extension_identifier: "transfer-pending-ext",
+        developer_identifier: "dev-developer",
         submitted_by: "user-3",
         content: JSON.stringify(sampleContent())
       });
@@ -573,6 +575,19 @@ describe("Extensions API v2", () => {
   });
 
   describe("developer claims", () => {
+    it("does not treat an internal UUID as a public identifier", async () => {
+      await seedUnownedDeveloper("legacy-developer");
+      const developer = (await getDeveloper(db, "legacy-developer"))!;
+      const response = await post(
+        `/extensions/v2/developers/${developer.id}/claim`,
+        await authHeaders("claimant"),
+        {}
+      );
+      expect(response.status).toBe(404);
+      expect(await countDeveloperClaims(db)).toBe(0);
+      expect(ghRequest).not.toHaveBeenCalled();
+    });
+
     // The claim body is strict so the server-computed verification fields on
     // DeveloperClaimSchema can never be supplied by the caller. Unknown keys
     // are reported at the root path, since the body has no nesting.
@@ -695,7 +710,7 @@ describe("Extensions API v2", () => {
           github_orgs_expires_at
         });
         await insertDeveloper(db, {
-          id: "acme-org",
+          identifier: "acme-org",
           type: "organization",
           name: "Acme Org",
           url: null,
@@ -886,7 +901,7 @@ describe("Extensions API v2", () => {
           // transition therefore executes first and this NOT NULL violation
           // proves D1 rolls it back.
           return db.prepare(
-            "UPDATE developers SET name = NULL WHERE id = 'legacy-developer'"
+            "UPDATE developers SET name = NULL WHERE identifier = 'legacy-developer'"
           );
         }
       });
@@ -931,9 +946,9 @@ describe("Extensions API v2", () => {
       );
       expect(approve.status).toBe(200);
       const approved = (await approve.json()) as {
-        result: { id: string; approved: boolean };
+        result: { id: string; identifier: string; approved: boolean };
       };
-      expect(approved.result.id).toBe("legacy-developer");
+      expect(approved.result.identifier).toBe("legacy-developer");
       expect(approved.result.approved).toBe(false);
       expect((await getDeveloper(db, "legacy-developer"))?.owner_user_id).toBe(
         "user-1"
@@ -983,7 +998,7 @@ describe("Extensions API v2", () => {
 
     it("copies the claim's GitHub verification onto the developer row it transfers ownership to", async () => {
       await insertDeveloper(db, {
-        id: "legacy-developer",
+        identifier: "legacy-developer",
         type: "organization",
         name: "Legacy Developer",
         url: null,
@@ -1073,7 +1088,7 @@ describe("Extensions API v2", () => {
 
     it("verifies a claim when the claimant's linked GitHub org matches the developer id", async () => {
       await insertDeveloper(db, {
-        id: "legacy-developer",
+        identifier: "legacy-developer",
         type: "organization",
         name: "Legacy Developer",
         url: null,
@@ -1100,7 +1115,7 @@ describe("Extensions API v2", () => {
 
     it("verifies a claim when the claimant's linked GitHub login matches a user-type developer id", async () => {
       await insertDeveloper(db, {
-        id: "legacy-user",
+        identifier: "legacy-user",
         type: "user",
         name: "Legacy User",
         url: null,
@@ -1127,7 +1142,7 @@ describe("Extensions API v2", () => {
 
     it("blocks a claim outright when the claimant's linked GitHub identity doesn't match", async () => {
       await insertDeveloper(db, {
-        id: "legacy-developer",
+        identifier: "legacy-developer",
         type: "organization",
         name: "Legacy Developer",
         url: null,
@@ -1170,7 +1185,7 @@ describe("Extensions API v2", () => {
 
     it("falls back to unverified manual review when organization membership evidence is stale", async () => {
       await insertDeveloper(db, {
-        id: "legacy-developer",
+        identifier: "legacy-developer",
         type: "organization",
         name: "Legacy Developer",
         url: null,
@@ -1198,7 +1213,7 @@ describe("Extensions API v2", () => {
 
     it("does not verify an organization claim for a whitespace-only GitHub login", async () => {
       await insertDeveloper(db, {
-        id: "legacy-developer",
+        identifier: "legacy-developer",
         type: "organization",
         name: "Legacy Developer",
         url: null,
