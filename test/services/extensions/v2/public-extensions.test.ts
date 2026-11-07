@@ -1,3 +1,4 @@
+import { UUID_V7 } from "./db-fixtures";
 import { describe, it, expect, vi } from "vitest";
 import { setupExtensionsV2Tests, db, get, seedOwnedExtension } from "./harness";
 import { insertDeveloper, insertExtension } from "./db-fixtures";
@@ -14,7 +15,7 @@ describe("Extensions API v2", () => {
   describe("GET /extensions", () => {
     async function seedExtensions(ids: string[]): Promise<void> {
       await insertDeveloper(db, {
-        id: "listing-developer",
+        identifier: "listing-developer",
         type: "user",
         name: "Listing Developer",
         url: null,
@@ -22,9 +23,9 @@ describe("Extensions API v2", () => {
       });
       for (const id of ids) {
         await insertExtension(db, {
-          id,
+          identifier: id,
           type: "module",
-          developer_id: "listing-developer",
+          developer_identifier: "listing-developer",
           name: id,
           description: `Description for ${id}`,
           releases: '[{"tag":"1.0.0"}]',
@@ -47,12 +48,13 @@ describe("Extensions API v2", () => {
       const body = (await res.json()) as {
         result: Array<{
           id: string;
-          developer: { id: string; unclaimed: boolean };
+          identifier: string;
+          developer: { id: string; identifier: string; unclaimed: boolean };
         }>;
       };
       expect(body.result).toHaveLength(1);
-      expect(body.result[0].id).toBe("existing-ext");
-      expect(body.result[0].developer.id).toBe("owner-developer");
+      expect(body.result[0].identifier).toBe("existing-ext");
+      expect(body.result[0].developer.identifier).toBe("owner-developer");
       expect(body.result[0].developer.unclaimed).toBe(false);
       expect(body.result[0]).not.toHaveProperty("readme");
       expect(body.result[0]).not.toHaveProperty("releases");
@@ -94,14 +96,14 @@ describe("Extensions API v2", () => {
       await seedOwnedExtension();
 
       const matching = await get(
-        "/extensions/v2/extensions?developer_id=owner-developer",
+        "/extensions/v2/extensions?developer_identifier=owner-developer",
         {}
       );
       const matchingBody = (await matching.json()) as { result: unknown[] };
       expect(matchingBody.result).toHaveLength(1);
 
       const nonMatching = await get(
-        "/extensions/v2/extensions?developer_id=someone-else",
+        "/extensions/v2/extensions?developer_identifier=someone-else",
         {}
       );
       const nonMatchingBody = (await nonMatching.json()) as {
@@ -115,10 +117,13 @@ describe("Extensions API v2", () => {
 
       const first = await get("/extensions/v2/extensions?limit=2", {});
       const firstBody = (await first.json()) as {
-        result: Array<{ id: string }>;
+        result: Array<{ id: string; identifier: string }>;
         pagination: { next_cursor: string | null; has_more: boolean };
       };
-      expect(firstBody.result.map(({ id }) => id)).toEqual(["Alpha", "bravo"]);
+      expect(firstBody.result.map(({ identifier }) => identifier)).toEqual([
+        "Alpha",
+        "bravo"
+      ]);
       expect(firstBody.pagination.has_more).toBe(true);
 
       const middle = await get(
@@ -126,7 +131,7 @@ describe("Extensions API v2", () => {
         {}
       );
       const middleBody = (await middle.json()) as typeof firstBody;
-      expect(middleBody.result.map(({ id }) => id)).toEqual([
+      expect(middleBody.result.map(({ identifier }) => identifier)).toEqual([
         "charlie",
         "delta"
       ]);
@@ -137,7 +142,9 @@ describe("Extensions API v2", () => {
         {}
       );
       const finalBody = (await final.json()) as typeof firstBody;
-      expect(finalBody.result.map(({ id }) => id)).toEqual(["echo"]);
+      expect(finalBody.result.map(({ identifier }) => identifier)).toEqual([
+        "echo"
+      ]);
       expect(finalBody.pagination).toEqual({
         next_cursor: null,
         has_more: false
@@ -174,7 +181,7 @@ describe("Extensions API v2", () => {
       );
       expect(second.status).toBe(200);
       expect(await second.json()).toMatchObject({
-        result: [{ id: "😀" }],
+        result: [{ id: expect.stringMatching(UUID_V7), identifier: "😀" }],
         pagination: { next_cursor: null, has_more: false }
       });
     });
@@ -199,10 +206,11 @@ describe("Extensions API v2", () => {
       const body = (await res.json()) as {
         result: {
           id: string;
+          identifier: string;
           developer: { name: string; approved: boolean; unclaimed: boolean };
         };
       };
-      expect(body.result.id).toBe("existing-ext");
+      expect(body.result.identifier).toBe("existing-ext");
       expect(body.result.developer.name).toBe("Owner");
       expect(body.result.developer.approved).toBe(false);
       expect(body.result.developer.unclaimed).toBe(false);
@@ -224,15 +232,15 @@ describe("Extensions API v2", () => {
 
     it("404s for a delisted extension, even though it is still published", async () => {
       await insertDeveloper(db, {
-        id: "listing-developer",
+        identifier: "listing-developer",
         type: "user",
         name: "Listing Developer",
         url: null,
         owner_user_id: null
       });
       await insertExtension(db, {
-        id: "delisted-ext",
-        developer_id: "listing-developer",
+        identifier: "delisted-ext",
+        developer_identifier: "listing-developer",
         delisted_at: "2026-01-01T00:00:00.000Z",
         delist_reason: "Upstream source removed"
       });

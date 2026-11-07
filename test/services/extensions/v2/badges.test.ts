@@ -21,13 +21,13 @@ const badge = (type: string) =>
 
 beforeEach(async () => {
   await insertDeveloper(db, {
-    id: "badge-dev",
+    identifier: "badge-dev",
     type: "user",
     name: "Developer"
   });
   await insertExtension(db, {
-    id: "example",
-    developer_id: "badge-dev",
+    identifier: "example",
+    developer_identifier: "badge-dev",
     license: '"MIT OR Apache-2.0"',
     // Deliberately unordered; requirements belong to each release, not to the
     // root manifest or to the first element of a stored array.
@@ -46,7 +46,7 @@ beforeEach(async () => {
 describe("v2 public badges", () => {
   it("uses the selected release for badges and the legacy version endpoint", async () => {
     await db
-      .prepare("UPDATE extensions SET releases=? WHERE id='example'")
+      .prepare("UPDATE extensions SET releases=? WHERE identifier='example'")
       .bind(
         JSON.stringify([
           { ...release("1.0.0", "^0.7"), is_latest: true },
@@ -67,7 +67,7 @@ describe("v2 public badges", () => {
 
   it("prefers stable releases over newer prereleases when no release is selected", async () => {
     await db
-      .prepare("UPDATE extensions SET releases=? WHERE id='example'")
+      .prepare("UPDATE extensions SET releases=? WHERE identifier='example'")
       .bind(
         JSON.stringify([
           release("3.0.0-beta.1", "^1.0"),
@@ -130,15 +130,19 @@ describe("v2 public badges", () => {
     "hides %s extensions",
     async (kind) => {
       if (kind === "missing")
-        await db.prepare("DELETE FROM extensions WHERE id='example'").run();
+        await db
+          .prepare("DELETE FROM extensions WHERE identifier='example'")
+          .run();
       if (kind === "unpublished")
         await db
-          .prepare("UPDATE extensions SET published_at=NULL WHERE id='example'")
+          .prepare(
+            "UPDATE extensions SET published_at=NULL WHERE identifier='example'"
+          )
           .run();
       if (kind === "delisted")
         await db
           .prepare(
-            "UPDATE extensions SET delisted_at=CURRENT_TIMESTAMP, delist_reason='Removed' WHERE id='example'"
+            "UPDATE extensions SET delisted_at=CURRENT_TIMESTAMP, delist_reason='Removed' WHERE identifier='example'"
           )
           .run();
       const response = await badge("fossbilling");
@@ -158,7 +162,7 @@ describe("v2 public badges", () => {
 
   it("handles empty release histories explicitly", async () => {
     await db
-      .prepare("UPDATE extensions SET releases='[]' WHERE id='example'")
+      .prepare("UPDATE extensions SET releases='[]' WHERE identifier='example'")
       .run();
     expect(await (await badge("version")).text()).toContain(
       "Latest version: unknown"
@@ -173,7 +177,7 @@ describe("v2 public badges", () => {
 
   it("escapes requirement text in the generated SVG", async () => {
     await db
-      .prepare("UPDATE extensions SET releases=? WHERE id='example'")
+      .prepare("UPDATE extensions SET releases=? WHERE identifier='example'")
       .bind(
         JSON.stringify([release("1.0.0", '</text><script>alert("x")</script>')])
       )
@@ -185,7 +189,7 @@ describe("v2 public badges", () => {
 
   it("renders badges when README content exceeds detail limits", async () => {
     await db
-      .prepare("UPDATE extensions SET readme=? WHERE id='example'")
+      .prepare("UPDATE extensions SET readme=? WHERE identifier='example'")
       .bind("x".repeat(300_000))
       .run();
     const queries: string[] = [];
@@ -198,7 +202,7 @@ describe("v2 public badges", () => {
 
   it("refuses oversized stored badge fields without truncation", async () => {
     await db
-      .prepare("UPDATE extensions SET license=? WHERE id='example'")
+      .prepare("UPDATE extensions SET license=? WHERE identifier='example'")
       .bind(JSON.stringify("A".repeat(1001)))
       .run();
     const response = await badge("license");

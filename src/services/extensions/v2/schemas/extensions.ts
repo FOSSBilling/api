@@ -132,16 +132,16 @@ function refineContentSize(content: unknown, ctx: z.RefinementCtx): void {
   }
 }
 
-// POST /extensions. The id is chosen once here and is immutable afterwards.
+// POST /extensions. The public identifier is chosen once; the API generates its UUID.
 // No developer field: a user owns at most one profile, so the server knows it.
 export const ExtensionCreateSchema = ExtensionContentSchema.extend({
-  id: ManifestSchema.shape.id
+  identifier: ManifestSchema.shape.id
 })
   .strict()
   .superRefine(refineContentSize)
   .openapi("ExtensionCreate");
 
-// PUT /extensions/{id}. Same content, no id — that comes from the path.
+// PUT /extensions/{id}. The public identifier comes from the path.
 // .strict() belongs here and not on ExtensionContentSchema, which is also a
 // branch of the responses below; see DeveloperInputSchema for why.
 export const ExtensionUpdateSchema = ExtensionContentSchema.strict()
@@ -162,7 +162,8 @@ const PublishedContentSchema = ExtensionContentSchema.extend({
 
 // The public projection: published package attribution plus its current owner.
 export const ExtensionSchema = PublishedContentSchema.extend({
-  id: z.string(),
+  id: z.uuidv7(),
+  identifier: z.string(),
   developer: PublicDeveloperSchema
 }).openapi("Extension");
 
@@ -190,7 +191,8 @@ const ExtensionCardContentSchema = ExtensionContentSchema.omit({
 });
 
 export const ExtensionListItemSchema = ExtensionCardContentSchema.extend({
-  id: z.string(),
+  id: z.uuidv7(),
+  identifier: z.string(),
   developer: PublicDeveloperSchema
 }).openapi("ExtensionListItem");
 
@@ -243,7 +245,8 @@ export const DelistedInfoSchema = z
 // no derived `status` field on top; see the README for how they map to a UI.
 export const OwnedExtensionListItemSchema = z
   .object({
-    id: z.string(),
+    id: z.uuidv7(),
+    identifier: z.string(),
     developer: PublicDeveloperSchema,
     published: ExtensionCardContentSchema.nullable(),
     pending_revision: PendingRevisionRefSchema.nullable(),
@@ -276,11 +279,11 @@ export const ExtensionListQuerySchema = z.object({
     .openapi({
       param: { name: "type", in: "query" }
     }),
-  developer_id: z
+  developer_identifier: z
     .string()
     .optional()
     .openapi({
-      param: { name: "developer_id", in: "query" }
+      param: { name: "developer_identifier", in: "query" }
     }),
   ...cursorPaginationFields
 });
@@ -305,11 +308,11 @@ export const UnifiedExtensionListQuerySchema = ExtensionListQuerySchema.extend({
     description:
       "public: published extension directory (anonymous allowed). mine: caller's own extensions. all: every extension (moderator only)."
   }),
-  developer_id: z
+  developer_identifier: z
     .string()
     .optional()
     .openapi({
-      param: { name: "developer_id", in: "query" },
+      param: { name: "developer_identifier", in: "query" },
       description: "Public scope only"
     }),
   status: ExtensionStatusSchema.optional().openapi({

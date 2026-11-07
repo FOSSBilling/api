@@ -1,3 +1,4 @@
+import { UUID_V7 } from "./db-fixtures";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { env } from "cloudflare:workers";
 import {
@@ -58,21 +59,24 @@ function stubSmtpApi(payload: unknown = { success: true, message: "sent" }) {
 
 async function seedLiveExtension(): Promise<void> {
   await insertDeveloper(db, {
-    id: "new-developer",
+    identifier: "new-developer",
     type: "user",
     name: "New Developer",
     url: null,
     owner_user_id: "user-1",
     contact_email: "author@example.com"
   });
-  await insertExtension(db, { id: "live-ext", developer_id: "new-developer" });
+  await insertExtension(db, {
+    identifier: "live-ext",
+    developer_identifier: "new-developer"
+  });
 }
 
 async function seedPendingClaim(): Promise<void> {
   await insertUser(db, { id: "mod-1", is_moderator: 1 });
   await insertUser(db, { id: "claimant-1", email: "claimant@example.com" });
   await insertDeveloper(db, {
-    id: "legacy-dev",
+    identifier: "legacy-dev",
     type: "user",
     name: "Legacy",
     url: null,
@@ -80,7 +84,7 @@ async function seedPendingClaim(): Promise<void> {
   });
   await insertDeveloperClaim(db, {
     id: "claim-1",
-    developer_id: "legacy-dev",
+    developer_identifier: "legacy-dev",
     claimant_id: "claimant-1"
   });
 }
@@ -99,7 +103,12 @@ describe("moderation notification emails", () => {
     );
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toEqual({
-      result: { id: "live-ext", status: "delisted", notified: true }
+      result: {
+        id: expect.stringMatching(UUID_V7),
+        identifier: "live-ext",
+        status: "delisted",
+        notified: true
+      }
     });
 
     expect(calls).toHaveLength(1);
@@ -132,7 +141,12 @@ describe("moderation notification emails", () => {
     );
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toEqual({
-      result: { id: "live-ext", status: "relisted", notified: true }
+      result: {
+        id: expect.stringMatching(UUID_V7),
+        identifier: "live-ext",
+        status: "relisted",
+        notified: true
+      }
     });
 
     expect(calls).toHaveLength(1);
@@ -207,7 +221,12 @@ describe("moderation notification emails", () => {
     );
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toEqual({
-      result: { id: "live-ext", status: "delisted", notified: false }
+      result: {
+        id: expect.stringMatching(UUID_V7),
+        identifier: "live-ext",
+        status: "delisted",
+        notified: false
+      }
     });
     expect(calls).toHaveLength(0);
   });
@@ -216,15 +235,15 @@ describe("moderation notification emails", () => {
     await insertUser(db, { id: "mod-1", is_moderator: 1 });
     await insertUser(db, { id: "user-1", email: "owner@example.com" });
     await insertDeveloper(db, {
-      id: "new-developer",
+      identifier: "new-developer",
       type: "user",
       name: "New Developer",
       url: null,
       owner_user_id: "user-1"
     });
     await insertExtension(db, {
-      id: "live-ext",
-      developer_id: "new-developer"
+      identifier: "live-ext",
+      developer_identifier: "new-developer"
     });
     setEmailEnv();
     const calls = stubSmtpApi();
@@ -262,7 +281,12 @@ describe("moderation notification emails", () => {
     // it. The provider failure is visible only in logs; the delist itself
     // must still succeed.
     await expect(res.json()).resolves.toEqual({
-      result: { id: "live-ext", status: "delisted", notified: true }
+      result: {
+        id: expect.stringMatching(UUID_V7),
+        identifier: "live-ext",
+        status: "delisted",
+        notified: true
+      }
     });
     expect(calls).toHaveLength(1);
     expect((await getExtension(db, "live-ext"))?.delist_reason).toBe(
@@ -277,7 +301,7 @@ describe("moderation notification emails", () => {
     await insertUser(db, { id: "mod-1", is_moderator: 1 });
     await insertUser(db, { id: "user-1", email: "original@example.com" });
     await insertDeveloper(db, {
-      id: "new-developer",
+      identifier: "new-developer",
       type: "user",
       name: "New Developer",
       url: null,
@@ -290,7 +314,7 @@ describe("moderation notification emails", () => {
     );
     expect(created.status).toBe(201);
     const { result } = (await created.json()) as {
-      result: { id: string; revision_id: string };
+      result: { id: string; identifier: string; revision_id: string };
     };
     await bumpDeveloperOwnership(db, "new-developer", "user-2");
     await insertUser(db, { id: "user-2", email: "current@example.com" });
@@ -298,7 +322,7 @@ describe("moderation notification emails", () => {
     const calls = stubSmtpApi();
 
     const res = await post(
-      `/extensions/v2/extensions/${result.id}/revisions/${result.revision_id}/reject`,
+      `/extensions/v2/extensions/${result.identifier}/revisions/${result.revision_id}/reject`,
       await authHeaders("mod-1"),
       { review_note: "Needs a valid license URL" }
     );
@@ -350,15 +374,15 @@ describe("moderation notification emails", () => {
   it("reports notified:false when no address exists anywhere", async () => {
     await insertUser(db, { id: "mod-1", is_moderator: 1 });
     await insertDeveloper(db, {
-      id: "new-developer",
+      identifier: "new-developer",
       type: "user",
       name: "New Developer",
       url: null,
       owner_user_id: null
     });
     await insertExtension(db, {
-      id: "live-ext",
-      developer_id: "new-developer"
+      identifier: "live-ext",
+      developer_identifier: "new-developer"
     });
     setEmailEnv();
     const calls = stubSmtpApi();
@@ -403,7 +427,7 @@ describe("moderation notification emails", () => {
     await insertUser(db, { id: "mod-1", is_moderator: 1 });
     await insertUser(db, { id: "user-1", email: "owner@example.com" });
     await insertDeveloper(db, {
-      id: "new-developer",
+      identifier: "new-developer",
       type: "user",
       name: "New Developer",
       url: null,
@@ -411,8 +435,8 @@ describe("moderation notification emails", () => {
       contact_email: "The Owner <owner@example.com>"
     });
     await insertExtension(db, {
-      id: "live-ext",
-      developer_id: "new-developer"
+      identifier: "live-ext",
+      developer_identifier: "new-developer"
     });
     setEmailEnv();
     const calls = stubSmtpApi();
@@ -434,7 +458,7 @@ describe("moderation notification emails", () => {
     await insertUser(db, { id: "mod-1", is_moderator: 1 });
     await insertUser(db, { id: "user-1", email: "owner@example.com" });
     await insertDeveloper(db, {
-      id: "new-developer",
+      identifier: "new-developer",
       type: "user",
       name: "New Developer",
       url: null,
@@ -447,13 +471,13 @@ describe("moderation notification emails", () => {
     );
     expect(created.status).toBe(201);
     const { result } = (await created.json()) as {
-      result: { id: string; revision_id: string };
+      result: { id: string; identifier: string; revision_id: string };
     };
     setEmailEnv();
     const calls = stubSmtpApi();
 
     const res = await post(
-      `/extensions/v2/extensions/${result.id}/revisions/${result.revision_id}/approve`,
+      `/extensions/v2/extensions/${result.identifier}/revisions/${result.revision_id}/approve`,
       await authHeaders("mod-1"),
       { review_note: "   " }
     );

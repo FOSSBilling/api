@@ -1,3 +1,4 @@
+import { UUID_V7 } from "./db-fixtures";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { env } from "cloudflare:workers";
 import { listCacheKey } from "../../../../src/services/extensions/v1/list-cache";
@@ -61,15 +62,15 @@ async function seedModAndExtension(): Promise<void> {
   await insertUser(db, { id: "mod-1", is_moderator: 1 });
   await insertUser(db, { id: "user-1", email: "owner@example.com" });
   await insertDeveloper(db, {
-    id: "new-developer",
+    identifier: "new-developer",
     type: "user",
     name: "New Developer",
     url: null,
     owner_user_id: "user-1"
   });
   await insertExtension(db, {
-    id: "live-ext",
-    developer_id: "new-developer"
+    identifier: "live-ext",
+    developer_identifier: "new-developer"
   });
 }
 
@@ -181,12 +182,12 @@ describe("CDN cache revalidation on extension mutations", () => {
     );
     expect(created.status).toBe(201);
     const { result } = (await created.json()) as {
-      result: { id: string; revision_id: string };
+      result: { id: string; identifier: string; revision_id: string };
     };
     const fetcher = stubFrontend();
 
     const res = await post(
-      `/extensions/v2/extensions/${result.id}/revisions/${result.revision_id}/approve?notify=false`,
+      `/extensions/v2/extensions/${result.identifier}/revisions/${result.revision_id}/approve?notify=false`,
       await authHeaders("mod-1"),
       {}
     );
@@ -216,12 +217,12 @@ describe("CDN cache revalidation on extension mutations", () => {
     );
     expect(created.status).toBe(201);
     const { result } = (await created.json()) as {
-      result: { id: string; revision_id: string };
+      result: { id: string; identifier: string; revision_id: string };
     };
     const fetcher = stubFrontend();
 
     const res = await post(
-      `/extensions/v2/extensions/${result.id}/revisions/${result.revision_id}/reject?notify=false`,
+      `/extensions/v2/extensions/${result.identifier}/revisions/${result.revision_id}/reject?notify=false`,
       await authHeaders("mod-1"),
       { review_note: "Needs work" }
     );
@@ -233,7 +234,7 @@ describe("CDN cache revalidation on extension mutations", () => {
     await insertUser(db, { id: "mod-1", is_moderator: 1 });
     await insertUser(db, { id: "claimant-1", email: "claimant@example.com" });
     await insertDeveloper(db, {
-      id: "legacy-dev",
+      identifier: "legacy-dev",
       type: "user",
       name: "Legacy",
       url: null,
@@ -241,7 +242,7 @@ describe("CDN cache revalidation on extension mutations", () => {
     });
     await insertDeveloperClaim(db, {
       id: "claim-1",
-      developer_id: "legacy-dev",
+      developer_identifier: "legacy-dev",
       claimant_id: "claimant-1"
     });
     const fetcher = stubFrontend();
@@ -257,15 +258,15 @@ describe("CDN cache revalidation on extension mutations", () => {
   it("purges after an owner withdraws an unpublished extension", async () => {
     await insertUser(db, { id: "user-1", email: "owner@example.com" });
     await insertDeveloper(db, {
-      id: "new-developer",
+      identifier: "new-developer",
       type: "user",
       name: "New Developer",
       url: null,
       owner_user_id: "user-1"
     });
     await insertUnpublishedExtension(db, {
-      id: "draft-ext",
-      developer_id: "new-developer"
+      identifier: "draft-ext",
+      developer_identifier: "new-developer"
     });
     const fetcher = stubFrontend();
 
@@ -294,7 +295,7 @@ describe("CDN cache revalidation on extension mutations", () => {
     // still public content, so the delete path must purge too.
     await insertUser(db, { id: "user-1", email: "owner@example.com" });
     await insertDeveloper(db, {
-      id: "doomed-dev",
+      identifier: "doomed-dev",
       type: "user",
       name: "Doomed",
       url: null,
@@ -329,7 +330,11 @@ describe("CDN cache revalidation on extension mutations", () => {
     const res = await delist("mod-1");
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toMatchObject({
-      result: { id: "live-ext", status: "delisted" }
+      result: {
+        id: expect.stringMatching(UUID_V7),
+        identifier: "live-ext",
+        status: "delisted"
+      }
     });
   });
 

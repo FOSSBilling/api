@@ -33,7 +33,6 @@
     "EXTENSION_ASSETS_S3_ENDPOINT": "https://s3.eu-central-003.backblazeb2.com",
     "EXTENSION_ASSETS_S3_REGION": "eu-central-003",
     "EXTENSION_ASSETS_S3_BUCKET": "fb-extensions-assets",
-    "EXTENSION_ASSETS_S3_PREFIX": "production",
     "EXTENSION_ASSETS_PUBLIC_URL": "https://extensions-assets.fossbilling.net",
     "EXTENSIONS_RETENTION_MODE": "dry-run",
     "EXTENSIONS_V2_EMAIL_PROVIDER": "mxroute",

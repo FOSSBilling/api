@@ -39,7 +39,7 @@ export interface ArtifactRow {
   download_url: string;
   published_at: string | null;
   created_at: string;
-  extension_id: string;
+  extension_identifier: string;
   profile_generation: string;
   version: string;
   icon_source_id: string | null;
@@ -51,7 +51,7 @@ export interface ArtifactRow {
   svg_sha256: string | null;
 }
 
-export const ARTIFACT_SELECT = `SELECT a.*, s.extension_id, s.profile_generation, s.version, i.source_id AS icon_source_id, i.avif_object_id, i.avif_sha256, i.png_object_id, i.png_sha256, i.svg_object_id, i.svg_sha256
+export const ARTIFACT_SELECT = `SELECT a.*, s.extension_identifier, s.profile_generation, s.version, i.source_id AS icon_source_id, i.avif_object_id, i.avif_sha256, i.png_object_id, i.png_sha256, i.svg_object_id, i.svg_sha256
   FROM package_artifacts a JOIN package_sources s ON s.id=a.source_id LEFT JOIN package_icons i ON i.source_id=s.id`;
 
 // All submission, publisher, correction and approval writers use this check.
@@ -66,7 +66,7 @@ export async function validatePackageContent(
   if (!developerId) {
     const ref = await db
       .prepare(
-        `SELECT d.id FROM extensions e JOIN developers d ON d.id=e.developer_id WHERE lower(e.id)=lower(?) AND (? IS NULL OR d.owner_user_id=?)`
+        `SELECT d.id FROM extensions e JOIN developers d ON d.id=e.developer_id WHERE lower(e.identifier)=lower(?) AND (? IS NULL OR d.owner_user_id=?)`
       )
       .bind(id, callerId ?? null, callerId ?? null)
       .first<{ id: string }>();
@@ -75,7 +75,7 @@ export async function validatePackageContent(
   }
   const published = await db
     .prepare(
-      `SELECT DISTINCT s.version FROM package_artifacts a JOIN package_sources s ON s.id=a.source_id WHERE s.extension_id=? AND a.published_at IS NOT NULL`
+      `SELECT DISTINCT s.version FROM package_artifacts a JOIN package_sources s ON s.id=a.source_id WHERE s.extension_identifier=? AND a.published_at IS NOT NULL`
     )
     .bind(id)
     .all<{ version: string }>();
@@ -122,7 +122,7 @@ export async function validatePackageContent(
   ];
   const rows = await db
     .prepare(
-      `${ARTIFACT_SELECT} JOIN developers d ON d.profile_generation=s.profile_generation WHERE a.id IN (SELECT value FROM json_each(?)) AND s.extension_id=? AND d.id=?`
+      `${ARTIFACT_SELECT} JOIN developers d ON d.profile_generation=s.profile_generation WHERE a.id IN (SELECT value FROM json_each(?)) AND s.extension_identifier=? AND d.id=?`
     )
     .bind(JSON.stringify(artifactIds), id, developerId)
     .all<ArtifactRow>();

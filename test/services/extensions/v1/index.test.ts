@@ -1,3 +1,4 @@
+import { v7 as uuidv7 } from "uuid";
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
 import { eq } from "drizzle-orm";
 import {
@@ -15,7 +16,8 @@ import { applyTestMigrations } from "../../../utils/apply-migrations";
 
 const testExtensionRows = [
   {
-    id: "Example",
+    id: uuidv7(),
+    identifier: "Example",
     manifest: JSON.stringify({
       manifest_version: 1,
       author: { name: "FOSSBilling" },
@@ -59,7 +61,8 @@ const testExtensionRows = [
       "https://github.com/FOSSBilling/example-module/releases/download/0.0.5/Example.zip"
   },
   {
-    id: "TestTheme",
+    id: uuidv7(),
+    identifier: "TestTheme",
     manifest: JSON.stringify({
       manifest_version: 1,
       author: { name: "FOSSBilling" },
@@ -104,6 +107,7 @@ describe("Extensions API v1", () => {
 
     await db.insert(developers).values({
       id: "fossbilling",
+      identifier: "fossbilling",
       type: "organization",
       name: "fossbilling",
       url: "https://fossbilling.org"
@@ -199,7 +203,8 @@ describe("Extensions API v1", () => {
       const db = getExtensionsDb(env.DB_EXTENSIONS);
       await db.insert(extensions).values({
         ...testExtensionRows[0],
-        id: "alpha-mod",
+        id: uuidv7(),
+        identifier: "alpha-mod",
         name: "Alpha Module",
         publishedAt: "2026-01-01T00:00:00.000Z"
       });
@@ -275,7 +280,7 @@ describe("Extensions API v1", () => {
       await db
         .update(extensions)
         .set({ delistedAt: "2026-01-01T00:00:00.000Z" })
-        .where(eq(extensions.id, "Example"));
+        .where(eq(extensions.identifier, "Example"));
 
       const ctx = createExecutionContext();
       const res = await app.request("/extensions/v1/list", {}, env, ctx);
@@ -309,13 +314,15 @@ describe("Extensions API v1", () => {
       const db = getExtensionsDb(env.DB_EXTENSIONS);
       await db.insert(developers).values({
         id: "nourl",
+        identifier: "nourl",
         type: "user",
         name: "No URL",
         url: null
       });
       await db.insert(extensions).values({
         ...testExtensionRows[1],
-        id: "NoIcon",
+        id: uuidv7(),
+        identifier: "NoIcon",
         developerId: "nourl",
         iconUrl: null,
         publishedAt: "2026-01-01T00:00:00.000Z"
@@ -382,7 +389,7 @@ describe("Extensions API v1", () => {
       await db
         .update(extensions)
         .set({ delistedAt: "2026-01-01T00:00:00.000Z" })
-        .where(eq(extensions.id, "Example"));
+        .where(eq(extensions.identifier, "Example"));
 
       const ctx = createExecutionContext();
       const res = await app.request("/extensions/v1/Example", {}, env, ctx);
@@ -433,7 +440,7 @@ describe("Extensions API v1", () => {
         await db
           .update(extensions)
           .set({ releases: JSON.stringify(releases), version: expected })
-          .where(eq(extensions.id, "Example"));
+          .where(eq(extensions.identifier, "Example"));
         const ctx = createExecutionContext();
         const response = await app.request(
           "/extensions/v1/Example/version",
@@ -509,7 +516,7 @@ describe("Extensions API v1", () => {
           }
         ])
       })
-      .where(eq(extensions.id, "Example"));
+      .where(eq(extensions.identifier, "Example"));
     const ctx = createExecutionContext();
     const response = await app.request(
       "/extensions/v1/Example/version",
@@ -533,6 +540,7 @@ describe("v1 projection failures", () => {
       await db.delete(developers);
       await db.insert(developers).values({
         id: "projection-owner",
+        identifier: "projection-owner",
         type: "organization",
         name: "Owner"
       });

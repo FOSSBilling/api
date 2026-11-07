@@ -42,7 +42,7 @@ import {
   put,
   db
 } from "./harness";
-import { insertUser, getExtension } from "./db-fixtures";
+import { insertUser, getExtension, getDeveloper } from "./db-fixtures";
 
 vi.mock("@octokit/request", async () =>
   (await import("../../../mocks/octokit")).octokitRequestMock()
@@ -78,8 +78,7 @@ afterEach(() => {
     "S3_BUCKET",
     "S3_ACCESS_KEY_ID",
     "S3_SECRET_ACCESS_KEY",
-    "PUBLIC_URL",
-    "S3_PREFIX"
+    "PUBLIC_URL"
   ])
     delete (env as unknown as Record<string, unknown>)[
       `EXTENSION_ASSETS_${key}`
@@ -198,7 +197,7 @@ async function submitted(
   const response = await post(
     `${root}/extensions`,
     await authHeaders("owner"),
-    { id: "package-demo", ...content(artifact) }
+    { identifier: "package-demo", ...content(artifact) }
   );
   const body = (await response.json()) as { result: { revision_id: string } };
   expect(response.status, JSON.stringify(body)).toBe(201);
@@ -232,7 +231,10 @@ describe("publisher package builds", () => {
     const response = await put(
       `${root}/m2m/clients/package-publisher`,
       await authHeaders("publisher-moderator"),
-      { developer_id: "developer", can_publish: true }
+      {
+        developer_id: (await getDeveloper(db, "developer"))!.id,
+        can_publish: true
+      }
     );
     expect(response.status).toBe(200);
   });
@@ -319,7 +321,7 @@ describe("publisher package builds", () => {
       "Content-Type": "application/json"
     };
     const created = await post(`${root}/extensions`, headers, {
-      id: "package-demo",
+      identifier: "package-demo",
       ...content(artifact)
     });
     expect(created.status).toBe(201);
@@ -358,7 +360,7 @@ describe("publisher package builds", () => {
     await seedDeveloper("another-developer", "another-owner");
     await db
       .prepare(
-        "UPDATE m2m_publisher_clients SET developer_id='another-developer' WHERE client_id='package-publisher'"
+        "UPDATE m2m_publisher_clients SET developer_id=(SELECT id FROM developers WHERE identifier='another-developer') WHERE client_id='package-publisher'"
       )
       .run();
     // New IDs can be reserved by that developer, but an existing owned ID cannot.
@@ -454,7 +456,7 @@ describe("queued package preparation", () => {
     };
     await db
       .prepare(
-        "UPDATE developers SET ownership_epoch=ownership_epoch+1 WHERE id='developer'"
+        "UPDATE developers SET ownership_epoch=ownership_epoch+1 WHERE identifier = 'developer'"
       )
       .run();
     expect(
@@ -708,7 +710,7 @@ describe("stored directory packages", () => {
     });
     await db
       .prepare(
-        "UPDATE extensions SET delisted_at=CURRENT_TIMESTAMP WHERE id='package-demo'"
+        "UPDATE extensions SET delisted_at=CURRENT_TIMESTAMP WHERE identifier='package-demo'"
       )
       .run();
     expect((await get(path, {})).status).toBe(404);
@@ -771,7 +773,7 @@ describe("stored directory packages", () => {
     );
     await db
       .prepare(
-        "UPDATE extensions SET delisted_at=CURRENT_TIMESTAMP WHERE id='package-demo'"
+        "UPDATE extensions SET delisted_at=CURRENT_TIMESTAMP WHERE identifier='package-demo'"
       )
       .run();
     expect((await get(path, {})).status).toBe(404);
@@ -977,8 +979,7 @@ describe("stored directory packages", () => {
       EXTENSION_ASSETS_S3_BUCKET: "test-assets",
       EXTENSION_ASSETS_S3_ACCESS_KEY_ID: "test-key",
       EXTENSION_ASSETS_S3_SECRET_ACCESS_KEY: "test-secret",
-      EXTENSION_ASSETS_PUBLIC_URL: "https://extensions-assets.fossbilling.net",
-      EXTENSION_ASSETS_S3_PREFIX: `tests-${crypto.randomUUID()}`
+      EXTENSION_ASSETS_PUBLIC_URL: "https://extensions-assets.fossbilling.net"
     });
     const calls: Request[] = [];
     let failure = false;
@@ -1025,7 +1026,7 @@ describe("stored directory packages", () => {
     );
     return writer.close();
   }
-  it("keeps pending images private and publishes approved images to B2 only once", async () => {
+  it("keeps pending images private and publishes a stable UUID icon URL", async () => {
     const remote = configureB2();
     const artifact = await built(manifest(), await iconSource());
     const pending = await submitted(artifact);
@@ -1040,14 +1041,16 @@ describe("stored directory packages", () => {
     expect(remote.calls).toHaveLength(0);
     expect((await approve(pending)).status).toBe(200);
     const published = await getExtension(db, "package-demo");
-    expect(published?.icon_url).toMatch(
-      /^https:\/\/extensions-assets\.fossbilling\.net\/tests-[a-f0-9-]+\/icons\/[a-f0-9]{64}\.svg$/
+    const objectKey = `extensions/${published!.id}/icons/${artifact.source_id}.svg`;
+    expect(published?.icon_url).toBe(
+      `https://extensions-assets.fossbilling.net/${objectKey}`
     );
     expect(remote.calls.map((request) => request.method)).toEqual([
       "HEAD",
       "PUT"
     ]);
     const upload = remote.calls[1];
+    expect(new URL(upload.url).pathname).toBe(`/test-assets/${objectKey}`);
     expect(upload.headers.get("Authorization")).toContain(
       "AWS4-HMAC-SHA256 Credential=test-key/"
     );
@@ -1059,6 +1062,25 @@ describe("stored directory packages", () => {
       upload.headers.get("x-amz-meta-sha256")
     );
     await get(`${root}/packages/${artifact.id}/icon`, {});
+    expect(remote.calls).toHaveLength(2);
+    const edited = await built(
+      { ...manifest(), description: "Updated metadata" },
+      undefined,
+      artifact.source_id
+    );
+    const update = await put(
+      `${root}/extensions/package-demo`,
+      await authHeaders("owner"),
+      content(edited)
+    );
+    expect(update.status).toBe(202);
+    const { result } = (await update.json()) as {
+      result: { revision_id: string };
+    };
+    expect((await approve(result.revision_id)).status).toBe(200);
+    expect((await getExtension(db, "package-demo"))?.icon_url).toBe(
+      published!.icon_url
+    );
     expect(remote.calls).toHaveLength(2);
   });
   it("keeps approval and fallback delivery working during B2 failures, then retries publication", async () => {
@@ -1080,7 +1102,7 @@ describe("stored directory packages", () => {
       200
     );
     expect((await getExtension(db, "package-demo"))?.icon_url).toContain(
-      "https://extensions-assets.fossbilling.net/tests-"
+      "https://extensions-assets.fossbilling.net/extensions/"
     );
   });
   it("publishes an icon when a valid extension ID is supplied in uppercase", async () => {
@@ -1112,6 +1134,10 @@ describe("stored directory packages", () => {
     expect((await approve(await submitted(artifact))).status).toBe(200);
     const uploads = remote.calls.filter((request) => request.method === "PUT");
     expect(uploads).toHaveLength(2);
+    const extension = (await getExtension(db, "package-demo"))!;
+    expect(new URL(uploads[0].url).pathname).toBe(
+      `/test-assets/extensions/${extension.id}/icons/${artifact.source_id}.avif`
+    );
     expect(uploads[0].url.replace(/\.avif$/, ".png")).toBe(uploads[1].url);
     expect(
       uploads.map((request) => request.headers.get("Content-Type"))
@@ -1212,14 +1238,14 @@ describe("stored directory packages", () => {
       const response = await post(
         `${root}/extensions`,
         await authHeaders("owner"),
-        { id: "package-demo", ...content(artifact), ...patch }
+        { identifier: "package-demo", ...content(artifact), ...patch }
       );
       expect(response.status).toBe(409);
     }
     expect(
       await db
         .prepare(
-          "SELECT count(*) AS count FROM extensions WHERE id='package-demo'"
+          "SELECT count(*) AS count FROM extensions WHERE identifier='package-demo'"
         )
         .first()
     ).toEqual({ count: 0 });
@@ -1461,7 +1487,7 @@ describe("stored directory packages", () => {
       `${root}/extensions`,
       await authHeaders("owner"),
       {
-        id: "package-demo",
+        identifier: "package-demo",
         ...payload,
         releases: payload.releases.map((release) => ({
           ...release,
@@ -1473,7 +1499,7 @@ describe("stored directory packages", () => {
     const response = await post(
       `${root}/extensions`,
       await authHeaders("owner"),
-      { id: "package-demo", ...payload }
+      { identifier: "package-demo", ...payload }
     );
     expect(response.status).toBe(201);
     expect(

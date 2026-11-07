@@ -26,7 +26,7 @@ export const MAX_PACKAGE_STORAGE_BYTES = 512 * 1024 * 1024;
 export const MAX_PACKAGE_OBJECTS = 256;
 
 function ownerPredicate() {
-  return `EXISTS (SELECT 1 FROM developers d JOIN users u ON u.id=d.owner_user_id WHERE d.id=? AND d.profile_generation=? AND d.ownership_epoch=? AND d.owner_user_id=? AND u.deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM extensions e WHERE lower(e.id)=lower(?) AND e.developer_id!=d.id) AND (? IS NULL OR EXISTS (SELECT 1 FROM m2m_publisher_clients p WHERE p.client_id=? AND p.developer_id=d.id AND p.ownership_epoch=d.ownership_epoch AND p.revoked_at IS NULL)))`;
+  return `EXISTS (SELECT 1 FROM developers d JOIN users u ON u.id=d.owner_user_id WHERE d.id=? AND d.profile_generation=? AND d.ownership_epoch=? AND d.owner_user_id=? AND u.deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM extensions e WHERE lower(e.identifier)=lower(?) AND e.developer_id!=d.id) AND (? IS NULL OR EXISTS (SELECT 1 FROM m2m_publisher_clients p WHERE p.client_id=? AND p.developer_id=d.id AND p.ownership_epoch=d.ownership_epoch AND p.revoked_at IS NULL)))`;
 }
 function ownerParams(owner: PackageOwner, id: string) {
   return [
@@ -48,7 +48,7 @@ export async function packageOwner(
 ) {
   const owner = await db
     .prepare(
-      `SELECT d.id,d.profile_generation,d.ownership_epoch,d.owner_user_id FROM developers d JOIN users u ON u.id=d.owner_user_id WHERE (? IS NULL AND d.owner_user_id=? OR d.id=? AND d.ownership_epoch=? AND EXISTS (SELECT 1 FROM m2m_publisher_clients p WHERE p.client_id=? AND p.developer_id=d.id AND p.ownership_epoch=d.ownership_epoch AND p.revoked_at IS NULL)) AND u.deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM extensions e WHERE lower(e.id)=lower(?) AND e.developer_id!=d.id)`
+      `SELECT d.id,d.profile_generation,d.ownership_epoch,d.owner_user_id FROM developers d JOIN users u ON u.id=d.owner_user_id WHERE (? IS NULL AND d.owner_user_id=? OR d.id=? AND d.ownership_epoch=? AND EXISTS (SELECT 1 FROM m2m_publisher_clients p WHERE p.client_id=? AND p.developer_id=d.id AND p.ownership_epoch=d.ownership_epoch AND p.revoked_at IS NULL)) AND u.deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM extensions e WHERE lower(e.identifier)=lower(?) AND e.developer_id!=d.id)`
     )
     .bind(
       publisher?.clientId ?? null,
@@ -155,7 +155,7 @@ export async function buildStoredPackage(input: {
   const { db, store, owner, manifest } = input;
   let source = await db
     .prepare(
-      "SELECT id,sha256,object_id FROM package_sources WHERE profile_generation=? AND extension_id=? AND version=?"
+      "SELECT id,sha256,object_id FROM package_sources WHERE profile_generation=? AND extension_identifier=? AND version=?"
     )
     .bind(owner.profile_generation, manifest.id, manifest.version)
     .first<SourceRow>();
@@ -234,7 +234,7 @@ export async function buildStoredPackage(input: {
     const sourceId = crypto.randomUUID();
     await db
       .prepare(
-        `INSERT INTO package_sources (id,profile_generation,extension_id,version,sha256,object_id)
+        `INSERT INTO package_sources (id,profile_generation,extension_identifier,version,sha256,object_id)
       SELECT ?,?,?,?,?,? WHERE ${ownerPredicate()} AND EXISTS (SELECT 1 FROM package_objects WHERE id=? AND deleting=0)
       ON CONFLICT DO NOTHING`
       )
@@ -251,7 +251,7 @@ export async function buildStoredPackage(input: {
       .run();
     source = await db
       .prepare(
-        "SELECT id,sha256,object_id FROM package_sources WHERE profile_generation=? AND extension_id=? AND version=?"
+        "SELECT id,sha256,object_id FROM package_sources WHERE profile_generation=? AND extension_identifier=? AND version=?"
       )
       .bind(owner.profile_generation, manifest.id, manifest.version)
       .first<SourceRow>();

@@ -16,7 +16,7 @@ type BadgeData = {
 export class ExtensionBadgesDatabase {
   constructor(private db: ExtensionsDb) {}
 
-  async getById(id: string): Promise<DatabaseResult<BadgeData>> {
+  async getByIdentifier(id: string): Promise<DatabaseResult<BadgeData>> {
     try {
       // Select only badge fields so large README content does not affect badges.
       const [row] = await this.db
@@ -31,7 +31,7 @@ export class ExtensionBadgesDatabase {
         .from(extensions)
         .where(
           and(
-            sql`LOWER(${extensions.id}) = LOWER(${id})`,
+            sql`LOWER(${extensions.identifier}) = LOWER(${id})`,
             isNotNull(extensions.publishedAt),
             isNull(extensions.delistedAt)
           )

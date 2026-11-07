@@ -217,7 +217,8 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
           "application/json": {
             schema: z.object({
               result: z.object({
-                id: z.string(),
+                id: z.uuidv7(),
+                identifier: z.string(),
                 status: z.literal("delisted"),
                 notified: NotifiedSchema
               })
@@ -256,7 +257,14 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
       reason
     });
     return c.json(
-      { result: { id: data.id, status: "delisted" as const, notified } },
+      {
+        result: {
+          id: data.id,
+          identifier: data.identifier,
+          status: "delisted" as const,
+          notified
+        }
+      },
       200
     );
   });
@@ -281,7 +289,8 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
           "application/json": {
             schema: z.object({
               result: z.object({
-                id: z.string(),
+                id: z.uuidv7(),
+                identifier: z.string(),
                 status: z.literal("relisted"),
                 notified: NotifiedSchema
               })
@@ -315,11 +324,18 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
     }
     const notified = await notifyAuthor(c, extDb, query, {
       kind: "extension-relisted",
-      extensionId: data.id,
+      extensionId: id,
       reason: review_note?.trim() || undefined
     });
     return c.json(
-      { result: { id: data.id, status: "relisted" as const, notified } },
+      {
+        result: {
+          id: data.id,
+          identifier: data.identifier,
+          status: "relisted" as const,
+          notified
+        }
+      },
       200
     );
   });
@@ -356,7 +372,8 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
           "application/json": {
             schema: z.object({
               result: z.object({
-                id: z.string(),
+                id: z.uuidv7(),
+                identifier: z.string(),
                 revision_id: z.string(),
                 status: z.literal("approved")
               })
@@ -407,6 +424,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
       {
         result: {
           id: data.id,
+          identifier: data.identifier,
           revision_id: data.revisionId,
           status: "approved" as const
         }
@@ -435,7 +453,8 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
           "application/json": {
             schema: z.object({
               result: z.object({
-                id: z.string(),
+                id: z.uuidv7(),
+                identifier: z.string(),
                 approved: z.literal(true),
                 notified: NotifiedSchema
               })
@@ -473,7 +492,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
     }
     const notified = await notifyAuthor(c, extDb, query, {
       kind: "developer-approved",
-      developerId: id
+      developerId: data.id
     });
     return c.json({ result: { ...data, notified } }, 200);
   });

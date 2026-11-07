@@ -36,7 +36,7 @@ export const PackageJobParamSchema = z.object({ jobId: z.uuid() });
 export const PackageJobSchema = z
   .object({
     id: z.uuid(),
-    extension_id: z.string(),
+    extension_identifier: z.string(),
     status: z.enum(["queued", "processing", "ready", "failed"]),
     artifact: z.union([PackageArtifactSchema, z.null()]),
     error: z

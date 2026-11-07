@@ -1,3 +1,4 @@
+import { UUID_V7 } from "./db-fixtures";
 import { describe, it, expect, vi } from "vitest";
 import {
   setupExtensionsV2Tests,
@@ -36,7 +37,10 @@ describe("Extensions API v2 contract", () => {
     );
     expect(me.status).toBe(200);
     await expect(me.json()).resolves.toMatchObject({
-      result: { id: "dev-developer" }
+      result: {
+        id: expect.stringMatching(UUID_V7),
+        identifier: "dev-developer"
+      }
     });
   });
 
@@ -57,7 +61,7 @@ describe("Extensions API v2 contract", () => {
 
     // developer_id is public-scope only.
     const scoped = await get(
-      "/extensions/v2/extensions?scope=mine&developer_id=dev-developer",
+      "/extensions/v2/extensions?scope=mine&developer_identifier=dev-developer",
       mod
     );
     expect(scoped.status).toBe(422);
@@ -89,14 +93,14 @@ describe("Extensions API v2 contract", () => {
 
   it("walks past the first page when rows exceed the limit", async () => {
     await insertDeveloper(db, {
-      id: "aaa-developer",
+      identifier: "aaa-developer",
       type: "user",
       name: "Aaa Developer",
       url: null,
       owner_user_id: "user-1"
     });
     await insertDeveloper(db, {
-      id: "zzz-developer",
+      identifier: "zzz-developer",
       type: "user",
       name: "Zzz Developer",
       url: null,
@@ -108,10 +112,12 @@ describe("Extensions API v2 contract", () => {
     const first = await get("/extensions/v2/developers?limit=1", mod);
     expect(first.status).toBe(200);
     const firstBody = (await first.json()) as {
-      result: Array<{ id: string }>;
+      result: Array<{ id: string; identifier: string }>;
       pagination: { next_cursor: string | null; has_more: boolean };
     };
-    expect(firstBody.result.map((d) => d.id)).toEqual(["aaa-developer"]);
+    expect(firstBody.result.map((d) => d.identifier)).toEqual([
+      "aaa-developer"
+    ]);
     expect(firstBody.pagination.has_more).toBe(true);
     expect(firstBody.pagination.next_cursor).toBeTruthy();
 
@@ -121,10 +127,12 @@ describe("Extensions API v2 contract", () => {
     );
     expect(second.status).toBe(200);
     const secondBody = (await second.json()) as {
-      result: Array<{ id: string }>;
+      result: Array<{ id: string; identifier: string }>;
       pagination: { next_cursor: string | null; has_more: boolean };
     };
-    expect(secondBody.result.map((d) => d.id)).toEqual(["zzz-developer"]);
+    expect(secondBody.result.map((d) => d.identifier)).toEqual([
+      "zzz-developer"
+    ]);
     expect(secondBody.pagination).toEqual({
       next_cursor: null,
       has_more: false

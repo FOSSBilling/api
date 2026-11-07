@@ -1,3 +1,4 @@
+import { v7 as uuidv7 } from "uuid";
 import { packageIconUrl } from "./packages";
 import { validatePackageContent } from "./packages";
 import { MAX_CONTENT_BYTES } from "../resource-limits";
@@ -39,6 +40,7 @@ export const MAX_PENDING_REVISIONS_PER_USER = 10;
 // carry a dangling one through its rebuild.
 const DEVELOPER_COLUMNS = {
   developerId: developers.id,
+  developerIdentifier: developers.identifier,
   developerType: developers.type,
   developerName: developers.name,
   developerUrl: developers.url,
@@ -137,6 +139,7 @@ const {
 
 const EXTENSION_COLUMNS = {
   id: extensions.id,
+  identifier: extensions.identifier,
   ...DETAIL_CONTENT_COLUMNS,
   publishedBytes,
   ...DEVELOPER_COLUMNS
@@ -144,6 +147,7 @@ const EXTENSION_COLUMNS = {
 
 const EXTENSION_LIST_COLUMNS = {
   id: extensions.id,
+  identifier: extensions.identifier,
   ...CARD_CONTENT_COLUMNS,
   publishedBytes,
   ...DEVELOPER_COLUMNS
@@ -191,6 +195,7 @@ const REVIEW_COLUMNS = {
 // and the pending revision's stored content (up to 256 KiB per row) with it.
 const OWNED_LIST_COLUMNS = {
   id: extensions.id,
+  identifier: extensions.identifier,
   publishedAt: extensions.publishedAt,
   delistedAt: extensions.delistedAt,
   delistReason: sql<string | null>`substr(${extensions.delistReason}, 1, 2000)`,
@@ -236,6 +241,7 @@ type OwnedRow = Awaited<ReturnType<typeof ownedQuery>>[number];
 
 interface DeveloperRow {
   developerId: string;
+  developerIdentifier: string;
   developerType: string;
   developerName: string;
   developerUrl: string | null;
@@ -254,6 +260,7 @@ interface DeveloperRow {
 interface PublishedRow extends DeveloperRow {
   manifest: string | null;
   id: string;
+  identifier: string;
   type: string;
   name: string;
   description: string;
@@ -275,7 +282,7 @@ type PublishedListRow = Omit<
 
 export interface ExtensionListFilters {
   type?: string;
-  developerId?: string;
+  developerIdentifier?: string;
   limit?: number;
   cursor?: string;
 }
@@ -293,22 +300,18 @@ export interface OwnedExtensionListPage {
 }
 
 type ExtensionCursor = {
-  normalizedId: string;
+  identifier: string;
   id: string;
 };
 
-// normalizedId is checked against id rather than trusted: it drives the
-// keyset comparison, so a tampered cursor could otherwise seek from a
-// position the id itself doesn't correspond to.
+// Public identifiers order the directory; the UUID breaks ties.
 const extensionCursor = createCursorCodec<ExtensionCursor>(
   (parsed): parsed is ExtensionCursor =>
-    typeof parsed.id === "string" &&
-    typeof parsed.normalizedId === "string" &&
-    parsed.normalizedId === parsed.id.toLowerCase()
+    typeof parsed.id === "string" && typeof parsed.identifier === "string"
 );
 
 export interface CreateExtensionInput {
-  extensionId: string;
+  identifier: string;
   developerId: string;
   ownershipEpoch: number;
   submittedBy: string;
@@ -320,7 +323,7 @@ export interface CreateExtensionInput {
 // route's mapping lookup is only advisory; the insert re-derives it), and
 // submittedBy is the client's synthetic users row.
 export interface CreateExtensionAsPublisherInput {
-  extensionId: string;
+  identifier: string;
   clientId: string;
   developerId: string;
   submittedBy: string;
@@ -340,8 +343,10 @@ export class ExtensionsDatabase {
       isNull(extensions.delistedAt)
     ];
     if (filters.type) conditions.push(eq(extensions.type, filters.type));
-    if (filters.developerId)
-      conditions.push(eq(extensions.developerId, filters.developerId));
+    if (filters.developerIdentifier)
+      conditions.push(
+        sql`lower(${developers.identifier}) = lower(${filters.developerIdentifier})`
+      );
 
     if (filters.cursor) {
       const cursor = extensionCursor.decode(filters.cursor);
@@ -356,7 +361,7 @@ export class ExtensionsDatabase {
         .from(extensions)
         .innerJoin(developers, eq(extensions.developerId, developers.id))
         .where(and(...conditions))
-        .orderBy(asc(sql`LOWER(${extensions.id})`), asc(extensions.id))
+        .orderBy(asc(sql`LOWER(${extensions.identifier})`), asc(extensions.id))
         .limit(limit + 1)) as PublishedListRow[];
     } catch (error) {
       return databaseError("list", error);
@@ -373,7 +378,7 @@ export class ExtensionsDatabase {
     };
   }
 
-  async getById(id: string): Promise<DatabaseResult<Extension>> {
+  async getByIdentifier(id: string): Promise<DatabaseResult<Extension>> {
     let rows: PublishedRow[];
     try {
       rows = (await this.db
@@ -382,7 +387,7 @@ export class ExtensionsDatabase {
         .innerJoin(developers, eq(extensions.developerId, developers.id))
         .where(
           and(
-            sql`LOWER(${extensions.id}) = LOWER(${id})`,
+            sql`LOWER(${extensions.identifier}) = LOWER(${id})`,
             isNotNull(extensions.publishedAt),
             isNull(extensions.delistedAt)
           )
@@ -433,7 +438,7 @@ export class ExtensionsDatabase {
     try {
       rows = await ownedListQuery(this.db)
         .where(and(...conditions))
-        .orderBy(asc(sql`LOWER(${extensions.id})`), asc(extensions.id))
+        .orderBy(asc(sql`LOWER(${extensions.identifier})`), asc(extensions.id))
         .limit(limit + 1);
     } catch (error) {
       return databaseError("listOwned", error);
@@ -483,7 +488,7 @@ export class ExtensionsDatabase {
       // produces for a non-ASCII id.
       const pattern = `%${escapeLikePattern(filters.q)}%`;
       conditions.push(
-        sql`LOWER(${extensions.id}) LIKE LOWER(${pattern}) ESCAPE '\\'`
+        sql`LOWER(${extensions.identifier}) LIKE LOWER(${pattern}) ESCAPE '\\'`
       );
     }
     if (filters.type) {
@@ -505,7 +510,7 @@ export class ExtensionsDatabase {
     try {
       const query = ownedListQuery(this.db);
       rows = await (conditions.length ? query.where(and(...conditions)) : query)
-        .orderBy(asc(sql`LOWER(${extensions.id})`), asc(extensions.id))
+        .orderBy(asc(sql`LOWER(${extensions.identifier})`), asc(extensions.id))
         .limit(limit + 1);
     } catch (error) {
       return databaseError("listForModeration", error);
@@ -576,7 +581,7 @@ export class ExtensionsDatabase {
         })
         .from(extensions)
         .innerJoin(developers, eq(extensions.developerId, developers.id))
-        .where(sql`LOWER(${extensions.id}) = LOWER(${id})`);
+        .where(sql`LOWER(${extensions.identifier}) = LOWER(${id})`);
 
       const row = rows[0];
       if (!row) return notFound(id);
@@ -599,7 +604,7 @@ export class ExtensionsDatabase {
     let rows: OwnedRow[];
     try {
       rows = await ownedQuery(this.db).where(
-        sql`LOWER(${extensions.id}) = LOWER(${id})`
+        sql`LOWER(${extensions.identifier}) = LOWER(${id})`
       );
     } catch (error) {
       return databaseError("getOwned", error);
@@ -633,21 +638,24 @@ export class ExtensionsDatabase {
   // toD1Statement for why this is raw sql rather than two builder calls.
   async create(
     input: CreateExtensionInput
-  ): Promise<DatabaseResult<{ id: string; revisionId: string }>> {
+  ): Promise<
+    DatabaseResult<{ id: string; identifier: string; revisionId: string }>
+  > {
     const revisionId = crypto.randomUUID();
+    const extensionId = uuidv7();
 
     let results;
     try {
       const packageError = await validatePackageContent(
         this.db.$client,
-        input.extensionId,
+        input.identifier,
         input.developerId,
         input.content
       );
       if (packageError) return { data: null, error: packageError };
       const extensionStmt = toD1Statement(this.db.$client, {
-        sql: `INSERT INTO extensions (id, developer_id, created_by, created_at, updated_at)
-              SELECT ?, d.id, d.owner_user_id, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        sql: `INSERT INTO extensions (id, identifier, developer_id, created_by, created_at, updated_at)
+              SELECT ?, ?, d.id, d.owner_user_id, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
               FROM developers d
               WHERE d.id = ? AND d.owner_user_id = ? AND d.ownership_epoch = ?
                 AND EXISTS (
@@ -659,7 +667,8 @@ export class ExtensionsDatabase {
                 ) < ?
               ON CONFLICT DO NOTHING`,
         params: [
-          input.extensionId,
+          extensionId,
+          input.identifier,
           input.developerId,
           input.submittedBy,
           input.ownershipEpoch,
@@ -676,7 +685,7 @@ export class ExtensionsDatabase {
               WHERE changes() = 1`,
         params: [
           revisionId,
-          input.extensionId,
+          extensionId,
           input.developerId,
           input.submittedBy,
           JSON.stringify(input.content),
@@ -697,7 +706,10 @@ export class ExtensionsDatabase {
       }
     }
 
-    return { data: { id: input.extensionId, revisionId }, error: null };
+    return {
+      data: { id: extensionId, identifier: input.identifier, revisionId },
+      error: null
+    };
   }
 
   // The insert affected no rows: either ON CONFLICT DO NOTHING swallowed an id
@@ -712,7 +724,7 @@ export class ExtensionsDatabase {
     const [taken] = await this.db
       .select({ one: sql`1` })
       .from(extensions)
-      .where(sql`LOWER(${extensions.id}) = LOWER(${input.extensionId})`);
+      .where(sql`LOWER(${extensions.identifier}) = LOWER(${input.identifier})`);
     if (taken) {
       return {
         message: "An extension with this id already exists",
@@ -732,21 +744,24 @@ export class ExtensionsDatabase {
   // users row); the mapped developer's human owner must still be active.
   async createAsPublisher(
     input: CreateExtensionAsPublisherInput
-  ): Promise<DatabaseResult<{ id: string; revisionId: string }>> {
+  ): Promise<
+    DatabaseResult<{ id: string; identifier: string; revisionId: string }>
+  > {
     const revisionId = crypto.randomUUID();
+    const extensionId = uuidv7();
 
     let results;
     try {
       const packageError = await validatePackageContent(
         this.db.$client,
-        input.extensionId,
+        input.identifier,
         input.developerId,
         input.content
       );
       if (packageError) return { data: null, error: packageError };
       const extensionStmt = toD1Statement(this.db.$client, {
-        sql: `INSERT INTO extensions (id, developer_id, created_by, created_at, updated_at)
-              SELECT ?, d.id, d.owner_user_id, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        sql: `INSERT INTO extensions (id, identifier, developer_id, created_by, created_at, updated_at)
+              SELECT ?, ?, d.id, d.owner_user_id, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
               FROM developers d
               WHERE d.id = ?
                 AND EXISTS (
@@ -763,7 +778,8 @@ export class ExtensionsDatabase {
                 ) < ?
               ON CONFLICT DO NOTHING`,
         params: [
-          input.extensionId,
+          extensionId,
+          input.identifier,
           input.developerId,
           input.clientId,
           input.submittedBy,
@@ -780,7 +796,7 @@ export class ExtensionsDatabase {
                 AND changes() = 1`,
         params: [
           revisionId,
-          input.extensionId,
+          extensionId,
           input.submittedBy,
           JSON.stringify(input.content),
           input.developerId
@@ -803,7 +819,10 @@ export class ExtensionsDatabase {
       }
     }
 
-    return { data: { id: input.extensionId, revisionId }, error: null };
+    return {
+      data: { id: extensionId, identifier: input.identifier, revisionId },
+      error: null
+    };
   }
 
   private async createAsPublisherBlockedError(
@@ -863,7 +882,7 @@ export class ExtensionsDatabase {
     const [taken] = await this.db
       .select({ one: sql`1` })
       .from(extensions)
-      .where(sql`LOWER(${extensions.id}) = LOWER(${input.extensionId})`);
+      .where(sql`LOWER(${extensions.identifier}) = LOWER(${input.identifier})`);
     if (taken) {
       return {
         message: "An extension with this id already exists",
@@ -883,12 +902,12 @@ export class ExtensionsDatabase {
   async withdraw(
     id: string,
     ownerUserId: string
-  ): Promise<DatabaseResult<{ id: string }>> {
+  ): Promise<DatabaseResult<{ id: string; identifier: string }>> {
     let result;
     try {
-      result = await this.db.run(sql`
+      result = await this.db.all<{ id: string; identifier: string }>(sql`
         DELETE FROM ${extensions}
-        WHERE LOWER(id) = LOWER(${id})
+        WHERE LOWER(identifier) = LOWER(${id})
           AND published_at IS NULL
           AND developer_id IN (
             SELECT d.id FROM ${developers} d WHERE d.owner_user_id = ${ownerUserId}
@@ -897,16 +916,17 @@ export class ExtensionsDatabase {
             SELECT 1 FROM ${users} u
             WHERE u.id = ${ownerUserId} AND u.deleted_at IS NULL
           )
+        RETURNING id,identifier
       `);
     } catch (error) {
       return databaseError("withdraw", error);
     }
 
-    if (!result.meta?.changes) {
+    if (!result[0]) {
       return this.withdrawBlockedError(id, ownerUserId);
     }
 
-    return { data: { id }, error: null };
+    return { data: result[0], error: null };
   }
 
   // Separates the four ways the delete can affect no rows, so the route can
@@ -928,7 +948,7 @@ export class ExtensionsDatabase {
       })
       .from(extensions)
       .innerJoin(developers, eq(extensions.developerId, developers.id))
-      .where(sql`LOWER(${extensions.id}) = LOWER(${id})`);
+      .where(sql`LOWER(${extensions.identifier}) = LOWER(${id})`);
     if (!existing) return notFound(id);
     if (existing.publishedAt) {
       return {
@@ -966,7 +986,7 @@ export class ExtensionsDatabase {
     id: string,
     moderatorId: string,
     reason: string
-  ): Promise<DatabaseResult<{ id: string }>> {
+  ): Promise<DatabaseResult<{ id: string; identifier: string }>> {
     let result;
     try {
       result = await this.db
@@ -978,7 +998,7 @@ export class ExtensionsDatabase {
         })
         .where(
           and(
-            sql`LOWER(${extensions.id}) = LOWER(${id})`,
+            sql`LOWER(${extensions.identifier}) = LOWER(${id})`,
             isNotNull(extensions.publishedAt),
             isNull(extensions.delistedAt),
             sql`EXISTS (
@@ -987,16 +1007,17 @@ export class ExtensionsDatabase {
                 AND ${users.isModerator} = 1
             )`
           )
-        );
+        )
+        .returning({ id: extensions.id, identifier: extensions.identifier });
     } catch (error) {
       return databaseError("delist", error);
     }
 
-    if (!result.meta?.changes) {
+    if (!result[0]) {
       return this.delistBlockedError(id, moderatorId);
     }
 
-    return { data: { id }, error: null };
+    return { data: result[0], error: null };
   }
 
   // Separates the three ways delist()'s guard can affect no rows, so the
@@ -1017,7 +1038,7 @@ export class ExtensionsDatabase {
           delistedAt: extensions.delistedAt
         })
         .from(extensions)
-        .where(sql`LOWER(${extensions.id}) = LOWER(${id})`);
+        .where(sql`LOWER(${extensions.identifier}) = LOWER(${id})`);
     } catch (error) {
       return databaseError("delist", error);
     }
@@ -1057,7 +1078,7 @@ export class ExtensionsDatabase {
   async relist(
     id: string,
     moderatorId: string
-  ): Promise<DatabaseResult<{ id: string }>> {
+  ): Promise<DatabaseResult<{ id: string; identifier: string }>> {
     let rows;
     try {
       rows = await this.db
@@ -1069,7 +1090,7 @@ export class ExtensionsDatabase {
         })
         .where(
           and(
-            sql`LOWER(${extensions.id}) = LOWER(${id})`,
+            sql`LOWER(${extensions.identifier}) = LOWER(${id})`,
             isNotNull(extensions.publishedAt),
             isNotNull(extensions.delistedAt),
             sql`EXISTS (
@@ -1080,7 +1101,7 @@ export class ExtensionsDatabase {
             )`
           )
         )
-        .returning({ id: extensions.id });
+        .returning({ id: extensions.id, identifier: extensions.identifier });
     } catch (error) {
       return databaseError("relist", error);
     }
@@ -1090,7 +1111,7 @@ export class ExtensionsDatabase {
       return this.relistBlockedError(id, moderatorId);
     }
 
-    return { data: { id: row.id }, error: null };
+    return { data: row, error: null };
   }
 
   private async relistBlockedError(
@@ -1113,7 +1134,7 @@ export class ExtensionsDatabase {
           delistedAt: extensions.delistedAt
         })
         .from(extensions)
-        .where(sql`LOWER(${extensions.id}) = LOWER(${id})`);
+        .where(sql`LOWER(${extensions.identifier}) = LOWER(${id})`);
     } catch (error) {
       return databaseError("relist", error);
     }
@@ -1155,7 +1176,9 @@ export class ExtensionsDatabase {
     moderatorId: string,
     content: ExtensionContent,
     correctionNote: string
-  ): Promise<DatabaseResult<{ id: string; revisionId: string }>> {
+  ): Promise<
+    DatabaseResult<{ id: string; identifier: string; revisionId: string }>
+  > {
     const parsed = ExtensionContentSchema.safeParse(content);
     if (!parsed.success) {
       return {
@@ -1185,7 +1208,7 @@ export class ExtensionsDatabase {
               SELECT ?, e.id, e.developer_id, ?, 'approved', ?, ?, ?, CURRENT_TIMESTAMP, d.ownership_epoch
               FROM extensions e
               JOIN developers d ON d.id = e.developer_id
-              WHERE LOWER(e.id) = LOWER(?)
+              WHERE LOWER(e.identifier) = LOWER(?)
                 AND e.published_at IS NOT NULL
                 AND e.delisted_at IS NULL
                 AND NOT EXISTS (
@@ -1196,7 +1219,7 @@ export class ExtensionsDatabase {
                   SELECT 1 FROM users u
                   WHERE u.id = ? AND u.deleted_at IS NULL AND u.is_moderator = 1
                 )
-              RETURNING extension_id`,
+              RETURNING extension_id, (SELECT identifier FROM extensions WHERE id=extension_id) AS identifier`,
         params: [
           revisionId,
           moderatorId,
@@ -1220,7 +1243,7 @@ export class ExtensionsDatabase {
                   download_url = ?, manifest = ?,
                   published_revision_id = ?,
                   updated_at = CURRENT_TIMESTAMP
-              WHERE changes() = 1 AND LOWER(id) = LOWER(?)`,
+              WHERE changes() = 1 AND LOWER(identifier) = LOWER(?)`,
         params: [
           valid.type,
           valid.name,
@@ -1251,6 +1274,8 @@ export class ExtensionsDatabase {
     return {
       data: {
         id: (results[0].results[0] as { extension_id: string }).extension_id,
+        identifier: (results[0].results[0] as { identifier: string })
+          .identifier,
         revisionId
       },
       error: null
@@ -1277,7 +1302,7 @@ export class ExtensionsDatabase {
           delistedAt: extensions.delistedAt
         })
         .from(extensions)
-        .where(sql`LOWER(${extensions.id}) = LOWER(${id})`);
+        .where(sql`LOWER(${extensions.identifier}) = LOWER(${id})`);
     } catch (error) {
       return databaseError("moderatorCorrect", error);
     }
@@ -1307,7 +1332,7 @@ export class ExtensionsDatabase {
         .from(extensionRevisions)
         .where(
           and(
-            sql`LOWER(${extensionRevisions.extensionId}) = LOWER(${id})`,
+            sql`${extensionRevisions.extensionId} = (SELECT id FROM extensions WHERE lower(identifier)=lower(${id}))`,
             eq(extensionRevisions.status, "pending")
           )
         );
@@ -1353,9 +1378,9 @@ function notFound(id: string): DatabaseResult<never> {
 
 function keysetAfter(cursor: ExtensionCursor) {
   return or(
-    sql`LOWER(${extensions.id}) > ${cursor.normalizedId}`,
+    sql`LOWER(${extensions.identifier}) > ${cursor.identifier}`,
     and(
-      sql`LOWER(${extensions.id}) = ${cursor.normalizedId}`,
+      sql`LOWER(${extensions.identifier}) = ${cursor.identifier}`,
       sql`${extensions.id} > ${cursor.id}`
     )
   )!;
@@ -1368,6 +1393,7 @@ export function isValidExtensionCursor(value: string): boolean {
 function parseDeveloper(row: DeveloperRow): PublicDeveloper {
   return {
     id: row.developerId,
+    identifier: row.developerIdentifier,
     type: row.developerType as "user" | "organization",
     name: row.developerName,
     URL: row.developerUrl ?? undefined,
@@ -1426,7 +1452,7 @@ interface ListContentFields {
 function listContent(
   row: ListContentFields,
   card: true
-): Omit<ExtensionListItem, "id" | "developer">;
+): Omit<ExtensionListItem, "id" | "identifier" | "developer">;
 function listContent(
   row: ListContentFields,
   card: false
@@ -1435,7 +1461,7 @@ function listContent(
   row: ListContentFields,
   card: boolean
 ):
-  | Omit<ExtensionListItem, "id" | "developer">
+  | Omit<ExtensionListItem, "id" | "identifier" | "developer">
   | Omit<ExtensionContent, "readme" | "releases"> {
   const metadata = parseManifestMetadata(row.manifest);
   return {
@@ -1469,7 +1495,7 @@ function listContent(
 
 // Shared keyset-pagination tail: each listing over-fetches one row to detect
 // hasMore, then encodes the next cursor from the final returned row.
-function keysetPage<T extends { id: string }>(
+function keysetPage<T extends { id: string; identifier: string }>(
   rows: T[],
   limit: number
 ): { pageRows: T[]; hasMore: boolean; nextCursor: string | null } {
@@ -1482,7 +1508,7 @@ function keysetPage<T extends { id: string }>(
     nextCursor:
       hasMore && last
         ? extensionCursor.encode({
-            normalizedId: last.id.toLowerCase(),
+            identifier: last.identifier.toLowerCase(),
             id: last.id
           })
         : null
@@ -1492,6 +1518,7 @@ function keysetPage<T extends { id: string }>(
 function parseListRow(row: PublishedListRow): ExtensionListItem {
   return {
     id: row.id,
+    identifier: row.identifier,
     ...listContent(row, true),
     developer: parseDeveloper(row)
   };
@@ -1502,6 +1529,7 @@ function parseListRow(row: PublishedListRow): ExtensionListItem {
 function parseRow(row: PublishedRow): Extension {
   return {
     id: row.id,
+    identifier: row.identifier,
     developer: parseDeveloper(row),
     ...listContent(row, false),
     homepage_url: row.website || undefined,
@@ -1514,6 +1542,7 @@ function parseRow(row: PublishedRow): Extension {
 function parseOwnedListRow(row: OwnedListRow): OwnedExtensionListItem {
   return {
     id: row.id,
+    identifier: row.identifier,
     developer: parseDeveloper(row),
     published: row.publishedAt ? listContent(row, true) : null,
     pending_revision:

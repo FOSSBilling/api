@@ -11,7 +11,8 @@ export type RevisionStatus = z.infer<typeof RevisionStatusSchema>;
 export const ExtensionRevisionSchema = z
   .object({
     id: z.string(),
-    extension_id: z.string(),
+    extension_id: z.uuidv7(),
+    extension_identifier: z.string(),
     developer_id: z.string(),
     submitted_by: z.string(),
     status: RevisionStatusSchema,

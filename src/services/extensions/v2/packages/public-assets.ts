@@ -1,7 +1,6 @@
 import { logError } from "../../../../lib/logger";
 import { revalidateExtensions } from "../revalidate";
 import type { ExtensionContent } from "../schemas/extensions";
-import { sha256 } from "../package-builder";
 import { AwsClient } from "aws4fetch";
 import type { Context } from "hono";
 import { getPlatform } from "../../../../lib/middleware";
@@ -31,17 +30,17 @@ export async function publishExtensionIcon(
     return value;
   };
   const row = await c.env.DB_EXTENSIONS.prepare(
-    "SELECT releases,published_revision_id FROM extensions WHERE id=? AND published_at IS NOT NULL AND delisted_at IS NULL"
+    "SELECT id,releases,published_revision_id FROM extensions WHERE lower(identifier)=? AND published_at IS NOT NULL AND delisted_at IS NULL"
   )
     .bind(extensionId)
-    .first<{ releases: string; published_revision_id: string }>();
+    .first<{ id: string; releases: string; published_revision_id: string }>();
   if (!row) return;
   const latest = latestRelease(
     JSON.parse(row.releases) as ExtensionContent["releases"]
   );
   if (!latest?.artifact_id) return;
   const artifact = await c.env.DB_EXTENSIONS.prepare(
-    `${ARTIFACT_SELECT} WHERE a.id=? AND a.published_at IS NOT NULL AND s.extension_id=?`
+    `${ARTIFACT_SELECT} WHERE a.id=? AND a.published_at IS NOT NULL AND s.extension_identifier=?`
   )
     .bind(latest.artifact_id, extensionId)
     .first<ArtifactRow>();
@@ -79,9 +78,6 @@ export async function publishExtensionIcon(
       "Invalid asset bucket name",
       503
     );
-  const prefix = platform.getEnv("EXTENSION_ASSETS_S3_PREFIX") ?? "local";
-  if (!/^[a-zA-Z0-9_-]+$/.test(prefix))
-    throw new PackageError("ASSETS_UNAVAILABLE", "Invalid asset prefix", 503);
   const aws = new AwsClient({
     accessKeyId: get("S3_ACCESS_KEY_ID"),
     secretAccessKey: get("S3_SECRET_ACCESS_KEY"),
@@ -89,15 +85,8 @@ export async function publishExtensionIcon(
     service: "s3",
     retries: 0
   });
-  const identity =
-    artifact.svg_sha256 ??
-    (await sha256(
-      new Uint8Array(
-        new TextEncoder().encode(
-          `${artifact.avif_sha256}:${artifact.png_sha256}`
-        )
-      )
-    ));
+  // The icon shares its immutable source UUID across formats and manifest revisions.
+  const assetId = artifact.icon_source_id;
   let iconUrl: string | undefined;
   for (const format of artifact.svg_object_id
     ? (["svg"] as const)
@@ -110,7 +99,7 @@ export async function publishExtensionIcon(
         "Prepared asset is unavailable",
         503
       );
-    const objectKey = `${prefix}/icons/${identity}.${format}`;
+    const objectKey = `extensions/${row.id}/icons/${assetId}.${format}`;
     const url = new URL(`${publicBase.href.replace(/\/$/, "")}/${objectKey}`)
       .href;
     const contentType = format === "svg" ? "image/svg+xml" : `image/${format}`;
@@ -176,7 +165,7 @@ export async function publishExtensionIcon(
   }
   if (iconUrl) {
     const updated = await c.env.DB_EXTENSIONS.prepare(
-      "UPDATE extensions SET icon_url=? WHERE id=? AND published_revision_id=? AND delisted_at IS NULL AND icon_url IS NOT ?"
+      "UPDATE extensions SET icon_url=? WHERE lower(identifier)=? AND published_revision_id=? AND delisted_at IS NULL AND icon_url IS NOT ?"
     )
       .bind(iconUrl, extensionId, row.published_revision_id, iconUrl)
       .run();

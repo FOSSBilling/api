@@ -1,3 +1,4 @@
+import { v7 as uuidv7 } from "uuid";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
@@ -53,8 +54,8 @@ if (action === "setup") {
       ('package-demo-owner','Local Package Developer',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,0),
       ('package-demo-reviewer','Local Package Reviewer',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,1)
       ON CONFLICT DO NOTHING;
-    INSERT INTO developers (id,type,name,owner_user_id,approved_at,created_at,updated_at)
-      VALUES ('package-demo-studio','user','Local Package Developer','package-demo-owner',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+    INSERT INTO developers (id,identifier,type,name,owner_user_id,approved_at,created_at,updated_at)
+      VALUES ('${uuidv7()}','package-demo-studio','user','Local Package Developer','package-demo-owner',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
       ON CONFLICT DO NOTHING;
   `
   ]);
@@ -188,7 +189,7 @@ if (action === "setup") {
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: manifest.id, ...content })
+      body: JSON.stringify({ identifier: manifest.id, ...content })
     },
     "package-demo-owner"
   );

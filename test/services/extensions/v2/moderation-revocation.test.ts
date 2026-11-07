@@ -52,30 +52,30 @@ describe("commit-time moderator authority", () => {
         await insertUser(db, { id: "reviewer", is_moderator: 1 });
         const claimAction = action.startsWith("claim");
         await insertDeveloper(db, {
-          id: "review-developer",
+          identifier: "review-developer",
           type: "individual",
           name: "Developer",
           owner_user_id: claimAction ? null : "owner"
         });
         await insertExtension(db, {
-          id: "review-extension",
-          developer_id: "review-developer"
+          identifier: "review-extension",
+          developer_identifier: "review-developer"
         });
         await insertRevision(db, {
           id: "review-revision",
-          extension_id: "review-extension",
-          developer_id: "review-developer",
+          extension_identifier: "review-extension",
+          developer_identifier: "review-developer",
           submitted_by: "owner",
           content: JSON.stringify(sampleContent({ name: "Reviewed content" }))
         });
         await insertDeveloperClaim(db, {
           id: "review-claim",
-          developer_id: "review-developer",
+          developer_identifier: "review-developer",
           claimant_id: "claimant"
         });
         await insertDeveloperClaim(db, {
           id: "competing-claim",
-          developer_id: "review-developer",
+          developer_identifier: "review-developer",
           claimant_id: "competitor"
         });
         const headers = await authHeaders("reviewer");

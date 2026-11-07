@@ -198,13 +198,21 @@ EXTENSION_ASSETS_S3_BUCKET="fb-extensions-assets"
 EXTENSION_ASSETS_S3_ACCESS_KEY_ID="your-keyID"
 EXTENSION_ASSETS_S3_SECRET_ACCESS_KEY="your-applicationKey"
 EXTENSION_ASSETS_PUBLIC_URL="https://extensions-assets.fossbilling.net"
-EXTENSION_ASSETS_S3_PREFIX="local"
 ```
 
-An unset endpoint disables B2 publication. Test images use `local/icons/`;
-production can select a separate prefix. URLs include an immutable image identity,
-and uploads set `Cache-Control: public, max-age=31536000, immutable`. Raster
-identities include both variant hashes so AVIF and PNG can share a URL stem.
+An unset endpoint disables B2 publication. Public object keys use
+`extensions/<extension UUID>/icons/<asset UUID>.<format>`, for example:
+
+```text
+https://extensions-assets.fossbilling.net/extensions/019a0000-0000-7000-8000-000000000001/icons/11111111-1111-4111-8111-111111111111.svg
+```
+
+The parent is the extension record's UUID, not its public identifier. The icon
+record uses its immutable package-source UUID as its asset identity. All format
+variants share that identity, and manifest-only edits reuse the same image URL.
+A different source gets a new asset UUID. Uploads set
+`Cache-Control: public, max-age=31536000, immutable` and retain each file's SHA-256
+in object metadata for verification.
 The API checks existing objects before uploading and caches successful checks in
 KV. Directory pages use direct CDN images with AVIF/PNG `<picture>` fallback,
 bypassing the directory image transformer.

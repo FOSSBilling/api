@@ -72,12 +72,13 @@ async function revisionReadAccess(
   return { data: { extensionId: ownership.data.extensionId }, error: null };
 }
 
+const AcceptedRevisionResultSchema = z.object({
+  identifier: z.string(),
+  revision_id: z.string(),
+  status: z.literal("pending")
+});
 const AcceptedRevisionSchema = z.object({
-  result: z.object({
-    id: z.string(),
-    revision_id: z.string(),
-    status: z.literal("pending")
-  })
+  result: AcceptedRevisionResultSchema
 });
 
 export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
@@ -95,7 +96,15 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
     },
     responses: {
       201: {
-        content: { "application/json": { schema: AcceptedRevisionSchema } },
+        content: {
+          "application/json": {
+            schema: z.object({
+              result: AcceptedRevisionResultSchema.extend({
+                id: z.uuidv7()
+              })
+            })
+          }
+        },
         description:
           "Extension created. It holds the id immediately but stays out of the public extension listing until a moderator approves the revision."
       },
@@ -120,14 +129,14 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
 
   app.openapi(createRouteDefinition, async (c) => {
     const auth = getAuth(c);
-    const { id, ...content } = c.req.valid("json");
+    const { identifier, ...content } = c.req.valid("json");
     const publisher = getPublisher(c);
 
     // A publisher client writes under its mapped developer; the mapping is
     // re-verified inside the insert. Humans resolve their own profile.
     if (publisher) {
       const input: CreateExtensionAsPublisherInput = {
-        extensionId: id,
+        identifier,
         clientId: publisher.clientId,
         developerId: publisher.developerId,
         submittedBy: auth.userId,
@@ -146,6 +155,7 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
         {
           result: {
             id: data.id,
+            identifier,
             revision_id: data.revisionId,
             status: "pending" as const
           }
@@ -175,7 +185,7 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
 
     const db = new ExtensionsDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
     const { data, error } = await db.create({
-      extensionId: id,
+      identifier,
       developerId: owner.data.id,
       ownershipEpoch: owner.data.ownershipEpoch,
       submittedBy: auth.userId,
@@ -192,6 +202,7 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
       {
         result: {
           id: data.id,
+          identifier,
           revision_id: data.revisionId,
           status: "pending" as const
         }
@@ -268,7 +279,13 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
       );
     }
     return c.json(
-      { result: { id, revision_id: data.id, status: "pending" as const } },
+      {
+        result: {
+          identifier: id,
+          revision_id: data.id,
+          status: "pending" as const
+        }
+      },
       202
     );
   });
@@ -337,7 +354,7 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
     return c.json(
       {
         result: {
-          id: data.extensionId,
+          identifier: data.identifier,
           revision_id: data.id,
           status: "pending" as const
         }
@@ -359,7 +376,11 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
         content: {
           "application/json": {
             schema: z.object({
-              result: z.object({ id: z.string(), deleted: z.literal(true) })
+              result: z.object({
+                id: z.uuidv7(),
+                identifier: z.string(),
+                deleted: z.literal(true)
+              })
             })
           }
         },
@@ -389,7 +410,16 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
       );
     }
     revalidateExtensions(c);
-    return c.json({ result: { id: data.id, deleted: true as const } }, 200);
+    return c.json(
+      {
+        result: {
+          id: data.id,
+          identifier: data.identifier,
+          deleted: true as const
+        }
+      },
+      200
+    );
   });
 
   const revisionsRoute = createRoute({
@@ -445,7 +475,7 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
       getExtensionsDb(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.listScoped({
-      extensionId: access.data.extensionId,
+      extensionId: id,
       readerId: auth.userId,
       sort: "newest",
       limit,
@@ -514,11 +544,7 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
     const db = new ExtensionRevisionsDatabase(
       getExtensionsDb(c.env.DB_EXTENSIONS)
     );
-    const { data, error } = await db.getById(
-      access.data.extensionId,
-      revisionId,
-      auth.userId
-    );
+    const { data, error } = await db.getById(id, revisionId, auth.userId);
     if (error || !data) {
       return c.json(
         errorBody(error, "Unable to load revisions"),

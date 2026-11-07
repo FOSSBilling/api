@@ -54,7 +54,10 @@ describe("manifest v1 publishing", () => {
     const { result: extension } = (await detail.json()) as {
       result: Record<string, unknown>;
     };
-    expect(extension).toMatchObject({ ...content, developer: { id: "owner" } });
+    expect(extension).toMatchObject({
+      ...content,
+      developer: { identifier: "owner" }
+    });
     expect(extension).not.toHaveProperty("website");
     const list = await get("/extensions/v2/extensions?type=module", {});
     const { result: items } = (await list.json()) as {
@@ -126,18 +129,20 @@ describe("manifest v1 publishing", () => {
     expect(
       (
         await post(
-          `/extensions/v2/extensions/${content.id}/revisions/${result.revision_id}/approve`,
+          `/extensions/v2/extensions/${content.identifier}/revisions/${result.revision_id}/approve`,
           await authHeaders("moderator"),
           {}
         )
       ).status
     ).toBe(200);
     const published = (await (
-      await get(`/extensions/v2/extensions/${content.id}`, {})
+      await get(`/extensions/v2/extensions/${content.identifier}`, {})
     ).json()) as { result: typeof content };
     expect(published.result.requires).toEqual(requires);
     expect(published.result.releases[0].requires).toEqual(requires);
-    expect((await get(`/extensions/v1/${content.id}`, {})).status).toBe(200);
+    expect((await get(`/extensions/v1/${content.identifier}`, {})).status).toBe(
+      200
+    );
   });
 
   it("keeps the historical minimum-version field bounded in revision schemas", () => {
@@ -188,7 +193,10 @@ describe("manifest v1 publishing", () => {
   it("allows existing long identities to be edited without relaxing new manifest IDs", async () => {
     await seedDeveloper("owner", "user-1");
     const id = "e".repeat(120);
-    await insertExtension(db, { id, developer_id: "owner" });
+    await insertExtension(db, {
+      identifier: id,
+      developer_identifier: "owner"
+    });
     expect(
       (
         await put(

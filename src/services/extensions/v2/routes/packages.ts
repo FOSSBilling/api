@@ -75,7 +75,7 @@ async function jobResponse(db: D1Database, job: PackageJob) {
   return {
     result: {
       id: job.id,
-      extension_id: job.manifest.id,
+      extension_identifier: job.manifest.id,
       status: job.status,
       artifact: artifact ? artifactResponse(artifact).result : null,
       error: job.status === "failed" ? job.error : null,
@@ -200,7 +200,7 @@ export function registerPackageRoutes(app: ExtensionsV2App) {
             SELECT d.owner_user_id FROM package_sources s
             JOIN developers d ON d.profile_generation=s.profile_generation
             JOIN users moderator ON moderator.id=? AND moderator.is_moderator=1 AND moderator.deleted_at IS NULL
-            WHERE s.id=? AND s.extension_id=? AND s.version=?
+            WHERE s.id=? AND s.extension_identifier=? AND s.version=?
             AND EXISTS (SELECT 1 FROM package_artifacts a WHERE a.source_id=s.id AND a.published_at IS NOT NULL)
           `
             )
@@ -436,7 +436,7 @@ export function registerPackageRoutes(app: ExtensionsV2App) {
           const auth = getOptionalAuth(c);
           const row = await c.env.DB_EXTENSIONS.prepare(
             `${ARTIFACT_SELECT} WHERE a.id=? AND (
-          (a.published_at IS NOT NULL AND EXISTS (SELECT 1 FROM extensions e WHERE lower(e.id)=lower(s.extension_id) AND e.published_at IS NOT NULL AND e.delisted_at IS NULL))
+          (a.published_at IS NOT NULL AND EXISTS (SELECT 1 FROM extensions e WHERE lower(e.identifier)=lower(s.extension_identifier) AND e.published_at IS NOT NULL AND e.delisted_at IS NULL))
           OR EXISTS (SELECT 1 FROM users u WHERE u.id=? AND u.deleted_at IS NULL AND (u.is_moderator=1 OR EXISTS (SELECT 1 FROM developers d WHERE d.profile_generation=s.profile_generation AND d.owner_user_id=u.id)))
         )`
           )
@@ -446,7 +446,8 @@ export function registerPackageRoutes(app: ExtensionsV2App) {
             throw new PackageError("NOT_FOUND", "Package not found", 404);
           if (!download && !icon) return c.json(artifactResponse(row), 200);
           if (icon) {
-            if (row.published_at) scheduleIconPublication(c, row.extension_id);
+            if (row.published_at)
+              scheduleIconPublication(c, row.extension_identifier);
             const avif = (c.req.header("Accept") ?? "")
               .split(",")
               .some((part) => {
@@ -509,7 +510,7 @@ export function registerPackageRoutes(app: ExtensionsV2App) {
           return new Response(body, {
             headers: {
               "Content-Type": "application/zip",
-              "Content-Disposition": `attachment; filename="${row.extension_id}-${row.version}-${row.id}.zip"`,
+              "Content-Disposition": `attachment; filename="${row.extension_identifier}-${row.version}-${row.id}.zip"`,
               ETag: `"${row.sha256}"`,
               "X-Content-Type-Options": "nosniff",
               "Cache-Control": "private, no-store",

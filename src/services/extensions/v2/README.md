@@ -13,6 +13,10 @@ Endpoints are not listed here. The service publishes its own contract:
 - **OpenAPI document:** `GET /extensions/v2/docs/openapi.json`
 - **Reference UI:** `GET /extensions/v2/docs`
 
+## Directory Identity
+
+Extensions and developers have generated UUIDv7 `id` primary keys and separate, globally unique `identifier` fields. Database relationships and machine publisher bindings use UUIDs. Public profile/extension paths use identifiers; `name` is the editable display name. Creation requests supply `identifier`, never the internal ID. The package manifest's `id` remains the public extension identifier. Staged package sources record this explicitly as `extension_identifier`, because a package can be prepared before its directory listing exists.
+
 ## Manifest contract
 
 New v2 writes use the [FOSSBilling manifest v1 fields](https://github.com/FOSSBilling/modules/blob/main/manifest.schema.json): `manifest_version: 1`, `type: "module"` (replacing `mod`; standalone `hook` entries require manual reclassification), `author: {name, url?}`, a string `license`, optional `homepage_url` (replacing `website`), and `requires: {fossbilling, php, modules?}`. IDs allow lowercase letters, digits, underscores, and hyphens, up to 64 characters. Names are limited to 100 characters, descriptions to 500, and versions use SemVer without a `v` prefix.
@@ -37,7 +41,7 @@ For example, after checking an affected package's actual requirements, an operat
 UPDATE extensions
 SET releases = json_set(releases, '$[0].requires',
   json('{"fossbilling":">=0.8.9","php":">=8.3"}'))
-WHERE id = 'affected-extension';
+WHERE identifier = 'affected-extension';
 ```
 
 Use the ID, index, and verified constraints from the preflight investigation; the values above are examples. Re-run the query until it returns no rows.

@@ -15,6 +15,7 @@ import {
 } from "./harness";
 import {
   insertUser,
+  getDeveloper,
   insertExtension,
   bumpDeveloperOwnership
 } from "./db-fixtures";
@@ -54,7 +55,10 @@ async function registerPublisher(canPublish = true): Promise<Response> {
   return put(
     `/extensions/v2/m2m/clients/${CLIENT}`,
     await authHeaders(MODERATOR),
-    { developer_id: DEVELOPER, can_publish: canPublish }
+    {
+      developer_id: (await getDeveloper(db, DEVELOPER))!.id,
+      can_publish: canPublish
+    }
   );
 }
 
@@ -80,7 +84,12 @@ describe("m2m publisher registration", () => {
     const res = await put(
       `/extensions/v2/m2m/clients/${CLIENT}`,
       await authHeaders(OWNER),
-      { developer_id: DEVELOPER, can_publish: true }
+      {
+        developer_id:
+          (await getDeveloper(db, DEVELOPER))?.id ??
+          "019a0000-0000-7000-8000-000000000001",
+        can_publish: true
+      }
     );
     expect(res.status).toBe(403);
   });
@@ -100,7 +109,7 @@ describe("m2m publisher registration", () => {
     };
     expect(body.result).toMatchObject({
       client_id: CLIENT,
-      developer_id: DEVELOPER,
+      developer_id: (await getDeveloper(db, DEVELOPER))!.id,
       can_publish: true,
       revoked_at: null
     });
@@ -117,13 +126,19 @@ describe("m2m publisher registration", () => {
     const missing = await put(
       `/extensions/v2/m2m/clients/${CLIENT}`,
       await authHeaders(MODERATOR),
-      { developer_id: "no-such-developer", can_publish: true }
+      {
+        developer_id: "019a0000-0000-7000-8000-000000000001",
+        can_publish: true
+      }
     );
     expect(missing.status).toBe(404);
     const unclaimed = await put(
       `/extensions/v2/m2m/clients/${CLIENT}`,
       await authHeaders(MODERATOR),
-      { developer_id: "unclaimed-dev", can_publish: true }
+      {
+        developer_id: (await getDeveloper(db, "unclaimed-dev"))!.id,
+        can_publish: true
+      }
     );
     expect(unclaimed.status).toBe(404);
   });
@@ -168,9 +183,11 @@ describe("m2m publisher writes", () => {
     };
     const revision = await revisionRow(body.result.revision_id);
     expect(revision?.submitted_by).toBe(`m2m:${CLIENT}`);
-    expect(revision?.developer_id).toBe(DEVELOPER);
+    expect(revision?.developer_id).toBe(
+      (await getDeveloper(db, DEVELOPER))!.id
+    );
     const ext = await db
-      .prepare("SELECT created_by FROM extensions WHERE id = ?")
+      .prepare("SELECT created_by FROM extensions WHERE identifier= ?")
       .bind("published-ext")
       .first<{ created_by: string }>();
     expect(ext?.created_by).toBe(OWNER);
@@ -179,8 +196,8 @@ describe("m2m publisher writes", () => {
   it("proposes an edit to an extension of the mapped developer", async () => {
     await registerPublisher();
     await insertExtension(db, {
-      id: "existing-ext",
-      developer_id: DEVELOPER,
+      identifier: "existing-ext",
+      developer_identifier: DEVELOPER,
       name: "Existing",
       source: '{"type":"github","repo":"example/existing"}'
     });
@@ -195,12 +212,21 @@ describe("m2m publisher writes", () => {
     };
     const revision = await revisionRow(body.result.revision_id);
     expect(revision?.submitted_by).toBe(`m2m:${CLIENT}`);
+    const repeated = await put(
+      "/extensions/v2/extensions/existing-ext",
+      await m2mHeaders(["extensions:push"]),
+      sampleContent({ name: "Another Edit" })
+    );
+    expect(repeated.status).toBe(409);
+    await expect(repeated.json()).resolves.toMatchObject({
+      error: { message: "An edit to this extension is already awaiting review" }
+    });
   });
 
   it("rejects writes for an unregistered client", async () => {
     await insertExtension(db, {
-      id: "existing-ext",
-      developer_id: DEVELOPER,
+      identifier: "existing-ext",
+      developer_identifier: DEVELOPER,
       name: "Existing",
       source: '{"type":"github","repo":"example/existing"}'
     });
@@ -338,7 +364,7 @@ describe("m2m publisher auto-approval", () => {
     );
     const ext = await db
       .prepare(
-        "SELECT published_at, published_revision_id FROM extensions WHERE id = ?"
+        "SELECT published_at, published_revision_id FROM extensions WHERE identifier= ?"
       )
       .bind("auto-published")
       .first<{ published_at: string | null; published_revision_id: string }>();
