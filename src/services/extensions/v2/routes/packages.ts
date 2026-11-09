@@ -1,12 +1,11 @@
 import { PackageJobsDatabase } from "../db/package-jobs";
 import { dispatchPackageJob, type PackageJob } from "../packages/jobs";
-import { canonicalJson } from "../db/packages";
 import { sha256 } from "../package-builder";
 import { createRoute, z } from "@hono/zod-openapi";
 import type { Context, MiddlewareHandler } from "hono";
 import { getAuth } from "../../../../lib/auth";
 import { getPlatform } from "../../../../lib/middleware";
-import { ARTIFACT_SELECT, ArtifactRow } from "../db/packages";
+import { ARTIFACT_SELECT, ArtifactRow, canonicalJson } from "../db/packages";
 import {
   requireContentWrite,
   getPublisher,
@@ -56,7 +55,7 @@ function artifactResponse(row: ArtifactRow) {
     result: {
       id: row.id,
       source_id: row.source_id,
-      manifest: ManifestSchema.loose().parse(JSON.parse(row.manifest)),
+      manifest: ManifestSchema.parse(JSON.parse(row.manifest)),
       sha256: row.sha256,
       download_url: row.download_url,
       published_at: row.published_at,

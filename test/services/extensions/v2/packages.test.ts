@@ -80,9 +80,7 @@ afterEach(() => {
     "S3_SECRET_ACCESS_KEY",
     "PUBLIC_URL"
   ])
-    delete (env as unknown as Record<string, unknown>)[
-      `EXTENSION_ASSETS_${key}`
-    ];
+    Reflect.deleteProperty(env, `EXTENSION_ASSETS_${key}`);
   for (const suffix of [
     "ENDPOINT",
     "REGION",
@@ -91,9 +89,7 @@ afterEach(() => {
     "SECRET_ACCESS_KEY",
     "PREFIX"
   ])
-    delete (env as unknown as Record<string, unknown>)[
-      `EXTENSION_PACKAGES_S3_${suffix}`
-    ];
+    Reflect.deleteProperty(env, `EXTENSION_PACKAGES_S3_${suffix}`);
   env.EXTENSION_PACKAGES_MODE = "disabled";
 });
 async function zip(content = "<?php // source") {

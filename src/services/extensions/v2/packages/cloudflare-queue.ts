@@ -12,8 +12,8 @@ export async function prepareQueuedPackage(
   env: CloudflareBindings,
   job: PackageJob
 ): Promise<string> {
-  const getEnv = (name: string) =>
-    createCloudflareBindings(env).environment.get(name);
+  const bindings = createCloudflareBindings(env);
+  const getEnv = (name: string) => bindings.environment.get(name);
   const store = configuredPackageStore(env, getEnv);
   if (!store)
     throw new PackageError(
