@@ -31,7 +31,7 @@
     "@hono/zod-openapi": "1.6.3",
     "@octokit/graphql": "9.0.5",
     "@octokit/request": "10.0.16",
-    "@scalar/hono-api-reference": "0.12.17",
+    "@scalar/hono-api-reference": "0.12.18",
     "@zeropress/svg-hush": "0.1.1",
     "@zip.js/zip.js": "2.24.0",
     "aws4fetch": "1.0.20",
