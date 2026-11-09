@@ -5,7 +5,9 @@ import { createRoute, z } from "@hono/zod-openapi";
 import type { Context, MiddlewareHandler } from "hono";
 import { getAuth } from "../../../../lib/auth";
 import { getPlatform } from "../../../../lib/middleware";
-import { ARTIFACT_SELECT, ArtifactRow, canonicalJson } from "../db/packages";
+import { canonicalJson } from "../packages/manifest";
+import type { ArtifactRow } from "../packages/repository";
+import { PackageBuildDatabase } from "../db/package-builds";
 import {
   requireContentWrite,
   getPublisher,
@@ -15,13 +17,10 @@ import {
   paceContentAccount,
   paceContentIp
 } from "../middleware";
-import {
-  reserveObject,
-  packageOwner,
-  cleanupPackageObjects
-} from "../packages/build";
+import { reserveObject, cleanupPackageObjects } from "../packages/build";
 import { PackageError } from "../packages/errors";
-import { boundedBytes, packageStore } from "../packages/store";
+import { boundedBytes } from "../packages/store";
+import { packageStore } from "../../../../lib/adapters/cloudflare/package-store";
 import { ManifestSchema } from "../schemas/manifest";
 import {
   PackageArtifactSchema,
@@ -65,10 +64,7 @@ function artifactResponse(row: ArtifactRow) {
 }
 async function jobResponse(db: D1Database, job: PackageJob) {
   const artifact = job.artifactId
-    ? await db
-        .prepare(`${ARTIFACT_SELECT} WHERE a.id=?`)
-        .bind(job.artifactId)
-        .first<ArtifactRow>()
+    ? await new PackageBuildDatabase(db).getArtifact(job.artifactId)
     : null;
   return {
     result: {
@@ -188,26 +184,19 @@ export function registerPackageRoutes(app: ExtensionsV2App) {
             413
           );
         const db = c.env.DB_EXTENSIONS;
+        const repository = new PackageBuildDatabase(db);
         const publisher = getPublisher(c);
         let ownerUserId = getAuth(c).userId;
         // Moderator corrections can rebuild published source, but cannot upload new files for another developer.
         if (form.source_id && !publisher) {
-          const correction = await db
-            .prepare(
-              `
-            SELECT d.owner_user_id FROM package_sources s
-            JOIN developers d ON d.profile_generation=s.profile_generation
-            JOIN users moderator ON moderator.id=? AND moderator.is_moderator=1 AND moderator.deleted_at IS NULL
-            WHERE s.id=? AND s.extension_identifier=? AND s.version=?
-            AND EXISTS (SELECT 1 FROM package_artifacts a WHERE a.source_id=s.id AND a.published_at IS NOT NULL)
-          `
-            )
-            .bind(ownerUserId, form.source_id, manifest.id, manifest.version)
-            .first<{ owner_user_id: string }>();
+          const correction = await repository.correctionOwner(
+            ownerUserId,
+            form.source_id,
+            manifest
+          );
           if (correction) ownerUserId = correction.owner_user_id;
         }
-        const owner = await packageOwner(
-          db,
+        const owner = await repository.getOwner(
           ownerUserId,
           manifest.id,
           publisher
@@ -239,7 +228,7 @@ export function registerPackageRoutes(app: ExtensionsV2App) {
         if (!job) {
           const uploadObjectId = source
             ? await reserveObject(
-                db,
+                repository,
                 store,
                 owner,
                 manifest.id,
@@ -298,22 +287,17 @@ export function registerPackageRoutes(app: ExtensionsV2App) {
     async (c) => {
       try {
         const db = c.env.DB_EXTENSIONS;
+        const repository = new PackageBuildDatabase(db);
         const job = await new PackageJobsDatabase(db).get(
           c.req.valid("param").jobId
         );
         if (!job)
           throw new PackageError("NOT_FOUND", "Package job not found", 404);
         const userId = getAuth(c).userId;
-        const moderator = await db
-          .prepare(
-            "SELECT 1 FROM users WHERE id=? AND is_moderator=1 AND deleted_at IS NULL"
-          )
-          .bind(userId)
-          .first();
+        const moderator = await repository.isModerator(userId);
         if (!moderator) {
           const publisher = getPublisher(c);
-          const owner = await packageOwner(
-            db,
+          const owner = await repository.getOwner(
             userId,
             job.manifest.id,
             publisher
@@ -362,7 +346,7 @@ export function registerPackageRoutes(app: ExtensionsV2App) {
           {
             result: {
               deleted: await cleanupPackageObjects(
-                c.env.DB_EXTENSIONS,
+                new PackageBuildDatabase(c.env.DB_EXTENSIONS),
                 packageStore(c)!
               )
             }
@@ -432,14 +416,9 @@ export function registerPackageRoutes(app: ExtensionsV2App) {
       async (c: Context<{ Bindings: CloudflareBindings }>) => {
         try {
           const auth = getOptionalAuth(c);
-          const row = await c.env.DB_EXTENSIONS.prepare(
-            `${ARTIFACT_SELECT} WHERE a.id=? AND (
-          (a.published_at IS NOT NULL AND EXISTS (SELECT 1 FROM extensions e WHERE lower(e.identifier)=lower(s.extension_identifier) AND e.published_at IS NOT NULL AND e.delisted_at IS NULL))
-          OR EXISTS (SELECT 1 FROM users u WHERE u.id=? AND u.deleted_at IS NULL AND (u.is_moderator=1 OR EXISTS (SELECT 1 FROM developers d WHERE d.profile_generation=s.profile_generation AND d.owner_user_id=u.id)))
-        )`
-          )
-            .bind(c.req.param("packageId"), auth?.userId ?? "")
-            .first<ArtifactRow>();
+          const row = await new PackageBuildDatabase(
+            c.env.DB_EXTENSIONS
+          ).getArtifactForReader(c.req.param("packageId")!, auth?.userId ?? "");
           if (!row)
             throw new PackageError("NOT_FOUND", "Package not found", 404);
           if (!download && !icon) return c.json(artifactResponse(row), 200);

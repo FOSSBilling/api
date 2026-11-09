@@ -1,7 +1,7 @@
 import { logError } from "../../../../lib/logger";
 import type { IMessageQueue } from "../../../../lib/interfaces";
 import type { Manifest } from "../schemas/manifest";
-import type { PackageOwner } from "./build";
+import type { PackageOwner } from "./repository";
 import { PackageError } from "./errors";
 
 export interface PackageJob {

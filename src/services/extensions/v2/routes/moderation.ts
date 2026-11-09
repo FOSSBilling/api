@@ -1,4 +1,4 @@
-import { schedulePublishedIconUpdate } from "../packages/public-assets";
+import { schedulePublishedIconUpdate } from "../../../../lib/adapters/cloudflare/package-assets";
 import {
   paceContentAccount,
   requireApproveAccess,

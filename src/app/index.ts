@@ -1,7 +1,7 @@
 import {
   consumePackageJobs,
   recoverPackageJobs
-} from "../services/extensions/v2/packages/cloudflare-queue";
+} from "../lib/adapters/cloudflare/package-jobs";
 import { getExtensionsDb } from "../lib/db";
 import {
   maintainExtensionResources,

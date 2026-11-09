@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({
   maintain: vi.fn(),
   report: vi.fn()
 }));
-vi.mock("../../src/services/extensions/v2/packages/cloudflare-queue", () => ({
+vi.mock("../../src/lib/adapters/cloudflare/package-jobs", () => ({
   consumePackageJobs: vi.fn(),
   recoverPackageJobs: mocks.recover
 }));

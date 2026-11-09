@@ -2,8 +2,9 @@ import { PackageJobsDatabase } from "../../../../src/services/extensions/v2/db/p
 import { processPackageJob } from "../../../../src/services/extensions/v2/packages/jobs";
 import {
   recoverPackageJobs,
-  prepareQueuedPackage
-} from "../../../../src/services/extensions/v2/packages/cloudflare-queue";
+  packagePreparation
+} from "../../../../src/lib/adapters/cloudflare/package-jobs";
+import { prepareQueuedPackage } from "../../../../src/services/extensions/v2/packages/prepare";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:workers";
 import {
@@ -27,10 +28,8 @@ import {
 import { PackageArtifactSchema } from "../../../../src/services/extensions/v2/schemas/packages";
 import { ManifestSchema } from "../../../../src/services/extensions/v2/schemas/manifest";
 import { ExtensionContentSchema } from "../../../../src/services/extensions/v2/schemas/extensions";
-import {
-  validatePackageContent,
-  contentManifest
-} from "../../../../src/services/extensions/v2/db/packages";
+import { validatePackageContent } from "../../../../src/services/extensions/v2/db/packages";
+import { contentManifest } from "../../../../src/services/extensions/v2/packages/manifest";
 import { sha256 } from "../../../../src/services/extensions/v2/package-builder";
 import {
   setupExtensionsV2Tests,
@@ -61,11 +60,13 @@ beforeEach(async () => {
   vi.spyOn(env.EXTENSION_PACKAGE_QUEUE, "send").mockResolvedValue({
     metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } }
   });
-  delete env.EXTENSION_PACKAGES_S3_ENDPOINT;
-  delete env.EXTENSION_ASSETS_S3_ENDPOINT;
-  env.ENVIRONMENT = "local";
-  env.EXTENSION_PACKAGES_MODE = "local";
-  env.EXTENSION_PACKAGES_BASE_URL = "http://localhost:8789/extensions/v2";
+  Reflect.deleteProperty(env, "EXTENSION_PACKAGES_S3_ENDPOINT");
+  Reflect.deleteProperty(env, "EXTENSION_ASSETS_S3_ENDPOINT");
+  Object.assign(env, {
+    ENVIRONMENT: "local",
+    EXTENSION_PACKAGES_MODE: "local",
+    EXTENSION_PACKAGES_BASE_URL: "http://localhost:8789/extensions/v2"
+  });
   await authHeaders("owner");
   await seedDeveloper("developer", "owner");
 });
@@ -137,7 +138,7 @@ async function finishJob(response: Response): Promise<Response> {
     attempt++
   ) {
     await processPackageJob(jobs, result.id, (job) =>
-      prepareQueuedPackage(env, job)
+      prepareQueuedPackage(packagePreparation(env), job)
     );
     job = (await jobs.get(result.id))!;
     if (job.status === "processing")
@@ -519,7 +520,7 @@ describe("queued package preparation", () => {
     await bucket().delete(job.uploadObjectId!);
     expect(
       await processPackageJob(jobs, job.id, (job) =>
-        prepareQueuedPackage(env, job)
+        prepareQueuedPackage(packagePreparation(env), job)
       )
     ).toBe("retry");
     expect(await jobs.get(job.id)).toMatchObject({
@@ -532,7 +533,7 @@ describe("queued package preparation", () => {
     });
     expect(
       await processPackageJob(jobs, job.id, (job) =>
-        prepareQueuedPackage(env, job)
+        prepareQueuedPackage(packagePreparation(env), job)
       )
     ).toBe("ack");
     expect(await jobs.get(job.id)).toMatchObject({
@@ -570,7 +571,10 @@ describe("queued package preparation", () => {
       false
     );
     expect((await jobs.get(job.id))!.status).toBe("processing");
-    const artifactId = await prepareQueuedPackage(env, claimed!);
+    const artifactId = await prepareQueuedPackage(
+      packagePreparation(env),
+      claimed!
+    );
     await jobs.complete(job.id, "second", artifactId);
     expect((await jobs.get(job.id))!.status).toBe("ready");
   });
@@ -589,7 +593,7 @@ describe("queued package preparation", () => {
     const prepare = vi.fn(
       (
         job: import("../../../../src/services/extensions/v2/packages/jobs").PackageJob
-      ) => prepareQueuedPackage(env, job)
+      ) => prepareQueuedPackage(packagePreparation(env), job)
     );
     await Promise.all([
       processPackageJob(jobs, job.id, prepare),
@@ -1588,8 +1592,8 @@ describe("stored directory packages", () => {
     ).toBe(true);
     Object.assign(env, { EXTENSION_PACKAGES_S3_PREFIX: "local" });
     expect((await upload()).status).toBe(503);
-    delete env.EXTENSION_PACKAGES_S3_PREFIX;
-    env.ENVIRONMENT = "local";
+    Reflect.deleteProperty(env, "EXTENSION_PACKAGES_S3_PREFIX");
+    Object.assign(env, { ENVIRONMENT: "local" });
   });
 
   it("checks account ownership, upload bounds, invalid archives and disabled storage", async () => {

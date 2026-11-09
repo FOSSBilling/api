@@ -1,55 +1,9 @@
+import { canonicalJson, contentManifest } from "../packages/manifest";
+import type { ArtifactRow } from "../packages/repository";
 import { latestRelease } from "../../../../lib/releases";
-import { ExtensionContent } from "../schemas/extensions";
+import type { ExtensionContent } from "../schemas/extensions";
 import { ManifestSchema } from "../schemas/manifest";
 import type { DatabaseError } from "../../../../lib/interfaces";
-
-// Sort nested maps too: object key ordering does not change a manifest.
-export function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (value !== null && typeof value === "object")
-    return `{${Object.entries(value)
-      .filter(([, v]) => v !== undefined)
-      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-      .map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`)
-      .join(",")}}`;
-  return JSON.stringify(value);
-}
-
-export function contentManifest(id: string, content: ExtensionContent) {
-  return ManifestSchema.parse({
-    id,
-    manifest_version: content.manifest_version,
-    type: content.type,
-    name: content.name,
-    version: content.version,
-    description: content.description,
-    author: content.author,
-    license: content.license,
-    homepage_url: content.homepage_url,
-    requires: content.requires
-  });
-}
-
-export interface ArtifactRow {
-  id: string;
-  source_id: string;
-  manifest: string;
-  sha256: string;
-  object_id: string;
-  download_url: string;
-  published_at: string | null;
-  created_at: string;
-  extension_identifier: string;
-  profile_generation: string;
-  version: string;
-  icon_source_id: string | null;
-  avif_object_id: string | null;
-  avif_sha256: string | null;
-  png_object_id: string | null;
-  png_sha256: string | null;
-  svg_object_id: string | null;
-  svg_sha256: string | null;
-}
 
 export const ARTIFACT_SELECT = `SELECT a.*, s.extension_identifier, s.profile_generation, s.version, i.source_id AS icon_source_id, i.avif_object_id, i.avif_sha256, i.png_object_id, i.png_sha256, i.svg_object_id, i.svg_sha256
   FROM package_artifacts a JOIN package_sources s ON s.id=a.source_id LEFT JOIN package_icons i ON i.source_id=s.id`;

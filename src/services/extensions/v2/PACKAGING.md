@@ -6,30 +6,18 @@ then publishes them through the existing revision review. It never runs uploaded
 code or package build scripts. Package storage uses the private B2 bucket when configured, otherwise Wrangler's local R2 emulator. Prepared icons use the public asset bucket, including icons for pending submissions.
 Package routes are disabled by default. Local development and production enablement are separate modes.
 
-## Run the local demo
+## Local development and testing
 
-Use Node.js 24, install dependencies with `npm ci`, then:
+Run the API through the normal `npm run dev` command. Use ignored `.dev.vars`
+for local credentials, set `ENVIRONMENT=local` and `EXTENSION_PACKAGES_MODE=local`,
+and set `EXTENSION_PACKAGES_BASE_URL` to the local API's `/extensions/v2` URL.
+Apply local migrations with `npm run db:migrate:all:local`. The configured Queue
+and Images bindings run locally under Wrangler; B2 requests use the configured
+buckets and development keys, so use a separate key and package object prefix.
 
-```sh
-npm run packages:setup
-npm run packages:dev
-```
-
-In another terminal:
-
-```sh
-npm run packages:demo -- --fresh
-```
-
-Setup creates an ignored `.dev.vars.packages-local`, applies local migrations,
-and seeds a developer and reviewer. Data lives in `.wrangler/package-demo`;
-the API listens on port 8789. The demo uploads a synthetic module, checks private
-access, submits and approves it, verifies the public download checksum, and
-builds a manifest correction from the stored source. `--fresh` allocates a new
-extension ID and includes an SVG icon, so private access is checked before any
-publication. It also verifies anonymous job-status denial, owner preview headers,
-and public icon access after approval. Without `--fresh`, the original no-icon
-fixture is repeatable and reuses artifacts.
+`npm run test:all` covers the package lifecycle through the real API routes and
+D1 repository, with emulated storage and images. Node tests also exercise package
+preparation and B2 storage without a Cloudflare runtime.
 
 ## API and review
 
@@ -75,13 +63,15 @@ so it is not uploaded to package storage a second time.
 The generic `IMessageQueue` producer interface lives in `src/lib/interfaces.ts`;
 `CloudflareQueueAdapter` implements it. `processPackageJob` depends on a
 `PackageJobRepository` and a preparation callback, not Cloudflare MessageBatch,
-acknowledgements or retry APIs. The D1 repository and Cloudflare consumer wire the
-existing storage/image implementation into that lifecycle. Node tests exercise
-processing through in-memory implementations without a Cloudflare runtime.
-This keeps the new job lifecycle portable; existing D1 and Images integrations
-would still need their own adapters for a complete provider migration.
+acknowledgements or retry APIs. Package preparation accepts a `PackageRepository`, `PackageStore` and
+`PackageImageProcessor`. SQL and guarded writes live in `db/package-builds.ts`;
+Cloudflare bindings, queue delivery and image processing live under
+`src/lib/adapters/cloudflare/`, and the B2 store lives under `src/lib/adapters/b2/`.
+The package workflow contains no Cloudflare binding types or SDK calls. A different
+runtime supplies these interfaces and its own queue consumer; the rest of the API
+still has existing platform integrations outside this package workflow.
 
-Production and local configurations each declare a producer/consumer pair. The
+Wrangler declares the production producer/consumer pair; local development emulates it. The
 consumer handles one message at a time, with concurrency limited to one. Duplicate
 delivery uses a 20-minute processing lease; a busy duplicate is delayed until that
 lease can expire. Temporary failures retry after a minute, at most three processing
@@ -161,8 +151,7 @@ newer publication.
 
 Set these in the integrated local API's ignored `.dev.vars`. The directory
 worktree's root `.dev.vars` may hold the development credentials, but the API
-process must receive them in its own configuration file. The standalone demo
-uses `.dev.vars.packages-local`.
+process must receive them in its own configuration file.
 
 ```dotenv
 EXTENSION_PACKAGES_S3_ENDPOINT="https://s3.eu-central-003.backblazeb2.com"
@@ -176,8 +165,9 @@ EXTENSION_PACKAGES_S3_PREFIX="local"
 Keep this bucket private. Use a separate development key restricted to the bucket
 with read, write and delete-file permissions. No public URL or domain is required.
 Use `EXTENSION_PACKAGES_MODE=local` only outside production. The committed production configuration remains disabled.
-Without S3 endpoints, ZIPs and prepared icons use the same local R2 emulator binding. An incomplete S3 configuration
-or upstream failure returns 503 rather than silently switching storage backends.
+The tests inject a local R2 store when S3 endpoints are unset. Normal local development
+uses B2 with development credentials. An incomplete S3 configuration or upstream
+failure returns 503 rather than silently switching storage backends.
 
 R2 validates the supplied SHA-256 when writing and returns that checksum as
 object metadata. Its adapter checks this metadata on reads without rehashing the
@@ -196,8 +186,7 @@ reservation for retry.
 
 ## B2 asset and Cloudflare testing
 
-Add these to the local API's ignored `.dev.vars` (use
-`.dev.vars.packages-local` for the standalone API demo):
+Add these to the local API's ignored `.dev.vars`:
 
 ```dotenv
 EXTENSION_ASSETS_S3_ENDPOINT="https://s3.eu-central-003.backblazeb2.com"
@@ -210,7 +199,7 @@ EXTENSION_ASSETS_PUBLIC_URL="https://extensions-assets.fossbilling.net"
 
 Restrict the asset key to this bucket with read, write and delete-file permissions.
 Pending API previews read these stored objects; cleanup deletes abandoned versions.
-An unset endpoint keeps assets in the local emulator instead of B2. Public object keys use
+Tests can inject emulated storage when the endpoint is unset. Public object keys use
 `extensions/<extension UUID>/icons/<asset UUID>.<format>`, for example:
 
 ```text

@@ -9,23 +9,14 @@ compressed payloads, replaces the manifest and prepares the display icon.
 
 ## Local checks
 
-The standalone demo uses the real Wrangler queue consumer with local D1 and R2:
+Run `npm run test:all`. Worker tests cover the API routes, guarded D1 writes,
+archive limits and corruption, ownership changes, publisher revocation, private
+previews, approval and cleanup. Storage and image bindings are emulated for these
+tests. Node tests exercise package preparation and job processing through their
+interfaces, plus the B2 adapter's request and integrity checks.
 
-```sh
-npm run packages:setup
-npm run packages:dev
-# In a second terminal:
-npm run packages:demo -- --fresh
-```
-
-A fresh run verifies private job status, private package and API preview access
-before approval, preview security headers, review and approval, the public ZIP
-checksum and icon, and a private manifest correction using the stored source.
-
-Worker and Node tests additionally cover archive limits and corruption, queue
-retries and duplicate delivery, interrupted leases, ownership changes and
-publisher revocation. The directory tests cover the private job proxy and polling
-failures; publisher tests cover completion, rejection and the polling deadline.
+The directory tests cover the private job proxy and polling failures; publisher
+tests cover completion, rejection and the polling deadline.
 
 ## Real B2 smoke test
 

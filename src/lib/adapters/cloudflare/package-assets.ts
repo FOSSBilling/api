@@ -1,8 +1,9 @@
-import { logError } from "../../../../lib/logger";
-import { revalidateExtensions } from "../revalidate";
+import { PackageBuildDatabase } from "../../../services/extensions/v2/db/package-builds";
+import { logError } from "../../logger";
+import { revalidateExtensions } from "../../../services/extensions/v2/revalidate";
 import type { Context } from "hono";
-import { getPlatform } from "../../../../lib/middleware";
-import { PackageError } from "./errors";
+import { getPlatform } from "../../middleware";
+import { PackageError } from "../../../services/extensions/v2/packages/errors";
 
 // Publishing changes the listing URL only; icons are already stored in B2.
 async function updatePublishedIconUrl(
@@ -11,18 +12,8 @@ async function updatePublishedIconUrl(
 ) {
   extensionId = extensionId.toLowerCase();
   const platform = getPlatform(c);
-  const row = await c.env.DB_EXTENSIONS.prepare(
-    `
-    SELECT e.published_revision_id, coalesce(i.svg_object_id,i.png_object_id) AS object_key
-    FROM extensions e
-    JOIN package_artifacts a ON a.download_url=e.download_url AND a.published_at IS NOT NULL
-    JOIN package_sources s ON s.id=a.source_id AND s.extension_identifier=lower(e.identifier)
-    JOIN package_icons i ON i.source_id=s.id
-    WHERE lower(e.identifier)=? AND e.published_at IS NOT NULL AND e.delisted_at IS NULL
-  `
-  )
-    .bind(extensionId)
-    .first<{ published_revision_id: string; object_key: string | null }>();
+  const repository = new PackageBuildDatabase(c.env.DB_EXTENSIONS);
+  const row = await repository.publishedIcon(extensionId);
   if (!row?.object_key) return;
   const base = platform.getEnv("EXTENSION_ASSETS_PUBLIC_URL");
   if (!base)
@@ -45,12 +36,11 @@ async function updatePublishedIconUrl(
       503
     );
   const iconUrl = `${publicBase.href.replace(/\/$/, "")}/${row.object_key}`;
-  const updated = await c.env.DB_EXTENSIONS.prepare(
-    "UPDATE extensions SET icon_url=? WHERE lower(identifier)=? AND published_revision_id=? AND delisted_at IS NULL AND icon_url IS NOT ?"
-  )
-    .bind(iconUrl, extensionId, row.published_revision_id, iconUrl)
-    .run();
-  return Boolean(updated.meta.changes);
+  return repository.updatePublishedIcon(
+    extensionId,
+    row.published_revision_id,
+    iconUrl
+  );
 }
 
 export function schedulePublishedIconUpdate(

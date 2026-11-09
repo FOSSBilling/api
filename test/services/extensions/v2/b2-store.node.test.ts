@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { b2ObjectStore } from "../../../../src/services/extensions/v2/packages/b2-store";
+import { b2ObjectStore } from "../../../../src/lib/adapters/b2/package-store";
 import {
   sha256,
   PACKAGE_LIMITS

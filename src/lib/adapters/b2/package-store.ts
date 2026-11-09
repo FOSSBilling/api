@@ -1,7 +1,13 @@
 import { AwsClient } from "aws4fetch";
-import { PACKAGE_LIMITS, sha256 } from "../package-builder";
-import { PackageError } from "./errors";
-import { boundedBytes, type PackageStore } from "./store";
+import {
+  PACKAGE_LIMITS,
+  sha256
+} from "../../../services/extensions/v2/package-builder";
+import { PackageError } from "../../../services/extensions/v2/packages/errors";
+import {
+  boundedBytes,
+  type PackageStore
+} from "../../../services/extensions/v2/packages/store";
 
 // Includes generated manifest and ZIP headers as well as the source contents.
 const MAX_STORED_BYTES = PACKAGE_LIMITS.expandedBytes + 1024 * 1024;
