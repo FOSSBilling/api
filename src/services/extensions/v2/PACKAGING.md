@@ -122,7 +122,7 @@ conflicts and corrupt archives are rejected. Checksums cover the final stored ZI
 
 Include at most one root `icon.svg`, `icon.png`, `icon.webp`, or `icon.avif`.
 There is no manifest icon field; packages without an icon use the generic icon.
-Packaging prepares display images once and stores them in `fb-extensions-assets`.
+Packaging prepares display images once and stores them in the configured public asset bucket.
 The original icon stays unchanged in the ZIP. A new extension receives its permanent
 UUIDv7 draft identity after package validation, before the first icon is stored.
 The first review submission reuses that draft identity.
@@ -156,9 +156,9 @@ worktree's root `.dev.vars` may hold the development credentials, but the API
 process must receive them in its own configuration file.
 
 ```dotenv
-EXTENSION_PACKAGES_S3_ENDPOINT="https://s3.eu-central-003.backblazeb2.com"
-EXTENSION_PACKAGES_S3_REGION="eu-central-003"
-EXTENSION_PACKAGES_S3_BUCKET="fb-extensions-packages"
+EXTENSION_PACKAGES_S3_ENDPOINT="https://s3.<region>.backblazeb2.com"
+EXTENSION_PACKAGES_S3_REGION="<region>"
+EXTENSION_PACKAGES_S3_BUCKET="your-development-packages-bucket"
 EXTENSION_PACKAGES_S3_ACCESS_KEY_ID="your-keyID"
 EXTENSION_PACKAGES_S3_SECRET_ACCESS_KEY="your-applicationKey"
 EXTENSION_PACKAGES_S3_PREFIX="local"
@@ -191,9 +191,9 @@ reservation for retry.
 Add these to the local API's ignored `.dev.vars`:
 
 ```dotenv
-EXTENSION_ASSETS_S3_ENDPOINT="https://s3.eu-central-003.backblazeb2.com"
-EXTENSION_ASSETS_S3_REGION="eu-central-003"
-EXTENSION_ASSETS_S3_BUCKET="fb-extensions-assets"
+EXTENSION_ASSETS_S3_ENDPOINT="https://s3.<region>.backblazeb2.com"
+EXTENSION_ASSETS_S3_REGION="<region>"
+EXTENSION_ASSETS_S3_BUCKET="your-development-assets-bucket"
 EXTENSION_ASSETS_S3_ACCESS_KEY_ID="your-keyID"
 EXTENSION_ASSETS_S3_SECRET_ACCESS_KEY="your-applicationKey"
 EXTENSION_ASSETS_PUBLIC_URL="https://extensions-assets.fossbilling.net"
@@ -233,9 +233,21 @@ Keep B2 daily caps and alerts configured for download and transaction charges.
 
 ## Production configuration (prepared locally)
 
-The top-level Wrangler configuration names the production resources but keeps
-`EXTENSION_PACKAGES_MODE=disabled`. No production resources or secrets are
-created by a local build or type-generation command.
+The top-level Wrangler configuration declares bindings, public URLs and deployment
+controls, keeping `EXTENSION_PACKAGES_MODE=disabled`. B2 endpoints, regions, bucket
+names and the package prefix are dashboard-managed runtime variables. Configure
+these under the Worker's **Settings > Variables and Secrets**, not build settings:
+
+| Runtime variables                                                                                | Purpose                                                              |
+| ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------- |
+| `EXTENSION_PACKAGES_S3_ENDPOINT`, `EXTENSION_PACKAGES_S3_REGION`, `EXTENSION_PACKAGES_S3_BUCKET` | Private ZIP storage connection                                       |
+| `EXTENSION_PACKAGES_S3_PREFIX`                                                                   | ZIP object prefix; production requires an explicit non-`local` value |
+| `EXTENSION_ASSETS_S3_ENDPOINT`, `EXTENSION_ASSETS_S3_REGION`, `EXTENSION_ASSETS_S3_BUCKET`       | Public image storage connection                                      |
+
+`keep_vars: true` preserves these values during Wrangler deployments. Do not
+reintroduce them in the committed `vars` map. Keep development values in ignored
+`.dev.vars` files; the examples above use placeholders. No production resources
+or secrets are created by a local build or type-generation command.
 
 Before deployment (including an automatic deployment after merge):
 
@@ -245,8 +257,8 @@ Before deployment (including an automatic deployment after merge):
    application routes, not deployment-time binding validation.
 2. Supply `EXTENSION_PACKAGES_S3_ACCESS_KEY_ID` and
    `EXTENSION_PACKAGES_S3_SECRET_ACCESS_KEY` as Worker secrets for
-   `fb-extensions-packages`. Supply separate `EXTENSION_ASSETS_S3_ACCESS_KEY_ID`
-   and `EXTENSION_ASSETS_S3_SECRET_ACCESS_KEY` for `fb-extensions-assets`.
+   the private package bucket. Supply separate `EXTENSION_ASSETS_S3_ACCESS_KEY_ID`
+   and `EXTENSION_ASSETS_S3_SECRET_ACCESS_KEY` for the public asset bucket.
    Development keys in `.dev.vars` are not production secrets.
 3. Confirm the Images binding is enabled for the account, the scoped CDN security
    headers remain configured, and B2 caps/alerts are in place.
@@ -260,7 +272,7 @@ Before deployment (including an automatic deployment after merge):
 Production requires HTTPS download URLs with the `/extensions/v2` base path,
 complete credentials for both B2 buckets, an explicit non-`local` ZIP object prefix,
 a public asset URL and the Images binding. An incomplete configuration fails with 503;
-it cannot fall back to local ZIP storage. Private package objects use the `production` prefix in this configuration.
+it cannot fall back to local ZIP storage. Private package objects use the configured prefix.
 Public image objects use the UUID-based layout described above.
 
 The disabled mode blocks package reads as well as writes. Once managed releases

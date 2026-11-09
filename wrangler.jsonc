@@ -20,24 +20,16 @@
     "mode": "smart"
   },
   "preview_urls": true,
+  // Preserve operational runtime variables managed in the Worker dashboard.
   "keep_vars": true,
   "vars": {
     "ENVIRONMENT": "production",
     // Enable only after the queue, Images binding and B2 secrets are configured.
     "EXTENSION_PACKAGES_MODE": "disabled",
     "EXTENSION_PACKAGES_BASE_URL": "https://api.fossbilling.net/extensions/v2",
-    "EXTENSION_PACKAGES_S3_ENDPOINT": "https://s3.eu-central-003.backblazeb2.com",
-    "EXTENSION_PACKAGES_S3_REGION": "eu-central-003",
-    "EXTENSION_PACKAGES_S3_BUCKET": "fb-extensions-packages",
-    "EXTENSION_PACKAGES_S3_PREFIX": "production",
-    "EXTENSION_ASSETS_S3_ENDPOINT": "https://s3.eu-central-003.backblazeb2.com",
-    "EXTENSION_ASSETS_S3_REGION": "eu-central-003",
-    "EXTENSION_ASSETS_S3_BUCKET": "fb-extensions-assets",
     "EXTENSION_ASSETS_PUBLIC_URL": "https://extensions-assets.fossbilling.net",
     "EXTENSIONS_RETENTION_MODE": "dry-run",
     "EXTENSIONS_V2_EMAIL_PROVIDER": "mxroute",
-    "EXTENSIONS_V2_MXROUTE_SERVER": "wednesday.mxrouting.net",
-    "EXTENSIONS_V2_MXROUTE_USERNAME": "extensions@fossbilling.org",
     "M2M_ISSUER": "https://auth.fossbilling.net",
     "M2M_JWKS_URL": "https://auth.fossbilling.net/.well-known/jwks.json",
     "M2M_AUDIENCE": "https://api.fossbilling.net"
