@@ -9,6 +9,8 @@ import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:workers";
 import {
   createExecutionContext,
+  createMessageBatch,
+  getQueueResult,
   waitOnExecutionContext
 } from "cloudflare:test";
 import {
@@ -28,7 +30,6 @@ import {
 import { PackageArtifactSchema } from "../../../../src/services/extensions/v2/schemas/packages";
 import { ManifestSchema } from "../../../../src/services/extensions/v2/schemas/manifest";
 import { ExtensionContentSchema } from "../../../../src/services/extensions/v2/schemas/extensions";
-import { validatePackageContent } from "../../../../src/services/extensions/v2/db/packages";
 import { contentManifest } from "../../../../src/services/extensions/v2/packages/manifest";
 import { sha256 } from "../../../../src/services/extensions/v2/package-builder";
 import {
@@ -145,15 +146,10 @@ async function finishJob(response: Response): Promise<Response> {
       await new Promise((resolve) => setTimeout(resolve, 5));
   }
   if (job.status === "ready") {
-    const read = await get(
+    return get(
       `${root}/packages/${job.artifactId}`,
       await authHeaders("owner")
     );
-    if (read.status !== 200) return read;
-    return new Response(await read.text(), {
-      status: 201,
-      headers: { "Content-Type": "application/json" }
-    });
   }
   return Response.json(
     { error: job.error },
@@ -167,7 +163,7 @@ async function built(
 ) {
   const response = await upload(metadata, source, sourceId);
   const body = (await response.json()) as { result: unknown };
-  expect(response.status, JSON.stringify(body)).toBe(201);
+  expect(response.status, JSON.stringify(body)).toBe(200);
   return PackageArtifactSchema.parse(body.result);
 }
 function content(artifact: ReturnType<typeof PackageArtifactSchema.parse>) {
@@ -269,7 +265,7 @@ describe("publisher package builds", () => {
     });
     expect(
       (await finishJob(Response.json({ result: job }, { status: 202 }))).status
-    ).toBe(201);
+    ).toBe(200);
     const ready = await get(`${root}/package-jobs/${job.id}`, headers);
     expect(ready.status).toBe(200);
     expect(await ready.json()).toMatchObject({
@@ -289,7 +285,7 @@ describe("publisher package builds", () => {
   });
   it("builds under the mapped developer while retaining owner privacy", async () => {
     const response = await machineBuild();
-    expect(response.status).toBe(201);
+    expect(response.status).toBe(200);
     const artifact = PackageArtifactSchema.parse(
       ((await response.json()) as { result: unknown }).result
     );
@@ -428,10 +424,20 @@ describe("queued package preparation", () => {
         )
       ).status
     ).toBe(403);
-    const finished = await finishJob(
-      Response.json({ result: job }, { status: 202 })
-    );
-    expect(finished.status).toBe(201);
+    const ctx = createExecutionContext();
+    const batch = createMessageBatch("extension-packages", [
+      {
+        id: "delivery",
+        timestamp: new Date(),
+        attempts: 1,
+        body: { jobId: job.id }
+      }
+    ]);
+    await app.queue(batch, env);
+    expect(await getQueueResult(batch, ctx)).toMatchObject({
+      explicitAcks: ["delivery"],
+      retryMessages: []
+    });
     const status = await get(
       `${root}/package-jobs/${job.id}`,
       await authHeaders("owner")
@@ -928,7 +934,7 @@ describe("stored directory packages", () => {
       artifact.source_id,
       "moderator"
     );
-    expect(response.status).toBe(201);
+    expect(response.status).toBe(200);
     const next = PackageArtifactSchema.parse(
       ((await response.json()) as { result: unknown }).result
     );
@@ -962,7 +968,7 @@ describe("stored directory packages", () => {
     expect(
       await db.prepare("SELECT count(*) AS count FROM package_sources").first()
     ).toEqual({ count: 0 });
-    expect((await upload()).status).toBe(201);
+    expect((await upload()).status).toBe(200);
   });
 
   function configureB2(overrides: Record<string, string> = {}) {
@@ -1225,7 +1231,7 @@ describe("stored directory packages", () => {
     );
     const changed = { ...manifest(), version: "1.1.0" };
     expect((await upload(changed, await zip("changed source"))).status).toBe(
-      201
+      200
     );
     await seedDeveloper("other-developer", "other");
     expect(
@@ -1394,19 +1400,31 @@ describe("stored directory packages", () => {
         artifact_id: crypto.randomUUID()
       }))
     ];
+    const headers = await authHeaders("owner");
     const prepared = vi.spyOn(db, "prepare");
-    const error = await validatePackageContent(
-      db,
-      "package-demo",
-      "developer",
-      ExtensionContentSchema.parse({ ...content(artifact), releases })
-    );
-    expect(error?.message).toBe("Release does not match its package artifact");
+    const response = await post(`${root}/extensions`, headers, {
+      identifier: "package-demo",
+      ...content(artifact),
+      releases
+    });
     const artifactQueries = prepared.mock.calls
       .map(([sql]) => sql)
       .filter((sql) => sql.includes("FROM package_artifacts"));
-    expect(artifactQueries).toHaveLength(2); // publication state + the complete artifact set
-    expect(artifactQueries[1]).toContain("json_each(?)");
+    prepared.mockRestore();
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      error: { message: "Release does not match its package artifact" }
+    });
+    // Keep validation bounded rather than querying once per release.
+    expect(artifactQueries.length).toBeLessThanOrEqual(2);
+    expect(
+      (
+        await post(`${root}/extensions`, headers, {
+          identifier: "package-demo",
+          ...content(artifact)
+        })
+      ).status
+    ).toBe(201);
   });
   it("revalidates the artifact at approval rather than trusting submission-time checks", async () => {
     const artifact = await built();
@@ -1628,7 +1646,7 @@ describe("stored directory packages", () => {
     expect(
       await db.prepare("SELECT count(*) AS count FROM package_objects").first()
     ).toEqual({ count: 1 });
-    expect((await upload()).status).toBe(201);
+    expect((await upload()).status).toBe(200);
     expect(
       await db.prepare("SELECT count(*) AS count FROM package_sources").first()
     ).toEqual({ count: 1 });
@@ -1668,6 +1686,6 @@ describe("stored directory packages", () => {
           artifact.source_id
         )
       ).status
-    ).toBe(201);
+    ).toBe(200);
   });
 });

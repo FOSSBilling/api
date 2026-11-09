@@ -3,7 +3,9 @@
 Authors upload ready-to-install distribution ZIPs, with any compilation already
 complete. The API validates and repacks them with directory-generated manifests,
 then publishes them through the existing revision review. It never runs uploaded
-code or package build scripts. Package storage uses the private B2 bucket when configured, otherwise Wrangler's local R2 emulator. Prepared icons use the public asset bucket, including icons for pending submissions.
+code or package build scripts. ZIPs use the private B2 bucket; prepared icons use
+the public asset bucket, including icons for pending submissions. Automated tests
+inject emulated storage.
 Package routes are disabled by default. Local development and production enablement are separate modes.
 
 ## Local development and testing

@@ -203,8 +203,6 @@ export async function buildExtensionPackage(
     manifest,
     sourceSha256: await sha256(source),
     packageSha256: await sha256(bytes),
-    sourceFileCount: files.length - 1,
-    expandedBytes,
     icon: icons[0]?.icon ?? null,
     iconName: icons[0]?.path
   };

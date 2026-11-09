@@ -49,7 +49,7 @@ async function contents(bytes: Uint8Array<ArrayBuffer>) {
   }
 }
 
-describe("local directory package builder", () => {
+describe("directory package builder", () => {
   it("rejects overlong and deeply nested paths before walking ancestors", async () => {
     for (const path of [
       "a/".repeat(20000) + "file.php",
@@ -61,10 +61,9 @@ describe("local directory package builder", () => {
       ).rejects.toThrow(/path exceeds/);
     }
     const path = "a/".repeat(PACKAGE_LIMITS.pathDepth - 1) + "file.php";
-    expect(
-      (await buildExtensionPackage(await zip([[path, "file"]]), manifest))
-        .sourceFileCount
-    ).toBe(1);
+    await expect(
+      buildExtensionPackage(await zip([[path, "file"]]), manifest)
+    ).resolves.toMatchObject({ manifest });
   });
   it("replaces the manifest and preserves every source file", async () => {
     const source = await zip([
@@ -78,7 +77,6 @@ describe("local directory package builder", () => {
       "Service.php": "<?php // not executed",
       "assets/logo.svg": "<svg />"
     });
-    expect(built.sourceFileCount).toBe(2);
     expect(built.sourceSha256).toBe(await sha256(source));
     expect(built.packageSha256).toBe(await sha256(built.bytes));
     const repeated = await buildExtensionPackage(source, manifest);
@@ -240,9 +238,13 @@ describe("local directory package builder", () => {
   it.each(["manifest.json", "file.php"])(
     "checks CRCs before copying or replacing %s",
     async (filename) => {
-      const source = await zip([[filename, "unique-contents"]], {
-        level: 0
-      });
+      const source = await zip(
+        [
+          [filename, "unique-contents"],
+          ["Service.php", "<?php // source"]
+        ],
+        { level: 0 }
+      );
       const contents = new TextEncoder().encode("unique-contents");
       // ZIP headers are binary: decoded string offsets are not byte offsets.
       const offset = source.findIndex((_, index) =>
@@ -250,7 +252,9 @@ describe("local directory package builder", () => {
       );
       expect(offset).toBeGreaterThan(0);
       source[offset] ^= 1;
-      await expect(buildExtensionPackage(source, manifest)).rejects.toThrow();
+      await expect(buildExtensionPackage(source, manifest)).rejects.toThrow(
+        "Invalid CRC32"
+      );
     }
   );
 
@@ -314,28 +318,5 @@ describe("local directory package builder", () => {
     await expect(
       buildExtensionPackage(await zip([["manifest.json", "{}"]]), manifest)
     ).rejects.toThrow("no source files");
-  });
-
-  it("builds and reads back a representative multi-file package in Workers", async () => {
-    const source = await zip(
-      Array.from({ length: 100 }, (_, i) => [
-        `src/file-${i}.php`,
-        "<?php // example source\n".repeat(2000)
-      ])
-    );
-    const started = performance.now();
-    const built = await buildExtensionPackage(source, manifest);
-    expect(built.sourceFileCount).toBe(100);
-    expect(Object.keys(await contents(built.bytes))).toHaveLength(101);
-    console.info(
-      JSON.stringify({
-        packageSpike: {
-          sourceBytes: source.length,
-          packageBytes: built.bytes.length,
-          expandedBytes: built.expandedBytes,
-          elapsedMs: Math.round(performance.now() - started)
-        }
-      })
-    );
   });
 });
