@@ -279,6 +279,7 @@ The disabled mode blocks package reads as well as writes. Once managed releases
 are published, disabling it also stops their API downloads and private previews;
 it is not an upload-only pause switch. Prepared CDN images remain accessible independently, even for pending packages.
 
-Local validation and the remaining production measurements are summarized in
-[PACKAGE-RUNTIME.md](PACKAGE-RUNTIME.md). Local queue success does not establish
-production CPU, memory or latency limits.
+Before enabling package mode, measure admission and queue-consumer invocations
+separately: CPU and wall duration, memory failures, queue delay, retries, and
+storage/image-service latency. Include near-limit ZIPs and SVG/raster icons.
+Local functional tests do not establish production capacity or billing.
