@@ -227,7 +227,7 @@ resources. A frontend service binding calls that Worker's normal deployment, so 
 staging Worker name rather than the production Extensions worker. Configure that
 frontend with HTTP API transport and a Preview API URL, without production routes
 or API bindings. A long-lived Preview such as `staging` can back this frontend;
-refresh it from the prepared artifact with `npm run cf-preview -- --name staging`.
+refresh it from the prepared artifact with `npm run cf-preview --workspace @fossbilling/api -- --name staging`.
 Register its OAuth callback with a dedicated test client before testing sign-in.
 
 Cloudflare Previews cannot consume Queues or receive Cron Triggers. Their configuration
