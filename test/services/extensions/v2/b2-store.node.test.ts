@@ -98,6 +98,7 @@ describe("B2 object storage", () => {
         expect(request.headers.get("Authorization")).toContain(
           "AWS4-HMAC-SHA256"
         );
+        expect(request.cache).toBe("no-store");
       }
       expect(requests[0].headers.get("Content-Type")).toBe(
         format === "svg" ? "image/svg+xml" : `image/${format}`
