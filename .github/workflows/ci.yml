@@ -95,6 +95,7 @@ jobs:
     if: github.event_name == 'push' && github.ref_type == 'branch' && (github.ref == 'refs/heads/main' || vars.API_PREVIEW_RESOURCES != '')
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Both environments own their token; preview requires trusted deployment approval.
     environment:
       name: ${{ github.ref == 'refs/heads/main' && 'production' || 'preview' }}
       deployment: false
@@ -158,6 +159,7 @@ jobs:
       artifact-path: services/api/dist/
       config-path: services/api/dist/wrangler.json
       wrangler-version: ${{ needs.build.outputs.wrangler-version }}
+    # GitHub requires named forwarding of the callee's environment secret.
     secrets:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}

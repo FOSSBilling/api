@@ -182,15 +182,27 @@ Migration jobs serialize access to the shared staging databases.
 
 #### Setup before switching deployment
 
-1. Configure GitHub `production` and `preview` environments. Set the
-   `CLOUDFLARE_API_TOKEN` repository secret, or override it with a separate token
-   in each environment. Set `CLOUDFLARE_ACCOUNT_ID` as a repository variable
-   shared by both deployment targets. Restrict the production environment to `main`.
-   Deployment tokens need Editor access to the API Worker, Workers Routes Write
-   for its zone, D1 Read/Write for migrations, and Queues Read/Write to configure
-   the existing production consumer. Preview deployments need access to the API
-   Worker and staging D1 migrations, without Queue or production route changes.
-   Preview data resources and runtime secrets must be separate from production.
+1. Store distinct `CLOUDFLARE_API_TOKEN` secrets only in the GitHub `production`
+   and `preview` environments. Remove any repository or organization secret with
+   that name accessible to this repository: branch workflows can read those
+   secrets without entering a protected environment. Set `CLOUDFLARE_ACCOUNT_ID`
+   as a repository variable shared by both deployment targets.
+
+   Restrict `production` to `main`; merging to `main` authorizes production
+   deployment, so merge authority must be trusted. Require approval from designated trusted
+   deployment maintainers on `preview`, and disable administrator bypass. A
+   maintainer may approve their own branches; other collaborators must not be
+   able to approve deployment jobs. Review the exact commit's workflow, scripts,
+   dependencies, configuration and migrations before releasing credentials.
+
+   Production needs Editor access to the API Worker, Workers Routes Write for
+   its zone, D1 Read/Write for migrations, and Queues Read/Write to configure the
+   consumer. Preview needs Editor access to the API Worker and D1 Read/Write for
+   staging migrations, without Queue or route permissions. Worker Editor also
+   permits production deployment of that Worker: a separate Preview token and
+   staging bindings do not replace the approval gate. Preview data resources and
+   runtime secrets must be separate from production.
+
 2. Provision staging D1 databases, KV namespaces, a download bucket and a separately
    deployed staging Extensions frontend. Set the repository variable `API_PREVIEW_RESOURCES`
    to their identifiers, using the following JSON shape:
