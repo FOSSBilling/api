@@ -1,4 +1,3 @@
-import { AwsClient } from "aws4fetch";
 import {
   PACKAGE_LIMITS,
   sha256
@@ -8,6 +7,7 @@ import {
   boundedBytes,
   type PackageStore
 } from "../../../services/extensions/v2/packages/store";
+import { signS3Request } from "./sigv4";
 
 // Includes generated manifest and ZIP headers as well as the source contents.
 const MAX_STORED_BYTES = PACKAGE_LIMITS.expandedBytes + 1024 * 1024;
@@ -55,13 +55,11 @@ export function b2ObjectStore(
     )
       throw unavailable("Invalid public asset URL configuration");
   }
-  const aws = new AwsClient({
+  const credentials = {
     accessKeyId: get("ACCESS_KEY_ID"),
     secretAccessKey: get("SECRET_ACCESS_KEY"),
-    region: get("REGION"),
-    service: "s3",
-    retries: 0
-  });
+    region: get("REGION")
+  };
   const uuid = "[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}";
   const pattern =
     kind === "assets"
@@ -78,11 +76,15 @@ export function b2ObjectStore(
   async function request(url: URL, init: RequestInit) {
     try {
       return await fetch(
-        await aws.sign(url, {
-          ...init,
-          redirect: "manual",
-          signal: AbortSignal.timeout(15000)
-        })
+        await signS3Request(
+          url,
+          {
+            ...init,
+            redirect: "manual",
+            signal: AbortSignal.timeout(15000)
+          },
+          credentials
+        )
       );
     } catch {
       throw unavailable("Package storage request failed");
