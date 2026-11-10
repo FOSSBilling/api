@@ -90,6 +90,12 @@ jobs:
           API_PREVIEW_RESOURCES: ${{ vars.API_PREVIEW_RESOURCES }}
       - name: Validate Deployment Artifact
         run: npm exec -- wrangler deploy --dry-run --config services/api/dist/wrangler.json
+      - name: Explain Unconfigured Previews
+        if: github.event_name == 'push' && github.ref_type == 'branch' && github.ref != 'refs/heads/main' && vars.API_PREVIEW_RESOURCES == ''
+        run: |
+          echo '::notice::Preview migrations and deployment are skipped until API_PREVIEW_RESOURCES is configured.'
+          echo '### Preview deployment skipped' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Configure the API_PREVIEW_RESOURCES repository variable with isolated staging resources to enable branch Previews. Validation and artifact checks still run.' >> "$GITHUB_STEP_SUMMARY"
       - name: Upload Deployment Artifact
         if: github.event_name == 'push'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -103,7 +109,7 @@ jobs:
   migrations:
     name: Apply API Migrations
     needs: [validation, packager-node24, build]
-    if: github.event_name == 'push' && github.ref_type == 'branch'
+    if: github.event_name == 'push' && github.ref_type == 'branch' && (github.ref == 'refs/heads/main' || vars.API_PREVIEW_RESOURCES != '')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment:
@@ -150,7 +156,7 @@ jobs:
   preview:
     name: Cloudflare Preview
     needs: [validation, packager-node24, build, migrations]
-    if: ${{ !cancelled() && github.event_name == 'push' && github.ref_type == 'branch' && github.ref != 'refs/heads/main' }}
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref_type == 'branch' && github.ref != 'refs/heads/main' && vars.API_PREVIEW_RESOURCES != '' }}
     permissions:
       contents: read
       actions: read

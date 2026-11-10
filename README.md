@@ -61,7 +61,9 @@ as `fossbilling.org`. [CI/CD](.github/workflows/ci.yml) validates the workspaces
 builds a self-contained Worker artifact, including deployment configuration and SQL.
 
 - Pushes to `main` migrate production D1 and deploy the tested artifact.
-- Other branch pushes migrate staging D1 and deploy Previews, with stable branch and
+- Other branch pushes migrate staging D1 and deploy Previews once `API_PREVIEW_RESOURCES`
+  is configured; until then, validation and artifact checks run with an explicit Preview skip summary.
+  Previews have stable branch and
   immutable commit URLs recorded on matching PRs.
 - PR runs validate without deploying. The [Cloudflare Events workflow](.github/workflows/cloudflare-events.yml)
   updates PR comments when a PR opens later or a run finishes, including failed attempts.

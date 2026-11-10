@@ -168,7 +168,9 @@ from [FOSSBilling/.workflows](https://github.com/FOSSBilling/.workflows), matchi
 
 Validation and artifact builds run on branch pushes and PRs. A push can deploy only
 after checks, the Node.js 24 packager test and D1 migrations succeed. `main` targets
-production; other branches target Previews. PR runs, including forks, never receive
+production; other branches target Previews once `API_PREVIEW_RESOURCES` is configured.
+Until then, branch builds report that Preview migrations and deployment are skipped;
+validation and artifact checks still run. PR runs, including forks, never receive
 deployment credentials or apply remote migrations.
 
 The artifact contains the compiled Worker, `wrangler.json`, and SQL migrations.
@@ -201,7 +203,8 @@ Migration jobs serialize access to the shared staging databases.
 
    The build refuses production resource IDs and duplicated IDs. These are operational
    identifiers, not credentials. The variable is optional for local production bundle
-   checks, but required for Preview migrations and deployment. Previews share these
+   checks. When absent, CI skips Preview migrations and deployment; a malformed or
+   production resource configuration still fails the build. Previews share these
    staging resources; they do not automatically receive separate D1/KV/R2 data.
 
 3. Configure Preview runtime secrets in the API Worker's **Previews Base** settings.
