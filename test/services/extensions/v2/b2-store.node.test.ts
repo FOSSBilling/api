@@ -52,6 +52,7 @@ describe("B2 object storage", () => {
         /^AWS4-HMAC-SHA256 /
       );
       expect(request.redirect).toBe("manual");
+      expect(request.cache).toBe("no-store");
     }
     expect(requests[0].headers.get("Cache-Control")).toBe("private, no-store");
     expect(requests[0].headers.get("x-amz-content-sha256")).toBe(checksum);
