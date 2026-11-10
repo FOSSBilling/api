@@ -41,7 +41,7 @@ export async function prepareQueuedPackage(
       "Package ownership changed while queued",
       403
     );
-  let source: Uint8Array<ArrayBuffer> | undefined;
+  let upload: { bytes: Uint8Array<ArrayBuffer>; objectId: string } | undefined;
   if (job.uploadObjectId) {
     const body = await store.get(
       job.uploadObjectId,
@@ -53,15 +53,17 @@ export async function prepareQueuedPackage(
         "Queued source ZIP is unavailable",
         503
       );
-    source = await boundedBytes(body, PACKAGE_LIMITS.sourceBytes);
+    upload = {
+      bytes: await boundedBytes(body, PACKAGE_LIMITS.sourceBytes),
+      objectId: job.uploadObjectId
+    };
   }
   const artifact = await buildStoredPackage({
     repository,
     store,
     owner: current,
     manifest: job.manifest,
-    source,
-    sourceObjectId: job.uploadObjectId ?? undefined,
+    upload,
     sourceId: job.sourceId ?? undefined,
     baseUrl: services.baseUrl.replace(/\/$/, ""),
     images: services.images

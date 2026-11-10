@@ -84,8 +84,6 @@ function mockB2() {
   >();
   const fetch = vi.fn(async (request: Request) => {
     const url = new URL(request.url);
-    expect(url.hostname).toBe("s3.example.test");
-    expect(request.headers.get("Authorization")).toMatch(/^AWS4-HMAC-SHA256 /);
     calls.push(request.clone());
     const key = url.pathname;
     if (request.method === "PUT") {
@@ -99,11 +97,13 @@ function mockB2() {
     const object = objects.get(key);
     if (!object) return new Response(null, { status: 404 });
     if (request.method === "DELETE") {
-      expect(url.searchParams.get("versionId")).toBe(object.version);
+      if (url.searchParams.get("versionId") !== object.version)
+        return new Response(null, { status: 400 });
       objects.delete(key);
       return new Response(null, { status: 204 });
     }
-    expect(["GET", "HEAD"]).toContain(request.method);
+    if (!["GET", "HEAD"].includes(request.method))
+      return new Response(null, { status: 405 });
     return new Response(request.method === "HEAD" ? null : object.bytes, {
       headers: {
         "x-amz-meta-sha256": object.checksum,
@@ -129,6 +129,7 @@ beforeEach(async () => {
   await seedDeveloper("developer", "owner");
 });
 afterEach(() => {
+  const requests = b2.fetch.mock.calls.map(([request]) => request);
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   for (const key of [
@@ -150,6 +151,15 @@ afterEach(() => {
   ])
     Reflect.deleteProperty(env, `EXTENSION_PACKAGES_S3_${suffix}`);
   env.EXTENSION_PACKAGES_MODE = "disabled";
+  // Assert outside the adapter's catch, including calls with injected failures.
+  for (const request of requests) {
+    const url = new URL(request.url);
+    expect(url.hostname).toBe("s3.example.test");
+    expect(request.headers.get("Authorization")).toMatch(/^AWS4-HMAC-SHA256 /);
+    expect(["PUT", "GET", "HEAD", "DELETE"]).toContain(request.method);
+    if (request.method === "DELETE")
+      expect(url.searchParams.get("versionId")).toBeTruthy();
+  }
 });
 async function zip(content = "<?php // source") {
   const writer = new ZipWriter(new Uint8ArrayWriter(), options);

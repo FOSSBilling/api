@@ -41,8 +41,7 @@ export async function buildStoredPackage(input: {
   store: PackageStore;
   owner: PackageOwner;
   manifest: Manifest;
-  source?: Uint8Array<ArrayBuffer>;
-  sourceObjectId?: string;
+  upload?: { bytes: Uint8Array<ArrayBuffer>; objectId: string };
   sourceId?: string;
   baseUrl: string;
   images: PackageImageProcessor;
@@ -59,7 +58,7 @@ export async function buildStoredPackage(input: {
       "Source not found for this extension version",
       404
     );
-  let sourceBytes = input.source;
+  let sourceBytes = input.upload?.bytes;
   if (sourceBytes && source && (await sha256(sourceBytes)) !== source.sha256)
     throw new PackageError(
       "SOURCE_CHANGED",
@@ -104,16 +103,8 @@ export async function buildStoredPackage(input: {
       ? []
       : await input.images.prepare(built.icon, built.iconName === "icon.svg");
   if (!source) {
-    const objectId =
-      input.sourceObjectId ??
-      (await reserveObject(
-        repository,
-        store,
-        owner,
-        manifest.id,
-        sourceBytes,
-        built.sourceSha256
-      ));
+    // Without an upload, the stored-source lookup above must have succeeded.
+    const objectId = input.upload!.objectId;
     source = await repository.linkSource(owner, manifest, {
       id: crypto.randomUUID(),
       sha256: built.sourceSha256,
@@ -125,19 +116,14 @@ export async function buildStoredPackage(input: {
         "Ownership changed while building",
         403
       );
-    if (source.object_id !== objectId) {
-      if (!input.sourceObjectId) {
-        await store.delete(objectId);
-        await repository.removeObject(objectId);
-      }
-      if (source.sha256 !== built.sourceSha256)
-        throw new PackageError(
-          "SOURCE_CHANGED",
-          "Another upload reserved this version with different source files",
-          409
-        );
-    }
+    if (source.sha256 !== built.sourceSha256)
+      throw new PackageError(
+        "SOURCE_CHANGED",
+        "Another upload reserved this version with different source files",
+        409
+      );
   }
+
   const extensionId = await repository.ensureDraft(owner, manifest.id);
   await storePackageIcon({
     repository,
