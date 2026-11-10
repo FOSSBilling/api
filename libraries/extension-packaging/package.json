@@ -1,0 +1,19 @@
+{
+  "name": "@fossbilling/extension-packaging",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "exports": {
+    "./*": "./src/*.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@zip.js/zip.js": "2.24.0",
+    "zod": "4.6.7",
+    "@fossbilling/logging": "*"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "@fossbilling/extension-packager",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "scripts": {
+    "dev": "tsx --env-file=.dev.vars scripts/extension-packager-dev.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@fossbilling/extension-packaging": "*",
+    "@fossbilling/logging": "*",
+    "@zeropress/svg-hush": "0.1.1",
+    "sharp": "0.35.5"
+  },
+  "devDependencies": {
+    "tsx": "4.23.15",
+    "@zip.js/zip.js": "2.24.0"
+  }
+}

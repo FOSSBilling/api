@@ -1,0 +1,640 @@
+import { sql } from "drizzle-orm";
+import {
+  sqliteTable,
+  text,
+  integer,
+  index,
+  uniqueIndex,
+  check
+} from "drizzle-orm/sqlite-core";
+
+// The API owns the complete Extensions domain, including this user projection.
+// The row is keyed by the central auth service's `sub`; authentication itself
+// remains in the Extensions site, while this projection is the domain-side
+// authorization and foreign-key anchor for developers, revisions, claims,
+// transfers, and audit history.
+export const users = sqliteTable("users", {
+  id: text("id").primaryKey(),
+  name: text("name"),
+  email: text("email"),
+  emailVerified: integer("email_verified").notNull().default(0),
+  picture: text("picture"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+  isModerator: integer("is_moderator").notNull().default(0),
+  displayName: text("display_name"),
+  githubLogin: text("github_login"),
+  githubOrgs: text("github_orgs"),
+  githubOrgsExpiresAt: text("github_orgs_expires_at"),
+  deletedAt: text("deleted_at")
+});
+
+// An extension record exists from the moment a developer creates it, before
+// any moderator has seen it. The content columns are therefore the *published*
+// projection and are NULL until the first revision is approved (migration
+// 0021); published_at is the marker the public extension listing filters on, and the
+// CHECK below is what keeps "published" from ever meaning "half a row".
+//
+// The column was author_id until migration 0021. It never had to be: the only
+// thing that kept the pre-v2 name was v1's public JSON field, which is called
+// "author" and is produced by a mapping in v1/database.ts either way.
+export const extensions = sqliteTable(
+  "extensions",
+  {
+    id: text("id").primaryKey(),
+    identifier: text("identifier").notNull(),
+    developerId: text("developer_id")
+      .notNull()
+      .references(() => developers.id),
+    createdBy: text("created_by"),
+    publishedBytes: integer("published_bytes").notNull().default(0),
+    publishedAt: text("published_at"),
+    // Which revision produced the current published content. Deliberately not
+    // a FK: extension_revisions.extension_id already points the other way, and
+    // a second FK between the same two tables would make them mutually
+    // dependent for both inserts and the SQLite table rebuilds that migrations
+    // need. NULL for rows adopted from the pre-v2 directory, which were never
+    // published through a revision.
+    publishedRevisionId: text("published_revision_id"),
+    // 0029 enforces presence on published rows with insert/update triggers;
+    // extending the original CHECK would require rebuilding this FK parent.
+    manifest: text("manifest"),
+    type: text("type"),
+    name: text("name"),
+    description: text("description"),
+    releases: text("releases"),
+    website: text("website"),
+    license: text("license"),
+    iconUrl: text("icon_url"),
+    readme: text("readme"),
+    source: text("source"),
+    version: text("version"),
+    downloadUrl: text("download_url"),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+    // A moderator's decision to pull an already-published extension from the
+    // extension directory for cause (its upstream source disappearing, for example).
+    // Distinct from never having been published and from an owner's
+    // pre-publish withdraw(): published_at and delisted_at can both be set at
+    // once, so the fact that this was live and then pulled is never lost, and
+    // an owner can still see and edit the row afterwards.
+    delistedAt: text("delisted_at"),
+    delistReason: text("delist_reason")
+  },
+  (table) => [
+    index("idx_extensions_published_revision").on(table.publishedRevisionId),
+    // Public identifiers are globally unique, independently of UUID identity.
+    uniqueIndex("idx_extensions_identifier_nocase").on(
+      sql`lower(${table.identifier})`
+    ),
+    // Not partial, unlike the two below: this one serves both the public
+    // developer_id filter and GET /extensions/mine, which pages every owned
+    // extension and so cannot filter on published_at. A partial index would
+    // leave the owner query sorting into a temporary B-tree once a developer
+    // has more than one page. The public read gets its ordered seek from the
+    // same index and checks published_at per row.
+    index("idx_extensions_developer_order").on(
+      table.developerId,
+      sql`lower(${table.identifier})`,
+      table.id
+    ),
+    // These two are partial: every read that uses them filters on
+    // published_at IS NOT NULL AND delisted_at IS NULL, so an unpublished or
+    // delisted row would only bloat the index the extension directory scans.
+    index("idx_extensions_public_order")
+      .on(sql`lower(${table.identifier})`, table.id)
+      .where(
+        sql`${table.publishedAt} IS NOT NULL AND ${table.delistedAt} IS NULL`
+      ),
+    index("idx_extensions_type_public_order")
+      .on(table.type, sql`lower(${table.identifier})`, table.id)
+      .where(
+        sql`${table.publishedAt} IS NOT NULL AND ${table.delistedAt} IS NULL`
+      ),
+    // "Published" must mean every column the public contract declares
+    // non-optional is present. icon_url is genuinely optional and is left out.
+    check(
+      "extensions_published_content_check",
+      sql`${table.publishedAt} IS NULL OR (
+        ${table.type} IS NOT NULL AND ${table.name} IS NOT NULL AND
+        ${table.description} IS NOT NULL AND ${table.releases} IS NOT NULL AND
+        ${table.website} IS NOT NULL AND ${table.license} IS NOT NULL AND
+        ${table.readme} IS NOT NULL AND ${table.source} IS NOT NULL AND
+        ${table.version} IS NOT NULL AND ${table.downloadUrl} IS NOT NULL
+      )`
+    )
+    // No CHECK tying delisted_at to published_at: SQLite cannot add a CHECK
+    // without a full table rebuild, and this table has a child
+    // (extension_revisions) that a rebuild's DROP TABLE cannot carry through
+    // a real transaction (see migration 0021's header). delist() is the only
+    // writer and already guards on published_at IS NOT NULL, so the invariant
+    // holds without spending a rebuild on it.
+  ]
+);
+
+// Legacy extension directory table renamed from authors to developers by migration
+// 0008. The API owns the full table now; type/name/url are the original
+// extension directory fields and the remaining columns were added by the v2 migrations.
+// bio (added in 0003) was dropped in 0010 and is intentionally absent here.
+export const developers = sqliteTable(
+  "developers",
+  {
+    id: text("id").primaryKey(),
+    identifier: text("identifier").notNull(),
+    type: text("type").notNull(),
+    name: text("name").notNull(),
+    url: text("url"),
+    ownerUserId: text("owner_user_id").references(() => users.id),
+    approvedAt: text("approved_at"),
+    // Kept in sync with the original constant database default. Writers set both timestamps.
+    createdAt: text("created_at").notNull().default("1970-01-01T00:00:00.000Z"),
+    updatedAt: text("updated_at").notNull().default("1970-01-01T00:00:00.000Z"),
+    avatarUrl: text("avatar_url"),
+    contactEmail: text("contact_email"),
+    ownershipEpoch: integer("ownership_epoch").notNull().default(1),
+    contentRevision: integer("content_revision").notNull().default(1),
+    // Migration 0027 backfills existing rows; its INSERT trigger replaces the
+    // constant default with a fresh token for every new profile.
+    profileGeneration: text("profile_generation").notNull().default(""),
+    approvedRevision: integer("approved_revision"),
+    approvedBy: text("approved_by"),
+    githubOrgVerified: integer("github_org_verified"),
+    githubVerificationNote: text("github_verification_note"),
+    // Set whenever githubOrgVerified is (re-)computed to a definitive 0/1 —
+    // see DeveloperProfilesDatabase.reverifyOwn(). Left null/stale on an
+    // inconclusive check (no linked GitHub identity), same as
+    // githubOrgVerified itself.
+    githubVerifiedAt: text("github_verified_at"),
+    // Whether `url` matches GitHub's own on-file website — see
+    // github/verification.ts's urlMatchesGithubBlog(). Only ever 1 or null,
+    // never 0 (see the schema comment on schemas/developers.ts's
+    // DeveloperProfileSchema.github_url_verified for why).
+    githubUrlVerified: integer("github_url_verified"),
+    // Atomic per-owner cooldown gating reverifyOwn()'s check_url path (the
+    // one that spends a real GitHub API call) — set via a conditional
+    // UPDATE, not read-then-write, so concurrent requests can't both pass.
+    // Null until the first check_url reverify.
+    urlCheckCooldownUntil: text("url_check_cooldown_until")
+  },
+  (table) => [
+    uniqueIndex("idx_developers_identifier_nocase").on(
+      sql`lower(${table.identifier})`
+    ),
+    uniqueIndex("idx_developers_owner_unique").on(table.ownerUserId),
+    index("idx_developers_approved").on(table.approvedAt),
+    check(
+      "developers_ownership_epoch_check",
+      sql`${table.ownershipEpoch} >= 1`
+    ),
+    check(
+      "developers_content_revision_check",
+      sql`${table.contentRevision} >= 1`
+    ),
+    check(
+      "developers_github_org_verified_check",
+      sql`${table.githubOrgVerified} IN (0, 1)`
+    ),
+    // = 1 rather than IN (0, 1): this column is documented to only ever be
+    // 1 or NULL, never 0 (see schemas/developers.ts's DeveloperProfileSchema
+    // comment) — SQLite's CHECK already treats NULL as satisfying `= 1`, so
+    // this enforces that invariant instead of just validating it's a 0/1.
+    check(
+      "developers_github_url_verified_check",
+      sql`${table.githubUrlVerified} = 1`
+    )
+  ]
+);
+
+// A proposed version of one extension's content, awaiting or carrying a
+// moderator decision. Renamed from extension_submissions by migration 0021,
+// which also made extension_id NOT NULL: an extension row now exists before
+// its first revision does, so a revision no longer has to name its target
+// indirectly through the payload. `content` is the extension content only —
+// developer edits go through PUT /developers/me and are no longer smuggled
+// through the review queue.
+export const extensionRevisions = sqliteTable(
+  "extension_revisions",
+  {
+    id: text("id").primaryKey(),
+    extensionId: text("extension_id")
+      .notNull()
+      .references(() => extensions.id, { onDelete: "cascade" }),
+    // Which developer the revision was proposed under, kept as an audit fact
+    // even after the extension is transferred. Deliberately NOT a FK, so
+    // DELETE /developers/me can hard-delete a profile without erasing the
+    // review record (same reasoning as developer_history — migration 0009).
+    developerId: text("developer_id").notNull(),
+    submittedBy: text("submitted_by")
+      .notNull()
+      .references(() => users.id),
+    status: text("status").notNull().default("pending"),
+    content: text("content").notNull(),
+    contentBytes: integer("content_bytes").notNull().default(0),
+    summaryName: text("summary_name"),
+    summaryVersion: text("summary_version"),
+    summaryDescription: text("summary_description"),
+    contentReadable: integer("content_readable").notNull().default(0),
+    contentHash: text("content_hash"),
+    compactedAt: text("compacted_at"),
+    reviewerId: text("reviewer_id").references(() => users.id),
+    reviewNote: text("review_note"),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+    reviewedAt: text("reviewed_at"),
+    ownershipEpoch: integer("ownership_epoch").notNull().default(1)
+  },
+  (table) => [
+    index("idx_extension_revisions_retention").on(
+      table.compactedAt,
+      table.reviewedAt,
+      table.id,
+      table.status
+    ),
+    index("idx_extension_revisions_submitted_by").on(table.submittedBy),
+    index("idx_extension_revisions_developer").on(table.developerId),
+    // At most one unreviewed revision per extension. This replaces migration
+    // 0011's target_key index: the target is now a real column, so the
+    // constraint no longer depends on a denormalised copy of an id that also
+    // lived inside the payload JSON.
+    uniqueIndex("idx_extension_revisions_pending")
+      .on(table.extensionId)
+      .where(sql`${table.status} = 'pending'`),
+    // created_at/id are DESC in the real index. SQLiteColumn has no .desc()
+    // (confirmed via tsc - that's a pg-core-only builder method), so the
+    // ordering is expressed as raw SQL fragments instead.
+    index("idx_extension_revisions_extension_page").on(
+      table.extensionId,
+      sql`${table.createdAt} desc`,
+      sql`${table.id} desc`
+    ),
+    index("idx_extension_revisions_submitter_page").on(
+      table.submittedBy,
+      sql`${table.createdAt} desc`,
+      sql`${table.id} desc`
+    ),
+    index("idx_extension_revisions_queue_page").on(
+      table.status,
+      table.createdAt,
+      table.id
+    ),
+    // Covers the "most recently reviewed revision" correlated subquery in
+    // extensions.ts's owner/moderation views (extensions.ts REVIEWED_JOIN).
+    // Without it, that subquery filters revisions by status and sorts by
+    // reviewed_at in a temporary B-tree once per row of every owned list;
+    // with it, the subquery is an ordered seek. reviewed_at is stored
+    // ASCENDING on purpose: SQLite index entries carry rowid ascending as
+    // their implicit final column, so a backward scan of this all-ASC
+    // index yields exactly the subquery's `reviewed_at DESC, rowid DESC`
+    // order - a DESC index scanned either direction would still leave the
+    // rowid tie-break to a per-row sort.
+    index("idx_extension_revisions_reviewed")
+      .on(table.extensionId, table.reviewedAt)
+      .where(sql`${table.status} IN ('approved', 'rejected')`),
+    // Covers the pending-revision guard ("submitter has fewer than 10
+    // pending revisions") and delete-account rejection, which otherwise
+    // scan all of a submitter's revisions across every status.
+    index("idx_extension_revisions_submitter_pending")
+      .on(table.submittedBy)
+      .where(sql`${table.status} = 'pending'`),
+    check(
+      "extension_revisions_status_check",
+      sql`${table.status} IN ('pending', 'approved', 'rejected')`
+    ),
+    check(
+      "extension_revisions_ownership_epoch_check",
+      sql`${table.ownershipEpoch} >= 1`
+    )
+  ]
+);
+
+// Append-only audit log for developers writes. developer_id deliberately
+// has NO FK (migration 0009 dropped it so DELETE /developers/me can hard-
+// delete a developer row while the audit trail survives). The append-only
+// guarantee is enforced by two triggers (trg_developer_history_no_update/
+// _no_delete) that Drizzle's schema model can't express - they stay as
+// hand-written SQL outside schema.ts, applied once and never touched by
+// drizzle-kit's diffing.
+export const developerHistory = sqliteTable(
+  "developer_history",
+  {
+    id: text("id").primaryKey(),
+    developerId: text("developer_id").notNull(),
+    type: text("type").notNull(),
+    name: text("name").notNull(),
+    url: text("url"),
+    changedBy: text("changed_by")
+      .notNull()
+      .references(() => users.id),
+    changedAt: text("changed_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`)
+  },
+  (table) => [
+    index("idx_developer_history_developer_changed_at").on(
+      table.developerId,
+      table.changedAt
+    ),
+    index("idx_developer_history_account_changed_at").on(
+      table.changedBy,
+      table.changedAt
+    )
+  ]
+);
+
+export const developerTransfers = sqliteTable(
+  "developer_transfers",
+  {
+    id: text("id").primaryKey(),
+    developerId: text("developer_id")
+      .notNull()
+      .references(() => developers.id),
+    tokenHash: text("token_hash").notNull(),
+    createdBy: text("created_by")
+      .notNull()
+      .references(() => users.id),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+    expiresAt: text("expires_at").notNull(),
+    acceptedBy: text("accepted_by").references(() => users.id),
+    acceptedAt: text("accepted_at"),
+    revokedAt: text("revoked_at")
+  },
+  (table) => [
+    uniqueIndex("idx_developer_transfers_token").on(table.tokenHash),
+    // At most one active (not accepted, not revoked) transfer per developer.
+    uniqueIndex("idx_developer_transfers_pending")
+      .on(table.developerId)
+      .where(sql`${table.acceptedAt} IS NULL AND ${table.revokedAt} IS NULL`)
+  ]
+);
+
+export const developerClaims = sqliteTable(
+  "developer_claims",
+  {
+    id: text("id").primaryKey(),
+    developerId: text("developer_id")
+      .notNull()
+      .references(() => developers.id),
+    claimantId: text("claimant_id")
+      .notNull()
+      .references(() => users.id),
+    status: text("status").notNull().default("pending"),
+    note: text("note"),
+    reviewNote: text("review_note"),
+    reviewerId: text("reviewer_id").references(() => users.id),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+    reviewedAt: text("reviewed_at"),
+    githubOrgVerified: integer("github_org_verified"),
+    githubVerificationNote: text("github_verification_note")
+  },
+  (table) => [
+    index("idx_developer_claims_developer").on(table.developerId),
+    index("idx_developer_claims_claimant").on(table.claimantId),
+    // One pending claim per (developer, claimant) at a time.
+    uniqueIndex("idx_developer_claims_pending_unique")
+      .on(table.developerId, table.claimantId)
+      .where(sql`${table.status} = 'pending'`),
+    index("idx_developer_claims_pending_queue")
+      .on(table.createdAt)
+      .where(sql`${table.status} = 'pending'`),
+    check(
+      "developer_claims_status_check",
+      sql`${table.status} IN ('pending', 'approved', 'rejected')`
+    ),
+    check(
+      "developer_claims_github_org_verified_check",
+      sql`${table.githubOrgVerified} IN (0, 1)`
+    )
+  ]
+);
+
+// No identity foreign keys: deleting an account or claim must not reset quota.
+export const claimVerificationBudgets = sqliteTable(
+  "claim_verification_budgets",
+  {
+    key: text("key").primaryKey(),
+    attempts: integer("attempts").notNull(),
+    expiresAt: integer("expires_at").notNull()
+  },
+  (table) => [
+    index("idx_claim_verification_budgets_expiry").on(table.expiresAt)
+  ]
+);
+
+// Derived usage is maintained by 0026's transactional triggers. Account
+// charges stay with the original creator/submitter across ownership changes.
+export const extensionResourceUsage = sqliteTable(
+  "extension_resource_usage",
+  {
+    scope: text("scope").notNull(),
+    subject: text("subject").notNull(),
+    bytes: integer("bytes").notNull().default(0),
+    extensions: integer("extensions").notNull().default(0),
+    revisions: integer("revisions").notNull().default(0)
+  },
+  (table) => [
+    uniqueIndex("idx_extension_resource_usage_subject").on(
+      table.scope,
+      table.subject
+    )
+  ]
+);
+
+// No foreign keys: deleting content or a profile cannot reset write pacing.
+export const extensionWriteEvents = sqliteTable(
+  "extension_write_events",
+  {
+    id: text("id").primaryKey(),
+    accountId: text("account_id").notNull(),
+    developerId: text("developer_id").notNull(),
+    occurredAt: integer("occurred_at").notNull()
+  },
+  (table) => [
+    index("idx_extension_write_events_account").on(
+      table.accountId,
+      table.occurredAt
+    ),
+    index("idx_extension_write_events_developer").on(
+      table.developerId,
+      table.occurredAt
+    ),
+    index("idx_extension_write_events_time").on(table.occurredAt)
+  ]
+);
+
+// A machine client registered by a moderator to publish on behalf of one
+// developer. The client_id is the central auth service's OAuth client id;
+// the auth service authenticates the token, this table authorizes it.
+// ownership_epoch is the developer's epoch at registration: an ownership
+// transfer bumps the developer's epoch, so the binding goes stale and every
+// publisher write re-asserts the match — a former owner's client cannot
+// publish under the recipient. Re-registering rebinds to the new epoch.
+// Soft-revoked rows keep the audit trail; lookups filter revoked_at.
+// Each registered client also has a synthetic `users` projection row
+// (`m2m:<client_id>`) that anchors the users foreign keys on the revisions
+// it submits and approves; PublisherClientsDatabase.register() creates it.
+export const m2mPublisherClients = sqliteTable(
+  "m2m_publisher_clients",
+  {
+    clientId: text("client_id").primaryKey(),
+    developerId: text("developer_id")
+      .notNull()
+      .references(() => developers.id),
+    canPublish: integer("can_publish").notNull().default(0),
+    ownershipEpoch: integer("ownership_epoch").notNull().default(1),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+    revokedAt: text("revoked_at")
+  },
+  (table) => [
+    index("idx_m2m_publisher_clients_developer").on(table.developerId),
+    check(
+      "m2m_publisher_clients_can_publish_check",
+      sql`${table.canPublish} IN (0, 1)`
+    ),
+    check(
+      "m2m_publisher_clients_ownership_epoch_check",
+      sql`${table.ownershipEpoch} >= 1`
+    )
+  ]
+);
+
+// Object reservations survive interrupted uploads so unreferenced objects can
+// be reclaimed. Published artifacts retain their original objects indefinitely.
+export const packageObjects = sqliteTable(
+  "package_objects",
+  {
+    deleting: integer("deleting").notNull().default(0),
+    id: text("id").primaryKey(),
+    createdBy: text("created_by").notNull(),
+    bytes: integer("bytes").notNull(),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`)
+  },
+  (table) => [index("idx_package_objects_creator").on(table.createdBy)]
+);
+
+// No extension FK: a developer can build a package before creating its listing.
+export const packageSources = sqliteTable(
+  "package_sources",
+  {
+    id: text("id").primaryKey(),
+    profileGeneration: text("profile_generation").notNull(),
+    extensionIdentifier: text("extension_identifier").notNull(),
+    version: text("version").notNull(),
+    sha256: text("sha256").notNull(),
+    objectId: text("object_id")
+      .notNull()
+      .references(() => packageObjects.id),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`)
+  },
+  (table) => [
+    uniqueIndex("idx_package_source_version").on(
+      table.profileGeneration,
+      table.extensionIdentifier,
+      table.version
+    ),
+    index("idx_package_sources_extension").on(table.extensionIdentifier),
+    uniqueIndex("idx_package_sources_object").on(table.objectId)
+  ]
+);
+
+export const packageArtifacts = sqliteTable(
+  "package_artifacts",
+  {
+    id: text("id").primaryKey(),
+    sourceId: text("source_id")
+      .notNull()
+      .references(() => packageSources.id),
+    manifest: text("manifest").notNull(),
+    manifestHash: text("manifest_hash").notNull(),
+    sha256: text("sha256").notNull(),
+    objectId: text("object_id")
+      .notNull()
+      .references(() => packageObjects.id),
+    downloadUrl: text("download_url").notNull(),
+    publishedAt: text("published_at"),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`)
+  },
+  (table) => [
+    uniqueIndex("idx_package_artifact_manifest").on(
+      table.sourceId,
+      table.manifestHash
+    ),
+    uniqueIndex("idx_package_artifacts_object").on(table.objectId)
+  ]
+);
+
+// Prepared display images are shared by packages using the same immutable source.
+export const packageIcons = sqliteTable("package_icons", {
+  sourceId: text("source_id")
+    .primaryKey()
+    .references(() => packageSources.id),
+  avifObjectId: text("avif_object_id").references(() => packageObjects.id),
+  avifSha256: text("avif_sha256"),
+  pngObjectId: text("png_object_id").references(() => packageObjects.id),
+  pngSha256: text("png_sha256"),
+  svgObjectId: text("svg_object_id").references(() => packageObjects.id),
+  svgSha256: text("svg_sha256")
+});
+
+export const packagingJobs = sqliteTable(
+  "package_jobs",
+  {
+    id: text("id").primaryKey(),
+    fingerprint: text("fingerprint").notNull(),
+    ownerUserId: text("owner_user_id").notNull(),
+    owner: text("owner").notNull(),
+    manifest: text("manifest").notNull(),
+    sourceId: text("source_id"),
+    uploadObjectId: text("upload_object_id").references(
+      () => packageObjects.id
+    ),
+    uploadSha256: text("upload_sha256"),
+    status: text("status", {
+      enum: ["queued", "processing", "ready", "failed"]
+    })
+      .notNull()
+      .default("queued"),
+    attempts: integer("attempts").notNull().default(0),
+    leaseId: text("lease_id"),
+    leaseUntil: text("lease_until"),
+    artifactId: text("artifact_id").references(() => packageArtifacts.id),
+    errorCode: text("error_code"),
+    errorMessage: text("error_message"),
+    errorStatus: integer("error_status"),
+    enqueuedAt: text("enqueued_at"),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`)
+  },
+  (table) => [
+    uniqueIndex("idx_package_jobs_fingerprint")
+      .on(table.fingerprint)
+      .where(sql`${table.status} != 'failed'`),
+    index("idx_package_jobs_owner").on(table.ownerUserId),
+    index("idx_package_jobs_upload_object").on(table.uploadObjectId),
+    index("idx_package_jobs_dispatch").on(table.status, table.enqueuedAt),
+    check(
+      "package_jobs_status_check",
+      sql`${table.status} IN ('queued','processing','ready','failed')`
+    )
+  ]
+);

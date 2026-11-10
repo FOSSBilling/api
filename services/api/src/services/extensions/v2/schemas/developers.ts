@@ -1,0 +1,205 @@
+import { z } from "@hono/zod-openapi";
+import { httpUrl } from "@fossbilling/extension-packaging/urls";
+import { lowercaseId, CursorPaginationQuerySchema } from "./common";
+
+// GET /developers/unapproved has been merged into GET /developers?scope=.
+// "unapproved" is therefore no longer a shadowed static route, but stays
+// reserved so an adopted row can never collide with a future static segment.
+// "claims" and "me" are still live static routes under /developers/*.
+const RESERVED_DEVELOPER_IDS = new Set(["claims", "me", "unapproved"]);
+
+// Route matching is case-sensitive but these literals are not, so the check
+// below lowercases before the lookup.
+export function isReservedDeveloperId(id: string): boolean {
+  return RESERVED_DEVELOPER_IDS.has(id.toLowerCase());
+}
+
+const developerId = () =>
+  lowercaseId("developer").refine((id) => !isReservedDeveloperId(id), {
+    message: "This developer id is reserved"
+  });
+
+export const DeveloperSchema = z
+  .object({
+    identifier: developerId(),
+    type: z.enum(["user", "organization"]),
+    name: z.string().min(1).max(120),
+    URL: httpUrl().optional(),
+    avatar_url: httpUrl().optional(),
+    contact_email: z.string().email().max(254).optional()
+  })
+  .openapi("Developer");
+
+export type Developer = z.infer<typeof DeveloperSchema>;
+
+const ProfileGenerationSchema = z.string().regex(/^[0-9a-f]{32}$/);
+
+// The PUT /developers/me request body. Separate from DeveloperSchema because
+// that one is also allOf/0 of the DeveloperProfile response, and strictness
+// propagates through extend/pick/omit - an additionalProperties:false branch
+// inside an allOf would reject the properties the sibling branch contributes,
+// and would tell generated clients to reject response fields added later.
+// Naming follows UserIdentityInputSchema.
+export const DeveloperInputSchema =
+  DeveloperSchema.strict().openapi("DeveloperInput");
+
+export const DeveloperProfileSchema = DeveloperSchema.extend({
+  id: z.uuidv7(),
+  approved: z.boolean(),
+  content_revision: z.int().positive(),
+  profile_generation: ProfileGenerationSchema,
+  // Server-computed — see verifyGithubOwnership() (at
+  // claim/creation time) and reverifyOwn() (opportunistic re-check on
+  // login, or the owner's own "Re-verify" action). Never part of the
+  // client-supplied DeveloperSchema.
+  github_org_verified: z.boolean().optional(),
+  github_verification_note: z.string().optional(),
+  // Set whenever github_org_verified is last (re-)computed to a definitive
+  // true/false — see reverifyOwn(). Absent/stale on an inconclusive check.
+  github_verified_at: z.string().nullish(),
+  // Whether Publisher URL matches GitHub's own on-file website for this
+  // org/user — see verifyGithubOwnership()'s urlMatchesGithubBlog() call.
+  // Only ever true or absent (never false): GitHub's website field is
+  // optional and often unset, so "doesn't match" isn't itself meaningful —
+  // there's nothing to flag, unlike github_org_verified's identity check.
+  // Computed at creation, and re-checked by the owner's own "Re-verify"
+  // action (never by the opportunistic per-login re-check, which stays
+  // GitHub-API-free by design).
+  github_url_verified: z.boolean().optional(),
+  // Only populated by the moderator listing (see
+  // DeveloperProfilesDatabase.listScoped) — other DeveloperProfile
+  // producers (getById, create/update/claim/transfer results) don't join
+  // for it, so it's absent rather than null there. `unclaimed` is the
+  // authoritative "has an owner" signal (owner_user_id IS NULL) — don't
+  // infer ownership from owner_name being present, since a real owner can
+  // still have a null name (e.g. their auth provider never supplied one).
+  // Owner identity is never exposed publicly — see PublicDeveloperSchema
+  // below and the README's note on not leaking owner identity.
+  unclaimed: z.boolean().optional(),
+  owner_name: z.string().nullish(),
+  owner_github_login: z.string().nullish()
+}).openapi("DeveloperProfile");
+
+export type DeveloperProfile = z.infer<typeof DeveloperProfileSchema>;
+
+// The publicly-readable view of a developer profile: everything in
+// DeveloperProfile except contact_email and review tokens (moderator/owner
+// only), the GitHub verification signal (a moderator-review aid, not meant
+// for public consumption), and the owner's identity (only ever an
+// `unclaimed` boolean is public). The Extensions site consumes this
+// projection through the generated API client.
+export const PublicDeveloperSchema = DeveloperProfileSchema.omit({
+  contact_email: true,
+  content_revision: true,
+  profile_generation: true,
+  github_org_verified: true,
+  github_verification_note: true,
+  github_verified_at: true,
+  github_url_verified: true,
+  owner_name: true,
+  owner_github_login: true
+})
+  .extend({ unclaimed: z.boolean() })
+  .openapi("PublicDeveloper");
+
+export type PublicDeveloper = z.infer<typeof PublicDeveloperSchema>;
+
+export function toPublicDeveloper(
+  profile: DeveloperProfile & { unclaimed: boolean }
+): PublicDeveloper {
+  return {
+    id: profile.id,
+    identifier: profile.identifier,
+    type: profile.type,
+    name: profile.name,
+    URL: profile.URL,
+    avatar_url: profile.avatar_url,
+    approved: profile.approved,
+    unclaimed: profile.unclaimed
+  };
+}
+
+export const OwnedDeveloperProfileSchema = z
+  .intersection(
+    DeveloperProfileSchema,
+    z.object({ has_pending_transfer: z.boolean() })
+  )
+  .openapi("OwnedDeveloperProfile");
+
+export const DeveloperHistoryEntrySchema = z
+  .object({
+    developer_id: z.string(),
+    type: z.enum(["user", "organization"]),
+    name: z.string(),
+    URL: httpUrl().optional(),
+    changed_by: z.string(),
+    // The editor's account name at read time — null if the auth provider
+    // never gave one, or the users row was since deleted.
+    changed_by_name: z.string().nullable(),
+    changed_at: z.string()
+  })
+  .openapi("DeveloperHistoryEntry");
+
+export type DeveloperHistoryEntry = z.infer<typeof DeveloperHistoryEntrySchema>;
+
+export const DeveloperApprovalSchema = z
+  .object({
+    expected_revision: z.number().int().positive(),
+    expected_generation: ProfileGenerationSchema
+  })
+  .strict()
+  .openapi("DeveloperApproval");
+
+// Moderator GET /developers: scope=all (default) lists every profile,
+// scope=unapproved lists only profiles awaiting review. Replaces the former
+// GET /developers/unapproved sibling route. `scope` (not `status`) selects
+// the projection, matching GET /extensions?scope= and
+// GET /developers/claims?scope=.
+export const DeveloperListQuerySchema = CursorPaginationQuerySchema.extend({
+  scope: z
+    .enum(["all", "unapproved"])
+    .optional()
+    .openapi({
+      param: { name: "scope", in: "query" },
+      description:
+        "all: every profile (default). unapproved: only profiles awaiting review."
+    }),
+  // Deprecated alias for the coordinated migration: ?status=all|unapproved
+  // behaves like ?scope=. Explicit conflict (?scope=X&status=Y, X!=Y) is
+  // rejected with 422 in the route so a caller cannot mistake one
+  // projection for another. Remove once the site migrates to ?scope=.
+  status: z
+    .enum(["all", "unapproved"])
+    .optional()
+    .openapi({
+      param: { name: "status", in: "query", deprecated: true },
+      description: "Deprecated alias for scope."
+    })
+});
+
+// Merged GET /developers/{id} (optional auth, role-aware): anonymous callers
+// get the sanitized PublicDeveloper, the owning caller gets their full Owned
+// profile, moderators get the full DeveloperProfile.
+export const DeveloperDetailResponseSchema = z
+  .object({
+    result: z.union([
+      PublicDeveloperSchema,
+      DeveloperProfileSchema,
+      OwnedDeveloperProfileSchema
+    ])
+  })
+  .openapi("DeveloperDetailResponse");
+
+// check_url — opt-in because it costs an extra GitHub API call (see
+// DeveloperProfilesDatabase.reverifyOwn()); only the owner's own manual "Re-verify"
+// button sets this, never the opportunistic per-login re-check. Not
+// z.coerce.boolean(): that coerces the non-empty string "false" to true.
+export const ReverifyQuerySchema = z.object({
+  check_url: z
+    .enum(["true", "false"])
+    .optional()
+    .transform((value) => value === "true")
+    .openapi({
+      param: { name: "check_url", in: "query" }
+    })
+});

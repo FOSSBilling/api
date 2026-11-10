@@ -1,0 +1,49 @@
+{
+  "name": "@fossbilling/api",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "scripts": {
+    "cf-typegen": "wrangler types --env-interface CloudflareBindings",
+    "cf-deploy": "npm run db:migrate:all:remote && wrangler deploy --minify",
+    "dev": "wrangler dev",
+    "db:generate:extensions": "drizzle-kit generate --config drizzle.extensions.config.ts",
+    "db:generate:central-alerts": "drizzle-kit generate --config drizzle.central-alerts.config.ts",
+    "db:migrate:extensions-v2:local": "wrangler d1 migrations apply DB_EXTENSIONS --local",
+    "db:migrate:extensions-v2:remote": "wrangler d1 migrations apply DB_EXTENSIONS --remote",
+    "db:migrate:central-alerts:local": "wrangler d1 migrations apply DB_CENTRAL_ALERTS --local",
+    "db:migrate:central-alerts:remote": "wrangler d1 migrations apply DB_CENTRAL_ALERTS --remote",
+    "db:migrate:all:local": "npm run db:migrate:extensions-v2:local && npm run db:migrate:central-alerts:local",
+    "db:migrate:all:remote": "npm run db:migrate:extensions-v2:remote && npm run db:migrate:central-alerts:remote",
+    "test": "npm run test:workers && npm run test:node",
+    "test:node": "vitest run --config vitest.node.config.ts",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "test:workers": "vitest run",
+    "build": "wrangler deploy --dry-run --outdir dist --minify && node scripts/prepare-deployment.ts",
+    "cf-preview": "wrangler preview --config dist/wrangler.json"
+  },
+  "dependencies": {
+    "@hono/zod-openapi": "1.6.3",
+    "@octokit/graphql": "9.0.5",
+    "@octokit/request": "10.0.16",
+    "@scalar/hono-api-reference": "0.12.18",
+    "badge-maker": "6.0.0",
+    "better-auth": "^1.7.14",
+    "drizzle-orm": "0.45.4",
+    "hono": "4.13.17",
+    "semver": "7.8.6",
+    "uuid": "14.0.3",
+    "zod": "4.6.7",
+    "@fossbilling/extension-packaging": "*",
+    "@fossbilling/logging": "*"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "1.6.1",
+    "@types/semver": "7.8.0",
+    "drizzle-kit": "0.31.11",
+    "wrangler": "4.158.0",
+    "@zip.js/zip.js": "2.24.0"
+  }
+}

@@ -1,0 +1,571 @@
+import { v7 as uuidv7 } from "uuid";
+import { describe, it, expect, beforeAll, beforeEach } from "vitest";
+import { eq } from "drizzle-orm";
+import {
+  createExecutionContext,
+  waitOnExecutionContext
+} from "cloudflare:test";
+import { env } from "cloudflare:workers";
+import app from "../../../../src/app/index";
+import { getExtensionsDb } from "../../../../src/lib/db";
+import {
+  developers,
+  extensions
+} from "../../../../src/services/extensions/v2/db/schema";
+import { applyTestMigrations } from "../../../utils/apply-migrations";
+
+const testExtensionRows = [
+  {
+    id: uuidv7(),
+    identifier: "Example",
+    manifest: JSON.stringify({
+      manifest_version: 1,
+      author: { name: "FOSSBilling" },
+      requires: { fossbilling: ">=0.6.0", php: ">=8.3" }
+    }),
+    type: "module" as const,
+    developerId: "fossbilling",
+    name: "Example Module",
+    description: "An example module for developers.",
+    releases: JSON.stringify([
+      {
+        tag: "0.0.5",
+        date: "2024-02-12T06:36:38+00:00",
+        download_url:
+          "https://github.com/FOSSBilling/example-module/releases/download/0.0.5/Example.zip",
+        changelog_url:
+          "https://github.com/FOSSBilling/example-module/releases/tag/0.0.5",
+        requires: { fossbilling: ">=0.6.0", php: ">=8.3" }
+      },
+      {
+        tag: "0.0.4",
+        date: "2023-09-25T07:36:29Z",
+        download_url:
+          "https://github.com/FOSSBilling/example-module/releases/download/0.0.4/Example.zip",
+        changelog_url:
+          "https://github.com/FOSSBilling/example-module/releases/tag/0.0.4",
+        requires: { fossbilling: ">=0.5.0", php: ">=8.2" }
+      }
+    ]),
+    website: "https://fossbilling.org",
+    license: JSON.stringify("Apache-2.0"),
+    iconUrl:
+      "https://raw.githubusercontent.com/FOSSBilling/example-module/main/src/icon.svg",
+    readme: "# Example module\n\nThis is an example module.",
+    source: JSON.stringify({
+      type: "github",
+      repo: "FOSSBilling/example-module"
+    }),
+    version: "0.0.5",
+    downloadUrl:
+      "https://github.com/FOSSBilling/example-module/releases/download/0.0.5/Example.zip"
+  },
+  {
+    id: uuidv7(),
+    identifier: "TestTheme",
+    manifest: JSON.stringify({
+      manifest_version: 1,
+      author: { name: "FOSSBilling" },
+      requires: { fossbilling: ">=0.6.0", php: ">=8.3" }
+    }),
+    type: "theme" as const,
+    developerId: "fossbilling",
+    name: "Test Theme",
+    description: "A test theme.",
+    releases: JSON.stringify([
+      {
+        tag: "1.0.0",
+        date: "2024-01-01T00:00:00Z",
+        download_url: "https://example.com/TestTheme.zip",
+        requires: { fossbilling: ">=0.6.0", php: ">=8.3" }
+      }
+    ]),
+    website: "https://fossbilling.org",
+    license: JSON.stringify("MIT"),
+    readme: "# Test Theme",
+    source: JSON.stringify({ type: "github", repo: "FOSSBilling/test-theme" }),
+    version: "1.0.0",
+    downloadUrl: "https://example.com/TestTheme.zip"
+  }
+];
+
+describe("Extensions API v1", () => {
+  beforeAll(applyTestMigrations);
+
+  beforeEach(async () => {
+    const db = getExtensionsDb(env.DB_EXTENSIONS);
+    await db.delete(extensions);
+    await db.delete(developers);
+
+    // The /list route caches assembled bodies in CACHE_KV; drop that
+    // namespace so tests observe live D1 state rather than a response a
+    // previous test cached.
+    const cached = await env.CACHE_KV.list({ prefix: "extensions:v1:list" });
+    for (const key of cached.keys) {
+      await env.CACHE_KV.delete(key.name);
+    }
+
+    await db.insert(developers).values({
+      id: "fossbilling",
+      identifier: "fossbilling",
+      type: "organization",
+      name: "fossbilling",
+      url: "https://fossbilling.org"
+    });
+    // publishedAt is what v1 filters on since migration 0021 - an extension
+    // row can now exist before a moderator has approved anything.
+    await db.insert(extensions).values(
+      testExtensionRows.map((row) => ({
+        ...row,
+        publishedAt: "2026-01-01T00:00:00.000Z"
+      }))
+    );
+  });
+
+  it("projects canonical licenses and release requirements into the v1 contract", async () => {
+    const ctx = createExecutionContext();
+    const response = await app.request("/extensions/v1/Example", {}, env, ctx);
+    await waitOnExecutionContext(ctx);
+    const body = (await response.json()) as {
+      result: {
+        type: string;
+        license: { name: string };
+        releases: Array<Record<string, unknown>>;
+      };
+    };
+    expect(body.result.type).toBe("mod");
+    expect(body.result.license).toEqual({ name: "Apache-2.0" });
+    expect(body.result.releases[0].min_fossbilling_version).toBe("0.6.0");
+    expect(body.result.releases[0]).not.toHaveProperty("requires");
+  });
+
+  describe("GET /list", () => {
+    it("should return all extensions", async () => {
+      const ctx = createExecutionContext();
+      const res = await app.request("/extensions/v1/list", {}, env, ctx);
+      await waitOnExecutionContext(ctx);
+
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as { result: unknown[] };
+      expect(Array.isArray(data.result)).toBe(true);
+      expect(data.result.length).toBe(2);
+    });
+
+    // The assembled body is cached in CACHE_KV (60s TTL): the second request
+    // must be served byte-identical from KV even after the underlying rows
+    // change, until revalidateExtensions deletes the key or the TTL lapses.
+    it("should serve a repeated request from the cached body", async () => {
+      const requestOnce = async () => {
+        const ctx = createExecutionContext();
+        const res = await app.request("/extensions/v1/list", {}, env, ctx);
+        await waitOnExecutionContext(ctx);
+        return res;
+      };
+
+      const first = await requestOnce();
+      expect(first.status).toBe(200);
+      const firstBody = await first.text();
+
+      const cachedKeys = await env.CACHE_KV.list({
+        prefix: "extensions:v1:list"
+      });
+      expect(cachedKeys.keys.length).toBe(1);
+
+      const db = getExtensionsDb(env.DB_EXTENSIONS);
+      await db.delete(extensions);
+
+      const second = await requestOnce();
+      expect(second.status).toBe(200);
+      await expect(second.text()).resolves.toBe(firstBody);
+    });
+
+    it("should filter by type", async () => {
+      const ctx = createExecutionContext();
+      const res = await app.request(
+        "/extensions/v1/list?type=mod",
+        {},
+        env,
+        ctx
+      );
+      await waitOnExecutionContext(ctx);
+
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as { result: Array<{ type: string }> };
+      expect(data.result.every((e) => e.type === "mod")).toBe(true);
+      expect(data.result.length).toBe(1);
+    });
+
+    // Opt-in pagination walks the list in (LOWER(id), id) order - the same
+    // ordering as the extension directory index - so pages are deterministic and
+    // case-mixed ids sort case-insensitively. Without params the response
+    // stays the unpaginated legacy shape (no pagination object).
+    it("should page deterministically with an opt-in limit and offset", async () => {
+      const db = getExtensionsDb(env.DB_EXTENSIONS);
+      await db.insert(extensions).values({
+        ...testExtensionRows[0],
+        id: uuidv7(),
+        identifier: "alpha-mod",
+        name: "Alpha Module",
+        publishedAt: "2026-01-01T00:00:00.000Z"
+      });
+
+      const page = async (query: string) => {
+        const ctx = createExecutionContext();
+        const res = await app.request(
+          `/extensions/v1/list${query}`,
+          {},
+          env,
+          ctx
+        );
+        await waitOnExecutionContext(ctx);
+        expect(res.status).toBe(200);
+        return (await res.json()) as {
+          result: Array<{ id: string }>;
+          pagination?: { limit: number; offset: number; has_more: boolean };
+        };
+      };
+
+      const first = await page("?limit=1");
+      expect(first.result.map((e) => e.id)).toEqual(["alpha-mod"]);
+      expect(first.pagination).toEqual({
+        limit: 1,
+        offset: 0,
+        has_more: true
+      });
+
+      const second = await page("?limit=1&offset=1");
+      expect(second.result.map((e) => e.id)).toEqual(["Example"]);
+      expect(second.pagination).toEqual({
+        limit: 1,
+        offset: 1,
+        has_more: true
+      });
+
+      const last = await page("?limit=1&offset=2");
+      expect(last.result.map((e) => e.id)).toEqual(["TestTheme"]);
+      expect(last.pagination).toEqual({
+        limit: 1,
+        offset: 2,
+        has_more: false
+      });
+
+      const unpaginated = await page("");
+      expect(unpaginated.result).toHaveLength(3);
+      expect(unpaginated.pagination).toBeUndefined();
+    });
+
+    // offset is only meaningful alongside a limit: a stray offset alone
+    // must not silently fall through to the full legacy response the way
+    // it would if the param were simply ignored.
+    it("should reject offset without limit with 422", async () => {
+      const ctx = createExecutionContext();
+      const res = await app.request(
+        "/extensions/v1/list?offset=1",
+        {},
+        env,
+        ctx
+      );
+      await waitOnExecutionContext(ctx);
+
+      expect(res.status).toBe(422);
+      const data = (await res.json()) as { error: { message: string } };
+      expect(data.error.message).toBe("offset requires limit");
+    });
+
+    // v1 and v2 share the extensions table and must agree on what counts as
+    // published - a moderator delisting an extension in v2 must also pull it
+    // from here, or FOSSBilling installs would keep seeing it.
+    it("should exclude a delisted extension", async () => {
+      const db = getExtensionsDb(env.DB_EXTENSIONS);
+      await db
+        .update(extensions)
+        .set({ delistedAt: "2026-01-01T00:00:00.000Z" })
+        .where(eq(extensions.identifier, "Example"));
+
+      const ctx = createExecutionContext();
+      const res = await app.request("/extensions/v1/list", {}, env, ctx);
+      await waitOnExecutionContext(ctx);
+
+      const data = (await res.json()) as { result: Array<{ id: string }> };
+      expect(data.result.map((e) => e.id)).toEqual(["TestTheme"]);
+    });
+
+    it("should parse releases in descending order", async () => {
+      const ctx = createExecutionContext();
+      const res = await app.request("/extensions/v1/list", {}, env, ctx);
+      await waitOnExecutionContext(ctx);
+
+      const data = (await res.json()) as {
+        result: Array<{ id: string; releases: Array<{ tag: string }> }>;
+      };
+      const example = data.result.find((e) => e.id === "Example");
+      expect(example).toBeTruthy();
+      expect(example!.releases[0].tag).toBe("0.0.5");
+    });
+
+    // Legacy FOSSBilling installs (0.8.x) render the extension directory with
+    // strict_variables, where a missing key throws and crashes the whole
+    // Extensions page (issue FOSSBilling/FOSSBilling#4486). The keys must
+    // always be present ("" when unknown) so old templates fall into their
+    // fallback branches. Assert on the raw body: JSON.stringify silently
+    // drops undefined values, which is the exact mechanism that omitted
+    // the keys.
+    it("should always include icon_url and author URL keys", async () => {
+      const db = getExtensionsDb(env.DB_EXTENSIONS);
+      await db.insert(developers).values({
+        id: "nourl",
+        identifier: "nourl",
+        type: "user",
+        name: "No URL",
+        url: null
+      });
+      await db.insert(extensions).values({
+        ...testExtensionRows[1],
+        id: uuidv7(),
+        identifier: "NoIcon",
+        developerId: "nourl",
+        iconUrl: null,
+        publishedAt: "2026-01-01T00:00:00.000Z"
+      });
+
+      const ctx = createExecutionContext();
+      const res = await app.request("/extensions/v1/list", {}, env, ctx);
+      await waitOnExecutionContext(ctx);
+
+      expect(res.status).toBe(200);
+      const body = await res.text();
+      const data = JSON.parse(body) as {
+        result: Array<{
+          id: string;
+          icon_url: string;
+          author: { URL: string };
+        }>;
+      };
+      const entry = data.result.find((e) => e.id === "NoIcon");
+      expect(entry).toBeTruthy();
+      expect("icon_url" in entry!).toBe(true);
+      expect(entry!.icon_url).toBe("");
+      expect("URL" in entry!.author).toBe(true);
+      expect(entry!.author.URL).toBe("");
+    });
+  });
+
+  describe("GET /:id", () => {
+    it("should return a single extension", async () => {
+      const ctx = createExecutionContext();
+      const res = await app.request("/extensions/v1/Example", {}, env, ctx);
+      await waitOnExecutionContext(ctx);
+
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as {
+        result: { id: string; name: string };
+      };
+      expect(data.result.id).toBe("Example");
+      expect(data.result.name).toBe("Example Module");
+    });
+
+    it("should do case-insensitive lookup", async () => {
+      const ctx = createExecutionContext();
+      const res = await app.request("/extensions/v1/example", {}, env, ctx);
+      await waitOnExecutionContext(ctx);
+
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as { result: { id: string } };
+      expect(data.result.id).toBe("Example");
+    });
+
+    it("should return 404 for unknown extension", async () => {
+      const ctx = createExecutionContext();
+      const res = await app.request("/extensions/v1/nonexistent", {}, env, ctx);
+      await waitOnExecutionContext(ctx);
+
+      expect(res.status).toBe(404);
+      const data = (await res.json()) as { error: { message: string } };
+      expect(data.error.message).toContain("nonexistent");
+    });
+
+    it("should return 404 for a delisted extension", async () => {
+      const db = getExtensionsDb(env.DB_EXTENSIONS);
+      await db
+        .update(extensions)
+        .set({ delistedAt: "2026-01-01T00:00:00.000Z" })
+        .where(eq(extensions.identifier, "Example"));
+
+      const ctx = createExecutionContext();
+      const res = await app.request("/extensions/v1/Example", {}, env, ctx);
+      await waitOnExecutionContext(ctx);
+
+      expect(res.status).toBe(404);
+    });
+
+    it("should include parsed author object", async () => {
+      const ctx = createExecutionContext();
+      const res = await app.request("/extensions/v1/Example", {}, env, ctx);
+      await waitOnExecutionContext(ctx);
+
+      const data = (await res.json()) as {
+        result: { author: { name: string } };
+      };
+      expect(data.result.author.name).toBe("fossbilling");
+    });
+  });
+
+  describe("GET /:id/version", () => {
+    it.each([false, true])(
+      "uses the selected or stable release when a newer prerelease exists (selected=%s)",
+      async (selected) => {
+        const db = getExtensionsDb(env.DB_EXTENSIONS);
+        const releases = [
+          {
+            tag: "2.0.0-beta.1",
+            date: "2026-01-02",
+            download_url: "https://example.test/beta.zip",
+            requires: { fossbilling: "*" }
+          },
+          {
+            tag: "1.0.0",
+            date: "2026-01-01",
+            download_url: "https://example.test/stable.zip",
+            requires: { fossbilling: "*" }
+          },
+          {
+            tag: "0.9.0",
+            date: "2025-01-01",
+            download_url: "https://example.test/pinned.zip",
+            requires: { fossbilling: "*" },
+            ...(selected ? { is_latest: true } : {})
+          }
+        ];
+        const expected = selected ? "0.9.0" : "1.0.0";
+        await db
+          .update(extensions)
+          .set({ releases: JSON.stringify(releases), version: expected })
+          .where(eq(extensions.identifier, "Example"));
+        const ctx = createExecutionContext();
+        const response = await app.request(
+          "/extensions/v1/Example/version",
+          {},
+          env,
+          ctx
+        );
+        await waitOnExecutionContext(ctx);
+        expect(await response.text()).toBe(expected);
+        const detail = await app.request(
+          "/extensions/v1/Example",
+          {},
+          env,
+          createExecutionContext()
+        );
+        expect(
+          ((await detail.json()) as { result: { version: string } }).result
+            .version
+        ).toBe(expected);
+      }
+    );
+    it("should return plain text version", async () => {
+      const ctx = createExecutionContext();
+      const res = await app.request(
+        "/extensions/v1/Example/version",
+        {},
+        env,
+        ctx
+      );
+      await waitOnExecutionContext(ctx);
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get("Content-Type")).toContain("text/plain");
+      const text = await res.text();
+      expect(text).toBe("0.0.5");
+    });
+
+    it("should return 404 for unknown extension", async () => {
+      const ctx = createExecutionContext();
+      const res = await app.request(
+        "/extensions/v1/nonexistent/version",
+        {},
+        env,
+        ctx
+      );
+      await waitOnExecutionContext(ctx);
+
+      expect(res.status).toBe(404);
+    });
+  });
+
+  it("leaves legacy badge requests to Cloudflare rules", async () => {
+    const ctx = createExecutionContext();
+    const response = await app.request(
+      "/extensions/v1/Example/badges/version",
+      {},
+      env,
+      ctx
+    );
+    await waitOnExecutionContext(ctx);
+    expect(response.status).toBe(404);
+  });
+
+  it("reads the plain-text version without deriving a v1 minimum", async () => {
+    const db = getExtensionsDb(env.DB_EXTENSIONS);
+    await db
+      .update(extensions)
+      .set({
+        releases: JSON.stringify([
+          {
+            tag: "1.0.0",
+            requires: { fossbilling: ">=0.8.9 !=0.9.0" }
+          }
+        ])
+      })
+      .where(eq(extensions.identifier, "Example"));
+    const ctx = createExecutionContext();
+    const response = await app.request(
+      "/extensions/v1/Example/version",
+      {},
+      env,
+      ctx
+    );
+    await waitOnExecutionContext(ctx);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("1.0.0");
+  });
+});
+
+describe("v1 projection failures", () => {
+  beforeAll(applyTestMigrations);
+  it.each(["not-a-range", ">=2.0.0 <1.0.0", "", "   ", "\t\n"])(
+    "flags a requirement with no v1 minimum: %s",
+    async (constraint) => {
+      const db = getExtensionsDb(env.DB_EXTENSIONS);
+      await db.delete(extensions);
+      await db.delete(developers);
+      await db.insert(developers).values({
+        id: "projection-owner",
+        identifier: "projection-owner",
+        type: "organization",
+        name: "Owner"
+      });
+      const original = JSON.parse(testExtensionRows[0].releases);
+      original[0].requires.fossbilling = constraint;
+      await db.insert(extensions).values({
+        ...testExtensionRows[0],
+        developerId: "projection-owner",
+        releases: JSON.stringify(original),
+        publishedAt: "2026-01-01T00:00:00Z"
+      });
+      const ctx = createExecutionContext();
+      const response = await app.request(
+        "/extensions/v1/Example",
+        {},
+        env,
+        ctx
+      );
+      await waitOnExecutionContext(ctx);
+      expect(response.status).toBe(500);
+      await expect(response.json()).resolves.toMatchObject({
+        error: {
+          message: expect.stringContaining("requires manual correction")
+        }
+      });
+    }
+  );
+});
