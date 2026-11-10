@@ -24,7 +24,7 @@ export function registerPublicExtensionsRoutes(app: ExtensionsV2App): void {
     path: "/extensions",
     tags: ["Extensions"],
     summary:
-      "List extensions: published catalogue (scope=public), caller's own (scope=mine), or every extension (scope=all, moderator)",
+      "List extensions: published extension directory (scope=public), caller's own (scope=mine), or every extension (scope=all, moderator)",
     security: [{ Bearer: [] }],
     middleware: [optionalAuth()] as const,
     request: { query: UnifiedExtensionListQuerySchema },
@@ -36,7 +36,7 @@ export function registerPublicExtensionsRoutes(app: ExtensionsV2App): void {
           }
         },
         description:
-          "Extensions matching the scope: catalogue cards for scope=public, owned rows for scope=mine/all"
+          "Extensions matching the scope: extension cards for scope=public, owned rows for scope=mine, moderation rows for scope=all"
       },
       401: errorResponse("Invalid bearer token"),
       403: errorResponse(
@@ -48,18 +48,18 @@ export function registerPublicExtensionsRoutes(app: ExtensionsV2App): void {
   });
 
   app.openapi(listExtensionsRoute, async (c) => {
-    const { scope, type, developer_id, status, q, limit, cursor } =
+    const { scope, type, developer_identifier, status, q, limit, cursor } =
       c.req.valid("query");
     const auth = getOptionalAuth(c);
     const extDb = getExtensionsDb(c.env.DB_EXTENSIONS);
 
     // Filter/scope combinations are rejected rather than silently ignored so
     // a caller cannot mistake one projection for another.
-    if (scope !== "public" && developer_id !== undefined) {
+    if (scope !== "public" && developer_identifier !== undefined) {
       return c.json(
         {
           error: {
-            message: "developer_id is only valid with scope=public",
+            message: "developer_identifier is only valid with scope=public",
             code: "VALIDATION_ERROR"
           }
         },
@@ -82,7 +82,7 @@ export function registerPublicExtensionsRoutes(app: ExtensionsV2App): void {
       const db = new ExtensionsDatabase(extDb);
       const { data, error } = await db.list({
         type,
-        developerId: developer_id,
+        developerIdentifier: developer_identifier,
         limit,
         cursor
       });
@@ -322,7 +322,7 @@ export function registerPublicExtensionsRoutes(app: ExtensionsV2App): void {
       }
     }
 
-    const { data, error } = await db.getById(id);
+    const { data, error } = await db.getByIdentifier(id);
     if (error || !data) {
       const status = statusFromContentReadError(error?.code);
       return c.json(errorBody(error, "Extension not found"), status);

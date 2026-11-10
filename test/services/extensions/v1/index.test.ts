@@ -1,3 +1,4 @@
+import { v7 as uuidv7 } from "uuid";
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
 import { eq } from "drizzle-orm";
 import {
@@ -15,8 +16,14 @@ import { applyTestMigrations } from "../../../utils/apply-migrations";
 
 const testExtensionRows = [
   {
-    id: "Example",
-    type: "mod" as const,
+    id: uuidv7(),
+    identifier: "Example",
+    manifest: JSON.stringify({
+      manifest_version: 1,
+      author: { name: "FOSSBilling" },
+      requires: { fossbilling: ">=0.6.0", php: ">=8.3" }
+    }),
+    type: "module" as const,
     developerId: "fossbilling",
     name: "Example Module",
     description: "An example module for developers.",
@@ -28,7 +35,7 @@ const testExtensionRows = [
           "https://github.com/FOSSBilling/example-module/releases/download/0.0.5/Example.zip",
         changelog_url:
           "https://github.com/FOSSBilling/example-module/releases/tag/0.0.5",
-        min_fossbilling_version: "0.6"
+        requires: { fossbilling: ">=0.6.0", php: ">=8.3" }
       },
       {
         tag: "0.0.4",
@@ -37,14 +44,11 @@ const testExtensionRows = [
           "https://github.com/FOSSBilling/example-module/releases/download/0.0.4/Example.zip",
         changelog_url:
           "https://github.com/FOSSBilling/example-module/releases/tag/0.0.4",
-        min_fossbilling_version: "0.5"
+        requires: { fossbilling: ">=0.5.0", php: ">=8.2" }
       }
     ]),
     website: "https://fossbilling.org",
-    license: JSON.stringify({
-      name: "Apache 2.0",
-      URL: "https://www.apache.org/licenses/LICENSE-2.0"
-    }),
+    license: JSON.stringify("Apache-2.0"),
     iconUrl:
       "https://raw.githubusercontent.com/FOSSBilling/example-module/main/src/icon.svg",
     readme: "# Example module\n\nThis is an example module.",
@@ -57,7 +61,13 @@ const testExtensionRows = [
       "https://github.com/FOSSBilling/example-module/releases/download/0.0.5/Example.zip"
   },
   {
-    id: "TestTheme",
+    id: uuidv7(),
+    identifier: "TestTheme",
+    manifest: JSON.stringify({
+      manifest_version: 1,
+      author: { name: "FOSSBilling" },
+      requires: { fossbilling: ">=0.6.0", php: ">=8.3" }
+    }),
     type: "theme" as const,
     developerId: "fossbilling",
     name: "Test Theme",
@@ -67,11 +77,11 @@ const testExtensionRows = [
         tag: "1.0.0",
         date: "2024-01-01T00:00:00Z",
         download_url: "https://example.com/TestTheme.zip",
-        min_fossbilling_version: "0.6"
+        requires: { fossbilling: ">=0.6.0", php: ">=8.3" }
       }
     ]),
     website: "https://fossbilling.org",
-    license: JSON.stringify({ name: "MIT" }),
+    license: JSON.stringify("MIT"),
     readme: "# Test Theme",
     source: JSON.stringify({ type: "github", repo: "FOSSBilling/test-theme" }),
     version: "1.0.0",
@@ -97,6 +107,7 @@ describe("Extensions API v1", () => {
 
     await db.insert(developers).values({
       id: "fossbilling",
+      identifier: "fossbilling",
       type: "organization",
       name: "fossbilling",
       url: "https://fossbilling.org"
@@ -109,6 +120,23 @@ describe("Extensions API v1", () => {
         publishedAt: "2026-01-01T00:00:00.000Z"
       }))
     );
+  });
+
+  it("projects canonical licenses and release requirements into the v1 contract", async () => {
+    const ctx = createExecutionContext();
+    const response = await app.request("/extensions/v1/Example", {}, env, ctx);
+    await waitOnExecutionContext(ctx);
+    const body = (await response.json()) as {
+      result: {
+        type: string;
+        license: { name: string };
+        releases: Array<Record<string, unknown>>;
+      };
+    };
+    expect(body.result.type).toBe("mod");
+    expect(body.result.license).toEqual({ name: "Apache-2.0" });
+    expect(body.result.releases[0].min_fossbilling_version).toBe("0.6.0");
+    expect(body.result.releases[0]).not.toHaveProperty("requires");
   });
 
   describe("GET /list", () => {
@@ -125,7 +153,7 @@ describe("Extensions API v1", () => {
 
     // The assembled body is cached in CACHE_KV (60s TTL): the second request
     // must be served byte-identical from KV even after the underlying rows
-    // change, until revalidateCatalogue deletes the key or the TTL lapses.
+    // change, until revalidateExtensions deletes the key or the TTL lapses.
     it("should serve a repeated request from the cached body", async () => {
       const requestOnce = async () => {
         const ctx = createExecutionContext();
@@ -168,14 +196,15 @@ describe("Extensions API v1", () => {
     });
 
     // Opt-in pagination walks the list in (LOWER(id), id) order - the same
-    // ordering as the catalogue index - so pages are deterministic and
+    // ordering as the extension directory index - so pages are deterministic and
     // case-mixed ids sort case-insensitively. Without params the response
     // stays the unpaginated legacy shape (no pagination object).
     it("should page deterministically with an opt-in limit and offset", async () => {
       const db = getExtensionsDb(env.DB_EXTENSIONS);
       await db.insert(extensions).values({
         ...testExtensionRows[0],
-        id: "alpha-mod",
+        id: uuidv7(),
+        identifier: "alpha-mod",
         name: "Alpha Module",
         publishedAt: "2026-01-01T00:00:00.000Z"
       });
@@ -251,7 +280,7 @@ describe("Extensions API v1", () => {
       await db
         .update(extensions)
         .set({ delistedAt: "2026-01-01T00:00:00.000Z" })
-        .where(eq(extensions.id, "Example"));
+        .where(eq(extensions.identifier, "Example"));
 
       const ctx = createExecutionContext();
       const res = await app.request("/extensions/v1/list", {}, env, ctx);
@@ -274,7 +303,7 @@ describe("Extensions API v1", () => {
       expect(example!.releases[0].tag).toBe("0.0.5");
     });
 
-    // Legacy FOSSBilling installs (0.8.x) render the catalogue with
+    // Legacy FOSSBilling installs (0.8.x) render the extension directory with
     // strict_variables, where a missing key throws and crashes the whole
     // Extensions page (issue FOSSBilling/FOSSBilling#4486). The keys must
     // always be present ("" when unknown) so old templates fall into their
@@ -285,13 +314,15 @@ describe("Extensions API v1", () => {
       const db = getExtensionsDb(env.DB_EXTENSIONS);
       await db.insert(developers).values({
         id: "nourl",
+        identifier: "nourl",
         type: "user",
         name: "No URL",
         url: null
       });
       await db.insert(extensions).values({
         ...testExtensionRows[1],
-        id: "NoIcon",
+        id: uuidv7(),
+        identifier: "NoIcon",
         developerId: "nourl",
         iconUrl: null,
         publishedAt: "2026-01-01T00:00:00.000Z"
@@ -358,7 +389,7 @@ describe("Extensions API v1", () => {
       await db
         .update(extensions)
         .set({ delistedAt: "2026-01-01T00:00:00.000Z" })
-        .where(eq(extensions.id, "Example"));
+        .where(eq(extensions.identifier, "Example"));
 
       const ctx = createExecutionContext();
       const res = await app.request("/extensions/v1/Example", {}, env, ctx);
@@ -410,79 +441,80 @@ describe("Extensions API v1", () => {
     });
   });
 
-  describe("GET /:id/badges/:type", () => {
-    it("should return SVG for version badge", async () => {
-      const ctx = createExecutionContext();
-      const res = await app.request(
-        "/extensions/v1/Example/badges/version",
-        {},
-        env,
-        ctx
-      );
-      await waitOnExecutionContext(ctx);
-
-      expect(res.status).toBe(200);
-      expect(res.headers.get("Content-Type")).toContain("image/svg+xml");
-      const svg = await res.text();
-      expect(svg).toContain("<svg");
-      expect(svg).toContain("v0.0.5");
-    });
-
-    it("should return SVG for license badge", async () => {
-      const ctx = createExecutionContext();
-      const res = await app.request(
-        "/extensions/v1/Example/badges/license",
-        {},
-        env,
-        ctx
-      );
-      await waitOnExecutionContext(ctx);
-
-      expect(res.status).toBe(200);
-      const svg = await res.text();
-      expect(svg).toContain("Apache 2.0");
-    });
-
-    it("should return red SVG for unknown badge type", async () => {
-      const ctx = createExecutionContext();
-      const res = await app.request(
-        "/extensions/v1/Example/badges/unknown_type",
-        {},
-        env,
-        ctx
-      );
-      await waitOnExecutionContext(ctx);
-
-      expect(res.status).toBe(200);
-      expect(res.headers.get("Content-Type")).toContain("image/svg+xml");
-    });
-
-    it("should accept custom color param", async () => {
-      const ctx = createExecutionContext();
-      const res = await app.request(
-        "/extensions/v1/Example/badges/version?color=green",
-        {},
-        env,
-        ctx
-      );
-      await waitOnExecutionContext(ctx);
-
-      expect(res.status).toBe(200);
-      const svg = await res.text();
-      expect(svg).toContain("<svg");
-    });
-
-    it("should return 404 for unknown extension", async () => {
-      const ctx = createExecutionContext();
-      const res = await app.request(
-        "/extensions/v1/nonexistent/badges/version",
-        {},
-        env,
-        ctx
-      );
-      await waitOnExecutionContext(ctx);
-
-      expect(res.status).toBe(404);
-    });
+  it("leaves legacy badge requests to Cloudflare rules", async () => {
+    const ctx = createExecutionContext();
+    const response = await app.request(
+      "/extensions/v1/Example/badges/version",
+      {},
+      env,
+      ctx
+    );
+    await waitOnExecutionContext(ctx);
+    expect(response.status).toBe(404);
   });
+
+  it("reads the plain-text version without deriving a v1 minimum", async () => {
+    const db = getExtensionsDb(env.DB_EXTENSIONS);
+    await db
+      .update(extensions)
+      .set({
+        releases: JSON.stringify([
+          {
+            tag: "1.0.0",
+            requires: { fossbilling: ">=0.8.9 !=0.9.0" }
+          }
+        ])
+      })
+      .where(eq(extensions.identifier, "Example"));
+    const ctx = createExecutionContext();
+    const response = await app.request(
+      "/extensions/v1/Example/version",
+      {},
+      env,
+      ctx
+    );
+    await waitOnExecutionContext(ctx);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("1.0.0");
+  });
+});
+
+describe("v1 projection failures", () => {
+  beforeAll(applyTestMigrations);
+  it.each(["not-a-range", ">=2.0.0 <1.0.0", "", "   ", "\t\n"])(
+    "flags a requirement with no v1 minimum: %s",
+    async (constraint) => {
+      const db = getExtensionsDb(env.DB_EXTENSIONS);
+      await db.delete(extensions);
+      await db.delete(developers);
+      await db.insert(developers).values({
+        id: "projection-owner",
+        identifier: "projection-owner",
+        type: "organization",
+        name: "Owner"
+      });
+      const original = JSON.parse(testExtensionRows[0].releases);
+      original[0].requires.fossbilling = constraint;
+      await db.insert(extensions).values({
+        ...testExtensionRows[0],
+        developerId: "projection-owner",
+        releases: JSON.stringify(original),
+        publishedAt: "2026-01-01T00:00:00Z"
+      });
+      const ctx = createExecutionContext();
+      const response = await app.request(
+        "/extensions/v1/Example",
+        {},
+        env,
+        ctx
+      );
+      await waitOnExecutionContext(ctx);
+      expect(response.status).toBe(500);
+      await expect(response.json()).resolves.toMatchObject({
+        error: {
+          message: expect.stringContaining("requires manual correction")
+        }
+      });
+    }
+  );
 });

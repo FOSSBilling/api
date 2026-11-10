@@ -1,7 +1,6 @@
 import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
 import { trimTrailingSlash } from "hono/trailing-slash";
-import { makeBadge } from "badge-maker";
 import { getExtensionsDb } from "../../../lib/db";
 import { singleFlight } from "../../../lib/cache";
 import { parseLegacyPagination } from "../../../lib/pagination";
@@ -27,7 +26,7 @@ extensionsV1.use("/*", trimTrailingSlash());
 
 // The assembled list is ~126KB of readme + release history per entry, rebuilt
 // from a full-table D1 read (per the documented legacy contract) on every
-// request - yet catalogue content changes at human speed. Cache the serialized
+// request - yet extension content changes at human speed. Cache the serialized
 // response body in CACHE_KV and let concurrent cold misses share one build per
 // isolate; a cached response also freezes the unpaginated query's otherwise
 // nondeterministic row order.
@@ -93,74 +92,22 @@ extensionsV1.get("/list", async (c) => {
   return c.body(body, 200, { "Content-Type": "application/json" });
 });
 
-extensionsV1.get("/:id/badges/:type", async (c) => {
-  const id = c.req.param("id");
-  const badgeType = c.req.param("type");
-
-  const db = new ExtensionsDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
-
-  const { data: badgeData, error } = await db.getExtensionBadgeData(id);
-  if (error || !badgeData) {
-    return extensionError(c, error);
-  }
-
-  const latest = badgeData.latestRelease;
-
-  const knownTypes: Record<string, { label: string; message: string }> = {
-    version: {
-      label: "Latest version",
-      message: latest ? `v${latest.tag}` : "unknown"
-    },
-    min_fossbilling_version: {
-      label: "Minimum FOSSBilling version",
-      message: latest ? `v${latest.min_fossbilling_version}` : "unknown"
-    },
-    license: {
-      label: "License",
-      message: badgeData.license.name
-    }
-  };
-
-  const matched = knownTypes[badgeType.toLowerCase()];
-  const format = {
-    label: matched ? matched.label : "Unknown type",
-    message: matched ? matched.message : badgeType,
-    color: matched ? "blue" : "red"
-  };
-
-  const colorParam = c.req.query("color");
-  if (colorParam) {
-    format.color = colorParam;
-  }
-
-  // Badges are embedded in READMEs and re-fetched by crawlers and shields
-  // proxies constantly; the underlying data changes only when a release
-  // lands, so let the CDN carry the traffic.
-  c.header("Cache-Control", "public, max-age=300, s-maxage=3600");
-  // Static import: wrangler's esbuild doesn't code-split, so a dynamic
-  // import here would just be inlined back into the bundle.
-  const svg = makeBadge(format);
-  c.header("Content-Type", "image/svg+xml");
-  return c.body(svg);
-});
-
 extensionsV1.get("/:id/version", async (c) => {
   const id = c.req.param("id");
 
   const db = new ExtensionsDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
 
-  const { data: badgeData, error } = await db.getExtensionBadgeData(id);
-  if (error || !badgeData) {
+  const { data, error } = await db.getExtensionVersion(id);
+  if (error || !data) {
     return extensionError(c, error);
   }
 
-  const latest = badgeData.latestRelease;
-  if (!latest) {
+  if (data.version === null) {
     return c.json({ error: { message: "No releases found" } }, 500);
   }
 
   c.header("Cache-Control", "public, max-age=300, s-maxage=3600");
-  return c.text(latest.tag);
+  return c.text(data.version);
 });
 
 extensionsV1.get("/:id", async (c) => {

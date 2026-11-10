@@ -38,7 +38,7 @@ import { DeveloperProfilesDatabase } from "../db/developer-profiles";
 import { ExtensionsDatabase } from "../db/extensions";
 import { ExtensionRevisionsDatabase } from "../db/revisions";
 import { notifyAuthor } from "./notify";
-import { revalidateCatalogue } from "../revalidate";
+import { revalidateExtensions } from "../revalidate";
 import { ExtensionsV2App } from "./app";
 
 export function registerModerationRoutes(app: ExtensionsV2App): void {
@@ -192,14 +192,14 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
   });
 
   // Distinct from reject: reject leaves a pending edit unpublished, delist
-  // pulls an already-published extension out of the catalogue entirely. See
+  // pulls an already-published extension out of the extension directory entirely. See
   // ExtensionsDatabase.delist() for why content and history are kept rather
   // than cleared.
   const delistRoute = createRoute({
     method: "post",
     path: "/extensions/{id}/delist",
     tags: ["Moderation"],
-    summary: "Remove a published extension from the public catalogue",
+    summary: "Remove a published extension from the public extension listing",
     security: [{ Bearer: [] }],
     middleware: [requireModerator()] as const,
     request: {
@@ -215,7 +215,8 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
           "application/json": {
             schema: z.object({
               result: z.object({
-                id: z.string(),
+                id: z.uuidv7(),
+                identifier: z.string(),
                 status: z.literal("delisted"),
                 notified: NotifiedSchema
               })
@@ -223,7 +224,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
           }
         },
         description:
-          "Extension removed from the public catalogue. Its content and " +
+          "Extension removed from the public extension listing. Its content and " +
           "history are kept, and its owner can still see and edit it."
       },
       ...authErrorResponses(ModeratorForbiddenResponse),
@@ -254,7 +255,14 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
       reason
     });
     return c.json(
-      { result: { id: data.id, status: "delisted" as const, notified } },
+      {
+        result: {
+          id: data.id,
+          identifier: data.identifier,
+          status: "delisted" as const,
+          notified
+        }
+      },
       200
     );
   });
@@ -263,7 +271,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
     method: "post",
     path: "/extensions/{id}/relist",
     tags: ["Moderation"],
-    summary: "Restore a delisted extension to the public catalogue",
+    summary: "Restore a delisted extension to the public extension listing",
     security: [{ Bearer: [] }],
     middleware: [requireModerator()] as const,
     request: {
@@ -279,7 +287,8 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
           "application/json": {
             schema: z.object({
               result: z.object({
-                id: z.string(),
+                id: z.uuidv7(),
+                identifier: z.string(),
                 status: z.literal("relisted"),
                 notified: NotifiedSchema
               })
@@ -287,7 +296,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
           }
         },
         description:
-          "Extension restored to the public catalogue. Content and history unchanged."
+          "Extension restored to the public extension listing. Content and history unchanged."
       },
       ...authErrorResponses(ModeratorForbiddenResponse),
       404: errorResponse("No such extension"),
@@ -313,11 +322,18 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
     }
     const notified = await notifyAuthor(c, extDb, query, {
       kind: "extension-relisted",
-      extensionId: data.id,
+      extensionId: id,
       reason: review_note?.trim() || undefined
     });
     return c.json(
-      { result: { id: data.id, status: "relisted" as const, notified } },
+      {
+        result: {
+          id: data.id,
+          identifier: data.identifier,
+          status: "relisted" as const,
+          notified
+        }
+      },
       200
     );
   });
@@ -354,7 +370,8 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
           "application/json": {
             schema: z.object({
               result: z.object({
-                id: z.string(),
+                id: z.uuidv7(),
+                identifier: z.string(),
                 revision_id: z.string(),
                 status: z.literal("approved")
               })
@@ -399,11 +416,12 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
       const status = statusFromContentWriteError(error?.code);
       return c.json(errorBody(error, "Unable to correct extension"), status);
     }
-    revalidateCatalogue(c);
+    revalidateExtensions(c);
     return c.json(
       {
         result: {
           id: data.id,
+          identifier: data.identifier,
           revision_id: data.revisionId,
           status: "approved" as const
         }
@@ -432,7 +450,8 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
           "application/json": {
             schema: z.object({
               result: z.object({
-                id: z.string(),
+                id: z.uuidv7(),
+                identifier: z.string(),
                 approved: z.literal(true),
                 notified: NotifiedSchema
               })
@@ -470,7 +489,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
     }
     const notified = await notifyAuthor(c, extDb, query, {
       kind: "developer-approved",
-      developerId: id
+      developerId: data.id
     });
     return c.json({ result: { ...data, notified } }, 200);
   });
@@ -482,7 +501,15 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
     summary: "List the write history of a developer profile",
     security: [{ Bearer: [] }],
     middleware: [requireModerator()] as const,
-    request: { params: IdParamSchema, query: CursorPaginationQuerySchema },
+    request: {
+      params: z.object({
+        id: z
+          .uuidv7()
+          .toLowerCase()
+          .openapi({ description: "Internal developer UUID" })
+      }),
+      query: CursorPaginationQuerySchema
+    },
     responses: {
       200: {
         content: {

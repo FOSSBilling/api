@@ -1,15 +1,17 @@
+import { minVersion, validRange } from "semver";
 import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import { ExtensionsDb } from "../../../lib/db";
 import { extensions, developers } from "../v2/db/schema";
 import { DatabaseResult } from "../../../lib/interfaces";
 import { sortReleasesDescending } from "../../../lib/releases";
 import { parseJSON } from "../../../lib/json";
+import type { Release as ManifestRelease } from "../v2/schemas/extensions";
 import { Extension, Release, Author, Repository } from "./interfaces";
 
 const EXTENSION_COLUMNS = {
-  id: extensions.id,
+  id: extensions.identifier,
   type: extensions.type,
-  developerId: extensions.developerId,
+  developerId: developers.identifier,
   authorType: developers.type,
   authorName: developers.name,
   authorUrl: developers.url,
@@ -34,10 +36,10 @@ const EXTENSION_COLUMNS = {
 // non-null here because both queries below filter on published_at IS NOT NULL
 // and extensions_published_content_check makes that filter sufficient - a
 // published row cannot be missing any of them. That filter is also what keeps
-// unreviewed extensions out of the v1 catalogue. delisted_at IS NULL is the
-// other half: v1 shares this table with v2's public catalogue and must stay
+// unreviewed extensions out of the v1 extension listing. delisted_at IS NULL is the
+// other half: v1 shares this table with v2's public extension listing and must stay
 // in sync with what v2 hides, or a moderator delisting an extension would
-// pull it from the v2 catalogue while it stayed visible here.
+// pull it from the v2 extension listing while it stayed visible here.
 interface ExtensionRow {
   id: string;
   type: string;
@@ -63,6 +65,10 @@ export class ExtensionsDatabase {
   // Shared catch shape for this module's D1 reads: driver message surfaced
   // under the generic DATABASE_ERROR code.
   private databaseError(error: unknown): DatabaseResult<never> {
+    console.error(
+      "[extensions-v1] Cannot read canonical extension data:",
+      error
+    );
     return {
       data: null,
       error: {
@@ -101,13 +107,23 @@ export class ExtensionsDatabase {
         .select(EXTENSION_COLUMNS)
         .from(extensions)
         .innerJoin(developers, eq(extensions.developerId, developers.id))
-        .where(type ? and(published, eq(extensions.type, type)) : published);
+        .where(
+          type
+            ? and(
+                published,
+                eq(extensions.type, type === "mod" ? "module" : type)
+              )
+            : published
+        );
       // Offset pagination needs a deterministic order (the unpaginated
       // default deliberately stays unordered) - (LOWER(id), id) matches
-      // the published-catalogue index and is unique.
+      // the published-extension index and is unique.
       rows = page
         ? ((await base
-            .orderBy(sql`LOWER(${extensions.id})`, extensions.id)
+            .orderBy(
+              sql`LOWER(${extensions.identifier})`,
+              extensions.identifier
+            )
             .offset(page.offset)
             .limit(page.limit + 1)) as ExtensionRow[])
         : ((await base) as ExtensionRow[]);
@@ -118,10 +134,14 @@ export class ExtensionsDatabase {
     const hasMore = page ? rows.length > page.limit : false;
     const trimmed = page && hasMore ? rows.slice(0, page.limit) : rows;
 
-    return {
-      data: { extensions: trimmed.map(parseExtensionRow), hasMore },
-      error: null
-    };
+    try {
+      return {
+        data: { extensions: trimmed.map(parseExtensionRow), hasMore },
+        error: null
+      };
+    } catch (error) {
+      return this.databaseError(error);
+    }
   }
 
   async getExtensionById(id: string): Promise<DatabaseResult<Extension>> {
@@ -133,7 +153,7 @@ export class ExtensionsDatabase {
         .innerJoin(developers, eq(extensions.developerId, developers.id))
         .where(
           and(
-            sql`LOWER(${extensions.id}) = LOWER(${id})`,
+            sql`LOWER(${extensions.identifier}) = LOWER(${id})`,
             isNotNull(extensions.publishedAt),
             isNull(extensions.delistedAt)
           )
@@ -147,57 +167,44 @@ export class ExtensionsDatabase {
       return this.notFound(id);
     }
 
-    return { data: parseExtensionRow(row), error: null };
-  }
-
-  // Badge/version endpoints read only these two columns, and badges are the
-  // highest-volume path in this service (README embeds + crawlers) - selecting
-  // the full projection would ship every row's readme blob to render a
-  // few-hundred-byte SVG.
-  async getExtensionBadgeData(
-    id: string
-  ): Promise<
-    DatabaseResult<{ latestRelease: Release | null; license: { name: string } }>
-  > {
-    let rows: { releases: string; license: string }[];
     try {
-      rows = (await this.db
-        .select({ releases: extensions.releases, license: extensions.license })
-        .from(extensions)
-        .where(
-          and(
-            sql`LOWER(${extensions.id}) = LOWER(${id})`,
-            isNotNull(extensions.publishedAt),
-            isNull(extensions.delistedAt)
-          )
-        )) as { releases: string; license: string }[];
+      return { data: parseExtensionRow(row), error: null };
     } catch (error) {
       return this.databaseError(error);
     }
+  }
 
-    const row = rows[0];
-    if (!row) {
-      return this.notFound(id);
+  // The plain-text version endpoint needs only the release tags.
+  async getExtensionVersion(
+    id: string
+  ): Promise<DatabaseResult<{ version: string | null }>> {
+    try {
+      const [row] = await this.db
+        .select({ releases: extensions.releases })
+        .from(extensions)
+        .where(
+          and(
+            sql`LOWER(${extensions.identifier}) = LOWER(${id})`,
+            isNotNull(extensions.publishedAt),
+            isNull(extensions.delistedAt)
+          )
+        );
+      if (!row) return this.notFound(id);
+      const releases = sortReleasesDescending(
+        JSON.parse(row.releases!) as ManifestRelease[]
+      );
+      return { data: { version: releases[0]?.tag ?? null }, error: null };
+    } catch (error) {
+      return this.databaseError(error);
     }
-
-    const releases = sortReleasesDescending(
-      parseJSON<Release[]>(row.releases, [])
-    );
-    return {
-      data: {
-        latestRelease: releases[0] ?? null,
-        license: parseJSON(row.license, { name: "" })
-      },
-      error: null
-    };
   }
 }
 
 function parseExtensionRow(row: ExtensionRow): Extension {
-  const releases = parseJSON<Release[]>(row.releases, []);
+  const releases = toV1Releases(row.releases);
   return {
     id: row.id,
-    type: row.type as Extension["type"],
+    type: (row.type === "module" ? "mod" : row.type) as Extension["type"],
     name: row.name,
     description: row.description,
     author: {
@@ -212,11 +219,35 @@ function parseExtensionRow(row: ExtensionRow): Extension {
     } as Author,
     releases: sortReleasesDescending(releases),
     website: row.website,
-    license: parseJSON(row.license, { name: "" }),
-    icon_url: row.iconUrl ?? "",
+    license: toV1License(row.license),
+    // Package-relative manifest icons have no public URL in the v1 contract.
+    icon_url:
+      row.iconUrl && /^https?:\/\//i.test(row.iconUrl) ? row.iconUrl : "",
     readme: row.readme,
     source: parseJSON<Repository>(row.source, { type: "custom", repo: "" }),
     version: row.version,
     download_url: row.downloadUrl
   };
+}
+
+// Storage is canonical after migration 0029; these only adapt the v1 contract.
+function toV1License(stored: string): { name: string } {
+  return { name: JSON.parse(stored) as string };
+}
+
+function toV1Releases(stored: string): Release[] {
+  return (JSON.parse(stored) as ManifestRelease[]).map(
+    ({ requires, ...release }) => {
+      const range = requires.fossbilling.trim()
+        ? validRange(requires.fossbilling)
+        : null;
+      const minimum = range === null ? null : minVersion(range);
+      if (!minimum) {
+        throw new Error(
+          `Release "${release.tag}" requires manual correction: FOSSBilling constraint "${requires.fossbilling}" has no representable v1 minimum`
+        );
+      }
+      return { ...release, min_fossbilling_version: minimum.version };
+    }
+  );
 }

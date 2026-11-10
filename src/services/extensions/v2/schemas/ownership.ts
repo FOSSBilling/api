@@ -18,7 +18,7 @@ export type DeveloperTransfer = z.infer<typeof DeveloperTransferSchema>;
 export const DeveloperClaimSchema = z
   .object({
     id: z.string(),
-    developer_id: z.string(),
+    developer_id: z.uuidv7(),
     claimant_id: z.string(),
     status: z.enum(["pending", "approved", "rejected"]),
     note: z.string().optional(),
@@ -39,6 +39,7 @@ export const DeveloperClaimSchema = z
 export type DeveloperClaim = z.infer<typeof DeveloperClaimSchema>;
 
 export const PendingDeveloperClaimSchema = DeveloperClaimSchema.extend({
+  developer_identifier: z.string(),
   developer_name: z.string(),
   developer_type: z.enum(["user", "organization"]),
   // The claimant's own account name/GitHub handle, so the moderator sees

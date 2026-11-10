@@ -32,7 +32,7 @@ export const users = sqliteTable("users", {
 // An extension record exists from the moment a developer creates it, before
 // any moderator has seen it. The content columns are therefore the *published*
 // projection and are NULL until the first revision is approved (migration
-// 0021); published_at is the marker the public catalogue filters on, and the
+// 0021); published_at is the marker the public extension listing filters on, and the
 // CHECK below is what keeps "published" from ever meaning "half a row".
 //
 // The column was author_id until migration 0021. It never had to be: the only
@@ -42,6 +42,7 @@ export const extensions = sqliteTable(
   "extensions",
   {
     id: text("id").primaryKey(),
+    identifier: text("identifier").notNull(),
     developerId: text("developer_id")
       .notNull()
       .references(() => developers.id),
@@ -52,9 +53,12 @@ export const extensions = sqliteTable(
     // a FK: extension_revisions.extension_id already points the other way, and
     // a second FK between the same two tables would make them mutually
     // dependent for both inserts and the SQLite table rebuilds that migrations
-    // need. NULL for rows adopted from the pre-v2 catalogue, which were never
+    // need. NULL for rows adopted from the pre-v2 directory, which were never
     // published through a revision.
     publishedRevisionId: text("published_revision_id"),
+    // 0029 enforces presence on published rows with insert/update triggers;
+    // extending the original CHECK would require rebuilding this FK parent.
+    manifest: text("manifest"),
     type: text("type"),
     name: text("name"),
     description: text("description"),
@@ -73,7 +77,7 @@ export const extensions = sqliteTable(
       .notNull()
       .default(sql`CURRENT_TIMESTAMP`),
     // A moderator's decision to pull an already-published extension from the
-    // catalogue for cause (its upstream source disappearing, for example).
+    // extension directory for cause (its upstream source disappearing, for example).
     // Distinct from never having been published and from an owner's
     // pre-publish withdraw(): published_at and delisted_at can both be set at
     // once, so the fact that this was live and then pulled is never lost, and
@@ -83,11 +87,10 @@ export const extensions = sqliteTable(
   },
   (table) => [
     index("idx_extensions_published_revision").on(table.publishedRevisionId),
-    // Case-insensitive id uniqueness. The id is a lowercase slug by schema,
-    // but adopted rows predate that, and this is what stops two developers
-    // racing for ids that differ only in case — the job migration 0011's
-    // extension_submissions.target_key index used to do from the other side.
-    uniqueIndex("idx_extensions_id_nocase").on(sql`lower(${table.id})`),
+    // Public identifiers are globally unique, independently of UUID identity.
+    uniqueIndex("idx_extensions_identifier_nocase").on(
+      sql`lower(${table.identifier})`
+    ),
     // Not partial, unlike the two below: this one serves both the public
     // developer_id filter and GET /extensions/mine, which pages every owned
     // extension and so cannot filter on published_at. A partial index would
@@ -96,19 +99,19 @@ export const extensions = sqliteTable(
     // same index and checks published_at per row.
     index("idx_extensions_developer_order").on(
       table.developerId,
-      sql`lower(${table.id})`,
+      sql`lower(${table.identifier})`,
       table.id
     ),
     // These two are partial: every read that uses them filters on
     // published_at IS NOT NULL AND delisted_at IS NULL, so an unpublished or
-    // delisted row would only bloat the index the catalogue scans.
-    index("idx_extensions_catalogue_order")
-      .on(sql`lower(${table.id})`, table.id)
+    // delisted row would only bloat the index the extension directory scans.
+    index("idx_extensions_public_order")
+      .on(sql`lower(${table.identifier})`, table.id)
       .where(
         sql`${table.publishedAt} IS NOT NULL AND ${table.delistedAt} IS NULL`
       ),
-    index("idx_extensions_type_catalogue_order")
-      .on(table.type, sql`lower(${table.id})`, table.id)
+    index("idx_extensions_type_public_order")
+      .on(table.type, sql`lower(${table.identifier})`, table.id)
       .where(
         sql`${table.publishedAt} IS NOT NULL AND ${table.delistedAt} IS NULL`
       ),
@@ -133,14 +136,15 @@ export const extensions = sqliteTable(
   ]
 );
 
-// Legacy catalogue table renamed from authors to developers by migration
+// Legacy extension directory table renamed from authors to developers by migration
 // 0008. The API owns the full table now; type/name/url are the original
-// catalogue fields and the remaining columns were added by the v2 migrations.
+// extension directory fields and the remaining columns were added by the v2 migrations.
 // bio (added in 0003) was dropped in 0010 and is intentionally absent here.
 export const developers = sqliteTable(
   "developers",
   {
     id: text("id").primaryKey(),
+    identifier: text("identifier").notNull(),
     type: text("type").notNull(),
     name: text("name").notNull(),
     url: text("url"),
@@ -186,6 +190,9 @@ export const developers = sqliteTable(
     urlCheckCooldownUntil: text("url_check_cooldown_until")
   },
   (table) => [
+    uniqueIndex("idx_developers_identifier_nocase").on(
+      sql`lower(${table.identifier})`
+    ),
     uniqueIndex("idx_developers_owner_unique").on(table.ownerUserId),
     index("idx_developers_approved").on(table.approvedAt),
     check(

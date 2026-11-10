@@ -1,5 +1,5 @@
 import type { Context } from "hono";
-import type { DatabaseResult } from "../../../../lib/interfaces";
+import type { DatabaseError } from "../../../../lib/interfaces";
 import {
   errorBody,
   listErrorStatus,
@@ -42,42 +42,37 @@ import {
 } from "../db/extensions";
 import { ExtensionRevisionsDatabase } from "../db/revisions";
 import { UsersDatabase } from "../db/users";
-import { revalidateCatalogue } from "../revalidate";
+import { revalidateExtensions } from "../revalidate";
 import { ExtensionsV2App } from "./app";
 
 // Both history and detail authorize against current account/profile state;
 // their actual data queries repeat this guard to contain mid-request changes.
-async function revisionReadAccess(
+async function revisionReadError(
   c: Context<{ Bindings: CloudflareBindings }>,
-  id: string
-): Promise<DatabaseResult<{ extensionId: string }>> {
+  identifier: string
+): Promise<DatabaseError | null> {
   const db = getExtensionsDb(c.env.DB_EXTENSIONS);
   const auth = getAuth(c);
   const [ownership, access] = await Promise.all([
-    new ExtensionsDatabase(db).getOwnership(id),
+    new ExtensionsDatabase(db).getOwnership(identifier),
     new UsersDatabase(db).moderatorAccess(auth.userId)
   ]);
-  if (ownership.error || !ownership.data) return ownership;
-  if (access.error) return { data: null, error: access.error };
-  if (!access.data?.active)
-    return {
-      data: null,
-      error: { code: "ACCOUNT_INACTIVE", message: "Active account required" }
-    };
+  if (ownership.error) return ownership.error;
+  if (access.error) return access.error;
+  if (!access.data.active)
+    return { code: "ACCOUNT_INACTIVE", message: "Active account required" };
   if (ownership.data.ownerUserId !== auth.userId && !access.data.moderator)
-    return {
-      data: null,
-      error: { code: "FORBIDDEN", message: "You do not own this extension" }
-    };
-  return { data: { extensionId: ownership.data.extensionId }, error: null };
+    return { code: "FORBIDDEN", message: "You do not own this extension" };
+  return null;
 }
 
+const AcceptedRevisionResultSchema = z.object({
+  identifier: z.string(),
+  revision_id: z.string(),
+  status: z.literal("pending")
+});
 const AcceptedRevisionSchema = z.object({
-  result: z.object({
-    id: z.string(),
-    revision_id: z.string(),
-    status: z.literal("pending")
-  })
+  result: AcceptedRevisionResultSchema
 });
 
 export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
@@ -95,9 +90,17 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
     },
     responses: {
       201: {
-        content: { "application/json": { schema: AcceptedRevisionSchema } },
+        content: {
+          "application/json": {
+            schema: z.object({
+              result: AcceptedRevisionResultSchema.extend({
+                id: z.uuidv7()
+              })
+            })
+          }
+        },
         description:
-          "Extension created. It holds the id immediately but stays out of the public catalogue until a moderator approves the revision."
+          "Extension created. It holds the id immediately but stays out of the public extension listing until a moderator approves the revision."
       },
       ...authErrorResponses(),
       403: {
@@ -120,14 +123,14 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
 
   app.openapi(createRouteDefinition, async (c) => {
     const auth = getAuth(c);
-    const { id, ...content } = c.req.valid("json");
+    const { identifier, ...content } = c.req.valid("json");
     const publisher = getPublisher(c);
 
     // A publisher client writes under its mapped developer; the mapping is
     // re-verified inside the insert. Humans resolve their own profile.
     if (publisher) {
       const input: CreateExtensionAsPublisherInput = {
-        extensionId: id,
+        identifier,
         clientId: publisher.clientId,
         developerId: publisher.developerId,
         submittedBy: auth.userId,
@@ -146,6 +149,7 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
         {
           result: {
             id: data.id,
+            identifier,
             revision_id: data.revisionId,
             status: "pending" as const
           }
@@ -175,7 +179,7 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
 
     const db = new ExtensionsDatabase(getExtensionsDb(c.env.DB_EXTENSIONS));
     const { data, error } = await db.create({
-      extensionId: id,
+      identifier,
       developerId: owner.data.id,
       ownershipEpoch: owner.data.ownershipEpoch,
       submittedBy: auth.userId,
@@ -192,6 +196,7 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
       {
         result: {
           id: data.id,
+          identifier,
           revision_id: data.revisionId,
           status: "pending" as const
         }
@@ -268,7 +273,86 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
       );
     }
     return c.json(
-      { result: { id, revision_id: data.id, status: "pending" as const } },
+      {
+        result: {
+          identifier: data.identifier,
+          revision_id: data.id,
+          status: "pending" as const
+        }
+      },
+      202
+    );
+  });
+
+  const replacePendingRoute = createRoute({
+    method: "put",
+    path: "/extensions/{id}/revisions/{revisionId}",
+    tags: ["Extensions"],
+    summary: "Replace a pending submission for an extension the caller owns",
+    description:
+      "The active owner can replace publisher-created submissions. The replacement records the owner as submitter.",
+    security: [{ Bearer: [] }],
+    middleware: [requireActiveAuth(), paceContentAccount()] as const,
+    request: {
+      params: RevisionIdParamSchema,
+      body: {
+        content: { "application/json": { schema: ExtensionUpdateSchema } }
+      }
+    },
+    responses: {
+      202: {
+        content: { "application/json": { schema: AcceptedRevisionSchema } },
+        description:
+          "Replaced with a new pending revision ID. Published content and reviewed history are unchanged."
+      },
+      ...authErrorResponses(),
+      403: {
+        ...ActiveAccountRequiredResponse,
+        description:
+          "The account is inactive, or the caller does not own this extension"
+      },
+      404: errorResponse("No extension with that id"),
+      409: errorResponse(
+        "The pending revision changed, was reviewed, ownership changed, or the pending-revision limit was reached"
+      ),
+      413: errorResponse("Raw request exceeds 512 KiB"),
+      429: errorResponse(
+        "Extension write allowance exhausted; see Retry-After"
+      ),
+      503: errorResponse("Write admission unavailable"),
+      422: errorResponse("Body failed validation"),
+      500: errorResponse("Database error")
+    }
+  });
+
+  app.openapi(replacePendingRoute, async (c) => {
+    const auth = getAuth(c);
+    const { id, revisionId } = c.req.valid("param");
+    const content = c.req.valid("json");
+    const db = new ExtensionRevisionsDatabase(
+      getExtensionsDb(c.env.DB_EXTENSIONS)
+    );
+    const { data, error } = await db.replacePending({
+      extensionId: id,
+      revisionId,
+      callerId: auth.userId,
+      content
+    });
+    if (error || !data) {
+      setContentRetryAfter(c, error?.code);
+      return c.json(
+        errorBody(error, "Unable to submit edit"),
+        statusFromContentWriteError(error?.code)
+      );
+    }
+    return c.json(
+      {
+        result: {
+          identifier: data.identifier,
+          revision_id: data.id,
+          status: "pending" as const
+        }
+      },
       202
     );
   });
@@ -286,7 +370,11 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
         content: {
           "application/json": {
             schema: z.object({
-              result: z.object({ id: z.string(), deleted: z.literal(true) })
+              result: z.object({
+                id: z.uuidv7(),
+                identifier: z.string(),
+                deleted: z.literal(true)
+              })
             })
           }
         },
@@ -315,8 +403,17 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
         statusFromWriteErrorCode(error?.code)
       );
     }
-    revalidateCatalogue(c);
-    return c.json({ result: { id: data.id, deleted: true as const } }, 200);
+    revalidateExtensions(c);
+    return c.json(
+      {
+        result: {
+          id: data.id,
+          identifier: data.identifier,
+          deleted: true as const
+        }
+      },
+      200
+    );
   });
 
   const revisionsRoute = createRoute({
@@ -356,14 +453,14 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
     const auth = getAuth(c);
     const { id } = c.req.valid("param");
     const { limit, cursor } = c.req.valid("query");
-    const access = await revisionReadAccess(c, id);
-    if (access.error || !access.data)
+    const accessError = await revisionReadError(c, id);
+    if (accessError)
       return c.json(
-        errorBody(access.error, "Unable to read revisions"),
-        access.error?.code === "NOT_FOUND"
+        errorBody(accessError, "Unable to read revisions"),
+        accessError.code === "NOT_FOUND"
           ? 404
-          : access.error?.code === "FORBIDDEN" ||
-              access.error?.code === "ACCOUNT_INACTIVE"
+          : accessError.code === "FORBIDDEN" ||
+              accessError.code === "ACCOUNT_INACTIVE"
             ? 403
             : 500
       );
@@ -372,7 +469,7 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
       getExtensionsDb(c.env.DB_EXTENSIONS)
     );
     const { data, error } = await db.listScoped({
-      extensionId: access.data.extensionId,
+      extensionId: id,
       readerId: auth.userId,
       sort: "newest",
       limit,
@@ -426,14 +523,14 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
   app.openapi(revisionDetailRoute, async (c) => {
     const auth = getAuth(c);
     const { id, revisionId } = c.req.valid("param");
-    const access = await revisionReadAccess(c, id);
-    if (access.error || !access.data)
+    const accessError = await revisionReadError(c, id);
+    if (accessError)
       return c.json(
-        errorBody(access.error, "Unable to read revisions"),
-        access.error?.code === "NOT_FOUND"
+        errorBody(accessError, "Unable to read revisions"),
+        accessError.code === "NOT_FOUND"
           ? 404
-          : access.error?.code === "FORBIDDEN" ||
-              access.error?.code === "ACCOUNT_INACTIVE"
+          : accessError.code === "FORBIDDEN" ||
+              accessError.code === "ACCOUNT_INACTIVE"
             ? 403
             : 500
       );
@@ -441,11 +538,7 @@ export function registerOwnerExtensionsRoutes(app: ExtensionsV2App): void {
     const db = new ExtensionRevisionsDatabase(
       getExtensionsDb(c.env.DB_EXTENSIONS)
     );
-    const { data, error } = await db.getById(
-      access.data.extensionId,
-      revisionId,
-      auth.userId
-    );
+    const { data, error } = await db.getById(id, revisionId, auth.userId);
     if (error || !data) {
       return c.json(
         errorBody(error, "Unable to load revisions"),

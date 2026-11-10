@@ -1,9 +1,12 @@
+import { UUID_V7 } from "./db-fixtures";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { env } from "cloudflare:workers";
+import { listCacheKey } from "../../../../src/services/extensions/v1/list-cache";
 import {
   setupExtensionsV2Tests,
   db,
   authHeaders,
+  get,
   post,
   put,
   del,
@@ -59,15 +62,15 @@ async function seedModAndExtension(): Promise<void> {
   await insertUser(db, { id: "mod-1", is_moderator: 1 });
   await insertUser(db, { id: "user-1", email: "owner@example.com" });
   await insertDeveloper(db, {
-    id: "new-developer",
+    identifier: "new-developer",
     type: "user",
     name: "New Developer",
     url: null,
     owner_user_id: "user-1"
   });
   await insertExtension(db, {
-    id: "live-ext",
-    developer_id: "new-developer"
+    identifier: "live-ext",
+    developer_identifier: "new-developer"
   });
 }
 
@@ -81,7 +84,27 @@ async function delist(as: string): Promise<Response> {
   );
 }
 
-describe("CDN cache revalidation on catalogue mutations", () => {
+describe("CDN cache revalidation on extension mutations", () => {
+  it("invalidates both v1 module cache aliases after a successful mutation", async () => {
+    // D1 reset does not clear KV. Start cold before priming either alias.
+    for (const type of ["mod", "module"]) {
+      await env.CACHE_KV.delete(listCacheKey(type, undefined));
+    }
+    await seedModAndExtension();
+    for (const type of ["mod", "module"]) {
+      const response = await get(`/extensions/v1/list?type=${type}`, {});
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({
+        result: [{ id: "live-ext" }]
+      });
+    }
+    expect((await delist("mod-1")).status).toBe(200);
+    for (const type of ["mod", "module"]) {
+      const response = await get(`/extensions/v1/list?type=${type}`, {});
+      await expect(response.json()).resolves.toMatchObject({ result: [] });
+    }
+  });
+
   it("does not revalidate unchanged profile replays", async () => {
     const fetcher = stubFrontend();
     const headers = await authHeaders("noop-revalidate-owner");
@@ -105,7 +128,7 @@ describe("CDN cache revalidation on catalogue mutations", () => {
     expect(fetcher.fetch).toHaveBeenCalledTimes(2);
   });
 
-  it("purges the catalogue tags after a successful delist", async () => {
+  it("purges the extension page tags after a successful delist", async () => {
     await seedModAndExtension();
     const fetcher = stubFrontend();
 
@@ -123,11 +146,11 @@ describe("CDN cache revalidation on catalogue mutations", () => {
       "content-type": "application/json"
     });
     expect(JSON.parse(String(init.body))).toEqual({
-      tags: ["catalogue", "developers"]
+      tags: ["extensions", "developers"]
     });
   });
 
-  it("purges the catalogue tags after a successful relist", async () => {
+  it("purges the extension page tags after a successful relist", async () => {
     await seedModAndExtension();
     expect((await delist("mod-1")).status).toBe(200);
     const fetcher = stubFrontend();
@@ -146,7 +169,7 @@ describe("CDN cache revalidation on catalogue mutations", () => {
     );
     expect(init.method).toBe("POST");
     expect(JSON.parse(String(init.body))).toEqual({
-      tags: ["catalogue", "developers"]
+      tags: ["extensions", "developers"]
     });
   });
 
@@ -159,12 +182,12 @@ describe("CDN cache revalidation on catalogue mutations", () => {
     );
     expect(created.status).toBe(201);
     const { result } = (await created.json()) as {
-      result: { id: string; revision_id: string };
+      result: { id: string; identifier: string; revision_id: string };
     };
     const fetcher = stubFrontend();
 
     const res = await post(
-      `/extensions/v2/extensions/${result.id}/revisions/${result.revision_id}/approve?notify=false`,
+      `/extensions/v2/extensions/${result.identifier}/revisions/${result.revision_id}/approve?notify=false`,
       await authHeaders("mod-1"),
       {}
     );
@@ -194,12 +217,12 @@ describe("CDN cache revalidation on catalogue mutations", () => {
     );
     expect(created.status).toBe(201);
     const { result } = (await created.json()) as {
-      result: { id: string; revision_id: string };
+      result: { id: string; identifier: string; revision_id: string };
     };
     const fetcher = stubFrontend();
 
     const res = await post(
-      `/extensions/v2/extensions/${result.id}/revisions/${result.revision_id}/reject?notify=false`,
+      `/extensions/v2/extensions/${result.identifier}/revisions/${result.revision_id}/reject?notify=false`,
       await authHeaders("mod-1"),
       { review_note: "Needs work" }
     );
@@ -211,7 +234,7 @@ describe("CDN cache revalidation on catalogue mutations", () => {
     await insertUser(db, { id: "mod-1", is_moderator: 1 });
     await insertUser(db, { id: "claimant-1", email: "claimant@example.com" });
     await insertDeveloper(db, {
-      id: "legacy-dev",
+      identifier: "legacy-dev",
       type: "user",
       name: "Legacy",
       url: null,
@@ -219,7 +242,7 @@ describe("CDN cache revalidation on catalogue mutations", () => {
     });
     await insertDeveloperClaim(db, {
       id: "claim-1",
-      developer_id: "legacy-dev",
+      developer_identifier: "legacy-dev",
       claimant_id: "claimant-1"
     });
     const fetcher = stubFrontend();
@@ -235,15 +258,15 @@ describe("CDN cache revalidation on catalogue mutations", () => {
   it("purges after an owner withdraws an unpublished extension", async () => {
     await insertUser(db, { id: "user-1", email: "owner@example.com" });
     await insertDeveloper(db, {
-      id: "new-developer",
+      identifier: "new-developer",
       type: "user",
       name: "New Developer",
       url: null,
       owner_user_id: "user-1"
     });
     await insertUnpublishedExtension(db, {
-      id: "draft-ext",
-      developer_id: "new-developer"
+      identifier: "draft-ext",
+      developer_identifier: "new-developer"
     });
     const fetcher = stubFrontend();
 
@@ -272,7 +295,7 @@ describe("CDN cache revalidation on catalogue mutations", () => {
     // still public content, so the delete path must purge too.
     await insertUser(db, { id: "user-1", email: "owner@example.com" });
     await insertDeveloper(db, {
-      id: "doomed-dev",
+      identifier: "doomed-dev",
       type: "user",
       name: "Doomed",
       url: null,
@@ -307,7 +330,11 @@ describe("CDN cache revalidation on catalogue mutations", () => {
     const res = await delist("mod-1");
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toMatchObject({
-      result: { id: "live-ext", status: "delisted" }
+      result: {
+        id: expect.stringMatching(UUID_V7),
+        identifier: "live-ext",
+        status: "delisted"
+      }
     });
   });
 

@@ -1,3 +1,5 @@
+import { v7 as uuidv7 } from "uuid";
+import { UUID_V7 } from "./db-fixtures";
 import { describe, it, expect, vi } from "vitest";
 import { env } from "cloudflare:workers";
 import { request as ghRequest } from "@octokit/request";
@@ -51,18 +53,18 @@ describe("Extensions API v2", () => {
       ).toBe(200);
       await db
         .prepare(
-          "UPDATE developers SET approved_at = CURRENT_TIMESTAMP, approved_revision = content_revision WHERE id = ?"
+          "UPDATE developers SET approved_at = CURRENT_TIMESTAMP, approved_revision = content_revision WHERE identifier = ?"
         )
-        .bind(profile.id)
+        .bind(profile.identifier)
         .run();
-      const before = await getDeveloper(db, profile.id);
+      const before = await getDeveloper(db, profile.identifier);
       const responses = await Promise.all(
         Array.from({ length: 6 }, () =>
           put("/extensions/v2/developers/me", headers, profile)
         )
       );
       expect(responses.map((r) => r.status)).toEqual(Array(6).fill(200));
-      expect(await getDeveloper(db, profile.id)).toEqual(before);
+      expect(await getDeveloper(db, profile.identifier)).toEqual(before);
       expect(await listDeveloperHistory(db)).toHaveLength(1);
     });
 
@@ -72,12 +74,13 @@ describe("Extensions API v2", () => {
       expect(
         (await put("/extensions/v2/developers/me", headers, profile)).status
       ).toBe(200);
+      const developerId = (await getDeveloper(db, profile.identifier))!.id;
       for (let i = 0; i < 18; i++) {
         await db
           .prepare(
             "INSERT INTO developer_history (id, developer_id, type, name, changed_by) VALUES (?, ?, 'user', 'Budget', ?)"
           )
-          .bind(`budget-${i}`, profile.id, "budget-owner")
+          .bind(`budget-${i}`, developerId, "budget-owner")
           .run();
       }
       const raced = await Promise.all(
@@ -93,7 +96,7 @@ describe("Extensions API v2", () => {
         error: { code: "PROFILE_MUTATION_RATE_LIMITED" }
       });
       expect(await listDeveloperHistory(db)).toHaveLength(20);
-      const current = await getDeveloper(db, profile.id);
+      const current = await getDeveloper(db, profile.identifier);
       expect(
         (
           await put("/extensions/v2/developers/me", headers, {
@@ -132,12 +135,13 @@ describe("Extensions API v2", () => {
     it("allows writes after old history leaves the window and audits all editable fields", async () => {
       const headers = await authHeaders("expired-budget-owner");
       let profile = sampleDeveloper({ id: "expired-profile" });
+      const formerDeveloperId = uuidv7();
       for (let i = 0; i < 20; i++) {
         await db
           .prepare(
             "INSERT INTO developer_history (id, developer_id, type, name, changed_by, changed_at) VALUES (?, ?, 'user', 'Old', ?, datetime('now', '-2 days'))"
           )
-          .bind(`old-${i}`, profile.id, "expired-budget-owner")
+          .bind(`old-${i}`, formerDeveloperId, "expired-budget-owner")
           .run();
       }
       expect(
@@ -156,13 +160,15 @@ describe("Extensions API v2", () => {
         ).toBe(200);
       }
       expect(await listDeveloperHistory(db)).toHaveLength(26);
-      expect((await getDeveloper(db, profile.id))?.content_revision).toBe(6);
+      expect(
+        (await getDeveloper(db, profile.identifier))?.content_revision
+      ).toBe(6);
     });
 
     it("treats omitted optional fields as null and audits clearing them once", async () => {
       const headers = await authHeaders("null-profile-owner");
       const profile = {
-        id: "null-profile",
+        identifier: "null-profile",
         type: "user",
         name: "Null profile"
       };
@@ -190,7 +196,7 @@ describe("Extensions API v2", () => {
         (await put("/extensions/v2/developers/me", headers, profile)).status
       ).toBe(200);
       expect(await listDeveloperHistory(db)).toHaveLength(3);
-      const current = await getDeveloper(db, profile.id);
+      const current = await getDeveloper(db, profile.identifier);
       expect(current?.url).toBeNull();
       expect(current?.avatar_url).toBeNull();
       expect(current?.contact_email).toBeNull();
@@ -204,13 +210,13 @@ describe("Extensions API v2", () => {
         const allowed = await put(
           "/extensions/v2/developers/me",
           firstHeaders,
-          { id, type: "user", name: id }
+          { identifier: id, type: "user", name: id }
         );
         expect(allowed.status).toBe(403);
       }
 
       const denied = await put("/extensions/v2/developers/me", firstHeaders, {
-        id: "attempt-four",
+        identifier: "attempt-four",
         type: "user",
         name: "Attempt four"
       });
@@ -228,7 +234,7 @@ describe("Extensions API v2", () => {
       const otherAccount = await put(
         "/extensions/v2/developers/me",
         await authHeaders("independent-rate-limit-account"),
-        { id: "other-attempt", type: "user", name: "Other attempt" }
+        { identifier: "other-attempt", type: "user", name: "Other attempt" }
       );
       expect(otherAccount.status).toBe(403);
       expect(ghRequest).toHaveBeenCalledTimes(4);
@@ -260,14 +266,14 @@ describe("Extensions API v2", () => {
 
       for (const id of ["remaining-one", "remaining-two"]) {
         const allowed = await put("/extensions/v2/developers/me", headers, {
-          id,
+          identifier: id,
           type: "user",
           name: id
         });
         expect(allowed.status).toBe(403);
       }
       const denied = await put("/extensions/v2/developers/me", headers, {
-        id: "no-allowance",
+        identifier: "no-allowance",
         type: "user",
         name: "No allowance"
       });
@@ -365,7 +371,7 @@ describe("Extensions API v2", () => {
         if (!raced && sql.includes("INSERT INTO developers")) {
           raced = true;
           await insertDeveloper(db, {
-            id: "raced-developer",
+            identifier: "raced-developer",
             type: "user",
             name: "Concurrent Creator",
             owner_user_id: "user-2"
@@ -417,7 +423,7 @@ describe("Extensions API v2", () => {
       const res = await put(
         "/extensions/v2/developers/me",
         await authHeaders("user-1"),
-        { id: "acme-org", type: "organization", name: "Acme Org" }
+        { identifier: "acme-org", type: "organization", name: "Acme Org" }
       );
 
       expect(res.status).toBe(200);
@@ -467,7 +473,7 @@ describe("Extensions API v2", () => {
         const res = await put(
           "/extensions/v2/developers/me",
           await authHeaders("user-1"),
-          { id: "acme-org", type: "organization", name: "Acme Org" }
+          { identifier: "acme-org", type: "organization", name: "Acme Org" }
         );
 
         expect(res.status).toBe(200);
@@ -490,7 +496,7 @@ describe("Extensions API v2", () => {
       const res = await put(
         "/extensions/v2/developers/me",
         await authHeaders("user-1"),
-        { id: "acme-org", type: "organization", name: "Acme Org" }
+        { identifier: "acme-org", type: "organization", name: "Acme Org" }
       );
 
       expect(res.status).toBe(200);
@@ -512,7 +518,7 @@ describe("Extensions API v2", () => {
       const res = await put(
         "/extensions/v2/developers/me",
         await authHeaders("user-1"),
-        { id: "acme-org", type: "organization", name: "Acme Org" }
+        { identifier: "acme-org", type: "organization", name: "Acme Org" }
       );
 
       expect(res.status).toBe(403);
@@ -532,7 +538,7 @@ describe("Extensions API v2", () => {
         "/extensions/v2/developers/me",
         await authHeaders("user-1"),
         {
-          id: "acme-org",
+          identifier: "acme-org",
           type: "organization",
           name: "Acme Org",
           URL: "https://acme.example"
@@ -564,7 +570,7 @@ describe("Extensions API v2", () => {
         "/extensions/v2/developers/me",
         await authHeaders("user-1"),
         {
-          id: "acme-org",
+          identifier: "acme-org",
           type: "organization",
           name: "Acme Org",
           URL: "https://acme.example"
@@ -592,7 +598,7 @@ describe("Extensions API v2", () => {
         "/extensions/v2/developers/me",
         await authHeaders("user-1"),
         {
-          id: "acme-org",
+          identifier: "acme-org",
           type: "organization",
           name: "Acme Org",
           URL: "http://acme.example/"
@@ -617,7 +623,7 @@ describe("Extensions API v2", () => {
         "/extensions/v2/developers/me",
         await authHeaders("user-1"),
         {
-          id: "acme-org",
+          identifier: "acme-org",
           type: "organization",
           name: "Acme Org",
           URL: "https://acme.example"
@@ -642,7 +648,7 @@ describe("Extensions API v2", () => {
         "/extensions/v2/developers/me",
         await authHeaders("user-1"),
         {
-          id: "acme-org",
+          identifier: "acme-org",
           type: "organization",
           name: "Acme Org",
           URL: "https://acme.example/docs"
@@ -666,7 +672,7 @@ describe("Extensions API v2", () => {
       const res = await put(
         "/extensions/v2/developers/me",
         await authHeaders("user-1"),
-        { id: "acme-org", type: "organization", name: "Acme Org" }
+        { identifier: "acme-org", type: "organization", name: "Acme Org" }
       );
 
       expect(res.status).toBe(403);
@@ -686,7 +692,7 @@ describe("Extensions API v2", () => {
       const res = await put(
         "/extensions/v2/developers/me",
         await authHeaders("user-1"),
-        { id: "acme-org", type: "user", name: "Acme Org" }
+        { identifier: "acme-org", type: "user", name: "Acme Org" }
       );
 
       expect(res.status).toBe(403);
@@ -715,7 +721,7 @@ describe("Extensions API v2", () => {
         const res = await put(
           "/extensions/v2/developers/me",
           await authHeaders("user-1"),
-          { id: "unavailable-dev", type: "user", name: "Unavailable" }
+          { identifier: "unavailable-dev", type: "user", name: "Unavailable" }
         );
 
         expect(res.status).toBe(expectedStatus);
@@ -739,7 +745,7 @@ describe("Extensions API v2", () => {
         const res = await put(
           "/extensions/v2/developers/me",
           await authHeaders("user-1"),
-          { id: "unavailable-dev", type: "user", name: "Unavailable" }
+          { identifier: "unavailable-dev", type: "user", name: "Unavailable" }
         );
 
         expect(res.status).toBe(503);
@@ -761,7 +767,7 @@ describe("Extensions API v2", () => {
         const res = await put(
           "/extensions/v2/developers/me",
           await authHeaders("user-1"),
-          { id: "invalid-response", type: "user", name: "Invalid" }
+          { identifier: "invalid-response", type: "user", name: "Invalid" }
         );
 
         expect(res.status).toBe(503);
@@ -779,7 +785,7 @@ describe("Extensions API v2", () => {
       const res = await put(
         "/extensions/v2/developers/me",
         await authHeaders("user-1"),
-        { id: "unsupported-entity", type: "user", name: "Unsupported" }
+        { identifier: "unsupported-entity", type: "user", name: "Unsupported" }
       );
 
       expect(res.status).toBe(422);
@@ -795,7 +801,7 @@ describe("Extensions API v2", () => {
       const res = await put(
         "/extensions/v2/developers/me",
         await authHeaders("user-1"),
-        { id: "acme-org", type: "organization", name: "Acme Org" }
+        { identifier: "acme-org", type: "organization", name: "Acme Org" }
       );
 
       expect(res.status).toBe(200);
@@ -816,7 +822,7 @@ describe("Extensions API v2", () => {
       const res = await put(
         "/extensions/v2/developers/me",
         await authHeaders("user-1"),
-        { id: "acme-org", type: "organization", name: "Acme Org" }
+        { identifier: "acme-org", type: "organization", name: "Acme Org" }
       );
 
       expect(res.status).toBe(500);
@@ -993,6 +999,8 @@ describe("Extensions API v2", () => {
         sampleDeveloper()
       );
 
+      const developerId = (await getDeveloper(db, "dev-developer"))!.id;
+
       // Fires when upsertOwn's existing-profile UPDATE (identified by
       // touching content_revision but not ownership_epoch, which only the
       // ownership-transfer statements touch) is about to run - the DB
@@ -1024,7 +1032,7 @@ describe("Extensions API v2", () => {
       );
       expect(
         (await listDeveloperHistory(db)).filter(
-          (row) => row.developer_id === "dev-developer"
+          (row) => row.developer_id === developerId
         )
       ).toHaveLength(1);
     });
@@ -1204,7 +1212,10 @@ describe("Extensions API v2", () => {
         .prepare(
           "INSERT INTO m2m_publisher_clients (client_id, developer_id, can_publish) VALUES (?, ?, 1)"
         )
-        .bind("modules-publisher", "dev-developer")
+        .bind(
+          "modules-publisher",
+          (await getDeveloper(db, "dev-developer"))!.id
+        )
         .run();
 
       const res = await del(
@@ -1213,9 +1224,12 @@ describe("Extensions API v2", () => {
       );
       expect(res.status).toBe(200);
       const body = (await res.json()) as {
-        result: { id: string; deleted: boolean };
+        result: { identifier: string; deleted: boolean };
       };
-      expect(body.result).toEqual({ id: "dev-developer", deleted: true });
+      expect(body.result).toMatchObject({
+        id: expect.stringMatching(/^[a-f0-9-]{36}$/),
+        deleted: true
+      });
 
       const getRes = await get("/extensions/v2/developers/dev-developer", {});
       expect(getRes.status).toBe(404);
@@ -1245,7 +1259,9 @@ describe("Extensions API v2", () => {
         if (!raced && sql.includes("DELETE FROM developers")) {
           raced = true;
           await db
-            .prepare("UPDATE developers SET owner_user_id = ? WHERE id = ?")
+            .prepare(
+              "UPDATE developers SET owner_user_id = ? WHERE identifier = ?"
+            )
             .bind("owner-after", "raced-delete")
             .run();
         }
@@ -1277,7 +1293,7 @@ describe("Extensions API v2", () => {
       await insertUser(db, { id: "owner-after" });
       await insertDeveloperTransfer(db, {
         id: "transfer-1",
-        developer_id: "raced-delete",
+        developer_identifier: "raced-delete",
         created_by: "owner-before",
         token_hash: "hash-1",
         expires_at: "2099-01-01T00:00:00.000Z"
@@ -1288,7 +1304,9 @@ describe("Extensions API v2", () => {
         if (!raced && sql.includes("DELETE FROM developers")) {
           raced = true;
           await db
-            .prepare("UPDATE developers SET owner_user_id = ? WHERE id = ?")
+            .prepare(
+              "UPDATE developers SET owner_user_id = ? WHERE identifier = ?"
+            )
             .bind("owner-after", "raced-delete")
             .run();
         }
@@ -1368,7 +1386,7 @@ describe("Extensions API v2", () => {
       );
       await insertDeveloperClaim(db, {
         id: "claim-1",
-        developer_id: "dev-developer",
+        developer_identifier: "dev-developer",
         claimant_id: "user-2",
         status: "rejected",
         review_note: "no",
@@ -1376,6 +1394,7 @@ describe("Extensions API v2", () => {
         reviewed_at: new Date().toISOString()
       });
 
+      const originalId = (await getDeveloper(db, "dev-developer"))!.id;
       const res = await del(
         "/extensions/v2/developers/me",
         await authHeaders("user-1")
@@ -1384,17 +1403,17 @@ describe("Extensions API v2", () => {
 
       expect(
         (await listDeveloperTransfers(db)).filter(
-          (r) => r.developer_id === "dev-developer"
+          (r) => r.developer_id === originalId
         )
       ).toHaveLength(0);
       expect(
         (await listDeveloperClaims(db)).filter(
-          (r) => r.developer_id === "dev-developer"
+          (r) => r.developer_id === originalId
         )
       ).toHaveLength(0);
       expect(
         (await listDeveloperHistory(db)).filter(
-          (r) => r.developer_id === "dev-developer"
+          (r) => r.developer_id === originalId
         ).length
       ).toBeGreaterThan(0);
     });
@@ -1432,8 +1451,10 @@ describe("Extensions API v2", () => {
         {}
       );
       expect(stillThere.status).toBe(200);
-      const body = (await stillThere.json()) as { result: { id: string } };
-      expect(body.result.id).toBe("dev-developer");
+      const body = (await stillThere.json()) as {
+        result: { identifier: string };
+      };
+      expect(body.result.identifier).toBe("dev-developer");
     });
 
     it("reports an inactive owner when the account is deactivated during deletion", async () => {
@@ -1473,7 +1494,7 @@ describe("Extensions API v2", () => {
     it("reports an inactive account when deactivated during a URL cooldown reservation", async () => {
       await insertUser(db, { id: "user-1" });
       await insertDeveloper(db, {
-        id: "dev-developer",
+        identifier: "dev-developer",
         type: "organization",
         name: "Dev",
         url: "https://acme.example",
@@ -1511,7 +1532,7 @@ describe("Extensions API v2", () => {
 
     it("re-verifies and refreshes the timestamp when the owner's GitHub org still matches", async () => {
       await insertDeveloper(db, {
-        id: "dev-developer",
+        identifier: "dev-developer",
         type: "organization",
         name: "Dev",
         url: null,
@@ -1552,7 +1573,7 @@ describe("Extensions API v2", () => {
       "preserves verification when the owner's organization evidence is %s",
       async (_state, github_orgs, github_orgs_expires_at) => {
         await insertDeveloper(db, {
-          id: "dev-developer",
+          identifier: "dev-developer",
           type: "organization",
           name: "Dev",
           url: null,
@@ -1587,7 +1608,7 @@ describe("Extensions API v2", () => {
 
     it("preserves verification when the owner's GitHub login is whitespace-only", async () => {
       await insertDeveloper(db, {
-        id: "dev-developer",
+        identifier: "dev-developer",
         type: "organization",
         name: "Dev",
         url: null,
@@ -1618,7 +1639,7 @@ describe("Extensions API v2", () => {
 
     it("flips to unverified when the owner's GitHub org membership no longer matches", async () => {
       await insertDeveloper(db, {
-        id: "dev-developer",
+        identifier: "dev-developer",
         type: "organization",
         name: "Dev",
         url: null,
@@ -1654,7 +1675,7 @@ describe("Extensions API v2", () => {
 
     it("verifies for the first time on re-check when the caller now has a matching linked GitHub identity", async () => {
       await insertDeveloper(db, {
-        id: "dev-developer",
+        identifier: "dev-developer",
         type: "organization",
         name: "Dev",
         url: null,
@@ -1682,7 +1703,7 @@ describe("Extensions API v2", () => {
     it("doesn't check the Publisher URL without ?check_url=true", async () => {
       mockGithubEntity("Organization", "https://acme.example");
       await insertDeveloper(db, {
-        id: "dev-developer",
+        identifier: "dev-developer",
         type: "organization",
         name: "Dev",
         url: "https://acme.example",
@@ -1709,7 +1730,7 @@ describe("Extensions API v2", () => {
     it("checks the Publisher URL when re-verified with ?check_url=true", async () => {
       mockGithubEntity("Organization", "https://acme.example");
       await insertDeveloper(db, {
-        id: "dev-developer",
+        identifier: "dev-developer",
         type: "organization",
         name: "Dev",
         url: "https://acme.example",
@@ -1739,7 +1760,7 @@ describe("Extensions API v2", () => {
       "returns an error and retains the cooldown when GitHub responds with %s",
       async (upstreamStatus, message, expectedStatus, expectedCode) => {
         await insertDeveloper(db, {
-          id: "dev-developer",
+          identifier: "dev-developer",
           type: "organization",
           name: "Dev",
           url: "https://acme.example",
@@ -1784,7 +1805,7 @@ describe("Extensions API v2", () => {
     it("rate-limits repeated ?check_url=true calls from the same caller", async () => {
       mockGithubEntity("Organization", "https://acme.example");
       await insertDeveloper(db, {
-        id: "dev-developer",
+        identifier: "dev-developer",
         type: "organization",
         name: "Dev",
         url: "https://acme.example",
@@ -1816,7 +1837,7 @@ describe("Extensions API v2", () => {
 
     it("doesn't rate-limit reverify calls that don't use ?check_url", async () => {
       await insertDeveloper(db, {
-        id: "dev-developer",
+        identifier: "dev-developer",
         type: "organization",
         name: "Dev",
         url: "https://acme.example",
@@ -1843,14 +1864,14 @@ describe("Extensions API v2", () => {
     it("rate-limits ?check_url=true per caller, not globally", async () => {
       mockGithubEntity("Organization", "https://acme.example");
       await insertDeveloper(db, {
-        id: "dev-developer",
+        identifier: "dev-developer",
         type: "organization",
         name: "Dev",
         url: "https://acme.example",
         owner_user_id: "user-1"
       });
       await insertDeveloper(db, {
-        id: "other-developer",
+        identifier: "other-developer",
         type: "organization",
         name: "Other",
         url: "https://acme.example",
@@ -1882,7 +1903,7 @@ describe("Extensions API v2", () => {
     it("only lets one of two concurrent ?check_url=true requests through", async () => {
       mockGithubEntity("Organization", "https://acme.example");
       await insertDeveloper(db, {
-        id: "dev-developer",
+        identifier: "dev-developer",
         type: "organization",
         name: "Dev",
         url: "https://acme.example",
@@ -1907,7 +1928,7 @@ describe("Extensions API v2", () => {
     it("does not persist a URL verification computed against a stale URL", async () => {
       mockGithubEntity("Organization", "https://acme.example");
       await insertDeveloper(db, {
-        id: "dev-developer",
+        identifier: "dev-developer",
         type: "organization",
         name: "Dev",
         url: "https://acme.example",
@@ -1926,7 +1947,7 @@ describe("Extensions API v2", () => {
       env.DB_EXTENSIONS = wrapD1WithHook(db, async (sql) => {
         if (sql.includes("developers") && sql.includes("github_verified_at")) {
           await db
-            .prepare("UPDATE developers SET url = ? WHERE id = ?")
+            .prepare("UPDATE developers SET url = ? WHERE identifier = ?")
             .bind("https://different.example", "dev-developer")
             .run();
         }
@@ -1950,7 +1971,7 @@ describe("Extensions API v2", () => {
     it("clears a previously-verified Publisher URL when identity no longer matches", async () => {
       mockGithubEntity("Organization", "https://acme.example");
       await insertDeveloper(db, {
-        id: "dev-developer",
+        identifier: "dev-developer",
         type: "organization",
         name: "Dev",
         url: "https://acme.example",
@@ -1982,7 +2003,7 @@ describe("Extensions API v2", () => {
 
     it("clears a previously-verified Publisher URL when identity no longer matches, even without ?check_url", async () => {
       await insertDeveloper(db, {
-        id: "dev-developer",
+        identifier: "dev-developer",
         type: "organization",
         name: "Dev",
         url: "https://acme.example",
@@ -2022,7 +2043,7 @@ describe("Extensions API v2", () => {
       // caught separately before trusting the entity's blog field.
       mockGithubEntity("Organization", "https://acme.example");
       await insertDeveloper(db, {
-        id: "dev-developer",
+        identifier: "dev-developer",
         type: "user",
         name: "Dev",
         url: "https://acme.example",
@@ -2059,7 +2080,7 @@ describe("Extensions API v2", () => {
     it("preserves an existing Publisher URL verification when the GitHub lookup fails", async () => {
       mockGithubEntityNotFound();
       await insertDeveloper(db, {
-        id: "dev-developer",
+        identifier: "dev-developer",
         type: "organization",
         name: "Dev",
         url: "https://acme.example",
@@ -2087,7 +2108,7 @@ describe("Extensions API v2", () => {
     it("treats ?check_url=false the same as omitting it", async () => {
       mockGithubEntity("Organization", "https://acme.example");
       await insertDeveloper(db, {
-        id: "dev-developer",
+        identifier: "dev-developer",
         type: "organization",
         name: "Dev",
         url: "https://acme.example",
@@ -2121,7 +2142,7 @@ describe("Extensions API v2", () => {
 
     it("refuses to overwrite verification if ownership moves away between the lookup and the write", async () => {
       await insertDeveloper(db, {
-        id: "dev-developer",
+        identifier: "dev-developer",
         type: "organization",
         name: "Dev",
         url: null,
@@ -2157,7 +2178,7 @@ describe("Extensions API v2", () => {
 
     it("refuses to overwrite verification if the profile type changes during the check", async () => {
       await insertDeveloper(db, {
-        id: "dev-developer",
+        identifier: "dev-developer",
         type: "organization",
         name: "Dev",
         url: null,
@@ -2178,7 +2199,7 @@ describe("Extensions API v2", () => {
         if (!changed && sql.includes("github_verified_at")) {
           changed = true;
           await db
-            .prepare("UPDATE developers SET type = ? WHERE id = ?")
+            .prepare("UPDATE developers SET type = ? WHERE identifier = ?")
             .bind("user", "dev-developer")
             .run();
         }
@@ -2200,7 +2221,7 @@ describe("Extensions API v2", () => {
 
     it("refuses to overwrite verification if GitHub identity sync wins the race", async () => {
       await insertDeveloper(db, {
-        id: "dev-developer",
+        identifier: "dev-developer",
         type: "organization",
         name: "Dev",
         url: null,
@@ -2256,7 +2277,7 @@ describe("Extensions API v2", () => {
   describe("GET /developers/{id}", () => {
     it("returns a developer's public profile without contact_email, unauthenticated", async () => {
       await insertDeveloper(db, {
-        id: "public-dev",
+        identifier: "public-dev",
         type: "organization",
         name: "Public Dev",
         url: "https://example.com",
@@ -2270,7 +2291,8 @@ describe("Extensions API v2", () => {
       expect(res.status).toBe(200);
       const body = (await res.json()) as { result: Record<string, unknown> };
       expect(body.result).toEqual({
-        id: "public-dev",
+        id: expect.stringMatching(UUID_V7),
+        identifier: "public-dev",
         type: "organization",
         name: "Public Dev",
         URL: "https://example.com",
@@ -2292,13 +2314,13 @@ describe("Extensions API v2", () => {
       const res = await get("/extensions/v2/developers/legacy-public", {});
       expect(res.status).toBe(200);
       expect(await res.json()).toMatchObject({
-        result: { id: "legacy-public", unclaimed: true }
+        result: { identifier: "legacy-public", unclaimed: true }
       });
     });
 
     it("falls back to the public view for a deactivated owner", async () => {
       await insertDeveloper(db, {
-        id: "owned-dev",
+        identifier: "owned-dev",
         type: "user",
         name: "Owned Dev",
         contact_email: "private@example.com",
@@ -2317,7 +2339,10 @@ describe("Extensions API v2", () => {
       expect(res.status).toBe(200);
       const body = (await res.json()) as { result: Record<string, unknown> };
       expect(body.result.contact_email).toBeUndefined();
-      expect(body.result).toMatchObject({ id: "owned-dev", unclaimed: false });
+      expect(body.result).toMatchObject({
+        identifier: "owned-dev",
+        unclaimed: false
+      });
       expect(res.headers.get("Vary")).toBe("Authorization");
     });
   });

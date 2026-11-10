@@ -129,7 +129,10 @@ export async function syncIdentity(sub: string, body: unknown) {
 // are now properties of the extension record rather than of the edit.
 export function sampleContent(overrides?: { name?: string }) {
   return {
-    type: "mod",
+    manifest_version: 1,
+    author: { name: "Developer" },
+    requires: { fossbilling: ">=0.6", php: ">=8.2" },
+    type: "module",
     name: overrides?.name ?? "New Extension",
     description: "A new extension",
     releases: [
@@ -137,11 +140,11 @@ export function sampleContent(overrides?: { name?: string }) {
         tag: "1.0.0",
         date: "2026-01-01T00:00:00Z",
         download_url: "https://example.com/download.zip",
-        min_fossbilling_version: "0.6"
+        requires: { fossbilling: ">=0.6", php: ">=8.2" }
       }
     ],
-    website: "https://example.com",
-    license: { name: "MIT" },
+    homepage_url: "https://example.com",
+    license: "MIT",
     readme: "# Readme",
     source: { type: "github", repo: "example/new-ext" },
     version: "1.0.0",
@@ -155,14 +158,14 @@ export function sampleCreate(overrides?: {
   name?: string;
 }) {
   return {
-    id: overrides?.extensionId ?? "new-ext",
+    identifier: overrides?.extensionId ?? "new-ext",
     ...sampleContent(overrides)
   };
 }
 
 export function sampleDeveloper(overrides?: { id?: string; name?: string }) {
   return {
-    id: overrides?.id ?? "dev-developer",
+    identifier: overrides?.id ?? "dev-developer",
     type: "user",
     name: overrides?.name ?? "Dev Developer",
     URL: "https://example.com"
@@ -176,7 +179,7 @@ export async function seedDeveloper(
   ownerUserId: string
 ): Promise<void> {
   await insertDeveloper(db, {
-    id,
+    identifier: id,
     type: "user",
     name: "Developer",
     url: null,
@@ -189,7 +192,7 @@ export async function seedUnownedDeveloper(
   name = "Legacy Developer"
 ): Promise<void> {
   await insertDeveloper(db, {
-    id,
+    identifier: id,
     type: "user",
     name,
     url: null,
@@ -199,15 +202,15 @@ export async function seedUnownedDeveloper(
 
 export async function seedOwnedExtension(): Promise<void> {
   await insertDeveloper(db, {
-    id: "owner-developer",
+    identifier: "owner-developer",
     type: "user",
     name: "Owner",
     url: null,
     owner_user_id: "owner-1"
   });
   await insertExtension(db, {
-    id: "existing-ext",
-    developer_id: "owner-developer",
+    identifier: "existing-ext",
+    developer_identifier: "owner-developer",
     name: "Existing",
     source: '{"type":"github","repo":"example/existing"}'
   });

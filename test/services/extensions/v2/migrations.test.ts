@@ -259,7 +259,7 @@ describe("Extensions D1 migrations", () => {
     }
   });
 
-  // idx_extensions_id_nocase cannot be created over a catalogue that already
+  // idx_extensions_id_nocase cannot be created over a directory that already
   // holds a case-colliding pair. Without a check first, the failure lands
   // mid-rebuild as a bare UNIQUE constraint error naming no rows.
   it("0021 refuses to run against ids that differ only in case", () => {
@@ -683,7 +683,7 @@ describe("Extensions D1 migrations", () => {
 
       db.exec(migration("0021_restructure_extensions_revisions.sql"));
 
-      // Rows that were already in the catalogue are published; a submission
+      // Rows that were already in the extension directory are published; a submission
       // that only ever proposed an id becomes an unpublished extension.
       expect(
         db
@@ -966,6 +966,511 @@ describe("Resource-bound migration", () => {
           )
           .all()
       ).toEqual([]);
+      expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+it("migrates published manifest metadata without changing reviewed audit bodies", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec("PRAGMA foreign_keys=ON");
+    for (const name of migrationNames.filter((name) => name < "0029"))
+      db.exec(migration(name));
+    db.exec(
+      "INSERT INTO users(id,created_at,updated_at) VALUES('owner','now','now')"
+    );
+    db.exec(
+      "INSERT INTO developers(id,type,name,url,owner_user_id) VALUES('dev','organization','Developer','https://example.com','owner')"
+    );
+    const olderRelease = {
+      tag: "0.9.0",
+      date: "2025-12-01",
+      download_url: "https://example.com/older.zip",
+      requires: {
+        fossbilling: "^0.7",
+        php: "^8.2",
+        modules: { "old-module": "~1.0" }
+      }
+    };
+    const currentRequirements = {
+      fossbilling: ">=0.8.9",
+      php: ">=8.3",
+      modules: { branding: "^2" }
+    };
+    const releases = JSON.stringify([
+      {
+        tag: "1.0.0",
+        date: "2026-01-01",
+        download_url: "https://example.com/a.zip"
+      },
+      { ...olderRelease, min_fossbilling_version: "0.7.0" }
+    ]);
+    db.prepare(
+      `INSERT INTO extensions(id,developer_id,type,name,description,releases,website,license,readme,source,version,download_url,published_at)
+      VALUES('legacy','dev','mod','Legacy','Description',?,'https://example.com',?,'README','{}','1.0.0','https://example.com/a.zip','now')`
+    ).run(
+      releases,
+      JSON.stringify({
+        name: "Apache License",
+        spdx_id: "Apache-2.0",
+        URL: "https://example.com/license"
+      })
+    );
+    const audit = JSON.stringify({
+      type: "mod",
+      website: "https://example.com",
+      license: { name: "MIT" }
+    });
+    db.prepare(
+      "INSERT INTO extension_revisions(id,extension_id,developer_id,submitted_by,status,content) VALUES('audit','legacy','dev','owner','approved',?)"
+    ).run(audit);
+    const preflight = readFileSync(
+      join(migrationsDirectory, "../manifest-preflight.sql"),
+      "utf8"
+    );
+    expect(db.prepare(preflight).all()).toEqual([
+      {
+        id: "legacy",
+        release_index: 0,
+        issue: expect.stringContaining("supply a FOSSBilling constraint")
+      }
+    ]);
+    // Existing over-quota collections must survive a structural backfill.
+    db.exec(
+      "UPDATE extension_resource_usage SET extensions=101 WHERE scope='developer'"
+    );
+    db.exec("BEGIN");
+    expect(() => db.exec(migration("0029_align_manifest.sql"))).toThrow(
+      /manifest_data_requires_manual_correction/
+    );
+    db.exec("ROLLBACK");
+    expect(columnNames(db, "extensions")).not.toContain("manifest");
+    expect(
+      db.prepare("SELECT type FROM extensions WHERE id='legacy'").get()?.type
+    ).toBe("mod");
+    const incompleteCorrection = `UPDATE extensions SET releases=json_set(releases,'$[0].requires',json('{"fossbilling":">=0.8.9","php":null}')) WHERE id='legacy';`;
+    db.exec("BEGIN");
+    expect(() =>
+      db.exec(
+        migration("0029_align_manifest.sql").replace(
+          "-- MANUAL_MANIFEST_CORRECTIONS",
+          `-- MANUAL_MANIFEST_CORRECTIONS\n${incompleteCorrection}`
+        )
+      )
+    ).toThrow(/manifest_data_requires_manual_correction/);
+    db.exec("ROLLBACK");
+    expect(
+      db.prepare("SELECT releases FROM extensions WHERE id='legacy'").get()
+        ?.releases
+    ).toBe(releases);
+    expect(columnNames(db, "extensions")).not.toContain("manifest");
+    // The operator inserts an explicit correction into the migration's
+    // maintenance section; direct growth would still be rejected pre-migration.
+    const correction = `UPDATE extensions SET releases=json_set(releases,'$[0].requires',json('${JSON.stringify(currentRequirements)}')) WHERE id='legacy';`;
+    expect(() => db.exec(correction)).toThrow(/extension_resource_quota/);
+    const preparedMigration = migration("0029_align_manifest.sql").replace(
+      "-- MANUAL_MANIFEST_CORRECTIONS",
+      `-- MANUAL_MANIFEST_CORRECTIONS\n${correction}`
+    );
+    db.exec("BEGIN");
+    db.exec(preparedMigration);
+    db.exec("COMMIT");
+    expect(db.prepare(preflight).all()).toEqual([]);
+    const row = db
+      .prepare(
+        "SELECT type,license,manifest,published_bytes FROM extensions WHERE id='legacy'"
+      )
+      .get()!;
+    expect(() =>
+      db
+        .prepare(
+          "UPDATE extensions SET manifest=manifest || ' ' WHERE id='legacy'"
+        )
+        .run()
+    ).toThrow(/extension_resource_quota/);
+    db.exec(
+      "UPDATE extension_resource_usage SET extensions=1 WHERE scope='developer'"
+    );
+    expect(
+      JSON.parse(
+        db.prepare("SELECT releases FROM extensions WHERE id='legacy'").get()
+          ?.releases as string
+      )
+    ).toEqual([
+      {
+        tag: "1.0.0",
+        date: "2026-01-01",
+        download_url: "https://example.com/a.zip",
+        requires: currentRequirements
+      },
+      olderRelease
+    ]);
+    expect(() =>
+      db.exec("UPDATE extensions SET manifest=NULL WHERE id='legacy'")
+    ).toThrow(/extensions_published_manifest_required/);
+    db.exec("INSERT INTO extensions(id,developer_id) VALUES('draft','dev')");
+    expect(
+      db.prepare("SELECT manifest FROM extensions WHERE id='draft'").get()
+        ?.manifest
+    ).toBeNull();
+    expect(() =>
+      db.exec(
+        "UPDATE extensions SET published_at='now',type='module',name='Draft',description='d',releases='[]',website='',license='\"MIT\"',readme='r',source='{}',version='1.0.0',download_url='https://example.com' WHERE id='draft'"
+      )
+    ).toThrow(/extensions_published_manifest_required/);
+    expect(() =>
+      db.exec(
+        "INSERT INTO extensions(id,developer_id,published_at,type,name,description,releases,website,license,readme,source,version,download_url) VALUES('missing','dev','now','module','Missing','d','[]','','\"MIT\"','r','{}','1.0.0','https://example.com')"
+      )
+    ).toThrow(/extensions_published_manifest_required/);
+    expect(row.type).toBe("module");
+    expect(JSON.parse(row.license as string)).toBe("Apache-2.0");
+    expect(JSON.parse(row.manifest as string)).toEqual({
+      manifest_version: 1,
+      author: { name: "Developer", url: "https://example.com" },
+      requires: currentRequirements
+    });
+    expect(
+      db
+        .prepare("SELECT content FROM extension_revisions WHERE id='audit'")
+        .get()?.content
+    ).toBe(audit);
+    expect(
+      db
+        .prepare(
+          readFileSync(
+            join(migrationsDirectory, "../resource-inventory.sql"),
+            "utf8"
+          )
+        )
+        .all()
+    ).toEqual([]);
+    db.prepare("UPDATE extensions SET manifest=? WHERE id='legacy'").run(
+      JSON.stringify({
+        manifest_version: 1,
+        author: { name: "Changed" },
+        requires: {
+          fossbilling: "^0.8.9",
+          php: ">=8.3",
+          modules: { branding: "^1" }
+        }
+      })
+    );
+    expect(
+      db
+        .prepare(
+          readFileSync(
+            join(migrationsDirectory, "../resource-inventory.sql"),
+            "utf8"
+          )
+        )
+        .all()
+    ).toEqual([]);
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+  } finally {
+    db.close();
+  }
+});
+
+it.each([
+  ["license", "not-json", "license:", null],
+  ["license", '{"name":42}', "license:", null],
+  ["license", "null", "license:", null],
+  ["license", "42", "license:", null],
+  ["license", "[]", "license:", null],
+  ["type", "hook", "type:", null],
+  ["developer_url", "javascript:alert(1)", "author:", null],
+  ["developer_url", "https://", "author:", null],
+  ["developer_url", "https://bad host.example", "author:", null],
+  ["developer_url", "https://example.com/" + "x".repeat(2048), "author:", null],
+  ["releases", "not-json", "releases:", null],
+  [
+    "releases",
+    JSON.stringify([
+      {
+        tag: "1.0.0",
+        requires: {
+          fossbilling: ">=0.8.9",
+          php: ">=8.3",
+          modules: { branding: 42 }
+        }
+      }
+    ]),
+    "requires:",
+    0
+  ],
+  [
+    "releases",
+    JSON.stringify([
+      { tag: "1.0.0", requires: { fossbilling: ">=0.8.9", php: null } }
+    ]),
+    "requires:",
+    0
+  ],
+  [
+    "releases",
+    JSON.stringify([
+      { tag: "1.0.0", requires: { fossbilling: "*", php: "*" } },
+      { tag: "v1.0.0", requires: { fossbilling: "*", php: "*" } }
+    ]),
+    "version:",
+    null
+  ]
+] as const)(
+  "flags %s data for manual correction before migration",
+  (column, value, issue, releaseIndex) => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      db.exec("PRAGMA foreign_keys=ON");
+      for (const name of migrationNames.filter((name) => name < "0029"))
+        db.exec(migration(name));
+      db.exec(
+        "INSERT INTO developers(id,type,name) VALUES('dev','organization','Developer')"
+      );
+      const releases = JSON.stringify([
+        {
+          tag: "1.0.0",
+          date: "2026-01-01",
+          download_url: "https://example.com/release.zip",
+          requires: { fossbilling: ">=0.8.9", php: ">=8.3" }
+        }
+      ]);
+      db.prepare(
+        `INSERT INTO extensions(id,developer_id,type,name,description,releases,website,license,readme,source,version,download_url,published_at)
+      VALUES('needs-review','dev','mod','Example','Description',?,'https://example.com','{"name":"MIT"}','README','{}','1.0.0','https://example.com/release.zip','now')`
+      ).run(releases);
+      const table = column === "developer_url" ? "developers" : "extensions";
+      const field = column === "developer_url" ? "url" : column;
+      const id = column === "developer_url" ? "dev" : "needs-review";
+      db.prepare(`UPDATE ${table} SET ${field}=? WHERE id=?`).run(value, id);
+      const preflight = readFileSync(
+        join(migrationsDirectory, "../manifest-preflight.sql"),
+        "utf8"
+      );
+      expect(db.prepare(preflight).all()).toEqual(
+        expect.arrayContaining([
+          {
+            id: "needs-review",
+            release_index: releaseIndex,
+            issue: expect.stringContaining(issue)
+          }
+        ])
+      );
+      db.exec("BEGIN");
+      expect(() => db.exec(migration("0029_align_manifest.sql"))).toThrow(
+        /manifest_data_requires_manual_correction/
+      );
+      db.exec("ROLLBACK");
+      expect(columnNames(db, "extensions")).not.toContain("manifest");
+      expect(
+        db.prepare(`SELECT ${field} AS value FROM ${table} WHERE id=?`).get(id)
+          ?.value
+      ).toBe(value);
+    } finally {
+      db.close();
+    }
+  }
+);
+
+it.each(["", "v"])(
+  "migrates legacy requirements with %s-prefixed release tags",
+  (prefix) => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      db.exec("PRAGMA foreign_keys=ON");
+      for (const name of migrationNames.filter((name) => name < "0029"))
+        db.exec(migration(name));
+      db.exec(
+        "INSERT INTO developers(id,type,name) VALUES('dev','organization','Developer')"
+      );
+      const fixtures = [
+        {
+          id: "legacy",
+          tags: ["1.0.0"],
+          minimum: "0.6",
+          initial: undefined,
+          expected: { fossbilling: ">=0.6" }
+        },
+        {
+          id: "BTCPay",
+          tags: ["0.1.5", "0.1.4", "0.1.3"],
+          minimum: "0.6",
+          initial: undefined,
+          expected: { fossbilling: ">=0.6", php: ">=8.1" }
+        },
+        {
+          id: "openreceive",
+          tags: ["0.4.29"],
+          minimum: "0.8.0",
+          initial: undefined,
+          expected: { fossbilling: ">=0.8.0", php: "^8.2" }
+        },
+        {
+          id: "partial",
+          tags: ["1.0.0"],
+          minimum: "0.6",
+          initial: { php: ">=8.4", modules: { branding: "^1" } },
+          expected: {
+            fossbilling: ">=0.6",
+            php: ">=8.4",
+            modules: { branding: "^1" }
+          }
+        }
+      ];
+      for (const fixture of fixtures) {
+        const releases = fixture.tags.map((tag) => ({
+          tag: prefix + tag,
+          date: "2026-01-01",
+          download_url: "https://example.com/release.zip",
+          min_fossbilling_version: fixture.minimum,
+          requires: fixture.initial
+        }));
+        db.prepare(
+          `INSERT INTO extensions(id,developer_id,type,name,description,releases,website,license,readme,source,version,download_url,published_at)
+        VALUES(?,'dev','mod','Legacy','Description',?,'','{"name":"MIT"}','README','{}',?,'https://example.com/release.zip','now')`
+        ).run(fixture.id, JSON.stringify(releases), fixture.tags[0]);
+      }
+      const preflight = readFileSync(
+        join(migrationsDirectory, "../manifest-preflight.sql"),
+        "utf8"
+      );
+      expect(db.prepare(preflight).all()).toEqual([]);
+      db.exec("BEGIN");
+      db.exec(migration("0029_align_manifest.sql"));
+      db.exec("COMMIT");
+      expect(db.prepare(preflight).all()).toEqual([]);
+      for (const fixture of fixtures) {
+        const row = db
+          .prepare("SELECT releases,manifest FROM extensions WHERE id=?")
+          .get(fixture.id)!;
+        const releases = JSON.parse(row.releases as string);
+        expect(releases.map((release: { tag: string }) => release.tag)).toEqual(
+          fixture.tags.map((tag) => prefix + tag)
+        );
+        for (const release of releases) {
+          expect(release.requires).toEqual(fixture.expected);
+          expect(release).not.toHaveProperty("min_fossbilling_version");
+        }
+        expect(JSON.parse(row.manifest as string).requires).toEqual(
+          fixture.expected
+        );
+      }
+      expect(
+        db
+          .prepare(
+            readFileSync(
+              join(migrationsDirectory, "../resource-inventory.sql"),
+              "utf8"
+            )
+          )
+          .all()
+      ).toEqual([]);
+      expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      db.close();
+    }
+  }
+);
+
+describe("directory UUID identities", () => {
+  it("preserves populated relationships and resource accounting in a D1 transaction", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      db.exec("PRAGMA foreign_keys=ON");
+      for (const name of migrationNames.filter((name) => name < "0030"))
+        db.exec(migration(name));
+      db.exec(`
+        INSERT INTO users(id,created_at,updated_at) VALUES ('owner',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP);
+        INSERT INTO developers(id,type,name,owner_user_id,created_at) VALUES ('studio','user','Studio','owner','2026-11-01 00:00:00');
+        INSERT INTO developer_history(id,developer_id,type,name,changed_by) VALUES ('deleted-history','deleted-studio','user','Deleted','owner');
+        INSERT INTO extensions(id,developer_id,created_by) VALUES ('example','studio','owner');
+        INSERT INTO extension_revisions(id,extension_id,developer_id,submitted_by,content) VALUES ('revision','example','studio','owner','{}');
+        INSERT INTO developer_claims(id,developer_id,claimant_id) VALUES ('claim','studio','owner');
+        INSERT INTO m2m_publisher_clients(client_id,developer_id,can_publish) VALUES ('publisher','studio',1);
+      `);
+      const before = db
+        .prepare(
+          "SELECT bytes,extensions,revisions FROM extension_resource_usage WHERE scope='developer' AND subject='studio'"
+        )
+        .get();
+      db.exec("BEGIN");
+      db.exec(migration("0030_directory_identity.sql"));
+      db.exec("COMMIT");
+      const developer = db
+        .prepare("SELECT id,identifier FROM developers")
+        .get() as { id: string; identifier: string };
+      const extension = db
+        .prepare("SELECT id,identifier,developer_id FROM extensions")
+        .get() as { id: string; identifier: string; developer_id: string };
+      const pattern =
+        /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+      expect(developer).toEqual({
+        id: expect.stringMatching(pattern),
+        identifier: "studio"
+      });
+      expect(extension).toEqual({
+        id: expect.stringMatching(pattern),
+        identifier: "example",
+        developer_id: developer.id
+      });
+      expect(
+        db
+          .prepare("SELECT extension_id,developer_id FROM extension_revisions")
+          .get()
+      ).toEqual({ extension_id: extension.id, developer_id: developer.id });
+      expect(
+        db.prepare("SELECT developer_id FROM developer_claims").get()
+      ).toEqual({ developer_id: developer.id });
+      expect(
+        db.prepare("SELECT developer_id FROM m2m_publisher_clients").get()
+      ).toEqual({ developer_id: developer.id });
+      expect(
+        db
+          .prepare(
+            "SELECT bytes,extensions,revisions FROM extension_resource_usage WHERE scope='developer' AND subject=?"
+          )
+          .get(developer.id)
+      ).toEqual(before);
+      const deletedHistory = db
+        .prepare(
+          "SELECT developer_id FROM developer_history WHERE id='deleted-history'"
+        )
+        .get() as { developer_id: string };
+      expect(deletedHistory.developer_id).toMatch(pattern);
+      expect(deletedHistory.developer_id).not.toBe(developer.id);
+      for (const filter of ["", " AND type='module'"]) {
+        const plan = db
+          .prepare(
+            `EXPLAIN QUERY PLAN
+          SELECT id FROM extensions
+          WHERE published_at IS NOT NULL AND delisted_at IS NULL${filter}
+          ORDER BY lower(identifier), id LIMIT 50`
+          )
+          .all() as Array<{ detail: string }>;
+        expect(plan.map((row) => row.detail).join(" ")).not.toContain(
+          "TEMP B-TREE"
+        );
+      }
+      db.prepare(
+        "INSERT INTO extension_revisions(id,extension_id,developer_id,submitted_by,content,status) VALUES ('new-revision',?,?, 'owner','{}','approved')"
+      ).run(extension.id, developer.id);
+      expect(
+        db
+          .prepare(
+            "SELECT revisions FROM extension_resource_usage WHERE scope='developer' AND subject=?"
+          )
+          .get(developer.id)
+      ).toEqual({ revisions: Number(before!.revisions) + 1 });
+      expect(
+        db
+          .prepare(
+            "SELECT subject FROM extension_resource_usage WHERE scope='developer'"
+          )
+          .all()
+      ).toEqual([{ subject: developer.id }]);
       expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
     } finally {
       db.close();

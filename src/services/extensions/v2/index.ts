@@ -7,6 +7,7 @@ import { OpenAPIHono } from "@hono/zod-openapi";
 import { Scalar } from "@scalar/hono-api-reference";
 import { cors } from "hono/cors";
 import { trimTrailingSlash } from "hono/trailing-slash";
+import { registerBadgeRoutes } from "./routes/badges";
 import { registerPublicExtensionsRoutes } from "./routes/public-extensions";
 import { registerOwnerExtensionsRoutes } from "./routes/owner-extensions";
 import { registerDeveloperProfileRoutes } from "./routes/developer-profiles";
@@ -57,7 +58,7 @@ extensionsV2.on(
 );
 extensionsV2.on(
   "PUT",
-  "/extensions/:id",
+  ["/extensions/:id", "/extensions/:id/revisions/:revisionId"],
   paceContentIp(),
   boundContentRequest()
 );
@@ -82,6 +83,7 @@ extensionsV2.openAPIRegistry.registerComponent("securitySchemes", "Bearer", {
 // (/developers/me, /developers/claims). Ownership registers before
 // developer-profiles so /developers/claims (static) wins over /developers/{id}.
 registerPublicExtensionsRoutes(extensionsV2);
+registerBadgeRoutes(extensionsV2);
 registerOwnerExtensionsRoutes(extensionsV2);
 registerAccountRoutes(extensionsV2);
 registerOwnershipRoutes(extensionsV2);
@@ -105,7 +107,7 @@ extensionsV2.route(
           title: "FOSSBilling Extensions API (v2)",
           version: "2.0.0",
           description:
-            "Self-service extension publishing, ownership, moderation, and public browsing. v1 (/extensions/v1) remains available for existing integrations."
+            "Self-service extension publishing, ownership, moderation, and public browsing. v1 (/extensions/v1) is deprecated. V1 badge URLs retire on 5 February 2027 at 00:00 UTC; other v1 endpoints remain available until at least six months after a stable FOSSBilling release ships the v2 installer."
         },
         servers: [{ url: "/extensions/v2" }]
       })),

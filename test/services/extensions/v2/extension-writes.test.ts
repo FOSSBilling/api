@@ -20,6 +20,7 @@ import {
   countRevisions,
   insertUser,
   getExtension,
+  getDeveloper,
   getRevision,
   insertDeveloper,
   insertExtension,
@@ -38,14 +39,14 @@ setupExtensionsV2Tests();
 // lowercaseId() rejects them at validation.
 async function seedMixedCaseExtension() {
   await insertDeveloper(db, {
-    id: "owner-developer",
+    identifier: "owner-developer",
     type: "user",
     name: "Owner",
     owner_user_id: "owner-1"
   });
   await insertExtension(db, {
-    id: "Existing-Ext",
-    developer_id: "owner-developer",
+    identifier: "Existing-Ext",
+    developer_identifier: "owner-developer",
     name: "Existing"
   });
 }
@@ -83,7 +84,7 @@ describe("Extensions API v2 writes", () => {
       expect(data.error.code).toBe("VALIDATION_ERROR");
     });
 
-    it("rejects a spdx_id that isn't a current SPDX license identifier", async () => {
+    it("rejects the legacy license object", async () => {
       await seedDeveloper("new-developer", "user-1");
       const res = await post(
         "/extensions/v2/extensions",
@@ -97,42 +98,38 @@ describe("Extensions API v2 writes", () => {
       expect(await countRevisions(db)).toBe(0);
     });
 
-    it("rejects a deprecated SPDX identifier", async () => {
+    it("rejects characters outside the manifest license grammar", async () => {
       await seedDeveloper("new-developer", "user-1");
       const res = await post(
         "/extensions/v2/extensions",
         await authHeaders("user-1"),
-        // "GPL-3.0" is deprecated in favor of GPL-3.0-only / GPL-3.0-or-later.
-        { ...sampleCreate(), license: { name: "GPL 3.0", spdx_id: "GPL-3.0" } }
+        { ...sampleCreate(), license: "invalid/license" }
       );
       expect(res.status).toBe(422);
     });
 
-    it("stores a recognized spdx_id alongside the display name", async () => {
+    it("stores a manifest license expression", async () => {
       await seedDeveloper("new-developer", "user-1");
       const res = await post(
         "/extensions/v2/extensions",
         await authHeaders("user-1"),
         {
           ...sampleCreate(),
-          license: { name: "Apache License 2.0", spdx_id: "Apache-2.0" }
+          license: "Apache-2.0 OR MIT"
         }
       );
       expect(res.status).toBe(201);
       const data = (await res.json()) as { result: { revision_id: string } };
       const revision = await getRevision(db, data.result.revision_id);
-      expect(JSON.parse(revision!.content).license).toEqual({
-        name: "Apache License 2.0",
-        spdx_id: "Apache-2.0"
-      });
+      expect(JSON.parse(revision!.content).license).toBe("Apache-2.0 OR MIT");
     });
 
-    it("accepts a license with no spdx_id, for custom/proprietary licenses", async () => {
+    it("accepts a custom manifest license", async () => {
       await seedDeveloper("new-developer", "user-1");
       const res = await post(
         "/extensions/v2/extensions",
         await authHeaders("user-1"),
-        { ...sampleCreate(), license: { name: "Acme Proprietary License" } }
+        { ...sampleCreate(), license: "LicenseRef-Acme" }
       );
       expect(res.status).toBe(201);
     });
@@ -160,15 +157,23 @@ describe("Extensions API v2 writes", () => {
 
       expect(res.status).toBe(201);
       const data = (await res.json()) as {
-        result: { id: string; revision_id: string; status: string };
+        result: {
+          id: string;
+          identifier: string;
+          revision_id: string;
+          status: string;
+        };
       };
-      expect(data.result).toMatchObject({ id: "new-ext", status: "pending" });
+      expect(data.result).toMatchObject({
+        identifier: "new-ext",
+        status: "pending"
+      });
 
       // Holds its id immediately, but stays unpublished until a moderator
       // approves.
       const stored = await getExtension(db, "new-ext");
       expect(stored).toMatchObject({
-        developer_id: "new-developer",
+        developer_id: (await getDeveloper(db, "new-developer"))!.id,
         published_at: null,
         published_revision_id: null,
         name: null
@@ -176,7 +181,7 @@ describe("Extensions API v2 writes", () => {
 
       const revision = await getRevision(db, data.result.revision_id);
       expect(revision).toMatchObject({
-        extension_id: "new-ext",
+        extension_id: (await getExtension(db, "new-ext"))!.id,
         submitted_by: "user-1",
         status: "pending"
       });
@@ -295,7 +300,7 @@ describe("Extensions API v2 writes", () => {
         date: "2026-01-01T00:00:00Z",
         download_url: longUrl,
         changelog_url: longUrl,
-        min_fossbilling_version: "0.6"
+        requires: { fossbilling: ">=0.6", php: "*" }
       }));
       const body = { ...sampleCreate(), releases };
       expect(
@@ -319,7 +324,7 @@ describe("Extensions API v2 writes", () => {
 
       // The edit body carries the same guard.
       await seedOwnedExtension();
-      const { id: _id, ...content } = body;
+      const { identifier: _identifier, ...content } = body;
       const edited = await put(
         "/extensions/v2/extensions/existing-ext",
         await authHeaders("owner-1"),
@@ -329,12 +334,12 @@ describe("Extensions API v2 writes", () => {
       expect(await countRevisions(db)).toBe(0);
     });
 
-    it("preserves compatibility with stored slug ids over 100 characters", async () => {
+    it("rejects new ids above the manifest limit of 64 characters", async () => {
       await seedDeveloper("d".repeat(120), "user-1");
       const res = await createExtension("user-1", {
-        extensionId: "e".repeat(120)
+        extensionId: "e".repeat(65)
       });
-      expect(res.status).toBe(201);
+      expect(res.status).toBe(422);
     });
 
     it("caps each user's unreviewed backlog", async () => {
@@ -404,7 +409,7 @@ describe("Extensions API v2 writes", () => {
       expect(res.status).toBe(202);
       const [revision] = await listRevisions(db);
       expect(revision).toMatchObject({
-        extension_id: "existing-ext",
+        extension_id: (await getExtension(db, "existing-ext"))!.id,
         status: "pending"
       });
       expect(JSON.parse(revision.content).name).toBe("Renamed");
@@ -518,9 +523,14 @@ describe("Extensions API v2 writes", () => {
       );
 
       expect(res.status).toBe(202);
+      await expect(res.json()).resolves.toMatchObject({
+        result: { identifier: "Existing-Ext" }
+      });
       // The revision must hang off the stored spelling, not the requested one.
       const [revision] = await listRevisions(db);
-      expect(revision.extension_id).toBe("Existing-Ext");
+      expect(revision.extension_id).toBe(
+        (await getExtension(db, "Existing-Ext"))!.id
+      );
     });
 
     it("lists revisions addressed in lower case", async () => {
@@ -734,13 +744,14 @@ describe("Extensions API v2 writes", () => {
       const data = (await res.json()) as {
         result: Array<{
           id: string;
+          identifier: string;
           published: { name: string } | null;
-          pending_revision: { id: string } | null;
+          pending_revision: { id: string; identifier: string } | null;
           last_review: unknown;
         }>;
       };
 
-      expect(data.result.map((item) => item.id)).toEqual([
+      expect(data.result.map((item) => item.identifier)).toEqual([
         "draft-ext",
         "existing-ext"
       ]);
@@ -765,7 +776,7 @@ describe("Extensions API v2 writes", () => {
       const data = (await res.json()) as {
         result: Array<{
           published: { name: string } | null;
-          pending_revision: { id: string } | null;
+          pending_revision: { id: string; identifier: string } | null;
         }>;
       };
       expect(data.result[0].published).toMatchObject({ name: "Existing" });
@@ -774,7 +785,7 @@ describe("Extensions API v2 writes", () => {
 
     // Both of these are states the README's mapping table now documents, and
     // both were reachable before it did.
-    it("reports a live extension adopted from the pre-v2 catalogue", async () => {
+    it("reports a live extension adopted from the pre-v2 directory", async () => {
       await seedOwnedExtension();
 
       const res = await get(
@@ -837,8 +848,12 @@ describe("Extensions API v2 writes", () => {
         "/extensions/v2/extensions?scope=mine",
         await authHeaders("owner-1")
       );
-      const data = (await res.json()) as { result: Array<{ id: string }> };
-      expect(data.result.map((item) => item.id)).toEqual(["existing-ext"]);
+      const data = (await res.json()) as {
+        result: Array<{ id: string; identifier: string }>;
+      };
+      expect(data.result.map((item) => item.identifier)).toEqual([
+        "existing-ext"
+      ]);
     });
 
     // extensions.type is NULL until a first approval, so filtering the column
@@ -876,12 +891,14 @@ describe("Extensions API v2 writes", () => {
       );
 
       const res = await get(
-        "/extensions/v2/extensions?scope=mine&type=mod",
+        "/extensions/v2/extensions?scope=mine&type=module",
         headers
       );
       expect(res.status).toBe(200);
-      const data = (await res.json()) as { result: Array<{ id: string }> };
-      expect(data.result.map((item) => item.id)).toEqual([
+      const data = (await res.json()) as {
+        result: Array<{ id: string; identifier: string }>;
+      };
+      expect(data.result.map((item) => item.identifier)).toEqual([
         "draft-ext",
         "live-ext",
         "rejected-ext"
@@ -924,10 +941,10 @@ describe("Extensions API v2 writes", () => {
         headers
       );
       const firstBody = (await first.json()) as {
-        result: Array<{ id: string }>;
+        result: Array<{ id: string; identifier: string }>;
         pagination: { has_more: boolean; next_cursor: string };
       };
-      expect(firstBody.result.map((item) => item.id)).toEqual([
+      expect(firstBody.result.map((item) => item.identifier)).toEqual([
         "page-a",
         "page-b"
       ]);
@@ -938,10 +955,12 @@ describe("Extensions API v2 writes", () => {
         headers
       );
       const secondBody = (await second.json()) as {
-        result: Array<{ id: string }>;
+        result: Array<{ id: string; identifier: string }>;
         pagination: { has_more: boolean; next_cursor: null };
       };
-      expect(secondBody.result.map((item) => item.id)).toEqual(["page-c"]);
+      expect(secondBody.result.map((item) => item.identifier)).toEqual([
+        "page-c"
+      ]);
       expect(secondBody.pagination).toEqual({
         has_more: false,
         next_cursor: null
@@ -977,14 +996,14 @@ describe("Extensions API v2 writes", () => {
     // advertised schema catches the disagreement.
     it("serves an adopted extension with no releases against its own schema", async () => {
       await insertDeveloper(db, {
-        id: "owner-developer",
+        identifier: "owner-developer",
         type: "user",
         name: "Owner",
         owner_user_id: "owner-1"
       });
       await insertExtension(db, {
-        id: "adopted-ext",
-        developer_id: "owner-developer",
+        identifier: "adopted-ext",
+        developer_identifier: "owner-developer",
         name: "Adopted",
         releases: "[]"
       });
@@ -1010,9 +1029,14 @@ describe("Extensions API v2 writes", () => {
       );
       expect(res.status).toBe(200);
       const data = (await res.json()) as {
-        result: { id: string; readme: string; pending_revision?: unknown };
+        result: {
+          id: string;
+          identifier: string;
+          readme: string;
+          pending_revision?: unknown;
+        };
       };
-      expect(data.result.id).toBe("existing-ext");
+      expect(data.result.identifier).toBe("existing-ext");
       expect(data.result.readme).toBeDefined();
       expect("pending_revision" in data.result).toBe(false);
     });
@@ -1047,10 +1071,14 @@ describe("Extensions API v2 writes", () => {
       );
       expect(res.status).toBe(200);
       const data = (await res.json()) as {
-        result: Array<{ extension_id: string }>;
+        result: Array<{
+          extension_id: string;
+          identifier: string;
+          extension_identifier: string;
+        }>;
       };
       expect(data.result).toHaveLength(1);
-      expect(data.result[0].extension_id).toBe("mine");
+      expect(data.result[0].extension_identifier).toBe("mine");
     });
   });
 
@@ -1066,11 +1094,15 @@ describe("Extensions API v2 writes", () => {
       );
       expect(res.status).toBe(200);
       const data = (await res.json()) as {
-        result: Array<{ extension_id: string; status: string }>;
+        result: Array<{
+          extension_id: string;
+          identifier: string;
+          status: string;
+        }>;
       };
       expect(data.result).toHaveLength(1);
       expect(data.result[0]).toMatchObject({
-        extension_id: "new-ext",
+        extension_id: (await getExtension(db, "new-ext"))!.id,
         status: "pending"
       });
     });

@@ -33,7 +33,7 @@ import {
   toPublicDeveloper
 } from "../schemas/developers";
 import { DeveloperProfilesDatabase } from "../db/developer-profiles";
-import { revalidateCatalogue } from "../revalidate";
+import { revalidateExtensions } from "../revalidate";
 import { UsersDatabase } from "../db/users";
 import { ExtensionsV2App } from "./app";
 
@@ -229,8 +229,8 @@ export function registerDeveloperProfileRoutes(app: ExtensionsV2App): void {
       return response;
     }
     // Profile edits apply immediately (no moderation staging) and change
-    // catalogue-visible fields (developer name/URL), so purge here too.
-    if (changed) revalidateCatalogue(c);
+    // publicly visible fields (developer name/URL), so purge here too.
+    if (changed) revalidateExtensions(c);
     return c.json({ result: data }, 200);
   });
 
@@ -279,7 +279,7 @@ export function registerDeveloperProfileRoutes(app: ExtensionsV2App): void {
     // extensions, which are still public content — purge for consistency
     // (it is a no-op today while no cached route carries 'developers', but
     // keeps this endpoint correct if that ever changes).
-    revalidateCatalogue(c);
+    revalidateExtensions(c);
     return c.json({ result: data }, 200);
   });
 
@@ -387,7 +387,7 @@ export function registerDeveloperProfileRoutes(app: ExtensionsV2App): void {
       if (
         !own.error &&
         own.data &&
-        own.data.id.toLowerCase() === id.toLowerCase()
+        own.data.identifier.toLowerCase() === id.toLowerCase()
       ) {
         // The full owned view carries contact_email, verification signals,
         // and transfer state, so it stays behind the active-account check
@@ -411,7 +411,7 @@ export function registerDeveloperProfileRoutes(app: ExtensionsV2App): void {
         return c.json(errorBody(access.error, "Unable to check access"), 500);
       }
       if (access.data?.moderator) {
-        const { data, error } = await db.getById(id);
+        const { data, error } = await db.getByIdentifier(id);
         if (error || !data) {
           const status = statusFromErrorCode(error?.code, false);
           return c.json(errorBody(error, "Developer not found"), status);
@@ -421,7 +421,7 @@ export function registerDeveloperProfileRoutes(app: ExtensionsV2App): void {
         return res;
       }
     }
-    const { data, error } = await db.getById(id);
+    const { data, error } = await db.getByIdentifier(id);
     if (error || !data) {
       const status = statusFromErrorCode(error?.code, false);
       return c.json(errorBody(error, "Developer not found"), status);

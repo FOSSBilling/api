@@ -1,3 +1,4 @@
+import { v7 as uuidv7 } from "uuid";
 import { MAX_CONTENT_BYTES } from "../resource-limits";
 import { and, asc, eq, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
@@ -27,6 +28,7 @@ import {
   Release,
   Repository
 } from "../schemas/extensions";
+import { Manifest, manifestMetadata } from "../schemas/manifest";
 import { PublicDeveloper } from "../schemas/developers";
 
 export const MAX_PENDING_REVISIONS_PER_USER = 10;
@@ -36,6 +38,7 @@ export const MAX_PENDING_REVISIONS_PER_USER = 10;
 // carry a dangling one through its rebuild.
 const DEVELOPER_COLUMNS = {
   developerId: developers.id,
+  developerIdentifier: developers.identifier,
   developerType: developers.type,
   developerName: developers.name,
   developerUrl: developers.url,
@@ -60,13 +63,15 @@ const CONTENT_COLUMNS = {
   >`CASE WHEN length(${extensions.website}) <= 2048 THEN ${extensions.website} ELSE NULL END`,
   license: sql<
     string | null
-  >`CASE WHEN length(CAST(${extensions.license} AS BLOB)) <= ${MAX_CONTENT_BYTES} AND json_valid(${extensions.license}) THEN
-    json_patch(json_object('name', substr(json_extract(${extensions.license}, '$.name'), 1, 100)),
-      json_patch(CASE WHEN json_type(${extensions.license}, '$.spdx_id') = 'text'
-        THEN json_object('spdx_id', substr(json_extract(${extensions.license}, '$.spdx_id'), 1, 100)) ELSE '{}' END,
-      CASE WHEN json_type(${extensions.license}, '$.URL') = 'text' AND length(json_extract(${extensions.license}, '$.URL')) <= 2048
-        THEN json_object('URL', json_extract(${extensions.license}, '$.URL')) ELSE '{}' END))
-    ELSE '{"name":"Unavailable"}' END`,
+  >`json_quote(substr(json_extract(${extensions.license}, '$'), 1, 1000))`,
+  manifest: sql<
+    string | null
+  >`CASE WHEN length(CAST(${extensions.manifest} AS BLOB)) <= ${MAX_CONTENT_BYTES} AND json_valid(${extensions.manifest}) THEN
+    json_object('manifest_version', 1, 'author', json_patch(
+      json_object('name', substr(json_extract(${extensions.manifest}, '$.author.name'), 1, 200)),
+      CASE WHEN json_type(${extensions.manifest}, '$.author.url') = 'text' AND length(json_extract(${extensions.manifest}, '$.author.url')) <= 2048
+        THEN json_object('url', json_extract(${extensions.manifest}, '$.author.url')) ELSE '{}' END))
+    ELSE NULL END`,
   iconUrl: sql<
     string | null
   >`CASE WHEN length(${extensions.iconUrl}) <= 2048 THEN ${extensions.iconUrl} ELSE NULL END`,
@@ -86,6 +91,9 @@ const CONTENT_COLUMNS = {
 
 // Detail preserves stored fields; the overall size guard prevents oversized reads.
 const DETAIL_CONTENT_COLUMNS = {
+  manifest: sql<
+    string | null
+  >`CASE WHEN ${publishedBytes} <= ${MAX_CONTENT_BYTES} THEN ${extensions.manifest} ELSE NULL END`,
   type: sql<
     string | null
   >`CASE WHEN ${publishedBytes} <= ${MAX_CONTENT_BYTES} THEN ${extensions.type} ELSE NULL END`,
@@ -129,6 +137,7 @@ const {
 
 const EXTENSION_COLUMNS = {
   id: extensions.id,
+  identifier: extensions.identifier,
   ...DETAIL_CONTENT_COLUMNS,
   publishedBytes,
   ...DEVELOPER_COLUMNS
@@ -136,6 +145,7 @@ const EXTENSION_COLUMNS = {
 
 const EXTENSION_LIST_COLUMNS = {
   id: extensions.id,
+  identifier: extensions.identifier,
   ...CARD_CONTENT_COLUMNS,
   publishedBytes,
   ...DEVELOPER_COLUMNS
@@ -179,10 +189,11 @@ const REVIEW_COLUMNS = {
   reviewedAt: REVIEWED.reviewedAt
 };
 
-// The owner list drops the same two large published fields the catalogue does,
+// The owner list omits README, releases, and requirements, like public lists,
 // and the pending revision's stored content (up to 256 KiB per row) with it.
 const OWNED_LIST_COLUMNS = {
   id: extensions.id,
+  identifier: extensions.identifier,
   publishedAt: extensions.publishedAt,
   delistedAt: extensions.delistedAt,
   delistReason: sql<string | null>`substr(${extensions.delistReason}, 1, 2000)`,
@@ -228,6 +239,7 @@ type OwnedRow = Awaited<ReturnType<typeof ownedQuery>>[number];
 
 interface DeveloperRow {
   developerId: string;
+  developerIdentifier: string;
   developerType: string;
   developerName: string;
   developerUrl: string | null;
@@ -244,7 +256,9 @@ interface DeveloperRow {
 // filter sufficient: a published row cannot be missing any of them. That
 // constraint is what makes the non-null types here sound.
 interface PublishedRow extends DeveloperRow {
+  manifest: string | null;
   id: string;
+  identifier: string;
   type: string;
   name: string;
   description: string;
@@ -266,7 +280,7 @@ type PublishedListRow = Omit<
 
 export interface ExtensionListFilters {
   type?: string;
-  developerId?: string;
+  developerIdentifier?: string;
   limit?: number;
   cursor?: string;
 }
@@ -284,22 +298,20 @@ export interface OwnedExtensionListPage {
 }
 
 type ExtensionCursor = {
-  normalizedId: string;
+  identifier: string;
   id: string;
 };
 
-// normalizedId is checked against id rather than trusted: it drives the
-// keyset comparison, so a tampered cursor could otherwise seek from a
-// position the id itself doesn't correspond to.
+// Public identifiers order the directory; the UUID breaks ties.
 const extensionCursor = createCursorCodec<ExtensionCursor>(
   (parsed): parsed is ExtensionCursor =>
     typeof parsed.id === "string" &&
-    typeof parsed.normalizedId === "string" &&
-    parsed.normalizedId === parsed.id.toLowerCase()
+    typeof parsed.identifier === "string" &&
+    parsed.identifier === parsed.identifier.toLowerCase()
 );
 
 export interface CreateExtensionInput {
-  extensionId: string;
+  identifier: string;
   developerId: string;
   ownershipEpoch: number;
   submittedBy: string;
@@ -311,7 +323,7 @@ export interface CreateExtensionInput {
 // route's mapping lookup is only advisory; the insert re-derives it), and
 // submittedBy is the client's synthetic users row.
 export interface CreateExtensionAsPublisherInput {
-  extensionId: string;
+  identifier: string;
   clientId: string;
   developerId: string;
   submittedBy: string;
@@ -331,8 +343,10 @@ export class ExtensionsDatabase {
       isNull(extensions.delistedAt)
     ];
     if (filters.type) conditions.push(eq(extensions.type, filters.type));
-    if (filters.developerId)
-      conditions.push(eq(extensions.developerId, filters.developerId));
+    if (filters.developerIdentifier)
+      conditions.push(
+        sql`lower(${developers.identifier}) = lower(${filters.developerIdentifier})`
+      );
 
     if (filters.cursor) {
       const cursor = extensionCursor.decode(filters.cursor);
@@ -347,7 +361,7 @@ export class ExtensionsDatabase {
         .from(extensions)
         .innerJoin(developers, eq(extensions.developerId, developers.id))
         .where(and(...conditions))
-        .orderBy(asc(sql`LOWER(${extensions.id})`), asc(extensions.id))
+        .orderBy(asc(sql`LOWER(${extensions.identifier})`), asc(extensions.id))
         .limit(limit + 1)) as PublishedListRow[];
     } catch (error) {
       return databaseError("list", error);
@@ -364,7 +378,7 @@ export class ExtensionsDatabase {
     };
   }
 
-  async getById(id: string): Promise<DatabaseResult<Extension>> {
+  async getByIdentifier(id: string): Promise<DatabaseResult<Extension>> {
     let rows: PublishedRow[];
     try {
       rows = (await this.db
@@ -373,7 +387,7 @@ export class ExtensionsDatabase {
         .innerJoin(developers, eq(extensions.developerId, developers.id))
         .where(
           and(
-            sql`LOWER(${extensions.id}) = LOWER(${id})`,
+            sql`LOWER(${extensions.identifier}) = LOWER(${id})`,
             isNotNull(extensions.publishedAt),
             isNull(extensions.delistedAt)
           )
@@ -424,7 +438,7 @@ export class ExtensionsDatabase {
     try {
       rows = await ownedListQuery(this.db)
         .where(and(...conditions))
-        .orderBy(asc(sql`LOWER(${extensions.id})`), asc(extensions.id))
+        .orderBy(asc(sql`LOWER(${extensions.identifier})`), asc(extensions.id))
         .limit(limit + 1);
     } catch (error) {
       return databaseError("listOwned", error);
@@ -474,7 +488,7 @@ export class ExtensionsDatabase {
       // produces for a non-ASCII id.
       const pattern = `%${escapeLikePattern(filters.q)}%`;
       conditions.push(
-        sql`LOWER(${extensions.id}) LIKE LOWER(${pattern}) ESCAPE '\\'`
+        sql`LOWER(${extensions.identifier}) LIKE LOWER(${pattern}) ESCAPE '\\'`
       );
     }
     if (filters.type) {
@@ -496,7 +510,7 @@ export class ExtensionsDatabase {
     try {
       const query = ownedListQuery(this.db);
       rows = await (conditions.length ? query.where(and(...conditions)) : query)
-        .orderBy(asc(sql`LOWER(${extensions.id})`), asc(extensions.id))
+        .orderBy(asc(sql`LOWER(${extensions.identifier})`), asc(extensions.id))
         .limit(limit + 1);
     } catch (error) {
       return databaseError("listForModeration", error);
@@ -513,7 +527,7 @@ export class ExtensionsDatabase {
     };
   }
 
-  // Catalogue totals for the admin tabs, using the same published /
+  // Extension directory totals for the admin tabs, using the same published /
   // delisted / unpublished predicates as listForModeration so the badges
   // can never disagree with what each tab lists. One conditional-SUM
   // query rather than four COUNTs.
@@ -549,30 +563,24 @@ export class ExtensionsDatabase {
     };
   }
 
-  // Light authorisation probe for the merged public/owner detail read and
-  // the revisions route: deciding which view a caller gets - and learning
-  // the canonical id for exact-match scoped queries - must not cost the
-  // full owner view (two revision joins plus up to 256 KiB of
-  // pendingContent).
+  // Check ownership for detail and revision reads without loading the full
+  // owner view, including its revision joins and pending content.
   async getOwnership(
     id: string
-  ): Promise<
-    DatabaseResult<{ extensionId: string; ownerUserId: string | null }>
-  > {
+  ): Promise<DatabaseResult<{ ownerUserId: string | null }>> {
     try {
       const rows = await this.db
         .select({
-          extensionId: extensions.id,
           ownerUserId: developers.ownerUserId
         })
         .from(extensions)
         .innerJoin(developers, eq(extensions.developerId, developers.id))
-        .where(sql`LOWER(${extensions.id}) = LOWER(${id})`);
+        .where(sql`LOWER(${extensions.identifier}) = LOWER(${id})`);
 
       const row = rows[0];
       if (!row) return notFound(id);
       return {
-        data: { extensionId: row.extensionId, ownerUserId: row.ownerUserId },
+        data: row,
         error: null
       };
     } catch (error) {
@@ -590,7 +598,7 @@ export class ExtensionsDatabase {
     let rows: OwnedRow[];
     try {
       rows = await ownedQuery(this.db).where(
-        sql`LOWER(${extensions.id}) = LOWER(${id})`
+        sql`LOWER(${extensions.identifier}) = LOWER(${id})`
       );
     } catch (error) {
       return databaseError("getOwned", error);
@@ -624,14 +632,17 @@ export class ExtensionsDatabase {
   // toD1Statement for why this is raw sql rather than two builder calls.
   async create(
     input: CreateExtensionInput
-  ): Promise<DatabaseResult<{ id: string; revisionId: string }>> {
+  ): Promise<
+    DatabaseResult<{ id: string; identifier: string; revisionId: string }>
+  > {
     const revisionId = crypto.randomUUID();
+    const extensionId = uuidv7();
 
     let results;
     try {
       const extensionStmt = toD1Statement(this.db.$client, {
-        sql: `INSERT INTO extensions (id, developer_id, created_by, created_at, updated_at)
-              SELECT ?, d.id, d.owner_user_id, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        sql: `INSERT INTO extensions (id, identifier, developer_id, created_by, created_at, updated_at)
+              SELECT ?, ?, d.id, d.owner_user_id, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
               FROM developers d
               WHERE d.id = ? AND d.owner_user_id = ? AND d.ownership_epoch = ?
                 AND EXISTS (
@@ -643,7 +654,8 @@ export class ExtensionsDatabase {
                 ) < ?
               ON CONFLICT DO NOTHING`,
         params: [
-          input.extensionId,
+          extensionId,
+          input.identifier,
           input.developerId,
           input.submittedBy,
           input.ownershipEpoch,
@@ -660,7 +672,7 @@ export class ExtensionsDatabase {
               WHERE changes() = 1`,
         params: [
           revisionId,
-          input.extensionId,
+          extensionId,
           input.developerId,
           input.submittedBy,
           JSON.stringify(input.content),
@@ -681,7 +693,10 @@ export class ExtensionsDatabase {
       }
     }
 
-    return { data: { id: input.extensionId, revisionId }, error: null };
+    return {
+      data: { id: extensionId, identifier: input.identifier, revisionId },
+      error: null
+    };
   }
 
   // The insert affected no rows: either ON CONFLICT DO NOTHING swallowed an id
@@ -696,7 +711,7 @@ export class ExtensionsDatabase {
     const [taken] = await this.db
       .select({ one: sql`1` })
       .from(extensions)
-      .where(sql`LOWER(${extensions.id}) = LOWER(${input.extensionId})`);
+      .where(sql`LOWER(${extensions.identifier}) = LOWER(${input.identifier})`);
     if (taken) {
       return {
         message: "An extension with this id already exists",
@@ -716,14 +731,17 @@ export class ExtensionsDatabase {
   // users row); the mapped developer's human owner must still be active.
   async createAsPublisher(
     input: CreateExtensionAsPublisherInput
-  ): Promise<DatabaseResult<{ id: string; revisionId: string }>> {
+  ): Promise<
+    DatabaseResult<{ id: string; identifier: string; revisionId: string }>
+  > {
     const revisionId = crypto.randomUUID();
+    const extensionId = uuidv7();
 
     let results;
     try {
       const extensionStmt = toD1Statement(this.db.$client, {
-        sql: `INSERT INTO extensions (id, developer_id, created_by, created_at, updated_at)
-              SELECT ?, d.id, d.owner_user_id, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        sql: `INSERT INTO extensions (id, identifier, developer_id, created_by, created_at, updated_at)
+              SELECT ?, ?, d.id, d.owner_user_id, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
               FROM developers d
               WHERE d.id = ?
                 AND EXISTS (
@@ -740,7 +758,8 @@ export class ExtensionsDatabase {
                 ) < ?
               ON CONFLICT DO NOTHING`,
         params: [
-          input.extensionId,
+          extensionId,
+          input.identifier,
           input.developerId,
           input.clientId,
           input.submittedBy,
@@ -757,7 +776,7 @@ export class ExtensionsDatabase {
                 AND changes() = 1`,
         params: [
           revisionId,
-          input.extensionId,
+          extensionId,
           input.submittedBy,
           JSON.stringify(input.content),
           input.developerId
@@ -780,7 +799,10 @@ export class ExtensionsDatabase {
       }
     }
 
-    return { data: { id: input.extensionId, revisionId }, error: null };
+    return {
+      data: { id: extensionId, identifier: input.identifier, revisionId },
+      error: null
+    };
   }
 
   private async createAsPublisherBlockedError(
@@ -840,7 +862,7 @@ export class ExtensionsDatabase {
     const [taken] = await this.db
       .select({ one: sql`1` })
       .from(extensions)
-      .where(sql`LOWER(${extensions.id}) = LOWER(${input.extensionId})`);
+      .where(sql`LOWER(${extensions.identifier}) = LOWER(${input.identifier})`);
     if (taken) {
       return {
         message: "An extension with this id already exists",
@@ -855,17 +877,17 @@ export class ExtensionsDatabase {
   }
 
   // Withdrawing is only offered while an extension has never been published:
-  // once it is in the catalogue, consumers pin its id and removing it is a
+  // once it is in the extension directory, consumers pin its id and removing it is a
   // moderator's decision, not the owner's.
   async withdraw(
     id: string,
     ownerUserId: string
-  ): Promise<DatabaseResult<{ id: string }>> {
+  ): Promise<DatabaseResult<{ id: string; identifier: string }>> {
     let result;
     try {
-      result = await this.db.run(sql`
+      result = await this.db.all<{ id: string; identifier: string }>(sql`
         DELETE FROM ${extensions}
-        WHERE LOWER(id) = LOWER(${id})
+        WHERE LOWER(identifier) = LOWER(${id})
           AND published_at IS NULL
           AND developer_id IN (
             SELECT d.id FROM ${developers} d WHERE d.owner_user_id = ${ownerUserId}
@@ -874,16 +896,17 @@ export class ExtensionsDatabase {
             SELECT 1 FROM ${users} u
             WHERE u.id = ${ownerUserId} AND u.deleted_at IS NULL
           )
+        RETURNING id,identifier
       `);
     } catch (error) {
       return databaseError("withdraw", error);
     }
 
-    if (!result.meta?.changes) {
+    if (!result[0]) {
       return this.withdrawBlockedError(id, ownerUserId);
     }
 
-    return { data: { id }, error: null };
+    return { data: result[0], error: null };
   }
 
   // Separates the four ways the delete can affect no rows, so the route can
@@ -905,7 +928,7 @@ export class ExtensionsDatabase {
       })
       .from(extensions)
       .innerJoin(developers, eq(extensions.developerId, developers.id))
-      .where(sql`LOWER(${extensions.id}) = LOWER(${id})`);
+      .where(sql`LOWER(${extensions.identifier}) = LOWER(${id})`);
     if (!existing) return notFound(id);
     if (existing.publishedAt) {
       return {
@@ -932,7 +955,7 @@ export class ExtensionsDatabase {
   }
 
   // A moderator's decision to pull an already-published extension from the
-  // catalogue for cause - its upstream source disappearing, for example.
+  // extension directory for cause - its upstream source disappearing, for example.
   // Content and history are kept (unlike withdraw(), which deletes a
   // never-published row outright), so an owner can still see why and a
   // moderator can re-list it later without the developer resubmitting from
@@ -943,7 +966,7 @@ export class ExtensionsDatabase {
     id: string,
     moderatorId: string,
     reason: string
-  ): Promise<DatabaseResult<{ id: string }>> {
+  ): Promise<DatabaseResult<{ id: string; identifier: string }>> {
     let result;
     try {
       result = await this.db
@@ -955,7 +978,7 @@ export class ExtensionsDatabase {
         })
         .where(
           and(
-            sql`LOWER(${extensions.id}) = LOWER(${id})`,
+            sql`LOWER(${extensions.identifier}) = LOWER(${id})`,
             isNotNull(extensions.publishedAt),
             isNull(extensions.delistedAt),
             sql`EXISTS (
@@ -964,16 +987,17 @@ export class ExtensionsDatabase {
                 AND ${users.isModerator} = 1
             )`
           )
-        );
+        )
+        .returning({ id: extensions.id, identifier: extensions.identifier });
     } catch (error) {
       return databaseError("delist", error);
     }
 
-    if (!result.meta?.changes) {
+    if (!result[0]) {
       return this.delistBlockedError(id, moderatorId);
     }
 
-    return { data: { id }, error: null };
+    return { data: result[0], error: null };
   }
 
   // Separates the three ways delist()'s guard can affect no rows, so the
@@ -994,7 +1018,7 @@ export class ExtensionsDatabase {
           delistedAt: extensions.delistedAt
         })
         .from(extensions)
-        .where(sql`LOWER(${extensions.id}) = LOWER(${id})`);
+        .where(sql`LOWER(${extensions.identifier}) = LOWER(${id})`);
     } catch (error) {
       return databaseError("delist", error);
     }
@@ -1024,7 +1048,7 @@ export class ExtensionsDatabase {
   }
 
   // Inverse of delist(): restores a delisted-but-published extension to the
-  // catalogue. Content and history are untouched; only the delist markers
+  // extension directory. Content and history are untouched; only the delist markers
   // are cleared. `AND delisted_at IS NOT NULL` makes this a single atomic
   // check-and-set mirroring delist(). The actor guard re-checks moderator
   // status inside the statement (not just activity): requireModerator()
@@ -1034,7 +1058,7 @@ export class ExtensionsDatabase {
   async relist(
     id: string,
     moderatorId: string
-  ): Promise<DatabaseResult<{ id: string }>> {
+  ): Promise<DatabaseResult<{ id: string; identifier: string }>> {
     let rows;
     try {
       rows = await this.db
@@ -1046,7 +1070,7 @@ export class ExtensionsDatabase {
         })
         .where(
           and(
-            sql`LOWER(${extensions.id}) = LOWER(${id})`,
+            sql`LOWER(${extensions.identifier}) = LOWER(${id})`,
             isNotNull(extensions.publishedAt),
             isNotNull(extensions.delistedAt),
             sql`EXISTS (
@@ -1057,7 +1081,7 @@ export class ExtensionsDatabase {
             )`
           )
         )
-        .returning({ id: extensions.id });
+        .returning({ id: extensions.id, identifier: extensions.identifier });
     } catch (error) {
       return databaseError("relist", error);
     }
@@ -1067,7 +1091,7 @@ export class ExtensionsDatabase {
       return this.relistBlockedError(id, moderatorId);
     }
 
-    return { data: { id: row.id }, error: null };
+    return { data: row, error: null };
   }
 
   private async relistBlockedError(
@@ -1090,7 +1114,7 @@ export class ExtensionsDatabase {
           delistedAt: extensions.delistedAt
         })
         .from(extensions)
-        .where(sql`LOWER(${extensions.id}) = LOWER(${id})`);
+        .where(sql`LOWER(${extensions.identifier}) = LOWER(${id})`);
     } catch (error) {
       return databaseError("relist", error);
     }
@@ -1119,7 +1143,7 @@ export class ExtensionsDatabase {
     };
   }
 
-  // Moderator correction of live catalogue content (api#251): a truncated
+  // Moderator correction of live extension content (api#251): a truncated
   // readme or broken link the owner should not have to resubmit to fix. One
   // D1 batch() like approve(): the first statement inserts an
   // already-approved revision row (submitted_by and reviewer both the
@@ -1132,7 +1156,9 @@ export class ExtensionsDatabase {
     moderatorId: string,
     content: ExtensionContent,
     correctionNote: string
-  ): Promise<DatabaseResult<{ id: string; revisionId: string }>> {
+  ): Promise<
+    DatabaseResult<{ id: string; identifier: string; revisionId: string }>
+  > {
     const parsed = ExtensionContentSchema.safeParse(content);
     if (!parsed.success) {
       return {
@@ -1155,7 +1181,7 @@ export class ExtensionsDatabase {
               SELECT ?, e.id, e.developer_id, ?, 'approved', ?, ?, ?, CURRENT_TIMESTAMP, d.ownership_epoch
               FROM extensions e
               JOIN developers d ON d.id = e.developer_id
-              WHERE LOWER(e.id) = LOWER(?)
+              WHERE LOWER(e.identifier) = LOWER(?)
                 AND e.published_at IS NOT NULL
                 AND e.delisted_at IS NULL
                 AND NOT EXISTS (
@@ -1166,7 +1192,7 @@ export class ExtensionsDatabase {
                   SELECT 1 FROM users u
                   WHERE u.id = ? AND u.deleted_at IS NULL AND u.is_moderator = 1
                 )
-              RETURNING extension_id`,
+              RETURNING extension_id, (SELECT identifier FROM extensions WHERE id=extension_id) AS identifier`,
         params: [
           revisionId,
           moderatorId,
@@ -1181,45 +1207,51 @@ export class ExtensionsDatabase {
       // The UPDATE below is the column list publish shares with
       // ExtensionRevisionsDatabase.approve() in db/revisions.ts; the two
       // differ only in published_at handling and how the row is matched
-      // (LOWER(id) here, because corrections must address legacy
+      // (LOWER(identifier) here, because corrections must address legacy
       // differently-cased rows). Change the projection in both places together.
       const publishStmt = toD1Statement(this.db.$client, {
         sql: `UPDATE extensions
               SET type = ?, name = ?, description = ?, releases = ?, website = ?,
                   license = ?, icon_url = ?, readme = ?, source = ?, version = ?,
-                  download_url = ?,
+                  download_url = ?, manifest = ?,
                   published_revision_id = ?,
                   updated_at = CURRENT_TIMESTAMP
-              WHERE changes() = 1 AND LOWER(id) = LOWER(?)`,
+              WHERE changes() = 1 AND LOWER(identifier) = LOWER(?)`,
         params: [
           valid.type,
           valid.name,
           valid.description,
           JSON.stringify(valid.releases),
-          valid.website,
+          valid.homepage_url ?? "",
           JSON.stringify(valid.license),
           valid.icon_url ?? null,
           valid.readme,
           JSON.stringify(valid.source),
           valid.version,
           valid.download_url,
+          JSON.stringify(manifestMetadata(valid)),
           revisionId,
           id
         ]
       });
 
-      results = await this.db.$client.batch([correctStmt, publishStmt]);
+      results = await this.db.$client.batch<{
+        extension_id: string;
+        identifier: string;
+      }>([correctStmt, publishStmt]);
     } catch (error) {
       return contentAdmissionError("moderatorCorrect", error);
     }
 
-    if (!results[0]?.meta?.changes) {
+    const corrected = results[0].results[0];
+    if (!corrected) {
       return this.moderatorCorrectBlockedError(id, moderatorId);
     }
 
     return {
       data: {
-        id: (results[0].results[0] as { extension_id: string }).extension_id,
+        id: corrected.extension_id,
+        identifier: corrected.identifier,
         revisionId
       },
       error: null
@@ -1246,7 +1278,7 @@ export class ExtensionsDatabase {
           delistedAt: extensions.delistedAt
         })
         .from(extensions)
-        .where(sql`LOWER(${extensions.id}) = LOWER(${id})`);
+        .where(sql`LOWER(${extensions.identifier}) = LOWER(${id})`);
     } catch (error) {
       return databaseError("moderatorCorrect", error);
     }
@@ -1276,7 +1308,7 @@ export class ExtensionsDatabase {
         .from(extensionRevisions)
         .where(
           and(
-            sql`LOWER(${extensionRevisions.extensionId}) = LOWER(${id})`,
+            sql`${extensionRevisions.extensionId} = (SELECT id FROM extensions WHERE lower(identifier)=lower(${id}))`,
             eq(extensionRevisions.status, "pending")
           )
         );
@@ -1322,9 +1354,9 @@ function notFound(id: string): DatabaseResult<never> {
 
 function keysetAfter(cursor: ExtensionCursor) {
   return or(
-    sql`LOWER(${extensions.id}) > ${cursor.normalizedId}`,
+    sql`LOWER(${extensions.identifier}) > ${cursor.identifier}`,
     and(
-      sql`LOWER(${extensions.id}) = ${cursor.normalizedId}`,
+      sql`LOWER(${extensions.identifier}) = ${cursor.identifier}`,
       sql`${extensions.id} > ${cursor.id}`
     )
   )!;
@@ -1337,6 +1369,7 @@ export function isValidExtensionCursor(value: string): boolean {
 function parseDeveloper(row: DeveloperRow): PublicDeveloper {
   return {
     id: row.developerId,
+    identifier: row.developerIdentifier,
     type: row.developerType as "user" | "organization",
     name: row.developerName,
     URL: row.developerUrl ?? undefined,
@@ -1350,20 +1383,9 @@ function parseDeveloper(row: DeveloperRow): PublicDeveloper {
   };
 }
 
-// Shared by both parsers so the catalogue card and the detail view can never
-// disagree about the embedded developer.
+// Keep URLs on list cards within the response size bound.
 function cardUrl(url: string | null): string | null {
   return url && url.length <= 2048 ? url : null;
-}
-
-function cardLicense(stored: string | null): License {
-  const license = parseJSON<License>(stored ?? "", { name: "Unavailable" });
-  license.name =
-    typeof license.name === "string" && license.name
-      ? license.name.slice(0, 100)
-      : "Unavailable";
-  if (license.URL && license.URL.length > 2048) delete license.URL;
-  return license;
 }
 
 function cardSource(stored: string | null): Repository {
@@ -1378,9 +1400,10 @@ function cardSource(stored: string | null): Repository {
   return source;
 }
 
-// The field subset both the public catalogue rows and the owner listing rows
+// The field subset both the public extension listing rows and the owner listing rows
 // project, in their nullable table form.
 interface ListContentFields {
+  manifest: string | null;
   type: string | null;
   name: string | null;
   description: string | null;
@@ -1393,7 +1416,7 @@ interface ListContentFields {
 }
 
 // The card/detail content projection shared by parseListRow (public
-// catalogue) and the owned listing's published payload. Shaping in one place
+// extension directory) and the owned listing's published payload. Shaping in one place
 // keeps the two payload producers from drifting; the non-null assertions are
 // sound because every caller only reaches here for rows whose published_at
 // is set, where extensions_published_content_check guarantees presence.
@@ -1402,17 +1425,36 @@ interface ListContentFields {
 // already performs in SQL. They are belt-and-braces for legacy rows written
 // before that truncation existed - not dead code, and not to be "simplified"
 // away without an audit of pre-migration rows.
-function listContent(row: ListContentFields, card: boolean) {
+function listContent(
+  row: ListContentFields,
+  card: true
+): Omit<ExtensionListItem, "id" | "identifier" | "developer">;
+function listContent(
+  row: ListContentFields,
+  card: false
+): Omit<ExtensionContent, "readme" | "releases">;
+function listContent(
+  row: ListContentFields,
+  card: boolean
+):
+  | Omit<ExtensionListItem, "id" | "identifier" | "developer">
+  | Omit<ExtensionContent, "readme" | "releases"> {
+  const metadata = parseManifestMetadata(row.manifest);
   return {
+    ...metadata,
+    requires: card ? undefined : metadata.requires,
+    author: card
+      ? { ...metadata.author, name: metadata.author.name.slice(0, 200) }
+      : metadata.author,
     type: row.type as ExtensionContent["type"],
     name: card ? (row.name as string).slice(0, 120) : (row.name as string),
     description: card
       ? (row.description as string).slice(0, 4000)
       : (row.description as string),
-    website: card ? cardUrl(row.website) : row.website,
+    homepage_url: (card ? cardUrl(row.website) : row.website) || undefined,
     license: card
-      ? cardLicense(row.license)
-      : parseJSON<License>(row.license as string, { name: "" }),
+      ? (JSON.parse(row.license as string) as License).slice(0, 1000)
+      : (JSON.parse(row.license as string) as License),
     icon_url: (card ? cardUrl(row.iconUrl) : row.iconUrl) ?? undefined,
     source: card
       ? cardSource(row.source)
@@ -1429,7 +1471,7 @@ function listContent(row: ListContentFields, card: boolean) {
 
 // Shared keyset-pagination tail: each listing over-fetches one row to detect
 // hasMore, then encodes the next cursor from the final returned row.
-function keysetPage<T extends { id: string }>(
+function keysetPage<T extends { id: string; identifier: string }>(
   rows: T[],
   limit: number
 ): { pageRows: T[]; hasMore: boolean; nextCursor: string | null } {
@@ -1442,36 +1484,41 @@ function keysetPage<T extends { id: string }>(
     nextCursor:
       hasMore && last
         ? extensionCursor.encode({
-            normalizedId: last.id.toLowerCase(),
+            identifier: last.identifier.toLowerCase(),
             id: last.id
           })
         : null
   };
 }
 
-function parseListRow(row: PublishedListRow, card = true): ExtensionListItem {
+function parseListRow(row: PublishedListRow): ExtensionListItem {
   return {
     id: row.id,
-    ...listContent(row, card),
+    identifier: row.identifier,
+    ...listContent(row, true),
     developer: parseDeveloper(row)
   };
 }
 
 // The detail view is the list projection plus the two large fields the
-// catalogue query deliberately omits.
+// extension directory query deliberately omits.
 function parseRow(row: PublishedRow): Extension {
   return {
-    ...parseListRow(row, false),
-    website: row.website,
+    id: row.id,
+    identifier: row.identifier,
+    developer: parseDeveloper(row),
+    ...listContent(row, false),
+    homepage_url: row.website || undefined,
     download_url: row.downloadUrl,
     readme: row.readme,
-    releases: boundedReleases(parseJSON<Release[]>(row.releases, []))
+    releases: boundedReleases(JSON.parse(row.releases))
   };
 }
 
 function parseOwnedListRow(row: OwnedListRow): OwnedExtensionListItem {
   return {
     id: row.id,
+    identifier: row.identifier,
     developer: parseDeveloper(row),
     published: row.publishedAt ? listContent(row, true) : null,
     pending_revision:
@@ -1502,12 +1549,10 @@ function parseOwnedRow(row: OwnedRow): OwnedExtension {
     published: row.publishedAt
       ? {
           ...listContent(row, false),
-          website: row.website as string,
+          homepage_url: row.website || undefined,
           download_url: row.downloadUrl as string,
           readme: row.readme as string,
-          releases: boundedReleases(
-            parseJSON<Release[]>(row.releases as string, [])
-          )
+          releases: boundedReleases(JSON.parse(row.releases as string))
         }
       : null,
     pending_revision:
@@ -1562,4 +1607,10 @@ export function oversizedContent(): DatabaseResult<never> {
         "Legacy content exceeds safe read bounds; resubmit or export it administratively"
     }
   };
+}
+
+function parseManifestMetadata(
+  stored: string | null
+): Pick<Manifest, "manifest_version" | "author" | "requires"> {
+  return JSON.parse(stored as string);
 }

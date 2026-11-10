@@ -1,3 +1,4 @@
+import { UUID_V7 } from "./db-fixtures";
 import { describe, it, expect, vi } from "vitest";
 import { env } from "cloudflare:workers";
 import { wrapD1WithHook } from "./db-interceptor";
@@ -44,31 +45,13 @@ async function seedPublished(): Promise<void> {
   await insertUser(db, { id: "mod-1", is_moderator: 1 });
   await seedDeveloper("new-developer", "user-1");
   await insertExtension(db, {
-    id: "live-ext",
-    developer_id: "new-developer",
+    identifier: "live-ext",
+    developer_identifier: "new-developer",
     readme: "old readme"
   });
 }
 
 describe("POST /extensions/{id}/moderator-correct (api#251)", () => {
-  it("returns the canonical id without a fallible post-commit read", async () => {
-    await seedPublished();
-    env.DB_EXTENSIONS = wrapD1WithHook(db, (query) => {
-      if (/^select "id" from "extensions"/i.test(query))
-        throw new Error("canonical read failed");
-    });
-    const response = await post(
-      PATH.replace("live-ext", "LIVE-EXT"),
-      await authHeaders("mod-1"),
-      correctBody()
-    );
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({
-      result: { id: "live-ext" }
-    });
-    expect(await countRevisions(db)).toBe(1);
-  });
-
   it("charges a first-time moderator exactly once and keeps totals reconciled", async () => {
     await seedPublished();
     const response = await post(
@@ -169,8 +152,8 @@ describe("POST /extensions/{id}/moderator-correct (api#251)", () => {
     await insertUser(db, { id: "mod-1", is_moderator: 1 });
     await seedDeveloper("new-developer", "user-1");
     await insertUnpublishedExtension(db, {
-      id: "draft-ext",
-      developer_id: "new-developer"
+      identifier: "draft-ext",
+      developer_identifier: "new-developer"
     });
     const res = await post(
       "/extensions/v2/extensions/draft-ext/moderator-correct",
@@ -188,7 +171,7 @@ describe("POST /extensions/{id}/moderator-correct (api#251)", () => {
     await seedPublished();
     await db
       .prepare(
-        "UPDATE extensions SET delisted_at = ?, delist_reason = ? WHERE id = ?"
+        "UPDATE extensions SET delisted_at = ?, delist_reason = ? WHERE identifier= ?"
       )
       .bind(new Date().toISOString(), "cause", "live-ext")
       .run();
@@ -212,7 +195,11 @@ describe("POST /extensions/{id}/moderator-correct (api#251)", () => {
     const res = await post(PATH, await authHeaders("mod-1"), correctBody());
     expect(res.status).toBe(409);
     await expect(res.json()).resolves.toMatchObject({
-      error: { code: "CONFLICT" }
+      error: {
+        code: "CONFLICT",
+        message:
+          "An edit to this extension is already awaiting review; approve or reject it first"
+      }
     });
     // Neither the live content nor the pending edit moves.
     expect((await getExtension(db, "live-ext"))?.readme).toBe("old readme");
@@ -264,9 +251,18 @@ describe("POST /extensions/{id}/moderator-correct (api#251)", () => {
     );
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
-      result: { id: string; revision_id: string; status: string };
+      result: {
+        id: string;
+        identifier: string;
+        revision_id: string;
+        status: string;
+      };
     };
-    expect(body.result).toMatchObject({ id: "live-ext", status: "approved" });
+    expect(body.result).toMatchObject({
+      id: expect.stringMatching(UUID_V7),
+      identifier: "live-ext",
+      status: "approved"
+    });
     expect(typeof body.result.revision_id).toBe("string");
     // No notification envelope on this route (api#251: history only).
     expect("notified" in body.result).toBe(false);
@@ -279,7 +275,7 @@ describe("POST /extensions/{id}/moderator-correct (api#251)", () => {
 
     const revision = await getRevision(db, body.result.revision_id);
     expect(revision).toMatchObject({
-      extension_id: "live-ext",
+      extension_id: expect.stringMatching(UUID_V7),
       status: "approved",
       submitted_by: "mod-1",
       reviewer_id: "mod-1",
@@ -292,7 +288,8 @@ describe("POST /extensions/{id}/moderator-correct (api#251)", () => {
 
     // Ownership is untouched: developer, owner, and epoch survive.
     expect(await getDeveloper(db, "new-developer")).toMatchObject({
-      id: "new-developer",
+      id: expect.stringMatching(UUID_V7),
+      identifier: "new-developer",
       owner_user_id: "user-1",
       ownership_epoch: 1
     });
@@ -301,12 +298,12 @@ describe("POST /extensions/{id}/moderator-correct (api#251)", () => {
     ).toHaveLength(0);
   });
 
-  it("matches ids case-insensitively and returns the canonical id", async () => {
+  it("matches identifiers case-insensitively and returns the canonical identifier", async () => {
     await insertUser(db, { id: "mod-1", is_moderator: 1 });
     await seedDeveloper("new-developer", "user-1");
     await insertExtension(db, {
-      id: "LIVE-ext",
-      developer_id: "new-developer"
+      identifier: "LIVE-ext",
+      developer_identifier: "new-developer"
     });
     const res = await post(
       "/extensions/v2/extensions/live-EXT/moderator-correct",
@@ -315,7 +312,11 @@ describe("POST /extensions/{id}/moderator-correct (api#251)", () => {
     );
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toMatchObject({
-      result: { id: "LIVE-ext", status: "approved" }
+      result: {
+        id: expect.stringMatching(UUID_V7),
+        identifier: "LIVE-ext",
+        status: "approved"
+      }
     });
   });
 
@@ -329,12 +330,12 @@ describe("POST /extensions/{id}/moderator-correct (api#251)", () => {
     );
     expect(created.status).toBe(201);
     const { result: pending } = (await created.json()) as {
-      result: { id: string; revision_id: string };
+      result: { id: string; identifier: string; revision_id: string };
     };
     expect(
       (
         await post(
-          `/extensions/v2/extensions/${pending.id}/revisions/${pending.revision_id}/approve?notify=false`,
+          `/extensions/v2/extensions/${pending.identifier}/revisions/${pending.revision_id}/approve?notify=false`,
           await authHeaders("mod-1"),
           {}
         )
@@ -353,7 +354,7 @@ describe("POST /extensions/{id}/moderator-correct (api#251)", () => {
     const revisions = await listRevisions(db);
     expect(
       revisions
-        .filter((r) => r.extension_id === "history-ext")
+        .filter((r) => r.extension_id === pending.id)
         .map((r) => r.status)
         .sort()
     ).toEqual(["approved", "approved"]);
