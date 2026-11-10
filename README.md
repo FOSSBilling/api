@@ -17,8 +17,8 @@ publication or library build step. Hosting configuration belongs to its service.
 
 ## Development
 
-Use Node.js 24 or later. The packager runs on Node.js 24; CI also tests the whole
-repository on Node.js 26. Native dependencies are installed for the build host.
+Use Node.js 24 or later. CI and the Netlify packager use Node.js 26. Native
+dependencies are installed for the build host.
 
 ```sh
 npm ci

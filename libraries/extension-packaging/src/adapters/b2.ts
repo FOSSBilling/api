@@ -2,7 +2,7 @@ import { PACKAGE_LIMITS } from "../limits";
 import { sha256 } from "../checksum";
 import { PackageError } from "../errors";
 import { boundedBytes, type PackageStore } from "../store";
-import { signS3Request } from "./sigv4";
+import { signS3Request, type S3RequestInit } from "./sigv4";
 
 // Includes generated manifest and ZIP headers as well as the source contents.
 const MAX_STORED_BYTES = PACKAGE_LIMITS.expandedBytes + 1024 * 1024;
@@ -69,7 +69,7 @@ export function b2ObjectStore(
       origin
     );
   }
-  async function request(url: URL, init: RequestInit) {
+  async function request(url: URL, init: S3RequestInit) {
     try {
       return await fetch(
         await signS3Request(
@@ -88,6 +88,7 @@ export function b2ObjectStore(
         )
       );
     } catch {
+      signal?.throwIfAborted();
       throw unavailable("Package storage request failed");
     }
   }
@@ -142,6 +143,7 @@ export function b2ObjectStore(
       try {
         bytes = await boundedBytes(response.body, MAX_STORED_BYTES);
       } catch {
+        signal?.throwIfAborted();
         throw unavailable(
           "Stored package could not be read within its size limit"
         );

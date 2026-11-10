@@ -49,9 +49,9 @@ Create a dedicated Netlify project connected to this repository:
 
 Paths in `netlify.toml` are relative to the repository-root base directory, following
 [Netlify's monorepo configuration](https://docs.netlify.com/build/configure-builds/monorepos/).
-The config selects Node.js 24 and keeps the native Sharp and sanitizer dependencies
+The config selects Node.js 26 and keeps the native Sharp and sanitizer dependencies
 external so Netlify includes their binaries and WASM files. Verify these files and
-Node.js 24 in the deployed artifact/runtime before enabling processing.
+Node.js 26 in the deployed artifact/runtime before enabling processing.
 
 Set the seven variables listed above through Netlify's dashboard, CLI or API for the
 function runtime. Use production credentials and a separate randomly generated shared

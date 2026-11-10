@@ -100,22 +100,25 @@ describe("API deployment artifact", () => {
     ).toBe(false);
     expect(read(folder, "wrangler.json").previews.d1_databases).toBeUndefined();
   });
-  it("rejects production resource reuse and duplicate staging databases before writing an artifact", () => {
+  it("rejects production resources and duplicated staging IDs before writing an artifact", () => {
     const folder = fixture();
     const source: Unstable_RawConfig = experimental_readRawConfig({
       config: join(folder, "wrangler.jsonc")
     }).rawConfig;
-    for (const DB_EXTENSIONS of [
-      source.d1_databases![0].database_id,
-      source.d1_databases![0].database_id!.toUpperCase(),
-      resources.DB_CENTRAL_ALERTS
-    ]) {
+    const overrides = [
+      { DB_EXTENSIONS: source.d1_databases![0].database_id },
+      { DB_EXTENSIONS: source.d1_databases![0].database_id!.toUpperCase() },
+      { DB_EXTENSIONS: resources.DB_CENTRAL_ALERTS },
+      { AUTH_KV: source.kv_namespaces![0].id },
+      { CACHE_KV: source.kv_namespaces![1].id },
+      { DOWNLOAD_BUCKET: source.r2_buckets![0].bucket_name },
+      { EXTENSIONS_FRONTEND: source.services![0].service },
+      { AUTH_KV: resources.CACHE_KV }
+    ];
+    for (const override of overrides) {
       expect(() =>
-        prepareDeployment(
-          folder,
-          JSON.stringify({ ...resources, DB_EXTENSIONS })
-        )
-      ).toThrow("distinct non-production resources");
+        prepareDeployment(folder, JSON.stringify({ ...resources, ...override }))
+      ).toThrow();
       expect(existsSync(join(folder, "dist/wrangler.json"))).toBe(false);
     }
   });

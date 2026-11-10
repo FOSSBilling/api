@@ -204,6 +204,53 @@ describe("Node package processor over the generic HTTP contract", () => {
       expect(f.objects.has(f.key(input.archive))).toBe(false);
     }
   });
+  it("accepts a valid manifest whose UTF-8 processing request exceeds 64 KiB", async () => {
+    const f = fixture();
+    const input = await f.input(await archive());
+    input.manifest.requires.modules = Object.fromEntries(
+      Array.from({ length: 30 }, (_, i) => [
+        `dependency_${i}`,
+        ">=1.0.0" + "\u2003".repeat(990)
+      ])
+    );
+    expect(JSON.stringify(input.manifest).length).toBeLessThan(64 * 1024);
+    expect(Buffer.byteLength(JSON.stringify(input))).toBeGreaterThan(64 * 1024);
+    await expect(f.processor.process(input)).resolves.toMatchObject({
+      archive: { bytes: expect.any(Number) }
+    });
+  });
+  it.each([
+    "timeout: 10% complete",
+    "Could not allocate enough memory for raw output"
+  ])("keeps image processing failure retryable: %s", async (message) => {
+    const f = fixture();
+    const png = new Uint8Array(
+      await sharp({
+        create: { width: 1, height: 1, channels: 4, background: "red" }
+      })
+        .png()
+        .toBuffer()
+    );
+    const input = await f.input(await archive("icon.png", png));
+    vi.spyOn(sharp.prototype, "toBuffer").mockRejectedValueOnce(
+      new Error(message)
+    );
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(f.processor.process(input)).rejects.toMatchObject({
+      status: 503
+    });
+    expect(f.objects.has(f.key(input.archive))).toBe(false);
+  });
+  it("preserves a missing source error through the HTTP processor", async () => {
+    const f = fixture();
+    const input = await f.input(await archive());
+    f.objects.delete(f.key(input.source.id));
+    await expect(f.processor.process(input)).rejects.toMatchObject({
+      code: "SOURCE_UNAVAILABLE",
+      status: 503
+    });
+    expect(f.objects.has(f.key(input.archive))).toBe(false);
+  });
   it("rejects unauthenticated and invalid requests before storage access", async () => {
     const f = fixture();
     expect(
@@ -308,24 +355,25 @@ describe("Node package processor over the generic HTTP contract", () => {
       "https://processor.example.test/process",
       "secret"
     );
-    vi.stubGlobal("fetch", async () =>
-      Response.json({
-        result: {
-          archive: { bytes: 20, sha256: "0".repeat(64) },
-          icons: [
-            {
-              id: crypto.randomUUID(),
-              format: "svg",
-              bytes: 10,
-              sha256: "0".repeat(64)
-            }
-          ]
-        }
-      })
-    );
-    await expect(processor.process(input)).rejects.toMatchObject({
-      status: 503
-    });
+    for (const result of [
+      { archive: { bytes: -1, sha256: "0".repeat(64) }, icons: [] },
+      {
+        archive: { bytes: 20, sha256: "0".repeat(64) },
+        icons: [
+          {
+            id: crypto.randomUUID(),
+            format: "svg",
+            bytes: 10,
+            sha256: "0".repeat(64)
+          }
+        ]
+      }
+    ]) {
+      vi.stubGlobal("fetch", async () => Response.json({ result }));
+      await expect(processor.process(input)).rejects.toMatchObject({
+        status: 503
+      });
+    }
     const controller = new AbortController();
     vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
     vi.stubGlobal(

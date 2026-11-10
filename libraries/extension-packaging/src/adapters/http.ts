@@ -14,17 +14,18 @@ export class HttpPackageProcessor implements PackageProcessor {
     private readonly secret: string,
     local = false
   ) {
-    this.url = new URL(url);
+    const target = URL.canParse(url) ? new URL(url) : null;
     if (
+      !target ||
       !secret ||
-      this.url.username ||
-      this.url.password ||
-      this.url.hash ||
+      target.username ||
+      target.password ||
+      target.hash ||
       !(
-        this.url.protocol === "https:" ||
+        target.protocol === "https:" ||
         (local &&
-          this.url.protocol === "http:" &&
-          ["localhost", "127.0.0.1", "[::1]"].includes(this.url.hostname))
+          target.protocol === "http:" &&
+          ["localhost", "127.0.0.1", "[::1]"].includes(target.hostname))
       )
     )
       throw new PackageError(
@@ -32,6 +33,7 @@ export class HttpPackageProcessor implements PackageProcessor {
         "Package processor is not configured correctly",
         503
       );
+    this.url = target;
   }
   async process(input: ProcessingInput) {
     try {
@@ -58,6 +60,12 @@ export class HttpPackageProcessor implements PackageProcessor {
           body.error.message.slice(0, 1000),
           422
         );
+      if (response.status === 503 && body.error?.code === "SOURCE_UNAVAILABLE")
+        throw new PackageError(
+          "SOURCE_UNAVAILABLE",
+          "Source ZIP is unavailable or failed checksum verification",
+          503
+        );
       if (!response.ok) throw new Error("Package processor request failed");
       const result = ProcessingResultSchema.parse(body.result);
       const allowed: readonly string[] = input.icons ?? [];
@@ -69,7 +77,11 @@ export class HttpPackageProcessor implements PackageProcessor {
         throw new Error("Package processor returned unexpected output IDs");
       return result;
     } catch (error) {
-      if (error instanceof PackageError && error.status === 422) throw error;
+      if (
+        error instanceof PackageError &&
+        (error.status === 422 || error.code === "SOURCE_UNAVAILABLE")
+      )
+        throw error;
       logError("extensions/packages", "Package processor request failed", {
         objectId: input.archive,
         error: error instanceof Error ? error.message : "Unknown error"

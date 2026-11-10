@@ -106,7 +106,10 @@ directory-only changes such as README edits keep the existing package.
 Approval publishes the revision and its artifacts in one D1 transaction. Older
 approved artifacts retain their URLs and checksums.
 
-Object reservations precede uploads. Unique constraints deduplicate concurrent
+Object reservations precede uploads. Before external processing, the API reserves at most
+17 MiB for the archive and 4 MiB for each possible icon; the archive reservation shrinks
+to its actual size after processing. This headroom keeps interrupted runner writes
+accounted for within the owner's quota. Unique constraints deduplicate concurrent
 builds; failed writes remain recorded for cleanup. Cleanup claims unreferenced
 objects before deletion, and builds cannot reference claimed objects. The
 per-account allowance is 256 objects / 512 MiB, including abandoned reservations
@@ -135,7 +138,7 @@ SVGs are sanitized with Cloudflare svg-hush through the pinned `@zeropress/svg-h
 Node adapter and served directly. SVG inputs are bounded by the ZIP expansion
 limit and the sanitizer's built-in input/output limits. Raster inputs use Sharp in the Node packager to produce
 AVIF and PNG variants within 256 × 256 pixels, preserving proportions and
-transparency without enlarging small images. Raster inputs are limited to 16 megapixels.
+transparency without enlarging small images. Raster inputs are limited to 16,777,216 pixels.
 Requests prefer SVG when present,
 otherwise AVIF when explicitly accepted, with PNG fallback. They read stored
 images directly and never reopen a ZIP.

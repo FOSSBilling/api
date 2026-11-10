@@ -7,6 +7,6 @@ import { defineConfig } from "drizzle-kit";
 // Cloudflare credentials are needed just to generate a migration.
 export default defineConfig({
   dialect: "sqlite",
-  schema: "./src/services/extensions/v2/db/schema",
+  schema: "./src/services/extensions/v2/db/schema.ts",
   out: "./src/services/extensions/v2/db/migrations"
 });

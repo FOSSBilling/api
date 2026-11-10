@@ -1,3 +1,4 @@
+import { configuredPackageProcessor } from "../packages/processor";
 import { PackagingJobsDatabase } from "../db/packaging-jobs";
 import { dispatchPackagingJob, type PackagingJob } from "../packages/jobs";
 import { sha256 } from "@fossbilling/extension-packaging/checksum";
@@ -112,7 +113,19 @@ export function registerPackageRoutes(app: ExtensionsV2App) {
   app.use("/packages", availability);
   app.use("/packages/*", availability);
   app.use("/packaging-jobs/*", availability);
-  app.on("POST", "/packages", paceContentIp());
+  app.on(
+    "POST",
+    "/packages",
+    async (c, next) => {
+      try {
+        configuredPackageProcessor(getPlatform(c).getEnv);
+      } catch (error) {
+        return failure(c, error);
+      }
+      await next();
+    },
+    paceContentIp()
+  );
   const boundUpload: MiddlewareHandler = async (c, next) => {
     try {
       const body = await boundedBytes(c.req.raw.body, 6 * 1024 * 1024);

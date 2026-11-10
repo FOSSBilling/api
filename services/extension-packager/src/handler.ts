@@ -33,7 +33,8 @@ export async function handlePackageProcessing(
     });
   const signal = AbortSignal.any([request.signal, AbortSignal.timeout(45000)]);
   try {
-    const bytes = await boundedBytes(request.body, 64 * 1024);
+    // A 64 KiB manifest string can expand in UTF-8, alongside request metadata.
+    const bytes = await boundedBytes(request.body, 256 * 1024);
     let input;
     try {
       input = ProcessingInputSchema.parse(
@@ -57,6 +58,11 @@ export async function handlePackageProcessing(
       return Response.json(
         { error: { code: error.code, message: error.message } },
         { status: 422, headers }
+      );
+    if (error instanceof PackageError && error.code === "SOURCE_UNAVAILABLE")
+      return Response.json(
+        { error: { code: error.code, message: error.message } },
+        { status: 503, headers }
       );
     logError("extensions/packages", "Package processing failed", {
       error: error instanceof Error ? error.message : "Unknown error"

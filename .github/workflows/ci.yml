@@ -10,7 +10,7 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   validation:
@@ -42,23 +42,6 @@ jobs:
       - name: Run Tests
         if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
         run: npm test
-
-  packager-node24:
-    name: Packager on Node.js 24
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98
-      - name: Setup Node.js
-        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
-        with:
-          node-version: "24"
-          cache: npm
-      - name: Install Dependencies
-        run: npm ci
-      - name: Test Packager
-        run: npm test --workspace @fossbilling/extension-packager
 
   build:
     name: Build API
@@ -108,7 +91,7 @@ jobs:
 
   migrations:
     name: Apply API Migrations
-    needs: [validation, packager-node24, build]
+    needs: [validation, build]
     if: github.event_name == 'push' && github.ref_type == 'branch' && (github.ref == 'refs/heads/main' || vars.API_PREVIEW_RESOURCES != '')
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -155,7 +138,7 @@ jobs:
 
   preview:
     name: Cloudflare Preview
-    needs: [validation, packager-node24, build, migrations]
+    needs: [validation, build, migrations]
     if: ${{ !cancelled() && github.event_name == 'push' && github.ref_type == 'branch' && github.ref != 'refs/heads/main' && vars.API_PREVIEW_RESOURCES != '' }}
     permissions:
       contents: read
@@ -166,7 +149,7 @@ jobs:
       operation: deploy
       mode: preview
       build-result: ${{ needs.build.result }}
-      checks-result: ${{ needs.validation.result == 'success' && needs.packager-node24.result == 'success' && needs.migrations.result == 'success' && 'success' || 'failure' }}
+      checks-result: ${{ needs.validation.result == 'success' && needs.migrations.result == 'success' && 'success' || 'failure' }}
       pr-comment: true
       pr-base-branch: main
       worker-name: api
@@ -181,7 +164,7 @@ jobs:
 
   deploy:
     name: Deploy Production
-    needs: [validation, packager-node24, build, migrations]
+    needs: [validation, build, migrations]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     uses: FOSSBilling/.workflows/.github/workflows/cloudflare-workers.yml@384ecc11e315c77cf3d6abb947e859ce62b38cf5 # main
     with:

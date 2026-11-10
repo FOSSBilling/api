@@ -20,6 +20,39 @@ const store = (overrides: Record<string, string | undefined> = {}) =>
 afterEach(() => vi.unstubAllGlobals());
 
 describe("B2 object storage", () => {
+  it("preserves a caller deadline while reading from B2", async () => {
+    const controller = new AbortController();
+    let started!: () => void;
+    const fetching = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    vi.stubGlobal(
+      "fetch",
+      (request: Request) =>
+        new Promise((_resolve, reject) => {
+          request.signal.addEventListener(
+            "abort",
+            () => reject(request.signal.reason),
+            { once: true }
+          );
+          started();
+        })
+    );
+    const storage = b2ObjectStore(
+      (name) => config[name.replace("EXTENSION_PACKAGES_S3_", "")],
+      "packages",
+      controller.signal
+    );
+    const deadline = new DOMException(
+      "Processor deadline exceeded",
+      "TimeoutError"
+    );
+    const read = expect(storage.get(objectId)).rejects.toBe(deadline);
+    await fetching;
+    controller.abort(deadline);
+    await read;
+  });
+
   it("signs ZIP writes and verifies downloaded bytes", async () => {
     const bytes = new Uint8Array(new TextEncoder().encode("synthetic ZIP"));
     const checksum = await sha256(bytes);

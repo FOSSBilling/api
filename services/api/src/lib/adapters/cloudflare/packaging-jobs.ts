@@ -12,7 +12,7 @@ import {
 } from "../../../services/extensions/v2/packages/jobs";
 import { PackageError } from "@fossbilling/extension-packaging/errors";
 import { configuredPackageStore } from "../../../services/extensions/v2/packages/store";
-import { HttpPackageProcessor } from "@fossbilling/extension-packaging/adapters/http";
+import { configuredPackageProcessor } from "../../../services/extensions/v2/packages/processor";
 
 export function packagePreparation(
   env: CloudflareBindings
@@ -27,22 +27,10 @@ export function packagePreparation(
       "Package storage or download URL is not configured",
       503
     );
-  const processorUrl = getEnv("EXTENSION_PACKAGER_URL");
-  const processorSecret = getEnv("EXTENSION_PACKAGER_SECRET");
-  if (!processorUrl || !processorSecret)
-    throw new PackageError(
-      "PACKAGES_DISABLED",
-      "Package processor is not configured",
-      503
-    );
   return {
     repository: new PackageBuildDatabase(env.DB_EXTENSIONS),
     store,
-    processor: new HttpPackageProcessor(
-      processorUrl,
-      processorSecret,
-      getEnv("ENVIRONMENT") !== "production"
-    ),
+    processor: configuredPackageProcessor(getEnv),
     baseUrl
   };
 }

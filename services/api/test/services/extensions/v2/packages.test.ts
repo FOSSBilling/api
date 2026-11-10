@@ -673,7 +673,7 @@ describe("queued package preparation", () => {
     expect(await jobs.get(job.id)).toMatchObject({
       status: "queued",
       attempts: 1,
-      error: { code: "PACKAGE_UNAVAILABLE", status: 503 }
+      error: { code: "SOURCE_UNAVAILABLE", status: 503 }
     });
     b2.objects.set(key, staged);
     expect(
@@ -1577,6 +1577,40 @@ describe("stored directory packages", () => {
     expect((await upload()).status).toBe(503);
     Reflect.deleteProperty(env, "EXTENSION_PACKAGES_S3_PREFIX");
     Object.assign(env, { ENVIRONMENT: "local" });
+  });
+
+  it("rejects missing or malformed processor configuration before accepting an upload", async () => {
+    for (const overrides of [
+      { EXTENSION_PACKAGER_URL: "" },
+      { EXTENSION_PACKAGER_URL: "not a URL" },
+      {
+        EXTENSION_PACKAGER_URL: "https://processor.example.test/process",
+        EXTENSION_PACKAGER_SECRET: ""
+      }
+    ]) {
+      Object.assign(env, overrides);
+      const response = await upload();
+      expect(response.status).toBe(503);
+      expect(await response.json()).toMatchObject({
+        error: { code: "PACKAGES_DISABLED" }
+      });
+    }
+    expect(
+      await db.prepare("SELECT count(*) AS count FROM package_jobs").first()
+    ).toEqual({ count: 0 });
+    expect(
+      await db.prepare("SELECT count(*) AS count FROM package_objects").first()
+    ).toEqual({ count: 0 });
+  });
+
+  it("admits a small package with 30 MiB of remaining storage headroom", async () => {
+    await db
+      .prepare(
+        "INSERT INTO package_objects (id,created_by,bytes) VALUES (?,'owner',?)"
+      )
+      .bind(crypto.randomUUID(), 482 * 1024 * 1024)
+      .run();
+    expect((await upload()).status).toBe(200);
   });
 
   it("checks account ownership, upload bounds, invalid archives and disabled storage", async () => {

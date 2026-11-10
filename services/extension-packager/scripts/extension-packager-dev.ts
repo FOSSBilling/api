@@ -1,8 +1,9 @@
+import { logError } from "@fossbilling/logging";
 import { createServer } from "node:http";
 import { Readable } from "node:stream";
 import { handlePackageProcessing } from "../src/handler";
 
-const port = Number(process.env.EXTENSION_PACKAGER_PORT ?? 8790);
+const port = Number(process.env.EXTENSION_PACKAGER_PORT || 8790);
 createServer(async (incoming, outgoing) => {
   const controller = new AbortController();
   outgoing.on("close", () => {
@@ -24,7 +25,10 @@ createServer(async (incoming, outgoing) => {
     );
     outgoing.writeHead(response.status, Object.fromEntries(response.headers));
     outgoing.end(new Uint8Array(await response.arrayBuffer()));
-  } catch {
+  } catch (error) {
+    logError("extensions/packages", "Local packager request failed", {
+      error: error instanceof Error ? error.message : "Unknown error"
+    });
     outgoing.writeHead(500);
     outgoing.end();
   }

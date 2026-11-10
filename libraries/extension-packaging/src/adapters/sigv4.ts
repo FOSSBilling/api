@@ -19,12 +19,10 @@ function toHex(bytes: ArrayBuffer): string {
     .join("");
 }
 
-async function sha256Hex(
-  data: Uint8Array<ArrayBuffer> | string
-): Promise<string> {
-  const bytes =
-    typeof data === "string" ? new TextEncoder().encode(data) : data;
-  return toHex(await crypto.subtle.digest("SHA-256", bytes));
+async function sha256Hex(data: string): Promise<string> {
+  return toHex(
+    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(data))
+  );
 }
 
 async function hmac(
@@ -64,19 +62,15 @@ function canonicalQueryString(searchParams: URLSearchParams): string {
     .join("&");
 }
 
-function bodyBytes(
-  body: RequestInit["body"]
-): Uint8Array<ArrayBuffer> | string | null {
-  if (body == null) return null;
-  if (typeof body === "string") return body;
-  if (body instanceof Uint8Array) return new Uint8Array(body);
-  return null;
+// PUT callers provide validated bytes and their checksum; other operations have no body.
+export interface S3RequestInit extends Omit<RequestInit, "body"> {
+  body?: Uint8Array<ArrayBuffer>;
 }
 
 /** Sign a request with SigV4 and return a new `Request` carrying the auth headers. */
 export async function signS3Request(
   url: URL | string,
-  init: RequestInit,
+  init: S3RequestInit,
   credentials: S3Credentials,
   now: Date = new Date()
 ): Promise<Request> {
@@ -89,11 +83,11 @@ export async function signS3Request(
     .replace(/\.\d+Z$/, "Z");
   const dateStamp = amzDate.slice(0, 8);
 
-  let payloadHash = headers.get("x-amz-content-sha256");
-  if (!payloadHash) {
-    const bytes = bodyBytes(init.body);
-    payloadHash = bytes == null ? EMPTY_SHA256 : await sha256Hex(bytes);
-  }
+  const payloadHash =
+    headers.get("x-amz-content-sha256") ??
+    (init.body == null ? EMPTY_SHA256 : null);
+  if (!payloadHash)
+    throw new Error("S3 uploads require an explicit payload checksum");
 
   headers.set("x-amz-date", amzDate);
   headers.set("x-amz-content-sha256", payloadHash);

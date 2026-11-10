@@ -1,6 +1,7 @@
 import { sha256 } from "@fossbilling/extension-packaging/checksum";
 import {
   MAX_PACKAGE_OBJECT_BYTES,
+  MAX_PACKAGE_ICON_BYTES,
   type PackageProcessor
 } from "@fossbilling/extension-packaging/processor";
 import type { Manifest } from "../schemas/manifest";
@@ -86,12 +87,18 @@ export async function buildStoredPackage(input: {
     : [crypto.randomUUID(), crypto.randomUUID()];
   // Reserve worst-case output space before an external runner can write to B2.
   // Unused/failed reservations remain discoverable by the normal cleanup job.
-  for (const id of [objectId, ...(iconIds ?? [])])
+  await repository.reserveObject(
+    owner,
+    manifest.id,
+    objectId,
+    MAX_PACKAGE_OBJECT_BYTES
+  );
+  for (const id of iconIds ?? [])
     await repository.reserveObject(
       owner,
       manifest.id,
       id,
-      MAX_PACKAGE_OBJECT_BYTES
+      MAX_PACKAGE_ICON_BYTES
     );
   const built = await input.processor.process({
     manifest,
@@ -104,7 +111,7 @@ export async function buildStoredPackage(input: {
   for (const icon of built.icons) {
     const bytes = await boundedBytes(
       await store.get(icon.id, icon.sha256),
-      MAX_PACKAGE_OBJECT_BYTES
+      MAX_PACKAGE_ICON_BYTES
     );
     if (bytes.length !== icon.bytes || (await sha256(bytes)) !== icon.sha256)
       throw new PackageError(

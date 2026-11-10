@@ -110,7 +110,8 @@ Package storage configuration is listed in [PACKAGING.md](src/services/extension
 - `EXTENSIONS_RETENTION_MODE`: `dry-run` (report only) or `compact` (prune old revision bodies). See [extensions v2 README](src/services/extensions/v2/README.md#revisions-and-retention).
 - `M2M_ISSUER`, `M2M_JWKS_URL`, `M2M_AUDIENCE`: Issuer, JWKS endpoint, and expected audience for machine-to-machine access tokens minted by the central auth service (`FOSSBilling/auth`). Defaults live in `wrangler.jsonc`; preview environments need them pointed at the issuing preview. See [extensions v2 README](src/services/extensions/v2/README.md#machine-publishing).
 
-Only extensions v2 consumes these. For the assertion format and the rotation procedure, see [its README](src/services/extensions/v2/README.md#authentication).
+The extension-specific settings apply to extensions v2; Versions, Previews and
+Stats also use `GITHUB_TOKEN`. For the assertion format and the rotation procedure, see [its README](src/services/extensions/v2/README.md#authentication).
 
 ## Development
 
@@ -167,7 +168,7 @@ from [FOSSBilling/.workflows](https://github.com/FOSSBilling/.workflows), matchi
 `fossbilling.org`'s Preview URLs, deployment summaries and PR comment history.
 
 Validation and artifact builds run on branch pushes and PRs. A push can deploy only
-after checks, the Node.js 24 packager test and D1 migrations succeed. `main` targets
+after workspace validation, the build and D1 migrations succeed. `main` targets
 production; other branches target Previews once `API_PREVIEW_RESOURCES` is configured.
 Until then, branch builds report that Preview migrations and deployment are skipped;
 validation and artifact checks still run. PR runs, including forks, never receive

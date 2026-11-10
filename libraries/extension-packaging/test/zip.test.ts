@@ -48,6 +48,17 @@ async function contents(bytes: Uint8Array<ArrayBuffer>) {
 }
 
 describe("directory package builder", () => {
+  it("stops ZIP processing when its caller aborts", async () => {
+    const source = await zip([["Service.php", "<?php // package source"]]);
+    const controller = new AbortController();
+    const processing = buildExtensionPackage(
+      source,
+      manifest,
+      controller.signal
+    );
+    controller.abort();
+    await expect(processing).rejects.toThrow();
+  });
   it("rejects overlong and deeply nested paths before walking ancestors", async () => {
     for (const path of [
       "a/".repeat(20000) + "file.php",

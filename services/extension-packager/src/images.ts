@@ -38,7 +38,19 @@ export class NodePackageImages implements PackageImageProcessor {
         variants.push({ format, bytes });
       }
       return variants;
-    } catch {
+    } catch (error) {
+      // libvips reports processing deadlines and allocation failures as errors.
+      if (
+        error instanceof Error &&
+        /timeout:|out of memory|could not allocate|unable to allocate/i.test(
+          error.message
+        )
+      )
+        throw new PackageError(
+          "PACKAGE_UNAVAILABLE",
+          "Image processing is temporarily unavailable",
+          503
+        );
       throw new PackageError(
         "INVALID_ICON",
         "Package icon could not be processed",

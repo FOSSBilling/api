@@ -4,6 +4,8 @@ import { PACKAGE_LIMITS } from "./limits";
 
 export const MAX_PACKAGE_OBJECT_BYTES =
   PACKAGE_LIMITS.expandedBytes + 1024 * 1024;
+// Matches the sanitizer's maximum prepared SVG output.
+export const MAX_PACKAGE_ICON_BYTES = 4 * 1024 * 1024;
 const checksum = z.string().regex(/^[a-f0-9]{64}$/);
 const output = z
   .object({
@@ -30,6 +32,7 @@ export const ProcessingResultSchema = z
       .array(
         output
           .extend({
+            bytes: output.shape.bytes.max(MAX_PACKAGE_ICON_BYTES),
             id: z.uuid(),
             format: z.enum(["svg", "avif", "png"])
           })
