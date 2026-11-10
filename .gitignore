@@ -1,11 +1,12 @@
 # prod
-dist/
+**/dist/
 
 # dev
 .vscode/*
 
 # deps
 node_modules/
+.netlify/
 .wrangler
 
 # env
@@ -20,7 +21,7 @@ logs/
 npm-debug.log*
 
 # test coverage
-coverage/
+**/coverage/
 
 # misc
 .DS_Store

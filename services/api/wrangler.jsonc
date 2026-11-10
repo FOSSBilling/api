@@ -1,0 +1,147 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "api",
+  "main": "src/app/index.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": [],
+  "observability": {
+    "logs": {
+      "enabled": true
+    },
+    "traces": {
+      "enabled": true
+    },
+    "issues": {
+      "enabled": true
+    }
+  },
+  "workers_dev": false,
+  "placement": {
+    "mode": "smart"
+  },
+  "preview_urls": true,
+  // Preserve operational runtime variables managed in the Worker dashboard.
+  "keep_vars": true,
+  "vars": {
+    "ENVIRONMENT": "production",
+    // Enable only after the queue, HTTP processor and B2 secrets are configured.
+    "EXTENSION_PACKAGES_MODE": "disabled",
+    "EXTENSION_PACKAGES_BASE_URL": "https://api.fossbilling.net/extensions/v2",
+    "EXTENSION_ASSETS_PUBLIC_URL": "https://extensions-assets.fossbilling.net",
+    "EXTENSIONS_RETENTION_MODE": "dry-run",
+    "EXTENSIONS_V2_EMAIL_PROVIDER": "mxroute",
+    "M2M_ISSUER": "https://auth.fossbilling.net",
+    "M2M_JWKS_URL": "https://auth.fossbilling.net/.well-known/jwks.json",
+    "M2M_AUDIENCE": "https://api.fossbilling.net"
+  },
+  "routes": [
+    {
+      "pattern": "api.fossbilling.net",
+      "zone_name": "fossbilling.net",
+      "custom_domain": true
+    }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB_CENTRAL_ALERTS",
+      "database_id": "3a47f7fd-5eda-4754-9594-9de809ad7823",
+      "migrations_dir": "src/services/central-alerts/v1/db/migrations"
+    },
+    {
+      "binding": "DB_EXTENSIONS",
+      "database_id": "b99e8d34-4856-4f92-837d-5413869d3d83",
+      "migrations_dir": "src/services/extensions/v2/db/migrations"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "AUTH_KV",
+      "id": "2750aba268824ff28fc8171cc75f4215"
+    },
+    {
+      "binding": "CACHE_KV",
+      "id": "0771957093ae481b9cd974ffa83f8263"
+    }
+  ],
+  "queues": {
+    "producers": [
+      { "binding": "EXTENSION_PACKAGE_QUEUE", "queue": "extension-packages" }
+    ],
+    "consumers": [
+      {
+        "queue": "extension-packages",
+        "max_batch_size": 1,
+        "max_batch_timeout": 1,
+        "max_retries": 5,
+        "max_concurrency": 1
+      }
+    ]
+  },
+  "r2_buckets": [
+    {
+      "binding": "DOWNLOAD_BUCKET",
+      "bucket_name": "fossbilling-download"
+    }
+  ],
+  "services": [
+    {
+      // Private service binding to the extensions site worker. Used by
+      // revalidateExtensions() to purge the site's CDN-cached extension pages
+      // after content mutations — see src/services/extensions/v2/revalidate.ts.
+      "binding": "EXTENSIONS_FRONTEND",
+      "service": "extensions"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "PREVIEW_GITHUB_BUDGET", "class_name": "PreviewGitHubBudget" }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "preview-github-budget-v1",
+      "new_sqlite_classes": ["PreviewGitHubBudget"]
+    }
+  ],
+  "triggers": { "crons": ["0 * * * *"] },
+  "ratelimits": [
+    {
+      "name": "EXTENSION_WRITE_RATE_LIMITER",
+      "namespace_id": "1002",
+      "simple": { "limit": 60, "period": 60 }
+    },
+    {
+      "name": "PROFILE_CREATION_RATE_LIMITER",
+      "namespace_id": "1001",
+      "simple": {
+        "limit": 3,
+        "period": 60
+      }
+    }
+  ],
+  "previews": {
+    "vars": {
+      "ENVIRONMENT": "preview",
+      "EXTENSION_PACKAGES_MODE": "disabled",
+      "EXTENSIONS_V2_EMAIL_PROVIDER": "disabled",
+      "EXTENSIONS_RETENTION_MODE": "dry-run"
+    },
+    "durable_objects": {
+      "bindings": [
+        { "name": "PREVIEW_GITHUB_BUDGET", "class_name": "PreviewGitHubBudget" }
+      ]
+    },
+    "ratelimits": [
+      {
+        "name": "EXTENSION_WRITE_RATE_LIMITER",
+        "namespace_id": "2002",
+        "simple": { "limit": 60, "period": 60 }
+      },
+      {
+        "name": "PROFILE_CREATION_RATE_LIMITER",
+        "namespace_id": "2001",
+        "simple": { "limit": 3, "period": 60 }
+      }
+    ]
+  }
+}

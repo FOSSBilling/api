@@ -26,8 +26,8 @@ export default defineConfig(
     }
   },
   {
-    files: ["**/*.config.ts", "worker-configuration.d.ts"],
+    files: ["**/*.config.ts", "**/worker-configuration.d.ts"],
     extends: [tseslint.configs.disableTypeChecked]
   },
-  globalIgnores(["coverage/", ".wrangler/"])
+  globalIgnores(["**/coverage/", "**/.wrangler/", "**/dist/", "**/.netlify/"])
 );

@@ -1,0 +1,101 @@
+import type { ICache } from "../../../lib/interfaces";
+import { GithubLookupResult } from "./github/artifacts";
+import { singleFlight } from "../../../lib/cache";
+
+// Default for anything that moves (main, pr/{number}) - previews churn
+// often (a new commit on a PR supersedes the last build within minutes),
+// so a short TTL keeps CACHE_KV useful without serving meaningfully stale
+// data - matches download-worker's existing choice for the same trade-off.
+// Callers addressing something immutable (a fixed commit/artifact) pass a
+// longer ttlSeconds explicitly - see routes/commit.ts and routes/respond.ts.
+export const DEFAULT_CACHE_TTL_SECONDS = 60;
+
+// Cloudflare KV's own floor - a shorter expirationTtl is a 400 at the API
+// level, not just an app-level policy choice.
+const KV_MIN_TTL_SECONDS = 60;
+
+// "not_found" results are cached for one KV-floor window: without this, a
+// client polling a PR whose build hasn't landed yet pays the full resolve
+// chain on every poll. The cost is at most a 60s delay between a build
+// appearing on GitHub and this service serving it. "unavailable" (GitHub
+// errors) still always re-resolves: a transient hiccup must not pin a
+// route into an error for a TTL window.
+const NEGATIVE_CACHE_TTL_SECONDS = KV_MIN_TTL_SECONDS;
+const NEGATIVE_CACHE_VALUE = "__not_found__";
+
+// Shared read half of cachedLookup: negative sentinel, positive parse,
+// corrupt-entry fallthrough to miss. The result is tagged rather than a
+// `T | null | "miss"` union so no cached value can collide with a sentinel
+// (a cached JSON `null` must not read as negative, and a cached "miss"
+// string must still be a hit). Routes with asymmetric write rules (main's
+// download path must never write the shared entry it reads) reuse this for
+// their reads while keeping their own write policy.
+export type CachedRead<T> =
+  { status: "hit"; value: T } | { status: "negative" } | { status: "miss" };
+
+export async function readCachedValue<T>(
+  kv: ICache,
+  key: string
+): Promise<CachedRead<T>> {
+  const cached = await kv.get(key);
+  if (cached === NEGATIVE_CACHE_VALUE) return { status: "negative" };
+  if (cached === null) return { status: "miss" };
+  try {
+    return { status: "hit", value: JSON.parse(cached) as T };
+  } catch {
+    // Corrupt cache entry - treat as absent.
+    return { status: "miss" };
+  }
+}
+
+// ttlSeconds may be a function of the resolved data instead of a fixed
+// number - see routes/commit.ts, which caps the cache lifetime at the
+// artifact's own remaining GitHub retention so a lookup resolved just
+// before expiry doesn't outlive it and keep serving a 200 after GitHub
+// itself has started 404ing. If the computed TTL is under KV's 60s floor,
+// the result is returned but not cached at all - better to re-resolve
+// live for the rest of that final minute than to either violate the floor
+// or round up and cache something past its real expiry.
+//
+// waitUntil, when provided, receives the KV writes so they don't sit on
+// the response path.
+export async function cachedLookup<T>(
+  kv: ICache,
+  key: string,
+  resolve: () => Promise<GithubLookupResult<T>>,
+  ttlSeconds: number | ((data: T) => number) = DEFAULT_CACHE_TTL_SECONDS,
+  waitUntil?: (promise: Promise<unknown>) => void
+): Promise<GithubLookupResult<T>> {
+  const read = await readCachedValue<T>(kv, key);
+  if (read.status === "hit") return { status: "found", data: read.value };
+  if (read.status === "negative") return { status: "not_found" };
+
+  // The KV write runs inside the flight, not per joiner: singleFlight only
+  // coalesces the resolve, so without this, N concurrent requests arriving
+  // on a cold key would each re-put identical bytes (and N duplicate
+  // negative-cache writes on a miss).
+  const result = await singleFlight(`previews:${key}`, async () => {
+    const resolved = await resolve();
+    if (resolved.status === "found") {
+      const ttl =
+        typeof ttlSeconds === "function"
+          ? ttlSeconds(resolved.data)
+          : ttlSeconds;
+      if (ttl >= KV_MIN_TTL_SECONDS) {
+        const put = kv.put(key, JSON.stringify(resolved.data), {
+          expirationTtl: ttl
+        });
+        if (waitUntil) waitUntil(put);
+        else await put;
+      }
+    } else if (resolved.status === "not_found") {
+      const put = kv.put(key, NEGATIVE_CACHE_VALUE, {
+        expirationTtl: NEGATIVE_CACHE_TTL_SECONDS
+      });
+      if (waitUntil) waitUntil(put);
+      else await put;
+    }
+    return resolved;
+  });
+  return result;
+}

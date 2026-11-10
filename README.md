@@ -1,165 +1,80 @@
-# FOSSBilling API Worker
+# FOSSBilling services
 
-This is the API service that acts as the central hub for FOSSBilling instances. It serves version checks, system-wide alerts, the extensions directory, preview builds, and release stats.
+This repository contains separately deployed backend services and the libraries they share.
+It uses npm workspaces and one root `package-lock.json`. Install dependencies from this
+repository root with `npm ci`; each workspace declares its own dependencies.
 
-Everything is built on [Hono](https://hono.dev), making it lightweight and fast. While we currently deploy this to Cloudflare Workers, the code is designed to be platform-agnostic.
+| Workspace                                                              | Purpose                                                                                | Deployment                            |
+| ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------- |
+| [`services/api`](services/api/README.md)                               | HTTP API, authentication, persistence, queues and publication                          | Cloudflare Workers                    |
+| [`services/extension-packager`](services/extension-packager/README.md) | ZIP validation, manifest replacement and icon preparation                              | Netlify Function or another Node host |
+| [`libraries/extension-packaging`](libraries/extension-packaging)       | Shared manifest and processing contracts, ZIP implementation and storage/HTTP adapters | Bundled by its consumers              |
+| [`libraries/logging`](libraries/logging)                               | Structured logging and credential redaction used by both services                      | Bundled by its consumers              |
 
-## What it does
-
-The worker exposes five services:
-
-- **Versions** (`/versions/v1`)
-  The source of truth for FOSSBilling updates. It fetches release data from GitHub, caches it for performance, and helps instances decide if they need to update.
-
-- **Central Alerts** (`/central-alerts/v1`)
-  Allows the project to push critical notifications to all FOSSBilling installations—useful for security hotfixes or major announcements.
-
-- **Extensions** (`/extensions/v1`, `/extensions/v2`)
-  Owns the complete Extensions domain and its `DB_EXTENSIONS` schema. `v2` is authoritative. `v1` is deprecated; its badge URLs retire on **5 February 2027** ([migration and retirement policy](src/services/extensions/v1/README.md)). The separate Extensions site keeps OIDC/session state but accesses this domain through the
-  generated HTTPS API client; it must not bind or migrate `DB_EXTENSIONS`.
-  See [`src/services/extensions/v2/README.md`](src/services/extensions/v2/README.md).
-
-- **Previews** (`/previews/v1`)
-  Resolves FOSSBilling preview builds — the current main preview and per-PR/per-commit builds produced by FOSSBilling/FOSSBilling's GitHub Actions workflows. Read-only; GitHub Actions and R2 are the sources of truth, not this service.
-  See [`src/services/previews/v1/README.md`](src/services/previews/v1/README.md).
-
-- **Stats** (`/stats/v1`)
-  Aggregates release data through the versions service's shared releases cache into charts and JSON; a cold cache can trigger a GitHub fetch through that shared path.
-  See [`src/services/stats/v1/README.md`](src/services/stats/v1/README.md).
-
-## Architecture
-
-We've structured the app to separate the core logic from the specific runtime environment (Cloudflare, Node, etc.).
-
-- **Application Logic**: Found in `src/services/versions/v1`, `src/services/central-alerts/v1`, etc. These feature modules don't know they are running on Cloudflare.
-  Smaller services are a flat `index.ts` + `interfaces.ts`; `src/services/extensions/v2` is the reference layout for larger ones, splitting into `routes/`, `db/`, `schemas/`, and `github/`.
-  See `AGENTS.md` for what belongs in each.
-- **Platform Layer**: Located in `src/lib`. This defines interfaces for things like Cache, Database, and Environment variables.
-- **Adapters**:
-  - `src/lib/adapters/cloudflare`: Real implementations using KV and D1.
-  - `src/lib/adapters/node`: Reference implementations (useful for testing or alternative deployments).
-
-Cron and Durable Object code lives with its owning service and is wired in `src/app/index.ts`.
-
-## APIs
-
-Each service documents its own endpoints and behaviour:
-
-| Service        | Base path                          | Docs                                                                                   |
-| -------------- | ---------------------------------- | -------------------------------------------------------------------------------------- |
-| Versions       | `/versions/v1`                     | [`src/services/versions/v1/README.md`](src/services/versions/v1/README.md)             |
-| Central Alerts | `/central-alerts/v1`               | [`src/services/central-alerts/v1/README.md`](src/services/central-alerts/v1/README.md) |
-| Stats          | `/stats/v1`                        | [`src/services/stats/v1/README.md`](src/services/stats/v1/README.md)                   |
-| Extensions     | `/extensions/v1`, `/extensions/v2` | [`src/services/extensions/v2/README.md`](src/services/extensions/v2/README.md)         |
-| Previews       | `/previews/v1`                     | [`src/services/previews/v1/README.md`](src/services/previews/v1/README.md)             |
-
-Extensions v2 and Previews v1 also publish a live OpenAPI document (`/extensions/v2/docs/openapi.json`, `/previews/v1/docs/openapi.json`) and a reference UI (`/extensions/v2/docs`, `/previews/v1/docs`).
-
-## Configuration
-
-If you're running this yourself, you'll need a few things set up.
-
-### Storage
-
-We use [Cloudflare D1](https://developers.cloudflare.com/d1/) and [KV](https://developers.cloudflare.com/kv/).
-
-- **D1 Database** (`DB_CENTRAL_ALERTS`): Stores the alert messages.
-- **D1 Database** (`DB_EXTENSIONS`): Stores the complete Extensions domain.
-  Migrations are owned by extensions v2 and applied only from this repository — see [its README](src/services/extensions/v2/README.md#database) for the migration and adoption procedure.
-- **KV Namespace** (`CACHE_KV`): Caches GitHub API responses so we don't hit rate limits.
-- **KV Namespace** (`AUTH_KV`): Stores the `UPDATE_TOKEN` value for `/versions/v1/update`.
-- **R2 Bucket** (`DOWNLOAD_BUCKET`): Shared by versions, previews, and stats for release/preview zips — see [`src/services/previews/v1/README.md`](src/services/previews/v1/README.md) and the comment in `wrangler.jsonc` for which bucket this points at and why.
-- **Durable Object** (`PREVIEW_GITHUB_BUDGET`): Token bucket limiting previews GitHub calls. Policy lives in `src/services/previews/v1/budget.ts`.
-- **Rate limiters** (`EXTENSION_WRITE_RATE_LIMITER`, `PROFILE_CREATION_RATE_LIMITER`): Edge pacing for extension writes and profile creation. Durable quotas are enforced in D1; see [extensions v2 README](src/services/extensions/v2/README.md#limits-and-budgets).
-- **Service binding** (`EXTENSIONS_FRONTEND`): Private binding to the Extensions site worker, used to purge cached extension pages after mutations.
-- **Cron** (`0 * * * *`): Hourly extension resource maintenance. See [extensions v2 README](src/services/extensions/v2/README.md#revisions-and-retention).
-
-### Environment Variables
-
-Production B2 connection details and MXroute server/username are managed in the
-Worker dashboard under **Settings > Variables and Secrets** as runtime variables.
-Credentials are stored as secrets. Build environment variables do not configure
-the running Worker. `keep_vars: true` preserves dashboard-managed variables on
-Wrangler deployments; keep their values out of the committed `vars` map and docs.
-Public URLs and deployment controls remain in `wrangler.jsonc`.
-
-For local development, put operational values and credentials in the ignored
-`.dev.vars` file. Document variable names and placeholders, not production values.
-Package storage configuration is listed in [PACKAGING.md](src/services/extensions/v2/PACKAGING.md).
-
-- `GITHUB_TOKEN`: A GitHub Personal Access Token (classic) with public repo read access.
-- `ASSERTION_SIGNING_SECRET`: Shared HMAC secret used to verify the short-lived bearer assertions minted by the Extensions site. Configure the same value in both Workers; it is never sent to clients.
-- `ASSERTION_SIGNING_SECRET_PREVIOUS`: Optional previous HMAC secret accepted during a signing-key rotation.
-- `EXTENSIONS_REVALIDATE_SECRET`: Bearer token the API sends to the Extensions site's `POST /api/revalidate` (over the `EXTENSIONS_FRONTEND` service binding) to purge the site's CDN-cached extension pages after content mutations. Configure the same value in both Workers; it is never sent to clients.
-- `EXTENSIONS_V2_EMAIL_PROVIDER`: `mxroute` or `resend` to send moderator notification emails, or unset/`disabled` to skip sending.
-- `EXTENSIONS_V2_EMAIL_FROM`: Sender address for notification emails (default `noreply@fossbilling.org`).
-- `EXTENSIONS_V2_EMAIL_REPLY_TO`: Optional Reply-To address for a monitored inbox. Omit when unset (no Reply-To header is sent) — notification emails do not invite replies.
-- `EXTENSIONS_V2_MXROUTE_SERVER`, `EXTENSIONS_V2_MXROUTE_USERNAME`: Dashboard-managed runtime variables identifying the mailbox for the MXroute SMTP API (`https://smtpapi.mxroute.com/`). Required when `EXTENSIONS_V2_EMAIL_PROVIDER=mxroute`.
-- `EXTENSIONS_V2_MXROUTE_PASSWORD`: Mailbox password, stored as a secret. Required when `EXTENSIONS_V2_EMAIL_PROVIDER=mxroute`.
-- `EXTENSIONS_V2_RESEND_API_KEY`: API key for Resend. Required when `EXTENSIONS_V2_EMAIL_PROVIDER=resend`.
-- `EXTENSIONS_RETENTION_MODE`: `dry-run` (report only) or `compact` (prune old revision bodies). See [extensions v2 README](src/services/extensions/v2/README.md#revisions-and-retention).
-- `M2M_ISSUER`, `M2M_JWKS_URL`, `M2M_AUDIENCE`: Issuer, JWKS endpoint, and expected audience for machine-to-machine access tokens minted by the central auth service (`FOSSBilling/auth`). Defaults live in `wrangler.jsonc`; preview environments need them pointed at the issuing preview. See [extensions v2 README](src/services/extensions/v2/README.md#machine-publishing).
-
-Only extensions v2 consumes these. For the assertion format and the rotation procedure, see [its README](src/services/extensions/v2/README.md#authentication).
+Services do not import each other's source. Shared libraries are private npm
+workspaces consumed directly from TypeScript source; there is no separate package
+publication or library build step. Hosting configuration belongs to its service.
 
 ## Development
 
-Get the dependencies installed:
+Use Node.js 24 or later. CI tests the workspaces on Node.js 26. Hosting runtime
+selection belongs to each service's deployment configuration. Native dependencies
+are installed for the build host.
 
-```bash
-npm install
+```sh
+npm ci
+npm run dev                    # API, using services/api/.dev.vars
+npm run extension-packager:dev  # Node packager, using services/extension-packager/.dev.vars
 ```
 
-### Local Setup
+API migrations and other service-specific commands use npm's workspace option:
 
-1. Create a `.dev.vars` file for local runtime variables and secrets:
-
-   ```env
-   GITHUB_TOKEN="your-token"
-   ASSERTION_SIGNING_SECRET="local-shared-secret"
-   EXTENSIONS_REVALIDATE_SECRET="local-revalidate-secret"
-   # Optional while rotating the shared assertion secret.
-   # ASSERTION_SIGNING_SECRET_PREVIOUS="previous-local-shared-secret"
-   ```
-
-2. Apply migrations to the local D1 databases:
-
-   ```bash
-   npm run db:migrate:all:local
-   ```
-
-3. (Optional) Store an update token in KV for `/versions/v1/update`:
-
-   ```bash
-   npx wrangler kv:key put --binding AUTH_KV UPDATE_TOKEN "dev-secret" --local
-   ```
-
-4. Spin up the dev server:
-
-   ```bash
-   npm run dev
-   ```
-
-You can now hit endpoints at `http://localhost:8787`.
-
-### Testing
-
-We use Vitest. Unit tests run under the Workers pool; Node adapter tests use a separate config.
-
-```bash
-npm run test       # workers pool
-npm run test:all   # workers + node adapters
+```sh
+npm run db:migrate:all:local --workspace @fossbilling/api
+npm run test:workers --workspace @fossbilling/api
+npm test --workspace @fossbilling/extension-packager
 ```
 
-```bash
-npm run typecheck
+See the service READMEs for local storage and authentication configuration. Runtime
+secrets and local state stay beside their service and are ignored by Git.
+
+## Checks
+
+```sh
+npm run format:check
 npm run lint
+npm run typecheck
+npm test
+npm run build:api  # Wrangler dry run; does not deploy or apply remote migrations
 ```
 
-### Deploy
+Each workspace owns its tests and type checking. The root test and type-check
+commands run all workspaces. Keep the single root lockfile updated with `npm install`
+from the repository root; do not create service-specific lockfiles.
 
-```bash
-npm run cf-deploy
-```
+## Deployments
 
-This applies remote D1 migrations, then deploys with Wrangler.
+The services deploy independently from the same repository. Netlify configuration
+and setup are documented in the [packager README](services/extension-packager/README.md).
+
+The API uses the same pinned [shared Cloudflare workflow](https://github.com/FOSSBilling/.workflows)
+as `fossbilling.org`. [CI/CD](.github/workflows/ci.yml) validates the workspaces and
+builds a self-contained Worker artifact, including deployment configuration and SQL.
+
+- Pushes to `main` migrate production D1 and deploy the tested artifact.
+- Other branch pushes migrate staging D1 and deploy Previews once `API_PREVIEW_RESOURCES`
+  is configured; until then, validation and artifact checks run with an explicit Preview skip summary.
+  Previews have stable branch and
+  immutable commit URLs recorded on matching PRs.
+- PR runs validate without deploying. The [Cloudflare Events workflow](.github/workflows/cloudflare-events.yml)
+  updates PR comments when a PR opens later or a run finishes, including failed attempts.
+
+See the [API deployment setup](services/api/README.md#deployment) for GitHub environments,
+staging resource IDs, Preview secrets, migration behaviour and the Workers Builds cutover.
+All production and Preview deployments require validation, the build and migrations
+to succeed. Previews keep package processing disabled because Cloudflare Previews
+cannot consume Queues. Production packaging also remains disabled pending Netlify
+runtime verification and the controlled production package test.
+
+`npm run cf-deploy` remains the explicit manual production command; it applies
+remote migrations and deploys the API. It does not deploy the packager.

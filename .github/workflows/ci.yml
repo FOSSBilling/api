@@ -1,4 +1,4 @@
-name: CI
+name: CI/CD
 
 on:
   push:
@@ -8,30 +8,174 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  test:
+  validation:
+    name: Validation
     runs-on: ubuntu-latest
-    if: ${{ (github.event_name == 'pull_request' && github.event.pull_request.base.repo.id != github.event.pull_request.head.repo.id) || github.event_name == 'push' }}
+    timeout-minutes: 15
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98
-
       - name: Setup Node.js
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
         with:
           node-version: "26.13.0"
-          cache: "npm"
+          cache: npm
+      - name: Install Dependencies
+        id: dependencies
+        run: npm ci
+      - name: Check Formatting
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
+        run: npm run format:check
+      - name: Lint Code
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
+        run: npm run lint
+      - name: Typecheck
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
+        run: npm run typecheck
+      - name: Run Tests
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
+        run: npm test
 
+  build:
+    name: Build API
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      wrangler-version: ${{ steps.wrangler-version.outputs.version }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98
+      - name: Setup Node.js
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
+        with:
+          node-version: "26.13.0"
+          cache: npm
       - name: Install Dependencies
         run: npm ci
+      - name: Read Wrangler Version
+        id: wrangler-version
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const { version } = require('./node_modules/wrangler/package.json');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);
+          NODE
+      - name: Build Deployment Artifact
+        run: npm run build:api
+        env:
+          API_PREVIEW_RESOURCES: ${{ vars.API_PREVIEW_RESOURCES }}
+      - name: Validate Deployment Artifact
+        run: npm exec -- wrangler deploy --dry-run --config services/api/dist/wrangler.json
+      - name: Explain Unconfigured Previews
+        if: github.event_name == 'push' && github.ref_type == 'branch' && github.ref != 'refs/heads/main' && vars.API_PREVIEW_RESOURCES == ''
+        run: |
+          echo '::notice::Preview migrations and deployment are skipped until API_PREVIEW_RESOURCES is configured.'
+          echo '### Preview deployment skipped' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Configure the API_PREVIEW_RESOURCES repository variable with isolated staging resources to enable branch Previews. Validation and artifact checks still run.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload Deployment Artifact
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: api-worker-build
+          overwrite: true
+          path: services/api/dist/
+          if-no-files-found: error
+          retention-days: 1
 
-      - name: Lint Code (ESLint)
-        run: npm run lint
+  migrations:
+    name: Apply API Migrations
+    needs: [validation, build]
+    if: github.event_name == 'push' && github.ref_type == 'branch' && (github.ref == 'refs/heads/main' || vars.API_PREVIEW_RESOURCES != '')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: ${{ github.ref == 'refs/heads/main' && 'production' || 'preview' }}
+      deployment: false
+    concurrency:
+      group: api-migrations-${{ github.ref == 'refs/heads/main' && 'production' || 'preview' }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98
+        with:
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
+        with:
+          node-version: "26.13.0"
+          cache: npm
+      - name: Install Dependencies
+        run: npm ci
+      - name: Download Deployment Artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: api-worker-build
+          path: services/api/dist/
+      - name: Apply Migrations
+        env:
+          DEPLOY_TARGET: ${{ github.ref == 'refs/heads/main' && 'production' || 'preview' }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          config=services/api/dist/wrangler.json
+          if [ "$DEPLOY_TARGET" = preview ]; then
+            config=services/api/dist/wrangler.preview-migrations.json
+            if [ ! -f "$config" ]; then
+              echo '::error::Configure the API_PREVIEW_RESOURCES repository variable before deploying Previews.'
+              exit 1
+            fi
+          fi
+          for binding in DB_CENTRAL_ALERTS DB_EXTENSIONS; do
+            npm exec -- wrangler d1 migrations apply "$binding" --remote --config "$config"
+          done
 
-      - name: Typecheck
-        run: npm run typecheck
+  preview:
+    name: Cloudflare Preview
+    needs: [validation, build, migrations]
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref_type == 'branch' && github.ref != 'refs/heads/main' && vars.API_PREVIEW_RESOURCES != '' }}
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
+    uses: FOSSBilling/.workflows/.github/workflows/cloudflare-workers.yml@384ecc11e315c77cf3d6abb947e859ce62b38cf5 # main
+    with:
+      operation: deploy
+      mode: preview
+      build-result: ${{ needs.build.result }}
+      checks-result: ${{ needs.validation.result == 'success' && needs.migrations.result == 'success' && 'success' || 'failure' }}
+      pr-comment: true
+      pr-base-branch: main
+      worker-name: api
+      environment: preview
+      artifact-name: api-worker-build
+      artifact-path: services/api/dist/
+      config-path: services/api/dist/wrangler.json
+      wrangler-version: ${{ needs.build.outputs.wrangler-version }}
+    secrets:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
 
-      - name: Run Tests
-        run: npm run test:all
+  deploy:
+    name: Deploy Production
+    needs: [validation, build, migrations]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    uses: FOSSBilling/.workflows/.github/workflows/cloudflare-workers.yml@384ecc11e315c77cf3d6abb947e859ce62b38cf5 # main
+    with:
+      operation: deploy
+      mode: production
+      worker-name: api
+      environment: production
+      artifact-name: api-worker-build
+      artifact-path: services/api/dist/
+      config-path: services/api/dist/wrangler.json
+      wrangler-version: ${{ needs.build.outputs.wrangler-version }}
+    secrets:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}

@@ -1,61 +1,41 @@
 {
-  "name": "api",
+  "name": "@fossbilling/services",
+  "private": true,
   "license": "AGPL-3.0-only",
   "type": "module",
+  "workspaces": [
+    "services/*",
+    "libraries/*"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
-    "cf-typegen": "wrangler types --env-interface CloudflareBindings",
-    "cf-deploy": "npm run db:migrate:all:remote && wrangler deploy --minify",
-    "dev": "wrangler dev",
+    "dev": "npm run dev --workspace @fossbilling/api",
+    "extension-packager:dev": "npm run dev --workspace @fossbilling/extension-packager",
+    "cf-typegen": "npm run cf-typegen --workspace @fossbilling/api",
+    "cf-deploy": "npm run cf-deploy --workspace @fossbilling/api",
+    "build:api": "npm run build --workspace @fossbilling/api",
+    "test": "npm test --workspaces",
+    "typecheck": "tsc --noEmit && npm run typecheck --workspaces",
+    "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "db:generate:extensions": "drizzle-kit generate --config drizzle.extensions.config.ts",
-    "db:generate:central-alerts": "drizzle-kit generate --config drizzle.central-alerts.config.ts",
-    "db:migrate:extensions-v2:local": "wrangler d1 migrations apply DB_EXTENSIONS --local",
-    "db:migrate:extensions-v2:remote": "wrangler d1 migrations apply DB_EXTENSIONS --remote",
-    "db:migrate:central-alerts:local": "wrangler d1 migrations apply DB_CENTRAL_ALERTS --local",
-    "db:migrate:central-alerts:remote": "wrangler d1 migrations apply DB_CENTRAL_ALERTS --remote",
-    "db:migrate:all:local": "npm run db:migrate:extensions-v2:local && npm run db:migrate:central-alerts:local",
-    "db:migrate:all:remote": "npm run db:migrate:extensions-v2:remote && npm run db:migrate:central-alerts:remote",
-    "lint": "eslint",
-    "lint:fix": "eslint --fix",
-    "test": "vitest run",
-    "test:node": "vitest run --config vitest.node.config.ts",
-    "test:all": "npm run test && npm run test:node",
-    "test:coverage": "vitest run --coverage",
-    "typecheck": "tsc --noEmit"
-  },
-  "dependencies": {
-    "@hono/zod-openapi": "1.6.3",
-    "@octokit/graphql": "9.0.5",
-    "@octokit/request": "10.0.16",
-    "@scalar/hono-api-reference": "0.12.18",
-    "@zeropress/svg-hush": "0.1.1",
-    "@zip.js/zip.js": "2.24.0",
-    "badge-maker": "6.0.0",
-    "better-auth": "^1.7.14",
-    "drizzle-orm": "0.45.4",
-    "hono": "4.13.17",
-    "semver": "7.8.6",
-    "uuid": "14.0.3",
-    "zod": "4.6.7"
+    "cf-preview": "npm run cf-preview --workspace @fossbilling/api"
   },
   "devDependencies": {
-    "@cloudflare/vitest-plugin": "1.6.1",
     "@eslint/js": "10.0.1",
     "@types/node": "26.6.6",
-    "@types/semver": "7.8.0",
     "@typescript-eslint/eslint-plugin": "8.72.1",
     "@typescript-eslint/parser": "8.72.1",
     "@vitest/coverage-istanbul": "5.1.0",
-    "drizzle-kit": "0.31.11",
     "eslint": "10.14.0",
     "eslint-config-prettier": "10.1.8",
     "jiti": "2.7.0",
     "prettier": "3.9.10",
     "typescript": "6.0.3",
     "typescript-eslint": "8.72.1",
-    "vitest": "5.1.0",
-    "wrangler": "4.158.0"
+    "vitest": "5.1.0"
   },
   "overrides": {
     "@esbuild-kit/core-utils": {

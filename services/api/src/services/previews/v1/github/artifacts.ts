@@ -1,0 +1,372 @@
+import { PreviewGitHub, previewRequest } from "./request";
+import {
+  classifyGitHubError,
+  GitHubError,
+  NotFoundError
+} from "../../../../lib/github-errors";
+import { logWarn } from "@fossbilling/logging";
+
+const REPO_OWNER = "FOSSBilling";
+const REPO_NAME = "FOSSBilling";
+const ARTIFACT_NAME_PREFIX = "FOSSBilling-preview-";
+
+// FOSSBilling/FOSSBilling's ci.yml uploads one artifact per commit for
+// every PR build, non-main branch push, and main push - named after the
+// short form of $GITHUB_SHA at build time (archive: false, so the file's
+// own basename becomes the artifact name). Expects an already-lowercased
+// sha - see findPreviewArtifactByCommitSha, which is the only caller.
+function artifactNameForSha(shaLower: string): string {
+  return `${ARTIFACT_NAME_PREFIX}${shaLower.slice(0, 7)}.zip`;
+}
+
+export interface PreviewArtifact {
+  runId: number;
+  artifactId: number;
+  commitSha: string;
+  digest: string | null;
+  sizeBytes: number;
+  createdAt: string;
+  expiresAt: string;
+}
+
+export type GithubLookupResult<T> =
+  | { status: "found"; data: T }
+  | { status: "not_found" }
+  | { status: "unavailable"; error: GitHubError };
+
+interface RawArtifact {
+  id: number;
+  name?: string;
+  size_in_bytes: number;
+  created_at: string | null;
+  expires_at: string | null;
+  expired: boolean;
+  digest: string | null;
+  workflow_run?: {
+    id: number;
+    head_sha: string;
+  } | null;
+}
+
+interface ArtifactMatch {
+  artifact: RawArtifact;
+  runId: number;
+  headSha: string;
+}
+
+function unavailable<T>(
+  context: string,
+  error: unknown,
+  url: string
+): GithubLookupResult<T> {
+  return unavailableWith(context, classifyGitHubError(error, url));
+}
+
+// Overload for call sites that already classified the error while checking
+// for a specific class (e.g. NotFoundError) - classification is pure, but
+// there is no reason to run it twice.
+function unavailableWith<T>(
+  context: string,
+  githubError: GitHubError
+): GithubLookupResult<T> {
+  logWarn("previews", `${context} unavailable`, {
+    message: githubError.message,
+    httpStatus: githubError.httpStatus
+  });
+  return { status: "unavailable", error: githubError };
+}
+
+async function listArtifacts(
+  github: PreviewGitHub,
+  name: string | undefined,
+  page: number = 1
+): Promise<RawArtifact[]> {
+  const result = await previewRequest(
+    github,
+    "GET /repos/{owner}/{repo}/actions/artifacts",
+    {
+      owner: REPO_OWNER,
+      repo: REPO_NAME,
+      ...(name ? { name } : {}),
+      per_page: 100,
+      page,
+      headers: { Authorization: `Bearer ${github.token}` }
+    }
+  );
+  return result.data.artifacts as RawArtifact[];
+}
+
+// Short identifiers require a complete scan: a second matching commit may
+// have a different artifact name (fork PRs use the merge SHA), or appear on
+// a later page. Never turn an incomplete scan into a match or a cached miss.
+const MAX_FALLBACK_PAGES = 50;
+
+async function findInFallbackPages(
+  github: PreviewGitHub,
+  shaLower: string
+): Promise<ArtifactMatch | null> {
+  let match: ArtifactMatch | null = null;
+  for (let page = 1; page <= MAX_FALLBACK_PAGES; page++) {
+    const artifacts = await listArtifacts(github, undefined, page);
+    for (const artifact of artifacts) {
+      if (!artifact.name?.startsWith(ARTIFACT_NAME_PREFIX)) continue;
+      const candidate = matchArtifact([artifact], shaLower);
+      if (!candidate) continue;
+      if (
+        match &&
+        candidate.headSha.toLowerCase() !== match.headSha.toLowerCase()
+      ) {
+        throw new GitHubError(
+          "Commit prefix matches multiple preview commits; use a full SHA",
+          409,
+          "AMBIGUOUS_COMMIT"
+        );
+      }
+      if (
+        !match ||
+        (candidate.artifact.created_at ?? "") >
+          (match.artifact.created_at ?? "")
+      ) {
+        match = candidate;
+      }
+    }
+    if (artifacts.length < 100) return match;
+  }
+  throw new GitHubError(
+    "Commit prefix scan exhausted its page budget before establishing uniqueness",
+    503,
+    "preview_scan_incomplete"
+  );
+}
+
+// Circuit-breaker budget on run-artifact listings, not a correctness
+// bound: a commit is not re-run dozens of times, so the match lands in
+// the first run or two in practice. Mirrors MAX_FALLBACK_PAGES' role for
+// the page-scan path - a guarantee of termination if the API misbehaves.
+const MAX_RUN_ARTIFACT_LISTINGS = 50;
+
+async function listRunArtifacts(
+  github: PreviewGitHub,
+  runId: number
+): Promise<RawArtifact[]> {
+  const result = await previewRequest(
+    github,
+    "GET /repos/{owner}/{repo}/actions/runs/{run_id}/artifacts",
+    {
+      owner: REPO_OWNER,
+      repo: REPO_NAME,
+      run_id: runId,
+      per_page: 100,
+      headers: { Authorization: `Bearer ${github.token}` }
+    }
+  );
+  return result.data.artifacts as RawArtifact[];
+}
+
+// The full-SHA fallback: list the workflow runs triggered by this exact
+// commit (server-side head_sha filter, all pages), then look at each
+// run's artifacts - a handful of calls regardless of repo size, which is
+// what keeps fork-PR polling affordable. Run artifacts are filtered to
+// preview-prefixed names before matching: preview-build.yml also uploads
+// an unprefixed `preview-build` artifact (a build.tar, not the
+// downloadable zip) whose head_sha matches everything on its run.
+// workflow_run is synthesized from the run at hand when absent, so
+// matchArtifact can rely on it.
+async function findArtifactByRunHeadSha(
+  github: PreviewGitHub,
+  shaLower: string
+): Promise<ArtifactMatch | null> {
+  let listingsLeft = MAX_RUN_ARTIFACT_LISTINGS;
+
+  for (let page = 1; ; page++) {
+    const result = await previewRequest(
+      github,
+      "GET /repos/{owner}/{repo}/actions/runs",
+      {
+        owner: REPO_OWNER,
+        repo: REPO_NAME,
+        head_sha: shaLower,
+        per_page: 100,
+        page,
+        headers: { Authorization: `Bearer ${github.token}` }
+      }
+    );
+    const runs = (result.data.workflow_runs ?? []) as Array<{
+      id: number;
+      head_sha: string;
+    }>;
+
+    for (const run of runs) {
+      if (listingsLeft-- <= 0) {
+        // An exhausted budget is an incomplete scan, not a verdict:
+        // surfacing it as not_found would let callers 404 and
+        // negative-cache an artifact that may exist past the runs we
+        // never examined. Throwing routes this through
+        // findPreviewArtifactByCommitSha's catch as unavailable (503,
+        // never cached) instead.
+        throw new Error(
+          "workflow-run artifact scan exhausted its listing budget before matching"
+        );
+      }
+      const artifacts = await listRunArtifacts(github, run.id);
+      const match = matchArtifact(
+        artifacts
+          .filter((artifact) => artifact.name?.startsWith(ARTIFACT_NAME_PREFIX))
+          .map((artifact) => ({
+            ...artifact,
+            workflow_run: artifact.workflow_run ?? {
+              id: run.id,
+              head_sha: run.head_sha
+            }
+          })),
+        shaLower
+      );
+      if (match) return match;
+    }
+
+    if (runs.length < 100) return null; // last page
+  }
+}
+
+// Newest non-expired artifact whose triggering run's real head commit
+// matches shaLower. shaLower may be a short (7+ char) prefix, so this is
+// a startsWith rather than an exact match.
+function matchArtifact(
+  artifacts: RawArtifact[],
+  shaLower: string
+): ArtifactMatch | null {
+  let match: ArtifactMatch | null = null;
+
+  for (const artifact of artifacts) {
+    const workflowRun = artifact.workflow_run;
+    if (artifact.expired || !workflowRun) continue;
+    if (!workflowRun.head_sha.toLowerCase().startsWith(shaLower)) continue;
+    if (
+      !match ||
+      (artifact.created_at ?? "") > (match.artifact.created_at ?? "")
+    ) {
+      match = {
+        artifact,
+        runId: workflowRun.id,
+        headSha: workflowRun.head_sha
+      };
+    }
+  }
+
+  return match;
+}
+
+function toPreviewArtifact(match: ArtifactMatch): PreviewArtifact {
+  return {
+    runId: match.runId,
+    artifactId: match.artifact.id,
+    commitSha: match.headSha,
+    digest: match.artifact.digest ?? null,
+    sizeBytes: match.artifact.size_in_bytes,
+    createdAt: match.artifact.created_at ?? "",
+    expiresAt: match.artifact.expires_at ?? ""
+  };
+}
+
+// Resolves the preview artifact for a commit. Tries the exact artifact
+// name first (artifactNameForSha) - correct and cheap for push-triggered
+// builds (main, branch pushes, and same-repo PRs, which take the push
+// path since preview-build-pr is fork-only), where $GITHUB_SHA in CI is
+// the actual pushed commit.
+//
+// Falls back to the triggering run's own head_sha metadata if that
+// misses. This is what makes fork PRs resolve correctly: GitHub's
+// pull_request event makes $GITHUB_SHA the ephemeral merge commit rather
+// than the PR's real head commit (see
+// https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request),
+// so preview-build-pr names its artifact after a SHA this service never
+// asks about - only the run's own head_sha metadata (populated by GitHub
+// independently of what the job saw as $GITHUB_SHA) still says which
+// commit it actually is. Full-length SHAs use the runs API fallback;
+// short prefixes always scan all artifact pages to establish uniqueness.
+export async function findPreviewArtifactByCommitSha(
+  github: PreviewGitHub,
+  sha: string
+): Promise<GithubLookupResult<PreviewArtifact>> {
+  const shaLower = sha.toLowerCase();
+  const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/actions/artifacts`;
+  try {
+    let match: ArtifactMatch | null;
+    if (shaLower.length === 40) {
+      const exact = await listArtifacts(github, artifactNameForSha(shaLower));
+      match = matchArtifact(exact, shaLower);
+      if (!match) match = await findArtifactByRunHeadSha(github, shaLower);
+    } else {
+      match = await findInFallbackPages(github, shaLower);
+    }
+
+    if (!match) {
+      return { status: "not_found" };
+    }
+
+    return { status: "found", data: toPreviewArtifact(match) };
+  } catch (error) {
+    return unavailable("Preview artifact lookup", error, url);
+  }
+}
+
+export async function resolvePullRequestHeadSha(
+  github: PreviewGitHub,
+  prNumber: number
+): Promise<GithubLookupResult<string>> {
+  const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/pulls/${prNumber}`;
+  try {
+    const result = await previewRequest(
+      github,
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}",
+      {
+        owner: REPO_OWNER,
+        repo: REPO_NAME,
+        pull_number: prNumber,
+        headers: { Authorization: `Bearer ${github.token}` }
+      }
+    );
+    return { status: "found", data: result.data.head.sha };
+  } catch (error) {
+    const githubError = classifyGitHubError(error, url);
+    if (githubError instanceof NotFoundError) return { status: "not_found" };
+    return unavailableWith("Pull request lookup", githubError);
+  }
+}
+
+// Resolves an artifact's live, short-lived download URL. Mirrors
+// download-worker/src/preview.ts's getArtifactDownloadUrl - GitHub answers
+// with a 302 to a signed, temporary URL rather than the file itself.
+export async function getArtifactDownloadUrl(
+  github: PreviewGitHub,
+  artifactId: number
+): Promise<GithubLookupResult<string>> {
+  const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/actions/artifacts/${artifactId}/zip`;
+  try {
+    const result = await previewRequest(
+      github,
+      "GET /repos/{owner}/{repo}/actions/artifacts/{artifact_id}/{archive_format}",
+      {
+        owner: REPO_OWNER,
+        repo: REPO_NAME,
+        artifact_id: artifactId,
+        archive_format: "zip",
+        request: { redirect: "manual" },
+        headers: { Authorization: `Bearer ${github.token}` }
+      }
+    );
+
+    if (result.status === 302 && result.headers.location) {
+      return { status: "found", data: result.headers.location };
+    }
+    return unavailable(
+      "Artifact download redirect",
+      new Error(`Unexpected status ${result.status}`),
+      url
+    );
+  } catch (error) {
+    const githubError = classifyGitHubError(error, url);
+    if (githubError instanceof NotFoundError) return { status: "not_found" };
+    return unavailableWith("Artifact download redirect", githubError);
+  }
+}

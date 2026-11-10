@@ -1,0 +1,902 @@
+import { bearerAuth } from "hono/bearer-auth";
+import { Hono, type Context, type Handler, type MiddlewareHandler } from "hono";
+import { cors } from "hono/cors";
+import { etag } from "hono/etag";
+import { prettyJSON } from "hono/pretty-json";
+import { graphql } from "@octokit/graphql";
+import { request as ghRequest } from "@octokit/request";
+import { trimTrailingSlash } from "hono/trailing-slash";
+import {
+  compare as semverCompare,
+  gt as semverGt,
+  gte as semverGte,
+  valid as semverValid
+} from "semver";
+import { Releases, ReleaseDetails, ResolvedReleaseDetails } from "./interfaces";
+import { getReleaseR2Object, ReleaseR2Object } from "./r2";
+import {
+  buildSuccessResponse,
+  buildUnavailableResponse,
+  githubErrorDetails,
+  hasNoReleases,
+  ReleaseSource
+} from "./responses";
+import { getPlatform } from "../../../lib/middleware";
+import { ICache } from "../../../lib/interfaces";
+import {
+  publicCacheKey,
+  publicResponseCache,
+  singleFlight
+} from "../../../lib/cache";
+import { logError, logWarn, logInfo } from "@fossbilling/logging";
+import {
+  GitHubError,
+  AuthError,
+  RateLimitError,
+  ValidationError,
+  classifyGitHubError
+} from "../../../lib/github-errors";
+
+const REPO_OWNER = "FOSSBilling";
+const REPO_NAME = "FOSSBilling";
+// Shared with stats/v1, which serves the same blob through getReleases and
+// reads its own stats value from the same CACHE_KV - exported so the key is
+// defined in one place.
+export const RELEASE_CACHE_KEY = "gh-fossbilling-releases";
+// Client-side caching of these endpoints is immaterial (the real consumers
+// re-request per update check and don't cache), so this TTL is sized for the
+// edge cache alone: short enough that a post-/update refresh is visible
+// within minutes without purge machinery, long enough that the vast majority
+// of repeat traffic never wakes the Worker.
+const RELEASES_CACHE_CONTROL = "max-age=300";
+const RELEASE_CACHE_TTL = 86400;
+const RELEASES_URL = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases`;
+type VersionsEnv = { Bindings: CloudflareBindings };
+
+const UPDATE_TOKEN_CACHE_TTL_MS = 60_000;
+
+let updateTokenCache: { token: string; expiresAt: number } | null = null;
+
+const versionsV1 = new Hono<VersionsEnv>();
+
+versionsV1.use(
+  "/*",
+  cors({
+    origin: "*"
+  }),
+  trimTrailingSlash()
+);
+
+async function getUpdateToken(cache: ICache): Promise<string> {
+  if (updateTokenCache && updateTokenCache.expiresAt > Date.now()) {
+    return updateTokenCache.token;
+  }
+
+  const token = await cache.get("UPDATE_TOKEN");
+
+  if (!token) {
+    throw new Error("UPDATE_TOKEN not found in AUTH_KV storage");
+  }
+
+  updateTokenCache = {
+    token,
+    expiresAt: Date.now() + UPDATE_TOKEN_CACHE_TTL_MS
+  };
+
+  return token;
+}
+
+// Edge (Cache API) response caching, mirroring stats/v1: Cloudflare does not
+// auto-cache Worker responses regardless of Cache-Control, so without this
+// every request wakes the isolate and pays the KV read + parse + stringify
+// + etag hash for a payload that only changes when a release lands. The
+// middleware ignores unused Authorization headers and caches only 200s.
+const VERSIONS_CACHE_NAME = "versions-api-v1";
+
+// Transient failures must not be client-cached: FOSSBilling's Update.php
+// honors Cache-Control, so a 503 during a GitHub outage or a 404 for a
+// not-yet-published version would suppress update checks for the TTL. A
+// thrown error never reaches the status check, so catch-and-rethrow keeps
+// the eventual 500 from inheriting the cacheable header either.
+async function stampCacheHeaders(
+  c: Context<VersionsEnv>,
+  next: () => Promise<void>
+) {
+  c.header("Cache-Control", RELEASES_CACHE_CONTROL);
+  try {
+    await next();
+  } catch (error) {
+    c.header("Cache-Control", "no-store");
+    throw error;
+  }
+  if (c.res.status >= 400) {
+    c.header("Cache-Control", "no-store");
+  }
+}
+
+interface CachedRouteOptions {
+  varyByMirrorTrust?: boolean;
+}
+
+function registerCachedRoute<P extends string>(
+  path: P,
+  handler: Handler<VersionsEnv, P>,
+  { varyByMirrorTrust = false }: CachedRouteOptions = {}
+) {
+  const responseCache = publicResponseCache({
+    cacheName: VERSIONS_CACHE_NAME,
+    cacheControl: RELEASES_CACHE_CONTROL,
+    keyGenerator: publicCacheKey,
+    ...(varyByMirrorTrust ? { vary: ["User-Agent"] } : {})
+  });
+  const boundedCache: MiddlewareHandler<VersionsEnv> = async (c, next) => {
+    if (!varyByMirrorTrust) return responseCache(c, next);
+
+    // Hono folds raw Vary header values into its key. Give it only the two
+    // semantic classes, while handlers and downstream caches retain the
+    // original User-Agent and the public Vary: User-Agent contract.
+    const original = c.req.raw;
+    const headers = new Headers(original.headers);
+    headers.set(
+      "User-Agent",
+      clientTrustsMirror(headers.get("User-Agent"))
+        ? `FOSSBilling/${MIRROR_TRUST_MIN_VERSION}`
+        : ""
+    );
+    c.req.raw = new Request(original, { headers });
+    try {
+      return await responseCache(c, async () => {
+        c.req.raw = original;
+        await next();
+      });
+    } finally {
+      c.req.raw = original;
+    }
+  };
+
+  return versionsV1.get(
+    path,
+    // Honor conditional requests on cache hits; the inner etag stamps entries.
+    etag(),
+    boundedCache,
+    stampCacheHeaders,
+    etag(),
+    prettyJSON(),
+    handler
+  );
+}
+
+async function loadReleases(
+  c: Context<VersionsEnv>,
+  updateCache: boolean = false
+): Promise<GetReleasesResult> {
+  const platform = getPlatform(c);
+  return getReleases(
+    platform.getCache("CACHE_KV"),
+    platform.getEnv("GITHUB_TOKEN") || "",
+    c.env.DOWNLOAD_BUCKET,
+    updateCache,
+    platform.waitUntil
+  );
+}
+
+// FOSSBilling's own Update.php sends this on every request already (src/di.php,
+// added in 0.8.4), so no client change is needed to gate the R2 mirror by version.
+// Anything we can't confidently read a trusted version out of - no header at all
+// (<=0.8.3, which predates this header), or a version we don't recognize - falls
+// through to `false`, matching the fully-backward-compatible default in
+// resolveReleaseForClient() below.
+const USER_AGENT_VERSION_PATTERN = /^FOSSBilling\/(.+)$/;
+
+// First version whose Update::$allowedDownloadPrefixes trusts
+// download.fossbilling.org. Older clients reject that URL outright with
+// "Update canceled for security reasons" - see FOSSBilling/FOSSBilling
+// incident following #4255/#2479.
+const MIRROR_TRUST_MIN_VERSION = "0.8.7";
+
+// First release actually mirrored to R2 - create-release.yml only started
+// uploading archives there from 0.8.0 onward, and that's a one-time step
+// run at release-publish time, so nothing before it will ever appear in
+// the bucket. Not to be confused with MIRROR_TRUST_MIN_VERSION above: this
+// is "does a mirror exist to look up", that's "does the requesting client
+// trust it".
+const R2_MIRROR_MIN_VERSION = "0.8.0";
+
+function clientTrustsMirror(userAgent: string | undefined | null): boolean {
+  if (!userAgent) return false;
+
+  const match = userAgent.match(USER_AGENT_VERSION_PATTERN);
+  if (!match) return false;
+
+  const version = match[1];
+  if (!semverValid(version)) return false;
+
+  return semverGte(version, MIRROR_TRUST_MIN_VERSION);
+}
+
+// Resolves a release's dual (GitHub + optional R2 mirror) download info down to
+// the single URL/digest pair this specific requester should be sent, and drops
+// the internal-only mirror_* fields from the public response shape.
+function resolveReleaseForClient(
+  release: ReleaseDetails,
+  userAgent: string | undefined | null
+): ResolvedReleaseDetails {
+  const {
+    mirror_download_url: mirrorDownloadUrl,
+    mirror_digest: mirrorDigest,
+    ...resolved
+  } = release;
+
+  if (mirrorDownloadUrl !== null && clientTrustsMirror(userAgent)) {
+    resolved.download_url = mirrorDownloadUrl;
+    resolved.digest = mirrorDigest;
+  }
+
+  return resolved;
+}
+
+interface ReleaseAsset {
+  name: string;
+  browser_download_url: string;
+  size: number;
+  digest: string | null;
+}
+
+function getReleaseZipAsset(
+  assets: ReleaseAsset[],
+  tag: string
+): ReleaseAsset | undefined {
+  return assets.find(
+    (asset) =>
+      asset.name === "FOSSBilling.zip" ||
+      asset.name === `FOSSBilling-${tag}.zip`
+  );
+}
+
+registerCachedRoute(
+  "/",
+  async (c) => {
+    const result = await loadReleases(c);
+    const releases = result.releases;
+
+    if (hasNoReleases(releases) && result.error) {
+      return c.json(buildUnavailableResponse(result.error), 503);
+    }
+
+    if (hasNoReleases(releases)) {
+      // `Vary: *` keeps intermediaries from pinning this degenerate
+      // response; hono's cache middleware will refuse to store it.
+      c.header("Vary", "*");
+    } else {
+      // The body varies by mirror trust (derived from the UA); declaring it
+      // keeps downstream caches from mixing the two response classes.
+      c.header("Vary", "User-Agent");
+    }
+
+    const userAgent = c.req.header("User-Agent");
+    const resolvedReleases = Object.fromEntries(
+      Object.entries(releases).map(([tag, release]) => [
+        tag,
+        resolveReleaseForClient(release, userAgent)
+      ])
+    );
+
+    return c.json(buildSuccessResponse(resolvedReleases, result.source));
+  },
+  { varyByMirrorTrust: true }
+);
+
+versionsV1.get(
+  "/update",
+  async (c, next) => {
+    c.header("Cache-Control", "no-store");
+    return next();
+  },
+  async (c, next) => {
+    const platform = getPlatform(c);
+    const token = await getUpdateToken(platform.getCache("AUTH_KV"));
+    const bearer = bearerAuth<VersionsEnv>({ token });
+    return bearer(c, next);
+  },
+  async (c) => {
+    const platform = getPlatform(c);
+    const result = await getReleases(
+      platform.getCache("CACHE_KV"),
+      platform.getEnv("GITHUB_TOKEN") || "",
+      c.env.DOWNLOAD_BUCKET,
+      true
+      // No waitUntil: /update's contract is "refresh the cache", so the
+      // KV write is awaited inline and its failure surfaces in the
+      // response instead of reporting success for a write still in
+      // flight.
+    );
+    const releaseCount = Object.keys(result.releases).length;
+
+    if (result.error && releaseCount === 0) {
+      return c.json(
+        {
+          result: null,
+          error_code: 500,
+          message: `Failed to fetch releases: ${result.error.message}`,
+          details: githubErrorDetails(result.error),
+          stale: result.source === "stale"
+        },
+        500
+      );
+    }
+
+    if (result.error) {
+      return c.json({
+        result: `Releases cache updated with ${releaseCount} releases (some errors occurred).`,
+        error_code: 0,
+        message: result.error.message,
+        warning: result.error.message,
+        details: githubErrorDetails(result.error),
+        stale: result.source === "stale"
+      });
+    }
+
+    return c.json({
+      result: `Releases cache updated successfully with ${releaseCount} releases.`,
+      error_code: 0,
+      message: null,
+      warning: null,
+      stale: false
+    });
+  }
+);
+
+registerCachedRoute("/build_changelog/:current", async (c) => {
+  const current = c.req.param("current");
+  const result = await loadReleases(c);
+
+  const releases = result.releases;
+
+  if (hasNoReleases(releases) && result.error) {
+    return c.json(buildUnavailableResponse(result.error), 503);
+  }
+
+  if (!current || !semverValid(current)) {
+    c.status(400);
+    return c.json({
+      result: null,
+      error_code: 400,
+      message: `'${current}' is not a valid semantic version.`
+    });
+  }
+
+  const sortedReleaseKeys = Object.keys(releases).sort((a, b) =>
+    semverCompare(b, a)
+  );
+  const completedChangelog: string[] = [];
+
+  for (const version of sortedReleaseKeys) {
+    if (semverGt(version, current)) {
+      let changelog = releases[version].changelog;
+
+      if (!changelog) {
+        changelog = `## ${version}\n`;
+        changelog += "The changelogs for this release appear to be missing.";
+      }
+
+      completedChangelog.push(changelog);
+    } else {
+      break;
+    }
+  }
+
+  const assembledChangelog = completedChangelog.join("\n");
+
+  return c.json(buildSuccessResponse(assembledChangelog, result.source));
+});
+
+registerCachedRoute("/count", async (c) => {
+  const result = await loadReleases(c);
+
+  const releases = result.releases;
+  const releaseCount = Object.keys(releases).length;
+
+  if (releaseCount === 0 && result.error) {
+    return c.json(buildUnavailableResponse(result.error), 503);
+  }
+
+  return c.json(buildSuccessResponse(releaseCount, result.source));
+});
+
+registerCachedRoute(
+  "/:version",
+  async (c) => {
+    // A required :version param cannot be empty or the route would not match.
+    const version = c.req.param("version");
+    let result = await loadReleases(c);
+
+    let releases = result.releases;
+
+    // Retry once on transient failures (network blips, empty responses). A rate
+    // limit or auth rejection will not succeed any better on retry and only
+    // burns quota, so skip it in those cases.
+    const retryable =
+      !result.error ||
+      (!(result.error instanceof RateLimitError) &&
+        !(result.error instanceof AuthError));
+    if (hasNoReleases(releases) && retryable) {
+      result = await loadReleases(c, true);
+      releases = result.releases;
+    }
+
+    if (hasNoReleases(releases) && result.error) {
+      return c.json(buildUnavailableResponse(result.error), 503);
+    }
+
+    if (hasNoReleases(releases)) {
+      c.status(404);
+      return c.json({
+        result: null,
+        error_code: 404,
+        message:
+          "No releases are currently available. Please try again later or check the GitHub releases page."
+      });
+    }
+
+    // The body varies by mirror trust (derived from the UA); declaring it
+    // keeps downstream caches from mixing the two response classes.
+    c.header("Vary", "User-Agent");
+    const userAgent = c.req.header("User-Agent");
+
+    if (version === "latest") {
+      // hasNoReleases was excluded above, so the newest key always exists.
+      const lastKey = Object.keys(releases).sort(semverCompare).at(-1)!;
+      const resolved = resolveReleaseForClient(releases[lastKey], userAgent);
+
+      return c.json(buildSuccessResponse(resolved, result.source));
+    }
+
+    if (version in releases) {
+      return c.json(
+        buildSuccessResponse(
+          resolveReleaseForClient(releases[version], userAgent),
+          result.source
+        )
+      );
+    }
+
+    c.status(404);
+    return c.json({
+      result: null,
+      error_code: 404,
+      message: `FOSSBilling version ${version} does not appear to exist.`
+    });
+  },
+  { varyByMirrorTrust: true }
+);
+
+export default versionsV1;
+
+interface GetReleasesResult {
+  releases: Releases;
+  source: ReleaseSource;
+  error?: GitHubError;
+}
+
+export function resetUpdateTokenCache() {
+  updateTokenCache = null;
+}
+
+export async function getReleases(
+  cache: ICache,
+  githubToken: string,
+  downloadBucket: R2Bucket,
+  updateCache: boolean = false,
+  waitUntil?: (promise: Promise<unknown>) => void
+): Promise<GetReleasesResult> {
+  const cachedReleases = await cache.get(RELEASE_CACHE_KEY);
+
+  // Parsed once and reused for the serve-from-cache short circuit below,
+  // the PHP-version reuse, and the stale fallback - re-parsing the full
+  // changelog-bearing blob per use is measurable on this route.
+  let parsedCache: Releases | null = null;
+  if (cachedReleases) {
+    parsedCache = parseCachedReleasesMemoized(
+      cachedReleases,
+      "Cache corruption detected, attempting fresh fetch"
+    );
+    if (parsedCache && !updateCache) {
+      logInfo("versions", "Serving releases from cache", {
+        cacheKey: RELEASE_CACHE_KEY
+      });
+      return {
+        releases: parsedCache,
+        source: "cache"
+      };
+    }
+  }
+
+  // Concurrent cold/expired-cache requests coalesce into one fetch chain
+  // per isolate instead of stampeding GitHub with N copies of it.
+  return singleFlight("versions:releases", async () => {
+    try {
+      const result = await ghRequest("GET /repos/{owner}/{repo}/releases", {
+        owner: REPO_OWNER,
+        repo: REPO_NAME,
+        headers: {
+          Authorization: `Bearer ${githubToken}`
+        },
+        per_page: 100
+      });
+
+      if (!Array.isArray(result.data)) {
+        logWarn("versions", "Unexpected GitHub releases response format", {
+          responseType: typeof result.data
+        });
+        return {
+          releases: {},
+          source: "fresh"
+        };
+      }
+
+      logInfo("versions", "Successfully fetched releases from GitHub API", {
+        url: RELEASES_URL,
+        releaseCount: result.data.length
+      });
+
+      const errors: GitHubError[] = [];
+
+      type ProcessedRelease = {
+        tag: string;
+        release: (typeof result.data)[number];
+        zipAsset: ReleaseAsset;
+        cachedPhpVersion: string | undefined;
+        cachedMirror: ReleaseR2Object | undefined;
+      };
+
+      const releasesToProcess: ProcessedRelease[] = [];
+      const releasesToFetch: PhpVersionBatchItem[] = [];
+
+      for (const release of result.data) {
+        const tag = release.tag_name;
+        if (!semverValid(tag)) {
+          logWarn("versions", "Skipping release with invalid semver tag", {
+            tag,
+            releaseId: release.id
+          });
+          continue;
+        }
+
+        const zipAsset = getReleaseZipAsset(release.assets, tag);
+        if (!zipAsset) {
+          continue;
+        }
+
+        const cachedEntry = parsedCache?.[tag];
+        const cachedPhpVersion = cachedEntry?.minimum_php_version;
+        const cachedPhpVersionValue =
+          typeof cachedPhpVersion === "string" && cachedPhpVersion.trim() !== ""
+            ? cachedPhpVersion
+            : undefined;
+        // A complete persisted mirror pair is reused as-is (same trade as
+        // the PHP version above); an absent or null pair still re-heads R2
+        // below, so a mirror that only appears later is picked up on the
+        // next rebuild.
+        const cachedMirror =
+          typeof cachedEntry?.mirror_download_url === "string"
+            ? {
+                downloadUrl: cachedEntry.mirror_download_url,
+                digest: cachedEntry.mirror_digest
+              }
+            : undefined;
+        releasesToProcess.push({
+          tag,
+          release,
+          zipAsset,
+          cachedPhpVersion: cachedPhpVersionValue,
+          cachedMirror
+        });
+
+        if (cachedPhpVersionValue === undefined) {
+          const composerPath = semverGte(tag, "0.5.0")
+            ? "composer.json"
+            : "src/composer.json";
+          releasesToFetch.push({ tag, composerPath });
+        }
+      }
+
+      // Single GraphQL request to fetch all missing PHP versions in one subrequest.
+      let batchPhpVersions = new Map<string, string>();
+      if (releasesToFetch.length > 0) {
+        try {
+          batchPhpVersions = await getBatchPhpVersions(
+            githubToken,
+            releasesToFetch
+          );
+          logInfo("versions", "Batch fetched PHP versions via GraphQL", {
+            requested: releasesToFetch.length,
+            resolved: batchPhpVersions.size
+          });
+        } catch (batchError) {
+          const githubError = classifyGitHubError(
+            batchError,
+            "https://api.github.com/graphql"
+          );
+          errors.push(githubError);
+          logWarn("versions", "Failed to batch fetch PHP versions", {
+            message: githubError.message,
+            count: releasesToFetch.length
+          });
+        }
+      }
+
+      // Record both the GitHub asset and the R2 mirror (if this release has
+      // one) rather than resolving to a single download_url here - which of
+      // the two a given client should actually be sent depends on whether
+      // *that client's own version* trusts download.fossbilling.org, and is
+      // decided per-request in resolveReleaseForClient().
+      const releaseEntries: [string, ReleaseDetails][] = await Promise.all(
+        releasesToProcess.map(
+          async ({
+            tag,
+            release,
+            zipAsset,
+            cachedPhpVersion,
+            cachedMirror
+          }) => {
+            const phpVersion =
+              cachedPhpVersion !== undefined
+                ? cachedPhpVersion
+                : (batchPhpVersions.get(tag) ?? "");
+
+            // Reuse the persisted mirror pair when complete: the archive for
+            // a released version is uploaded to R2 once, at release time, and
+            // is stable, so re-heading every object on every rebuild burns up
+            // to N subrequests rediscovering data the cached blob already
+            // carries. Otherwise: releases before R2_MIRROR_MIN_VERSION were
+            // never uploaded to R2 and never will be, so skip the lookup
+            // rather than issuing a HeadObject that's guaranteed to miss -
+            // Cloudflare's own R2 binding instrumentation logs every miss as
+            // an error-level span, regardless of how we handle the resulting
+            // null here.
+            let mirror: ReleaseR2Object | null = cachedMirror ?? null;
+            if (!mirror && semverGte(tag, R2_MIRROR_MIN_VERSION)) {
+              try {
+                mirror = await getReleaseR2Object(downloadBucket, tag);
+              } catch (r2Error) {
+                logWarn("versions", "Failed to look up release in R2", {
+                  tag,
+                  error:
+                    r2Error instanceof Error ? r2Error.message : String(r2Error)
+                });
+              }
+            }
+
+            const releaseDetails: ReleaseDetails = {
+              version: release.name || tag,
+              released_on: release.published_at ?? "",
+              minimum_php_version: phpVersion,
+              download_url: zipAsset.browser_download_url,
+              mirror_download_url: mirror?.downloadUrl ?? null,
+              size_bytes: zipAsset.size,
+              is_prerelease: Boolean(release.prerelease),
+              github_release_id: release.id ?? 0,
+              changelog: release.body || "",
+              digest: zipAsset.digest ?? null,
+              mirror_digest: mirror?.digest ?? null
+            };
+            return [tag, releaseDetails];
+          }
+        )
+      );
+
+      const releases = Object.fromEntries(
+        releaseEntries.sort((a, b) => semverCompare(b[0], a[0]))
+      );
+
+      if (Object.keys(releases).length > 0) {
+        // The write is deliberately outside the GitHub try/catch: a KV
+        // failure must not be classified as a GitHub outage (or discard
+        // the fresh data just fetched in favour of the stale cache) - it
+        // gets its own log line and the fresh result still returns.
+        const writeCache = cache
+          .put(RELEASE_CACHE_KEY, JSON.stringify(releases), {
+            expirationTtl: RELEASE_CACHE_TTL
+          })
+          .then(() => {
+            logInfo("versions", "Updated releases cache", {
+              cacheKey: RELEASE_CACHE_KEY,
+              releaseCount: Object.keys(releases).length
+            });
+          })
+          .catch((putError) => {
+            logError("versions", "Failed to write releases cache", {
+              cacheKey: RELEASE_CACHE_KEY,
+              error:
+                putError instanceof Error ? putError.message : String(putError)
+            });
+          });
+        if (waitUntil) waitUntil(writeCache);
+        else await writeCache;
+      }
+
+      // Only non-validation errors are worth reporting upstream: a malformed
+      // composer blob skips that version but the rebuild itself succeeded.
+      // First match wins - the batch produces at most one non-validation
+      // failure in practice (a rate limit or network outage aborts the scan).
+      return {
+        releases,
+        source: "fresh",
+        error: errors.find((e) => !(e instanceof ValidationError))
+      };
+    } catch (error) {
+      const githubError = classifyGitHubError(error, RELEASES_URL);
+
+      if (githubError instanceof ValidationError) {
+        logWarn("versions", "Invalid response received from GitHub API", {
+          message: githubError.message,
+          url: githubError.url
+        });
+        return {
+          releases: {},
+          source: "fresh"
+        };
+      }
+
+      if (
+        githubError instanceof AuthError ||
+        githubError instanceof RateLimitError
+      ) {
+        logError("versions", "Critical GitHub API error", {
+          message: githubError.message,
+          httpStatus: githubError.httpStatus,
+          url: githubError.url
+        });
+      } else {
+        logWarn("versions", "GitHub API error", {
+          message: githubError.message,
+          httpStatus: githubError.httpStatus,
+          url: githubError.url
+        });
+      }
+
+      if (parsedCache) {
+        logInfo("versions", "Serving stale releases from cache", {
+          cacheKey: RELEASE_CACHE_KEY,
+          reason: githubError.message
+        });
+        return {
+          releases: parsedCache,
+          source: "stale",
+          error: githubError
+        };
+      }
+
+      return {
+        releases: {},
+        source: "fresh",
+        error: githubError
+      };
+    }
+  });
+}
+
+// Parsing the full changelog-bearing blob is measurable and the blob is
+// byte-identical across sequential requests on a warm isolate until a
+// rebuild refreshes KV, so keep exactly the last parse: a refreshed value
+// simply misses and re-parses. A single slot covers the real workload - the
+// old and new blob around one rebuild.
+let lastRawReleases: string | null = null;
+let lastParsedReleases: Releases | null = null;
+
+function parseCachedReleasesMemoized(
+  cachedReleases: string,
+  logMessage: string
+): Releases | null {
+  if (cachedReleases === lastRawReleases) return lastParsedReleases;
+
+  const parsed = parseCachedReleases(cachedReleases, logMessage);
+  lastRawReleases = cachedReleases;
+  lastParsedReleases = parsed;
+  return parsed;
+}
+
+function parseCachedReleases(
+  cachedReleases: string,
+  logMessage: string
+): Releases | null {
+  try {
+    const parsedCache = JSON.parse(cachedReleases);
+    if (parsedCache && typeof parsedCache === "object") {
+      // Cache entries written before the `digest` field existed lack the
+      // key entirely; normalize them to the documented `null` fallback.
+      for (const release of Object.values(parsedCache as Releases)) {
+        if (release.digest === undefined) {
+          release.digest = null;
+        }
+
+        // A release missing *either* mirror field predates them (both are
+        // always written together - see getReleases() below - so a partial
+        // pair means this entry is malformed or from before they existed),
+        // which includes the window when download_url itself was written
+        // as the (unconditionally preferred) R2 mirror URL, with no
+        // separate field preserving the GitHub URL every older client
+        // trusts. There's no `null` to backfill that repairs it: the
+        // GitHub URL isn't recoverable from this cache entry at all, and
+        // serving download_url as-is risks handing every client - not
+        // just old ones - the untrusted mirror URL. A one-sided pair is
+        // just as unsafe: resolveReleaseForClient() would pair a real
+        // mirror_download_url with an undefined mirror_digest (or vice
+        // versa) for a trusting client, and JSON drops that undefined key
+        // from the response entirely - incomplete update metadata. Invalidate
+        // the whole cache so getReleases() falls through to a fresh fetch,
+        // which rebuilds every entry with its GitHub and mirror URLs kept
+        // separate again.
+        if (
+          release.mirror_download_url === undefined ||
+          release.mirror_digest === undefined
+        ) {
+          logWarn(
+            "versions",
+            "Cache entry predates mirror fields; invalidating cache to rebuild with separated URLs",
+            { cacheKey: RELEASE_CACHE_KEY, version: release.version }
+          );
+          return null;
+        }
+      }
+      return parsedCache as Releases;
+    }
+  } catch (parseError) {
+    logError("versions", logMessage, {
+      cacheKey: RELEASE_CACHE_KEY,
+      error:
+        parseError instanceof Error ? parseError.message : String(parseError)
+    });
+  }
+
+  return null;
+}
+
+interface PhpVersionBatchItem {
+  tag: string;
+  composerPath: string;
+}
+
+async function getBatchPhpVersions(
+  githubToken: string,
+  releases: PhpVersionBatchItem[]
+): Promise<Map<string, string>> {
+  if (releases.length === 0) return new Map();
+
+  const fields = releases
+    .map(
+      ({ tag, composerPath }, i) =>
+        `r${i}: object(expression: "${tag}:${composerPath}") { ... on Blob { text } }`
+    )
+    .join("\n");
+
+  const query = `{ repository(owner: "${REPO_OWNER}", name: "${REPO_NAME}") {\n${fields}\n} }`;
+
+  const data = await graphql<{
+    repository: Record<string, { text?: string } | null>;
+  }>(query, {
+    headers: { authorization: `Bearer ${githubToken}` }
+  });
+
+  const result = new Map<string, string>();
+
+  for (let i = 0; i < releases.length; i++) {
+    const { tag } = releases[i];
+    const blob = data.repository[`r${i}`];
+    if (blob?.text) {
+      try {
+        const composerJson = JSON.parse(blob.text) as {
+          require?: { php?: string };
+        };
+        const phpRequirement = composerJson.require?.php;
+        if (phpRequirement) {
+          result.set(tag, phpRequirement.replace(/\^|>=/g, "").trim());
+        }
+      } catch {
+        // Ignore individual parse errors
+      }
+    }
+  }
+
+  return result;
+}
