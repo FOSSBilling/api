@@ -18,7 +18,6 @@ export default defineConfig({
     cloudflareTest({
       wrangler: { configPath: "./wrangler.jsonc" },
       miniflare: {
-        r2Buckets: ["EXTENSION_PACKAGE_BUCKET"],
         images: { binding: "PACKAGE_IMAGES" },
         // Add test environment variables
         bindings: {

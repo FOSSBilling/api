@@ -11,7 +11,6 @@ declare module "cloudflare:test" {
 // hence augmenting this namespace directly rather than the module above.
 declare namespace Cloudflare {
   interface Env {
-    EXTENSION_PACKAGE_BUCKET: R2Bucket;
     TEST_MIGRATIONS_EXTENSIONS: import("cloudflare:test").D1Migration[];
     TEST_MIGRATIONS_CENTRAL_ALERTS: import("cloudflare:test").D1Migration[];
   }

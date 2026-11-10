@@ -14,10 +14,9 @@ import { PackageError } from "../../../services/extensions/v2/packages/errors";
 import { configuredPackageStore } from "./package-store";
 import { CloudflarePackageImages } from "./package-images";
 
-type PackageBindings = CloudflareBindings & {
-  EXTENSION_PACKAGE_BUCKET?: R2Bucket;
-};
-export function packagePreparation(env: PackageBindings): PackagePreparation {
+export function packagePreparation(
+  env: CloudflareBindings
+): PackagePreparation {
   const bindings = createCloudflareBindings(env);
   const getEnv = (name: string) => bindings.environment.get(name);
   const store = configuredPackageStore(env, getEnv);

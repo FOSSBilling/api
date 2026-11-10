@@ -5,7 +5,7 @@ complete. The API validates and repacks them with directory-generated manifests,
 then publishes them through the existing revision review. It never runs uploaded
 code or package build scripts. ZIPs use the private B2 bucket; prepared icons use
 the public asset bucket, including icons for pending submissions. Automated tests
-inject emulated storage.
+use the B2 adapter with mocked S3 responses.
 Package routes are disabled by default. Local development and production enablement are separate modes.
 
 ## Local development and testing
@@ -18,8 +18,8 @@ and Images bindings run locally under Wrangler; B2 requests use the configured
 buckets and development keys, so use a separate key and package object prefix.
 
 `npm run test:all` covers the package lifecycle through the real API routes and
-D1 repository, with emulated storage and images. Node tests also exercise package
-preparation and B2 storage without a Cloudflare runtime.
+D1 repository, with mocked S3 responses and emulated image processing. Node tests
+also exercise package preparation and B2 storage without a Cloudflare runtime.
 
 ## API and review
 
@@ -167,13 +167,12 @@ EXTENSION_PACKAGES_S3_PREFIX="local"
 Keep this bucket private. Use a separate development key restricted to the bucket
 with read, write and delete-file permissions. No public URL or domain is required.
 Use `EXTENSION_PACKAGES_MODE=local` only outside production. The committed production configuration remains disabled.
-The tests inject a local R2 store when S3 endpoints are unset. Normal local development
-uses B2 with development credentials. An incomplete S3 configuration or upstream
+Tests run the B2 adapter against mocked S3 responses. Local development uses B2
+with development credentials. An incomplete S3 configuration or upstream
 failure returns 503 rather than silently switching storage backends.
 
-R2 validates the supplied SHA-256 when writing and returns that checksum as
-object metadata. Its adapter checks this metadata on reads without rehashing the
-response body. The B2 adapter additionally hashes the downloaded bytes.
+The B2 adapter signs uploads with their SHA-256 payload, stores checksum metadata
+and verifies both metadata and downloaded bytes on reads.
 
 Source and built ZIPs use `local/packages/<object-id>`. Object IDs are allocated
 once by D1 before upload. Uploads carry a signed SHA-256 payload and private cache
@@ -201,7 +200,7 @@ EXTENSION_ASSETS_PUBLIC_URL="https://extensions-assets.fossbilling.net"
 
 Restrict the asset key to this bucket with read, write and delete-file permissions.
 Pending API previews read these stored objects; cleanup deletes abandoned versions.
-Tests can inject emulated storage when the endpoint is unset. Public object keys use
+Tests mock S3 responses without accessing a real bucket. Public object keys use
 `extensions/<extension UUID>/icons/<asset UUID>.<format>`, for example:
 
 ```text
@@ -251,7 +250,7 @@ or secrets are created by a local build or type-generation command.
 
 Before deployment (including an automatic deployment after merge):
 
-1. Provision the `extension-packages` Queue. No R2 image bucket is needed;
+1. Provision the `extension-packages` Queue.
    ZIPs use private B2 and prepared icons use the public B2 asset bucket.
    The queue binding must exist even while package mode is disabled; that flag blocks
    application routes, not deployment-time binding validation.

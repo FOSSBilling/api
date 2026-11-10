@@ -55,14 +55,71 @@ const manifest = () =>
     "package-demo",
     ExtensionContentSchema.parse(sampleContent())
   );
-const bucket = () => env.EXTENSION_PACKAGE_BUCKET!;
+const packageKey = (id: string) => `/test-packages/local/packages/${id}`;
+let b2: ReturnType<typeof mockB2>;
+
+function mockB2() {
+  Object.assign(env, {
+    EXTENSION_PACKAGES_S3_ENDPOINT: "https://s3.example.test",
+    EXTENSION_PACKAGES_S3_REGION: "test-region",
+    EXTENSION_PACKAGES_S3_BUCKET: "test-packages",
+    EXTENSION_PACKAGES_S3_PREFIX: "local",
+    EXTENSION_PACKAGES_S3_ACCESS_KEY_ID: "test-key",
+    EXTENSION_PACKAGES_S3_SECRET_ACCESS_KEY: "test-secret",
+    EXTENSION_ASSETS_S3_ENDPOINT: "https://s3.example.test",
+    EXTENSION_ASSETS_S3_REGION: "test-region",
+    EXTENSION_ASSETS_S3_BUCKET: "test-assets",
+    EXTENSION_ASSETS_S3_ACCESS_KEY_ID: "test-key",
+    EXTENSION_ASSETS_S3_SECRET_ACCESS_KEY: "test-secret",
+    EXTENSION_ASSETS_PUBLIC_URL: "https://extensions-assets.fossbilling.net"
+  });
+  const calls: Request[] = [];
+  const objects = new Map<
+    string,
+    {
+      bytes: ArrayBuffer;
+      checksum: string;
+      version: string;
+    }
+  >();
+  const fetch = vi.fn(async (request: Request) => {
+    const url = new URL(request.url);
+    expect(url.hostname).toBe("s3.example.test");
+    expect(request.headers.get("Authorization")).toMatch(/^AWS4-HMAC-SHA256 /);
+    calls.push(request.clone());
+    const key = url.pathname;
+    if (request.method === "PUT") {
+      objects.set(key, {
+        bytes: await request.arrayBuffer(),
+        checksum: request.headers.get("x-amz-meta-sha256")!,
+        version: crypto.randomUUID()
+      });
+      return new Response(null);
+    }
+    const object = objects.get(key);
+    if (!object) return new Response(null, { status: 404 });
+    if (request.method === "DELETE") {
+      expect(url.searchParams.get("versionId")).toBe(object.version);
+      objects.delete(key);
+      return new Response(null, { status: 204 });
+    }
+    expect(["GET", "HEAD"]).toContain(request.method);
+    return new Response(request.method === "HEAD" ? null : object.bytes, {
+      headers: {
+        "x-amz-meta-sha256": object.checksum,
+        "x-amz-version-id": object.version
+      }
+    });
+  });
+  vi.stubGlobal("fetch", fetch);
+  return { calls, objects, fetch };
+}
 
 beforeEach(async () => {
   vi.spyOn(env.EXTENSION_PACKAGE_QUEUE, "send").mockResolvedValue({
     metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } }
   });
-  Reflect.deleteProperty(env, "EXTENSION_PACKAGES_S3_ENDPOINT");
-  Reflect.deleteProperty(env, "EXTENSION_ASSETS_S3_ENDPOINT");
+  b2 = mockB2();
   Object.assign(env, {
     ENVIRONMENT: "local",
     EXTENSION_PACKAGES_MODE: "local",
@@ -220,6 +277,14 @@ async function unpack(bytes: Uint8Array<ArrayBuffer>) {
 describe("publisher package builds", () => {
   beforeEach(async () => {
     await activateM2mJwks();
+    const jwksFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
+      const request =
+        input instanceof Request ? input : new Request(input, init);
+      return new URL(request.url).hostname === "s3.example.test"
+        ? b2.fetch(request)
+        : jwksFetch(input, init);
+    });
     await insertUser(db, { id: "publisher-moderator", is_moderator: 1 });
     const response = await put(
       `${root}/m2m/clients/package-publisher`,
@@ -362,28 +427,20 @@ describe("publisher package builds", () => {
     expect((await machineBuild()).status).toBe(403);
   });
   it("rechecks revocation after uploading before linking source bytes", async () => {
-    const original = bucket().put.bind(bucket());
-    const write = vi
-      .spyOn(bucket(), "put")
-      .mockImplementationOnce(async (...args) => {
-        const result = await original(...args);
-        await db
-          .prepare(
-            "UPDATE m2m_publisher_clients SET revoked_at=CURRENT_TIMESTAMP WHERE client_id='package-publisher'"
-          )
-          .run();
-        return result;
-      });
-    try {
-      expect((await machineBuild()).status).toBe(403);
-      expect(
-        await db
-          .prepare("SELECT count(*) as count FROM package_sources")
-          .first()
-      ).toEqual({ count: 0 });
-    } finally {
-      write.mockRestore();
-    }
+    const original = b2.fetch.getMockImplementation()!;
+    b2.fetch.mockImplementationOnce(async (request) => {
+      const result = await original(request);
+      await db
+        .prepare(
+          "UPDATE m2m_publisher_clients SET revoked_at=CURRENT_TIMESTAMP WHERE client_id='package-publisher'"
+        )
+        .run();
+      return result;
+    });
+    expect((await machineBuild()).status).toBe(403);
+    expect(
+      await db.prepare("SELECT count(*) as count FROM package_sources").first()
+    ).toEqual({ count: 0 });
   });
 });
 
@@ -523,7 +580,9 @@ describe("queued package preparation", () => {
     const { result } = (await response.json()) as { result: { id: string } };
     const jobs = new PackageJobsDatabase(db);
     const job = (await jobs.get(result.id))!;
-    await bucket().delete(job.uploadObjectId!);
+    const key = packageKey(job.uploadObjectId!);
+    const staged = b2.objects.get(key)!;
+    b2.objects.delete(key);
     expect(
       await processPackageJob(jobs, job.id, (job) =>
         prepareQueuedPackage(packagePreparation(env), job)
@@ -534,9 +593,7 @@ describe("queued package preparation", () => {
       attempts: 1,
       error: { code: "SOURCE_UNAVAILABLE", status: 503 }
     });
-    await bucket().put(job.uploadObjectId!, source, {
-      sha256: job.uploadSha256!
-    });
+    b2.objects.set(key, staged);
     expect(
       await processPackageJob(jobs, job.id, (job) =>
         prepareQueuedPackage(packagePreparation(env), job)
@@ -612,14 +669,7 @@ describe("queued package preparation", () => {
 
 describe("stored directory packages", () => {
   it("uses separate B2 buckets for ZIPs and icons through preparation, correction and approval", async () => {
-    const remote = configureB2({
-      EXTENSION_PACKAGES_S3_ENDPOINT: "https://s3.example.test",
-      EXTENSION_PACKAGES_S3_REGION: "eu-central-003",
-      EXTENSION_PACKAGES_S3_BUCKET: "test-packages",
-      EXTENSION_PACKAGES_S3_ACCESS_KEY_ID: "test-key",
-      EXTENSION_PACKAGES_S3_SECRET_ACCESS_KEY: "test-secret"
-    });
-    const requests = remote.calls;
+    const requests = b2.calls;
     const writer = new ZipWriter(new Uint8ArrayWriter(), options);
     await writer.add("Service.php", new TextReader("<?php // B2 test"));
     await writer.add(
@@ -759,14 +809,14 @@ describe("stored directory packages", () => {
       .prepare("SELECT object_id FROM package_artifacts WHERE id=?")
       .bind(artifact.id)
       .first<{ object_id: string }>();
-    await bucket().delete(object!.object_id);
+    b2.objects.delete(packageKey(object!.object_id));
     // Reading the icon must not depend on opening the ZIP.
     expect((await get(path, await authHeaders("owner"))).status).toBe(200);
     expect((await approve(await submitted(artifact))).status).toBe(200);
     expect((await get(path, {})).status).toBe(200);
     const published = await getExtension(db, "package-demo");
     expect(published?.icon_url).toBe(
-      artifact.download_url.replace(/\/download$/, "/icon")
+      `https://extensions-assets.fossbilling.net/${String(before!.svg_object_id)}`
     );
     await db
       .prepare(
@@ -971,50 +1021,6 @@ describe("stored directory packages", () => {
     expect((await upload()).status).toBe(200);
   });
 
-  function configureB2(overrides: Record<string, string> = {}) {
-    Object.assign(env, {
-      EXTENSION_ASSETS_S3_ENDPOINT: "https://s3.example.test",
-      EXTENSION_ASSETS_S3_REGION: "eu-central-003",
-      EXTENSION_ASSETS_S3_BUCKET: "test-assets",
-      EXTENSION_ASSETS_S3_ACCESS_KEY_ID: "test-key",
-      EXTENSION_ASSETS_S3_SECRET_ACCESS_KEY: "test-secret",
-      EXTENSION_ASSETS_PUBLIC_URL: "https://extensions-assets.fossbilling.net",
-      ...overrides
-    });
-    const calls: Request[] = [];
-    const objects = new Map<string, { bytes: ArrayBuffer; checksum: string }>();
-    let failure = false;
-    vi.stubGlobal(
-      "fetch",
-      async (input: RequestInfo | URL, init?: RequestInit) => {
-        const request =
-          input instanceof Request ? input : new Request(input, init);
-        expect(new URL(request.url).hostname).toBe("s3.example.test");
-        calls.push(request.clone());
-        if (failure) return new Response(null, { status: 503 });
-        const key = new URL(request.url).pathname;
-        if (request.method === "PUT") {
-          objects.set(key, {
-            bytes: await request.arrayBuffer(),
-            checksum: request.headers.get("x-amz-meta-sha256")!
-          });
-          return new Response(null);
-        }
-        const object = objects.get(key);
-        if (!object) return new Response(null, { status: 404 });
-        expect(request.method).toBe("GET");
-        return new Response(object.bytes, {
-          headers: { "x-amz-meta-sha256": object.checksum }
-        });
-      }
-    );
-    return {
-      calls,
-      fail: (value: boolean) => {
-        failure = value;
-      }
-    };
-  }
   async function iconSource(format: "svg" | "png" = "svg") {
     const svg =
       '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M0 0h24v24z"/></svg>';
@@ -1038,7 +1044,6 @@ describe("stored directory packages", () => {
     return writer.close();
   }
   it("stores pending icons at unlisted B2 URLs using the permanent draft UUID", async () => {
-    const remote = configureB2();
     const artifact = await built(manifest(), await iconSource());
     const draft = (await getExtension(db, "package-demo"))!;
     expect(draft.id).toMatch(UUID_V7);
@@ -1048,14 +1053,18 @@ describe("stored directory packages", () => {
         .status
     ).toBe(200);
     expect((await get(`${root}/extensions/package-demo`, {})).status).toBe(404);
-    const uploads = remote.calls.filter((r) => r.method === "PUT");
+    const uploads = b2.calls.filter(
+      (r) =>
+        r.method === "PUT" &&
+        new URL(r.url).pathname.startsWith("/test-assets/")
+    );
     expect(uploads).toHaveLength(1);
     const upload = uploads[0];
     const objectKey = new URL(upload.url).pathname.replace("/test-assets/", "");
     expect(objectKey).toMatch(
       new RegExp(`^extensions/${draft.id}/icons/[a-f0-9-]{36}\\.svg$`)
     );
-    const callsBefore = remote.calls.length;
+    const callsBefore = b2.calls.length;
     expect((await get(`${root}/packages/${artifact.id}/icon`, {})).status).toBe(
       404
     );
@@ -1067,7 +1076,7 @@ describe("stored directory packages", () => {
         )
       ).status
     ).toBe(404);
-    expect(remote.calls).toHaveLength(callsBefore);
+    expect(b2.calls).toHaveLength(callsBefore);
     const preview = await get(
       `${root}/packages/${artifact.id}/icon`,
       await authHeaders("owner")
@@ -1075,16 +1084,16 @@ describe("stored directory packages", () => {
     expect(preview.status).toBe(200);
     expect(preview.headers.get("Cache-Control")).toBe("private, no-store");
     expect(await preview.text()).toContain("<svg");
-    expect(remote.calls.at(-1)?.url).toBe(upload.url);
+    expect(b2.calls.at(-1)?.url).toBe(upload.url);
     const pending = await submitted(artifact);
-    const callsBeforeApproval = remote.calls.length;
+    const callsBeforeApproval = b2.calls.length;
     expect((await approve(pending)).status).toBe(200);
     const published = (await getExtension(db, "package-demo"))!;
     expect(published.id).toBe(draft.id);
     expect(published.icon_url).toBe(
       `https://extensions-assets.fossbilling.net/${objectKey}`
     );
-    expect(remote.calls).toHaveLength(callsBeforeApproval);
+    expect(b2.calls).toHaveLength(callsBeforeApproval);
     const edited = await built(
       { ...manifest(), description: "Updated metadata" },
       undefined,
@@ -1103,19 +1112,30 @@ describe("stored directory packages", () => {
     expect((await getExtension(db, "package-demo"))?.icon_url).toBe(
       published.icon_url
     );
-    expect(remote.calls.filter((r) => r.method === "PUT")).toHaveLength(1);
+    expect(
+      b2.calls.filter(
+        (r) =>
+          r.method === "PUT" &&
+          new URL(r.url).pathname.startsWith("/test-assets/")
+      )
+    ).toHaveLength(1);
   });
   it("fails preparation on asset upload errors and retries without changing storage backends", async () => {
-    const remote = configureB2();
     const source = await iconSource();
-    remote.fail(true);
+    const original = b2.fetch.getMockImplementation()!;
+    b2.fetch.mockImplementation(async (request) =>
+      request.method === "PUT" &&
+      new URL(request.url).pathname.startsWith("/test-assets/")
+        ? new Response(null, { status: 503 })
+        : original(request)
+    );
     expect((await upload(manifest(), source)).status).toBe(503);
     expect(
       await db
         .prepare("SELECT count(*) AS count FROM package_artifacts")
         .first()
     ).toEqual({ count: 0 });
-    remote.fail(false);
+    b2.fetch.mockImplementation(original);
     const artifact = await built(manifest(), source);
     expect(
       (
@@ -1131,7 +1151,6 @@ describe("stored directory packages", () => {
     );
   });
   it("publishes an icon when a valid extension ID is supplied in uppercase", async () => {
-    configureB2();
     const artifact = await built(manifest(), await iconSource());
     const revision = await submitted(artifact);
     await insertUser(db, { id: "moderator", is_moderator: 1 });
@@ -1149,10 +1168,13 @@ describe("stored directory packages", () => {
     );
   });
   it("publishes AVIF and PNG with one immutable image identity for browser fallback", async () => {
-    const remote = configureB2();
     const artifact = await built(manifest(), await iconSource("png"));
     expect((await approve(await submitted(artifact))).status).toBe(200);
-    const uploads = remote.calls.filter((request) => request.method === "PUT");
+    const uploads = b2.calls.filter(
+      (request) =>
+        request.method === "PUT" &&
+        new URL(request.url).pathname.startsWith("/test-assets/")
+    );
     expect(uploads).toHaveLength(2);
     const extension = (await getExtension(db, "package-demo"))!;
     expect(new URL(uploads[0].url).pathname).toMatch(
@@ -1209,7 +1231,7 @@ describe("stored directory packages", () => {
       .prepare("SELECT object_id FROM package_sources WHERE id=?")
       .bind(artifact.source_id)
       .first<{ object_id: string }>();
-    await bucket().delete(source!.object_id);
+    b2.objects.delete(packageKey(source!.object_id));
     expect((await built(manifest(), undefined, artifact.source_id)).id).toBe(
       artifact.id
     );
@@ -1447,7 +1469,9 @@ describe("stored directory packages", () => {
       .prepare("SELECT object_id FROM package_sources WHERE id=?")
       .bind(artifact.source_id)
       .first<{ object_id: string }>();
-    await bucket().put(source!.object_id, "corrupt");
+    b2.objects.get(packageKey(source!.object_id))!.bytes = new Uint8Array(
+      new TextEncoder().encode("corrupt")
+    ).buffer;
     expect(
       (
         await upload(
@@ -1461,7 +1485,9 @@ describe("stored directory packages", () => {
       .prepare("SELECT object_id FROM package_artifacts WHERE id=?")
       .bind(artifact.id)
       .first<{ object_id: string }>();
-    await bucket().put(stored!.object_id, "corrupt");
+    b2.objects.get(packageKey(stored!.object_id))!.bytes = new Uint8Array(
+      new TextEncoder().encode("corrupt")
+    ).buffer;
     expect(
       (
         await get(
@@ -1571,28 +1597,14 @@ describe("stored directory packages", () => {
     expect((await upload()).status).toBe(503); // localhost URL / incomplete storage
     env.EXTENSION_PACKAGES_BASE_URL =
       "https://api.fossbilling.net/extensions/v2";
-    expect((await upload()).status).toBe(503); // must not fall back to local R2
+    expect((await upload()).status).toBe(503); // local object prefix cannot enable production
+    Object.assign(env, { EXTENSION_PACKAGES_S3_PREFIX: "production" });
+    Reflect.deleteProperty(env, "EXTENSION_ASSETS_S3_SECRET_ACCESS_KEY");
+    expect((await upload()).status).toBe(503);
     Object.assign(env, {
-      EXTENSION_PACKAGES_S3_ENDPOINT: "https://s3.example.test",
-      EXTENSION_PACKAGES_S3_REGION: "eu-central-003",
-      EXTENSION_PACKAGES_S3_BUCKET: "private-packages",
-      EXTENSION_PACKAGES_S3_PREFIX: "production",
-      EXTENSION_PACKAGES_S3_ACCESS_KEY_ID: "test-key",
-      EXTENSION_PACKAGES_S3_SECRET_ACCESS_KEY: "test-secret"
+      EXTENSION_ASSETS_S3_SECRET_ACCESS_KEY: "test-secret"
     });
-    Object.assign(env, {
-      EXTENSION_ASSETS_S3_ENDPOINT: "https://s3.example.test",
-      EXTENSION_ASSETS_S3_REGION: "eu-central-003",
-      EXTENSION_ASSETS_S3_BUCKET: "public-assets",
-      EXTENSION_ASSETS_S3_ACCESS_KEY_ID: "test-key",
-      EXTENSION_ASSETS_S3_SECRET_ACCESS_KEY: "test-secret",
-      EXTENSION_ASSETS_PUBLIC_URL: "https://extensions-assets.fossbilling.net"
-    });
-    const requests: Request[] = [];
-    vi.stubGlobal("fetch", async (request: Request) => {
-      requests.push(request);
-      return new Response(null, { status: 200 });
-    });
+    const requests = b2.calls;
     const response = await upload(
       manifest(),
       undefined,
@@ -1621,6 +1633,11 @@ describe("stored directory packages", () => {
     expect(
       (await upload(manifest(), new Uint8Array(5 * 1024 * 1024 + 1))).status
     ).toBe(413);
+    Reflect.deleteProperty(env, "EXTENSION_PACKAGES_S3_ENDPOINT");
+    expect((await upload()).status).toBe(503);
+    Object.assign(env, {
+      EXTENSION_PACKAGES_S3_ENDPOINT: "https://s3.example.test"
+    });
     await db
       .prepare("UPDATE users SET deleted_at=CURRENT_TIMESTAMP WHERE id='owner'")
       .run();
@@ -1630,14 +1647,8 @@ describe("stored directory packages", () => {
   });
 
   it("leaves failed uploads reserved for cleanup and permits a safe retry", async () => {
-    const failure = vi
-      .spyOn(bucket(), "put")
-      .mockRejectedValueOnce(new Error("storage outage"));
-    try {
-      expect((await upload()).status).toBe(503);
-    } finally {
-      failure.mockRestore();
-    }
+    b2.fetch.mockResolvedValueOnce(new Response(null, { status: 503 }));
+    expect((await upload()).status).toBe(503);
     expect(
       await db
         .prepare("SELECT count(*) AS count FROM package_artifacts")
@@ -1654,13 +1665,19 @@ describe("stored directory packages", () => {
 
   it("counts abandoned reservations against quota and safely cleans them after a day", async () => {
     const artifact = await built();
+    const abandoned = crypto.randomUUID();
     await db
       .prepare(
-        "INSERT INTO package_objects (id,created_by,bytes,created_at) VALUES ('abandoned','owner',?,datetime('now','-2 days'))"
+        "INSERT INTO package_objects (id,created_by,bytes,created_at) VALUES (?,'owner',?,datetime('now','-2 days'))"
       )
-      .bind(512 * 1024 * 1024)
+      .bind(abandoned, 512 * 1024 * 1024)
       .run();
-    await bucket().put("abandoned", "failed upload");
+    const bytes = new Uint8Array(new TextEncoder().encode("failed upload"));
+    b2.objects.set(packageKey(abandoned), {
+      bytes: bytes.buffer,
+      checksum: await sha256(bytes),
+      version: "abandoned-version"
+    });
     expect(
       (
         await upload(
@@ -1677,7 +1694,10 @@ describe("stored directory packages", () => {
     );
     expect(cleanup.status).toBe(200);
     expect(await cleanup.json()).toEqual({ result: { deleted: 1 } });
-    expect(await bucket().get("abandoned")).toBeNull();
+    expect(b2.objects.has(packageKey(abandoned))).toBe(false);
+    expect(
+      b2.calls.find((request) => request.method === "DELETE")?.url
+    ).toContain("versionId=abandoned-version");
     expect(
       (
         await upload(
