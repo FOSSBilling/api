@@ -100,7 +100,7 @@ function fixture() {
       checksum = await sha256(bytes);
     objects.set(key(id), { bytes, checksum });
     return {
-      manifest,
+      manifest: structuredClone(manifest),
       source: { id, sha256: checksum },
       archive: crypto.randomUUID(),
       icons: [crypto.randomUUID(), crypto.randomUUID()]

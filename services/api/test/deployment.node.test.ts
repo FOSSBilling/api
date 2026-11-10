@@ -118,7 +118,9 @@ describe("API deployment artifact", () => {
     for (const override of overrides) {
       expect(() =>
         prepareDeployment(folder, JSON.stringify({ ...resources, ...override }))
-      ).toThrow();
+      ).toThrow(
+        "API_PREVIEW_RESOURCES must use distinct non-production resources"
+      );
       expect(existsSync(join(folder, "dist/wrangler.json"))).toBe(false);
     }
   });

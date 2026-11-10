@@ -2,7 +2,8 @@
   publish = "services/extension-packager/netlify/public"
 
 [build.environment]
-  NODE_VERSION = "26"
+  # Lambda Node 26 is currently public preview; application CI uses Node 26.
+  NODE_VERSION = "24"
 
 [functions]
   directory = "services/extension-packager/netlify/functions"

@@ -49,9 +49,14 @@ Create a dedicated Netlify project connected to this repository:
 
 Paths in `netlify.toml` are relative to the repository-root base directory, following
 [Netlify's monorepo configuration](https://docs.netlify.com/build/configure-builds/monorepos/).
-The config selects Node.js 26 and keeps the native Sharp and sanitizer dependencies
-external so Netlify includes their binaries and WASM files. Verify these files and
-Node.js 26 in the deployed artifact/runtime before enabling processing.
+The Netlify configuration currently selects Node.js 24, a stable Lambda runtime.
+[AWS lists Node.js 26 as public preview](https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtimes.html),
+so it is not yet the production hosting target. The code is tested on Node.js 26;
+this runtime selection belongs only to the Netlify adapter.
+
+Native Sharp and sanitizer dependencies remain external so Netlify includes their
+binaries and WASM files. Verify those files and the deployed runtime before
+enabling processing.
 
 Set the seven variables listed above through Netlify's dashboard, CLI or API for the
 function runtime. Use production credentials and a separate randomly generated shared
