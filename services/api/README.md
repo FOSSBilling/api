@@ -182,11 +182,15 @@ Migration jobs serialize access to the shared staging databases.
 
 #### Setup before switching deployment
 
-1. Configure GitHub `production` and `preview` environments, each with its own
-   `CLOUDFLARE_API_TOKEN` secret. Set `CLOUDFLARE_ACCOUNT_ID` as a repository variable
+1. Configure GitHub `production` and `preview` environments. Set the
+   `CLOUDFLARE_API_TOKEN` repository secret, or override it with a separate token
+   in each environment. Set `CLOUDFLARE_ACCOUNT_ID` as a repository variable
    shared by both deployment targets. Restrict the production environment to `main`.
-   Deployment tokens need Workers deployment and
-   D1 migration permissions; Preview credentials and resources must be non-production.
+   Deployment tokens need Editor access to the API Worker, Workers Routes Write
+   for its zone, D1 Read/Write for migrations, and Queues Read/Write to configure
+   the existing production consumer. Preview deployments need access to the API
+   Worker and staging D1 migrations, without Queue or production route changes.
+   Preview data resources and runtime secrets must be separate from production.
 2. Provision staging D1 databases, KV namespaces, a download bucket and a separately
    deployed staging Extensions frontend. Set the repository variable `API_PREVIEW_RESOURCES`
    to their identifiers, using the following JSON shape:
@@ -209,8 +213,9 @@ Migration jobs serialize access to the shared staging databases.
    staging resources; they do not automatically receive separate D1/KV/R2 data.
 
 3. Configure Preview runtime secrets in the API Worker's **Previews Base** settings.
-   Use a separate assertion-signing secret, revalidation secret and read-only GitHub
-   token. Match the revalidation secret with the staging frontend. Set M2M issuer,
+   Use separate assertion-signing and revalidation secrets, matching both with
+   the staging frontend. Use a read-only GitHub token if authenticated GitHub
+   requests are needed. Set M2M issuer,
    JWKS and audience variables there when using a separate test issuer. Operational
    production variables and secrets remain dashboard-managed with `keep_vars: true`.
 4. Configure required checks for the new validation/build job names, then disable the
@@ -219,7 +224,11 @@ Migration jobs serialize access to the shared staging databases.
 The workflow compiles the branch's Preview settings into the artifact. Each Preview
 receives isolated Durable Object state; the data bindings above are shared staging
 resources. A frontend service binding calls that Worker's normal deployment, so use a
-staging Worker name rather than the production Extensions worker.
+staging Worker name rather than the production Extensions worker. Configure that
+frontend with HTTP API transport and a Preview API URL, without production routes
+or API bindings. A long-lived Preview such as `staging` can back this frontend;
+refresh it from the prepared artifact with `npm run cf-preview -- --name staging`.
+Register its OAuth callback with a dedicated test client before testing sign-in.
 
 Cloudflare Previews cannot consume Queues or receive Cron Triggers. Their configuration
 therefore disables packaging and notification email, and omits Queue bindings. Full
