@@ -120,6 +120,20 @@
       "when": 1794071864002,
       "tag": "0030_directory_identity",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "6",
+      "when": 1794078741225,
+      "tag": "0031_directory_packages",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1794078779548,
+      "tag": "0032_package_jobs",
+      "breakpoints": true
     }
   ]
 }

@@ -1,3 +1,4 @@
+import { CloudflareQueueAdapter } from "./queue";
 import { IPlatformBindings } from "../../interfaces";
 import { CloudflareKVAdapter } from "./cache";
 import { CloudflareEnvironmentAdapter } from "./environment";
@@ -18,6 +19,13 @@ export function createCloudflareBindings(
   let bindings = bindingsCache.get(env);
   if (!bindings) {
     bindings = {
+      queues: env.EXTENSION_PACKAGE_QUEUE
+        ? {
+            EXTENSION_PACKAGE_QUEUE: new CloudflareQueueAdapter(
+              env.EXTENSION_PACKAGE_QUEUE
+            )
+          }
+        : {},
       caches: {
         CACHE_KV: new CloudflareKVAdapter(env.CACHE_KV),
         AUTH_KV: new CloudflareKVAdapter(env.AUTH_KV)

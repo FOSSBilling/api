@@ -11,11 +11,13 @@ FOSSBilling 0.8.9 still uses v1. Upgrade integrations to [extensions v2](../v2/R
 
 ## Migration
 
-| v1 endpoint         | v2 replacement                                                                |
-| ------------------- | ----------------------------------------------------------------------------- |
-| `GET /list`         | `GET /extensions/v2/extensions`                                               |
-| `GET /{id}`         | `GET /extensions/v2/extensions/{id}`                                          |
-| `GET /{id}/version` | Read the latest release's tag (`releases[0].tag`) from the v2 detail response |
+| v1 endpoint         | v2 replacement                                                                                                |
+| ------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `GET /list`         | `GET /extensions/v2/extensions`                                                                               |
+| `GET /{id}`         | `GET /extensions/v2/extensions/{id}`                                                                          |
+| `GET /{id}/version` | Read `version` from the v2 detail response (the selected latest release, or newest stable release by default) |
+
+The v2 version replacement returns JSON rather than plain text. Its `version` is stored without a leading `v`, while the v1 version endpoint preserves the release tag. For oversized published content, the v2 detail endpoint returns `409 CONTENT_UNAVAILABLE` instead of a version; handle that error before reading `result.version`.
 
 V2 lists use cursor pagination, not v1 limit/offset pagination. Use type `module` instead of `mod`. Releases carry full `requires.fossbilling` constraints; consumers must evaluate that constraint rather than a derived minimum.
 

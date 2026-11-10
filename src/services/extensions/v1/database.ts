@@ -3,7 +3,7 @@ import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import { ExtensionsDb } from "../../../lib/db";
 import { extensions, developers } from "../v2/db/schema";
 import { DatabaseResult } from "../../../lib/interfaces";
-import { sortReleasesDescending } from "../../../lib/releases";
+import { latestRelease, sortReleasesDescending } from "../../../lib/releases";
 import { parseJSON } from "../../../lib/json";
 import type { Release as ManifestRelease } from "../v2/schemas/extensions";
 import { Extension, Release, Author, Repository } from "./interfaces";
@@ -190,10 +190,10 @@ export class ExtensionsDatabase {
           )
         );
       if (!row) return this.notFound(id);
-      const releases = sortReleasesDescending(
+      const release = latestRelease(
         JSON.parse(row.releases!) as ManifestRelease[]
       );
-      return { data: { version: releases[0]?.tag ?? null }, error: null };
+      return { data: { version: release?.tag ?? null }, error: null };
     } catch (error) {
       return this.databaseError(error);
     }

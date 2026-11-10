@@ -27,6 +27,7 @@ export const BadgeDataSchema = z.object({
   releases: z
     .array(
       z.object({
+        is_latest: z.boolean().optional(),
         tag: z
           .string()
           .min(1)

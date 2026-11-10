@@ -139,6 +139,25 @@ async function clearDeveloperHistory(db: D1Database): Promise<void> {
 }
 
 export async function resetExtensionsDb(db: D1Database): Promise<void> {
+  // Test reset only: temporarily lift the immutable-row delete guards.
+  const guards = [
+    ["package_sources", "package_source_immutable"],
+    ["package_artifacts", "package_artifact_immutable"],
+    ["package_icons", "package_icons_immutable"]
+  ];
+  await db.batch([
+    ...guards.map(([table]) => db.prepare(`DROP TRIGGER ${table}_no_delete`)),
+    db.prepare("DELETE FROM package_jobs"),
+    db.prepare("DELETE FROM package_artifacts"),
+    db.prepare("DELETE FROM package_icons"),
+    db.prepare("DELETE FROM package_sources"),
+    db.prepare("DELETE FROM package_objects"),
+    ...guards.map(([table, message]) =>
+      db.prepare(
+        `CREATE TRIGGER ${table}_no_delete BEFORE DELETE ON ${table} BEGIN SELECT RAISE(ABORT, '${message}'); END`
+      )
+    )
+  ]);
   await db.prepare("DELETE FROM extension_write_events").run();
   await db.prepare("DELETE FROM claim_verification_budgets").run();
   await clearDeveloperHistory(db);

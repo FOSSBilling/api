@@ -1,3 +1,4 @@
+import { registerPackageRoutes } from "./routes/packages";
 import {
   boundContentRequest,
   paceContentIp,
@@ -90,6 +91,7 @@ registerOwnershipRoutes(extensionsV2);
 registerModerationRoutes(extensionsV2);
 registerM2mRoutes(extensionsV2);
 registerRevisionRoutes(extensionsV2);
+registerPackageRoutes(extensionsV2);
 registerDeveloperProfileRoutes(extensionsV2);
 
 // The document is deterministic once every route is registered, so build

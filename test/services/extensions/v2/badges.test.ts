@@ -44,6 +44,45 @@ beforeEach(async () => {
 });
 
 describe("v2 public badges", () => {
+  it("uses the selected release for badges and the legacy version endpoint", async () => {
+    await db
+      .prepare("UPDATE extensions SET releases=? WHERE identifier='example'")
+      .bind(
+        JSON.stringify([
+          { ...release("1.0.0", "^0.7"), is_latest: true },
+          release("2.0.0", requirement)
+        ])
+      )
+      .run();
+    expect(await (await badge("version")).text()).toContain(
+      "Latest version: v1.0.0"
+    );
+    expect(await (await badge("fossbilling")).text()).toContain(
+      "FOSSBilling: ^0.7"
+    );
+    expect(await (await get("/extensions/v1/example/version", {})).text()).toBe(
+      "1.0.0"
+    );
+  });
+
+  it("prefers stable releases over newer prereleases when no release is selected", async () => {
+    await db
+      .prepare("UPDATE extensions SET releases=? WHERE identifier='example'")
+      .bind(
+        JSON.stringify([
+          release("3.0.0-beta.1", "^1.0"),
+          release("2.0.0", requirement)
+        ])
+      )
+      .run();
+    expect(await (await badge("version")).text()).toContain(
+      "Latest version: v2.0.0"
+    );
+    expect(await (await get("/extensions/v1/example/version", {})).text()).toBe(
+      "2.0.0"
+    );
+  });
+
   it("displays the complete latest-release requirement, including Composer exclusions", async () => {
     const response = await badge("fossbilling");
     expect(response.status).toBe(200);

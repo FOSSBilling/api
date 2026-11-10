@@ -1,7 +1,9 @@
-import { rcompare, valid } from "semver";
+import { prerelease, rcompare, valid } from "semver";
 
 export interface ReleaseTag {
   tag: string;
+  date?: string;
+  is_latest?: boolean;
 }
 
 // Newest first by semver. Tags that aren't valid semver can't be ordered
@@ -21,4 +23,30 @@ export function sortReleasesDescending<T extends ReleaseTag>(
     ...withValidTag.sort((a, b) => rcompare(a.tag, b.tag)),
     ...withInvalidTag
   ];
+}
+
+// Explicit selection wins; older records without a selection prefer stable versions.
+export function latestRelease<T extends ReleaseTag>(
+  releases: readonly T[]
+): T | undefined {
+  const selected = releases.find((release) => release.is_latest === true);
+  if (selected) return selected;
+  const stable = releases.filter(
+    (release) => valid(release.tag) && prerelease(release.tag) === null
+  );
+  return (stable.length ? stable : releases).reduce<T | undefined>(
+    (latest, release) => {
+      if (!latest) return release;
+      const a = valid(release.tag),
+        b = valid(latest.tag);
+      const order = a && b ? rcompare(a, b) : a ? -1 : b ? 1 : 0;
+      if (order) return order < 0 ? release : latest;
+      const time = (date?: string) => {
+        const value = Date.parse(date ?? "");
+        return Number.isFinite(value) ? value : -Infinity;
+      };
+      return time(release.date) > time(latest.date) ? release : latest;
+    },
+    undefined
+  );
 }

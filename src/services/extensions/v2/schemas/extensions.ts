@@ -16,6 +16,17 @@ export const ReleaseSchema = z
     date: z.string().min(1).max(64),
     download_url: httpUrl(),
     changelog_url: httpUrl().optional(),
+    is_latest: z
+      .boolean()
+      .optional()
+      .describe(
+        "Explicitly selected latest release; at most one release may be selected"
+      ),
+    artifact_id: z.uuid().optional(),
+    sha256: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .optional(),
     requires: ManifestRequirementsSchema
   })
   .strict()
@@ -50,7 +61,6 @@ export const ExtensionContentSchema = z
     releases: z.array(ReleaseSchema).min(1).max(100),
     homepage_url: ManifestSchema.shape.homepage_url,
     license: LicenseSchema,
-    icon_url: ManifestSchema.shape.icon_url,
     readme: z.string().min(1).max(100_000),
     source: RepositorySchema,
     version: ManifestSchema.shape.version,
@@ -91,7 +101,7 @@ export const StoredExtensionContentSchema = ExtensionContentSchema.extend({
   name: z.string().min(1).max(120),
   description: z.string().min(1).max(4000),
   version: z.string().min(1).max(100),
-  icon_url: z.union([ManifestSchema.shape.icon_url, httpUrl()]).optional(),
+  icon_url: z.string().max(2048).optional(),
   website: httpUrl().optional(),
   license: z.union([
     LicenseSchema,

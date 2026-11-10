@@ -411,6 +411,57 @@ describe("Extensions API v1", () => {
   });
 
   describe("GET /:id/version", () => {
+    it.each([false, true])(
+      "uses the selected or stable release when a newer prerelease exists (selected=%s)",
+      async (selected) => {
+        const db = getExtensionsDb(env.DB_EXTENSIONS);
+        const releases = [
+          {
+            tag: "2.0.0-beta.1",
+            date: "2026-01-02",
+            download_url: "https://example.test/beta.zip",
+            requires: { fossbilling: "*" }
+          },
+          {
+            tag: "1.0.0",
+            date: "2026-01-01",
+            download_url: "https://example.test/stable.zip",
+            requires: { fossbilling: "*" }
+          },
+          {
+            tag: "0.9.0",
+            date: "2025-01-01",
+            download_url: "https://example.test/pinned.zip",
+            requires: { fossbilling: "*" },
+            ...(selected ? { is_latest: true } : {})
+          }
+        ];
+        const expected = selected ? "0.9.0" : "1.0.0";
+        await db
+          .update(extensions)
+          .set({ releases: JSON.stringify(releases), version: expected })
+          .where(eq(extensions.identifier, "Example"));
+        const ctx = createExecutionContext();
+        const response = await app.request(
+          "/extensions/v1/Example/version",
+          {},
+          env,
+          ctx
+        );
+        await waitOnExecutionContext(ctx);
+        expect(await response.text()).toBe(expected);
+        const detail = await app.request(
+          "/extensions/v1/Example",
+          {},
+          env,
+          createExecutionContext()
+        );
+        expect(
+          ((await detail.json()) as { result: { version: string } }).result
+            .version
+        ).toBe(expected);
+      }
+    );
     it("should return plain text version", async () => {
       const ctx = createExecutionContext();
       const res = await app.request(

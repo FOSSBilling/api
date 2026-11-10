@@ -150,16 +150,7 @@ export const developers = sqliteTable(
     url: text("url"),
     ownerUserId: text("owner_user_id").references(() => users.id),
     approvedAt: text("approved_at"),
-    // Placeholder default from migration 0002 (SQLite rejects non-constant
-    // ALTER TABLE ADD COLUMN defaults). Every write sets this explicitly (see
-    // db/developer-profiles.ts) - the literal default is never actually read,
-    // but it is part of the real column definition, so it is kept here for
-    // baseline-diff fidelity against the existing database.
-    //
-    // Replacing it needs a table rebuild, which this table cannot have: three
-    // tables reference it and a parent cannot be dropped with foreign keys
-    // enforced (see migration 0021's header). Rebuilding all three children
-    // too is a lot of risk for a default nothing reads.
+    // Kept in sync with the original constant database default. Writers set both timestamps.
     createdAt: text("created_at").notNull().default("1970-01-01T00:00:00.000Z"),
     updatedAt: text("updated_at").notNull().default("1970-01-01T00:00:00.000Z"),
     avatarUrl: text("avatar_url"),
@@ -513,6 +504,137 @@ export const m2mPublisherClients = sqliteTable(
     check(
       "m2m_publisher_clients_ownership_epoch_check",
       sql`${table.ownershipEpoch} >= 1`
+    )
+  ]
+);
+
+// Object reservations survive interrupted uploads so unreferenced objects can
+// be reclaimed. Published artifacts retain their original objects indefinitely.
+export const packageObjects = sqliteTable(
+  "package_objects",
+  {
+    deleting: integer("deleting").notNull().default(0),
+    id: text("id").primaryKey(),
+    createdBy: text("created_by").notNull(),
+    bytes: integer("bytes").notNull(),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`)
+  },
+  (table) => [index("idx_package_objects_creator").on(table.createdBy)]
+);
+
+// No extension FK: a developer can build a package before creating its listing.
+export const packageSources = sqliteTable(
+  "package_sources",
+  {
+    id: text("id").primaryKey(),
+    profileGeneration: text("profile_generation").notNull(),
+    extensionIdentifier: text("extension_identifier").notNull(),
+    version: text("version").notNull(),
+    sha256: text("sha256").notNull(),
+    objectId: text("object_id")
+      .notNull()
+      .references(() => packageObjects.id),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`)
+  },
+  (table) => [
+    uniqueIndex("idx_package_source_version").on(
+      table.profileGeneration,
+      table.extensionIdentifier,
+      table.version
+    ),
+    index("idx_package_sources_extension").on(table.extensionIdentifier),
+    uniqueIndex("idx_package_sources_object").on(table.objectId)
+  ]
+);
+
+export const packageArtifacts = sqliteTable(
+  "package_artifacts",
+  {
+    id: text("id").primaryKey(),
+    sourceId: text("source_id")
+      .notNull()
+      .references(() => packageSources.id),
+    manifest: text("manifest").notNull(),
+    manifestHash: text("manifest_hash").notNull(),
+    sha256: text("sha256").notNull(),
+    objectId: text("object_id")
+      .notNull()
+      .references(() => packageObjects.id),
+    downloadUrl: text("download_url").notNull(),
+    publishedAt: text("published_at"),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`)
+  },
+  (table) => [
+    uniqueIndex("idx_package_artifact_manifest").on(
+      table.sourceId,
+      table.manifestHash
+    ),
+    uniqueIndex("idx_package_artifacts_object").on(table.objectId)
+  ]
+);
+
+// Prepared display images are shared by packages using the same immutable source.
+export const packageIcons = sqliteTable("package_icons", {
+  sourceId: text("source_id")
+    .primaryKey()
+    .references(() => packageSources.id),
+  avifObjectId: text("avif_object_id").references(() => packageObjects.id),
+  avifSha256: text("avif_sha256"),
+  pngObjectId: text("png_object_id").references(() => packageObjects.id),
+  pngSha256: text("png_sha256"),
+  svgObjectId: text("svg_object_id").references(() => packageObjects.id),
+  svgSha256: text("svg_sha256")
+});
+
+export const packageJobs = sqliteTable(
+  "package_jobs",
+  {
+    id: text("id").primaryKey(),
+    fingerprint: text("fingerprint").notNull(),
+    ownerUserId: text("owner_user_id").notNull(),
+    owner: text("owner").notNull(),
+    manifest: text("manifest").notNull(),
+    sourceId: text("source_id"),
+    uploadObjectId: text("upload_object_id").references(
+      () => packageObjects.id
+    ),
+    uploadSha256: text("upload_sha256"),
+    status: text("status", {
+      enum: ["queued", "processing", "ready", "failed"]
+    })
+      .notNull()
+      .default("queued"),
+    attempts: integer("attempts").notNull().default(0),
+    leaseId: text("lease_id"),
+    leaseUntil: text("lease_until"),
+    artifactId: text("artifact_id").references(() => packageArtifacts.id),
+    errorCode: text("error_code"),
+    errorMessage: text("error_message"),
+    errorStatus: integer("error_status"),
+    enqueuedAt: text("enqueued_at"),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`)
+  },
+  (table) => [
+    uniqueIndex("idx_package_jobs_fingerprint")
+      .on(table.fingerprint)
+      .where(sql`${table.status} != 'failed'`),
+    index("idx_package_jobs_owner").on(table.ownerUserId),
+    index("idx_package_jobs_upload_object").on(table.uploadObjectId),
+    index("idx_package_jobs_dispatch").on(table.status, table.enqueuedAt),
+    check(
+      "package_jobs_status_check",
+      sql`${table.status} IN ('queued','processing','ready','failed')`
     )
   ]
 );

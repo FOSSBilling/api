@@ -1,3 +1,4 @@
+import { packageIconUrl, validatePackageContent } from "./packages";
 import { manifestMetadata } from "../schemas/manifest";
 import { MAX_CONTENT_BYTES } from "../resource-limits";
 import { and, asc, desc, eq, gt, lt, or, sql, SQL } from "drizzle-orm";
@@ -151,6 +152,14 @@ export class ExtensionRevisionsDatabase {
 
     let result;
     try {
+      const packageError = await validatePackageContent(
+        this.db.$client,
+        input.extensionId,
+        undefined,
+        input.content,
+        input.callerId
+      );
+      if (packageError) return { data: null, error: packageError };
       result = await this.db.all<{ identifier: string }>(sql`
         INSERT INTO ${extensionRevisions}
              (id, extension_id, developer_id, submitted_by, status, content, ownership_epoch)
@@ -196,6 +205,14 @@ export class ExtensionRevisionsDatabase {
   }): Promise<DatabaseResult<{ id: string; identifier: string }>> {
     const id = crypto.randomUUID();
     try {
+      const packageError = await validatePackageContent(
+        this.db.$client,
+        input.extensionId,
+        undefined,
+        input.content,
+        input.callerId
+      );
+      if (packageError) return { data: null, error: packageError };
       const results = await this.db.$client.batch<{ identifier: string }>([
         this.db.$client
           .prepare(
@@ -335,6 +352,13 @@ export class ExtensionRevisionsDatabase {
 
     let result;
     try {
+      const packageError = await validatePackageContent(
+        this.db.$client,
+        input.extensionId,
+        input.developerId,
+        input.content
+      );
+      if (packageError) return { data: null, error: packageError };
       result = await this.db.all<{ identifier: string }>(sql`
         INSERT INTO ${extensionRevisions}
              (id, extension_id, developer_id, submitted_by, status, content, ownership_epoch)
@@ -794,6 +818,20 @@ export class ExtensionRevisionsDatabase {
         }
       };
     }
+    try {
+      const packageError = await validatePackageContent(
+        this.db.$client,
+        revision.extension_identifier,
+        revision.developer_id,
+        parsed.data
+      );
+      if (packageError) return { ok: false, error: packageError };
+    } catch (error) {
+      return {
+        ok: false,
+        error: databaseError("preparePackageApproval", error).error!
+      };
+    }
     return { ok: true, revision, content: parsed.data };
   }
 
@@ -837,7 +875,7 @@ export class ExtensionRevisionsDatabase {
         JSON.stringify(content.releases),
         content.homepage_url ?? "",
         JSON.stringify(content.license),
-        content.icon_url ?? null,
+        packageIconUrl(content),
         content.readme,
         JSON.stringify(content.source),
         content.version,

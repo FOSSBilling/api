@@ -18,6 +18,7 @@ export default defineConfig({
     cloudflareTest({
       wrangler: { configPath: "./wrangler.jsonc" },
       miniflare: {
+        images: { binding: "PACKAGE_IMAGES" },
         // Add test environment variables
         bindings: {
           GITHUB_TOKEN: "test-github-token",
@@ -68,7 +69,8 @@ export default defineConfig({
     exclude: [
       "**/node_modules/**",
       "**/test/lib/adapters/node/**",
-      "**/test/services/extensions/v2/migrations.test.ts"
+      "**/test/services/extensions/v2/migrations.test.ts",
+      "**/*.node.test.ts"
     ],
 
     // Test timeout configuration

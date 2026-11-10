@@ -29,3 +29,18 @@ describe("sortReleasesDescending", () => {
     ]);
   });
 });
+
+// The same choice drives directory downloads and v1 version badges.
+describe("latestRelease", () => {
+  it("honors a selected older release and otherwise prefers stable versions", async () => {
+    const { latestRelease } = await import("../../src/lib/releases");
+    const older = { tag: "1.0.0", is_latest: true };
+    expect(latestRelease([{ tag: "2.0.0" }, older])).toBe(older);
+    expect(latestRelease([{ tag: "3.0.0-rc.1" }, { tag: "2.0.0" }])?.tag).toBe(
+      "2.0.0"
+    );
+    expect(
+      latestRelease([{ tag: "3.0.0-rc.1" }, { tag: "3.0.0-rc.2" }])?.tag
+    ).toBe("3.0.0-rc.2");
+  });
+});

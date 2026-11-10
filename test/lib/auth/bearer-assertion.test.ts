@@ -20,6 +20,9 @@ function platformWithSecret(
   previousSecret?: string
 ): PlatformContext {
   return {
+    getQueue: () => {
+      throw new Error("No queue in auth test");
+    },
     getCache: () => {
       throw new Error("not implemented");
     },

@@ -1,3 +1,7 @@
+import {
+  consumePackageJobs,
+  recoverPackageJobs
+} from "../lib/adapters/cloudflare/package-jobs";
 import { getExtensionsDb } from "../lib/db";
 import {
   maintainExtensionResources,
@@ -75,12 +79,20 @@ app.all("/*", (c) => {
 });
 
 export default {
+  queue: consumePackageJobs,
   fetch: app.fetch,
   request: app.request.bind(app),
   scheduled: async (
     _event: ScheduledController,
     env: CloudflareBindings
   ): Promise<void> => {
+    try {
+      await recoverPackageJobs(env);
+    } catch (error) {
+      logError("extensions/packages", "Package job recovery failed", {
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
     const db = getExtensionsDb(env.DB_EXTENSIONS);
     await maintainExtensionResources(db, {
       mode: env.EXTENSIONS_RETENTION_MODE

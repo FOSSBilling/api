@@ -1,3 +1,4 @@
+import { schedulePublishedIconUpdate } from "../../../../lib/adapters/cloudflare/package-assets";
 import {
   paceContentAccount,
   requireApproveAccess,
@@ -118,6 +119,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
       const status = statusFromWriteErrorCode(error?.code);
       return c.json(errorBody(error, "Unable to approve revision"), status);
     }
+    schedulePublishedIconUpdate(c, id);
     const notified = await notifyAuthor(c, extDb, query, {
       kind: "revision-approved",
       extensionId: id,
@@ -416,6 +418,7 @@ export function registerModerationRoutes(app: ExtensionsV2App): void {
       const status = statusFromContentWriteError(error?.code);
       return c.json(errorBody(error, "Unable to correct extension"), status);
     }
+    schedulePublishedIconUpdate(c, id);
     revalidateExtensions(c);
     return c.json(
       {
