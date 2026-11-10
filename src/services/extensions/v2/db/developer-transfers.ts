@@ -58,9 +58,15 @@ export class DeveloperTransfersDatabase {
   }
 
   async initiateTransfer(
-    developerId: string,
+    identifier: string,
     userId: string
   ): Promise<DatabaseResult<DeveloperTransfer>> {
+    const profile = await new DeveloperProfilesDatabase(
+      this.db
+    ).getByIdentifier(identifier);
+    if (profile.error || !profile.data)
+      return { data: null, error: profile.error };
+    const developerId = profile.data.id;
     try {
       const token =
         crypto.randomUUID().replace(/-/g, "") +
@@ -140,9 +146,15 @@ export class DeveloperTransfersDatabase {
   }
 
   async revokeTransfer(
-    developerId: string,
+    identifier: string,
     userId: string
   ): Promise<DatabaseResult<{ id: string; revoked: true }>> {
+    const profile = await new DeveloperProfilesDatabase(
+      this.db
+    ).getByIdentifier(identifier);
+    if (profile.error || !profile.data)
+      return { data: null, error: profile.error };
+    const developerId = profile.data.id;
     try {
       const result = await this.db.run(sql`
         UPDATE ${developerTransfers} SET revoked_at = CURRENT_TIMESTAMP

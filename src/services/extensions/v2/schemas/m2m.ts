@@ -19,7 +19,7 @@ export const PublisherClientIdParamSchema = z.object({
 // developer's pending revisions); without it the client may only propose.
 export const PublisherRegisterSchema = z
   .object({
-    developer_id: z.string().min(1).max(200),
+    developer_id: z.uuidv7(),
     can_publish: z.boolean().default(false)
   })
   .strict()
@@ -28,7 +28,7 @@ export const PublisherRegisterSchema = z
 export const PublisherClientSchema = z
   .object({
     client_id: z.string(),
-    developer_id: z.string(),
+    developer_id: z.uuidv7(),
     can_publish: z.boolean(),
     created_at: z.string(),
     revoked_at: z.string().nullable()

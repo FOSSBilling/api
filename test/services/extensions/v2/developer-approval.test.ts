@@ -214,7 +214,7 @@ describe("Developer approval binds to the reviewed profile instance and content"
       ).toBe(200);
       // Model second-granular timestamps deterministically without timing a test.
       await db
-        .prepare("UPDATE developers SET updated_at = ? WHERE id = ?")
+        .prepare("UPDATE developers SET updated_at = ? WHERE identifier = ?")
         .bind("2026-10-07 00:00:00", "dev-developer")
         .run();
     }
@@ -246,7 +246,7 @@ describe("Developer approval binds to the reviewed profile instance and content"
       await insertUser(db, { id: "moderator", is_moderator: 1 });
       const moderator = await authHeaders("moderator");
       await insertDeveloper(db, {
-        id: "dev-developer",
+        identifier: "dev-developer",
         type: "user",
         name: "Developer",
         approved_at: "2026-10-07 00:00:00",
@@ -254,8 +254,8 @@ describe("Developer approval binds to the reviewed profile instance and content"
         approved_revision: approvedRevision
       });
       await insertExtension(db, {
-        id: "live-ext",
-        developer_id: "dev-developer"
+        identifier: "live-ext",
+        developer_identifier: "dev-developer"
       });
       const expected = approvedRevision === 2;
       const profile = (await (await get(profilePath, {})).json()) as {
@@ -273,10 +273,10 @@ describe("Developer approval binds to the reviewed profile instance and content"
       for (const query of ["scope", "status"]) {
         const queue = (await (
           await get(`/extensions/v2/developers?${query}=unapproved`, moderator)
-        ).json()) as { result: Array<{ id: string }> };
-        expect(queue.result.some((item) => item.id === "dev-developer")).toBe(
-          !expected
-        );
+        ).json()) as { result: Array<{ id: string; identifier: string }> };
+        expect(
+          queue.result.some((item) => item.identifier === "dev-developer")
+        ).toBe(!expected);
       }
     }
   );

@@ -9,9 +9,9 @@ import type { Release as ManifestRelease } from "../v2/schemas/extensions";
 import { Extension, Release, Author, Repository } from "./interfaces";
 
 const EXTENSION_COLUMNS = {
-  id: extensions.id,
+  id: extensions.identifier,
   type: extensions.type,
-  developerId: extensions.developerId,
+  developerId: developers.identifier,
   authorType: developers.type,
   authorName: developers.name,
   authorUrl: developers.url,
@@ -120,7 +120,10 @@ export class ExtensionsDatabase {
       // the published-extension index and is unique.
       rows = page
         ? ((await base
-            .orderBy(sql`LOWER(${extensions.id})`, extensions.id)
+            .orderBy(
+              sql`LOWER(${extensions.identifier})`,
+              extensions.identifier
+            )
             .offset(page.offset)
             .limit(page.limit + 1)) as ExtensionRow[])
         : ((await base) as ExtensionRow[]);
@@ -150,7 +153,7 @@ export class ExtensionsDatabase {
         .innerJoin(developers, eq(extensions.developerId, developers.id))
         .where(
           and(
-            sql`LOWER(${extensions.id}) = LOWER(${id})`,
+            sql`LOWER(${extensions.identifier}) = LOWER(${id})`,
             isNotNull(extensions.publishedAt),
             isNull(extensions.delistedAt)
           )
@@ -181,7 +184,7 @@ export class ExtensionsDatabase {
         .from(extensions)
         .where(
           and(
-            sql`LOWER(${extensions.id}) = LOWER(${id})`,
+            sql`LOWER(${extensions.identifier}) = LOWER(${id})`,
             isNotNull(extensions.publishedAt),
             isNull(extensions.delistedAt)
           )

@@ -42,6 +42,7 @@ export const extensions = sqliteTable(
   "extensions",
   {
     id: text("id").primaryKey(),
+    identifier: text("identifier").notNull(),
     developerId: text("developer_id")
       .notNull()
       .references(() => developers.id),
@@ -86,11 +87,10 @@ export const extensions = sqliteTable(
   },
   (table) => [
     index("idx_extensions_published_revision").on(table.publishedRevisionId),
-    // Case-insensitive id uniqueness. The id is a lowercase slug by schema,
-    // but adopted rows predate that, and this is what stops two developers
-    // racing for ids that differ only in case — the job migration 0011's
-    // extension_submissions.target_key index used to do from the other side.
-    uniqueIndex("idx_extensions_id_nocase").on(sql`lower(${table.id})`),
+    // Public identifiers are globally unique, independently of UUID identity.
+    uniqueIndex("idx_extensions_identifier_nocase").on(
+      sql`lower(${table.identifier})`
+    ),
     // Not partial, unlike the two below: this one serves both the public
     // developer_id filter and GET /extensions/mine, which pages every owned
     // extension and so cannot filter on published_at. A partial index would
@@ -99,19 +99,19 @@ export const extensions = sqliteTable(
     // same index and checks published_at per row.
     index("idx_extensions_developer_order").on(
       table.developerId,
-      sql`lower(${table.id})`,
+      sql`lower(${table.identifier})`,
       table.id
     ),
     // These two are partial: every read that uses them filters on
     // published_at IS NOT NULL AND delisted_at IS NULL, so an unpublished or
     // delisted row would only bloat the index the extension directory scans.
     index("idx_extensions_public_order")
-      .on(sql`lower(${table.id})`, table.id)
+      .on(sql`lower(${table.identifier})`, table.id)
       .where(
         sql`${table.publishedAt} IS NOT NULL AND ${table.delistedAt} IS NULL`
       ),
     index("idx_extensions_type_public_order")
-      .on(table.type, sql`lower(${table.id})`, table.id)
+      .on(table.type, sql`lower(${table.identifier})`, table.id)
       .where(
         sql`${table.publishedAt} IS NOT NULL AND ${table.delistedAt} IS NULL`
       ),
@@ -144,6 +144,7 @@ export const developers = sqliteTable(
   "developers",
   {
     id: text("id").primaryKey(),
+    identifier: text("identifier").notNull(),
     type: text("type").notNull(),
     name: text("name").notNull(),
     url: text("url"),
@@ -189,6 +190,9 @@ export const developers = sqliteTable(
     urlCheckCooldownUntil: text("url_check_cooldown_until")
   },
   (table) => [
+    uniqueIndex("idx_developers_identifier_nocase").on(
+      sql`lower(${table.identifier})`
+    ),
     uniqueIndex("idx_developers_owner_unique").on(table.ownerUserId),
     index("idx_developers_approved").on(table.approvedAt),
     check(

@@ -387,7 +387,7 @@ export function registerDeveloperProfileRoutes(app: ExtensionsV2App): void {
       if (
         !own.error &&
         own.data &&
-        own.data.id.toLowerCase() === id.toLowerCase()
+        own.data.identifier.toLowerCase() === id.toLowerCase()
       ) {
         // The full owned view carries contact_email, verification signals,
         // and transfer state, so it stays behind the active-account check
@@ -411,7 +411,7 @@ export function registerDeveloperProfileRoutes(app: ExtensionsV2App): void {
         return c.json(errorBody(access.error, "Unable to check access"), 500);
       }
       if (access.data?.moderator) {
-        const { data, error } = await db.getById(id);
+        const { data, error } = await db.getByIdentifier(id);
         if (error || !data) {
           const status = statusFromErrorCode(error?.code, false);
           return c.json(errorBody(error, "Developer not found"), status);
@@ -421,7 +421,7 @@ export function registerDeveloperProfileRoutes(app: ExtensionsV2App): void {
         return res;
       }
     }
-    const { data, error } = await db.getById(id);
+    const { data, error } = await db.getByIdentifier(id);
     if (error || !data) {
       const status = statusFromErrorCode(error?.code, false);
       return c.json(errorBody(error, "Developer not found"), status);

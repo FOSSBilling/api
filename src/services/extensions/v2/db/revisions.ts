@@ -51,6 +51,7 @@ const revisionCursor = createCursorCodec<RevisionCursor>(
 interface RevisionRow {
   id: string;
   extensionId: string;
+  extensionIdentifier: string;
   developerId: string;
   submittedBy: string;
   status: string;
@@ -84,6 +85,7 @@ function parseRevisionRow(row: RevisionRow): StoredRevision {
 const REVISION_COLUMNS = {
   id: extensionRevisions.id,
   extensionId: extensionRevisions.extensionId,
+  extensionIdentifier: sql<string>`(SELECT identifier FROM extensions WHERE id=${extensionRevisions.extensionId})`,
   developerId: extensionRevisions.developerId,
   submittedBy: extensionRevisions.submittedBy,
   status: extensionRevisions.status,
@@ -112,6 +114,7 @@ function parseSummaryRow(row: SummaryRow): ExtensionRevisionSummary {
   return {
     id: row.id,
     extension_id: row.extensionId,
+    extension_identifier: row.extensionIdentifier,
     developer_id: row.developerId,
     submitted_by: row.submittedBy,
     status: row.status as RevisionStatus,
@@ -143,18 +146,18 @@ export class ExtensionRevisionsDatabase {
     extensionId: string;
     callerId: string;
     content: ExtensionContent;
-  }): Promise<DatabaseResult<{ id: string }>> {
+  }): Promise<DatabaseResult<{ id: string; identifier: string }>> {
     const id = crypto.randomUUID();
 
     let result;
     try {
-      result = await this.db.run(sql`
+      result = await this.db.all<{ identifier: string }>(sql`
         INSERT INTO ${extensionRevisions}
              (id, extension_id, developer_id, submitted_by, status, content, ownership_epoch)
            SELECT ${id}, e.id, d.id, ${input.callerId}, 'pending', ${JSON.stringify(input.content)}, d.ownership_epoch
            FROM ${extensions} e
            JOIN ${developers} d ON d.id = e.developer_id
-           WHERE LOWER(e.id) = LOWER(${input.extensionId})
+           WHERE LOWER(e.identifier) = LOWER(${input.extensionId})
              AND d.owner_user_id = ${input.callerId}
              AND EXISTS (
                SELECT 1 FROM ${users} u
@@ -165,12 +168,13 @@ export class ExtensionRevisionsDatabase {
                WHERE submitted_by = ${input.callerId} AND status = 'pending'
              ) < ${MAX_PENDING_REVISIONS_PER_USER}
         ON CONFLICT DO NOTHING
+        RETURNING (SELECT identifier FROM extensions WHERE id=extension_id) AS identifier
       `);
     } catch (error) {
       return contentAdmissionError("propose", error);
     }
 
-    if (!result.meta?.changes) {
+    if (!result[0]) {
       try {
         return { data: null, error: await this.proposeBlockedError(input) };
       } catch (error) {
@@ -178,7 +182,7 @@ export class ExtensionRevisionsDatabase {
       }
     }
 
-    return { data: { id }, error: null };
+    return { data: { id, identifier: result[0].identifier }, error: null };
   }
 
   // Owners can replace publisher submissions; attribute the new row to the owner.
@@ -189,10 +193,10 @@ export class ExtensionRevisionsDatabase {
     revisionId: string;
     callerId: string;
     content: ExtensionContent;
-  }): Promise<DatabaseResult<{ id: string; extensionId: string }>> {
+  }): Promise<DatabaseResult<{ id: string; identifier: string }>> {
     const id = crypto.randomUUID();
     try {
-      const results = await this.db.$client.batch<{ extensionId: string }>([
+      const results = await this.db.$client.batch<{ identifier: string }>([
         this.db.$client
           .prepare(
             `
@@ -201,7 +205,7 @@ export class ExtensionRevisionsDatabase {
             AND EXISTS (
               SELECT 1 FROM extensions e JOIN developers d ON d.id = e.developer_id
               JOIN users u ON u.id = d.owner_user_id
-              WHERE LOWER(e.id) = LOWER(?) AND e.id = extension_revisions.extension_id
+              WHERE LOWER(e.identifier) = LOWER(?) AND e.id = extension_revisions.extension_id
                 AND d.id = extension_revisions.developer_id
                 AND d.ownership_epoch = extension_revisions.ownership_epoch
                 AND d.owner_user_id = ? AND u.deleted_at IS NULL
@@ -226,8 +230,8 @@ export class ExtensionRevisionsDatabase {
             (id, extension_id, developer_id, submitted_by, status, content, ownership_epoch)
           SELECT ?, e.id, d.id, ?, 'pending', ?, d.ownership_epoch
           FROM extensions e JOIN developers d ON d.id = e.developer_id
-          WHERE LOWER(e.id) = LOWER(?) AND changes() = 1
-          RETURNING extension_id AS extensionId
+          WHERE LOWER(e.identifier) = LOWER(?) AND changes() = 1
+          RETURNING (SELECT identifier FROM extensions WHERE id=extension_id) AS identifier
         `
           )
           .bind(
@@ -240,7 +244,10 @@ export class ExtensionRevisionsDatabase {
       const [replacement] = results[1].results;
       if (replacement)
         return {
-          data: { id, extensionId: replacement.extensionId },
+          data: {
+            id,
+            identifier: replacement.identifier
+          },
           error: null
         };
       const error = await this.proposeBlockedError(input);
@@ -273,7 +280,9 @@ export class ExtensionRevisionsDatabase {
       .select({ ownerUserId: developers.ownerUserId })
       .from(extensions)
       .innerJoin(developers, eq(extensions.developerId, developers.id))
-      .where(sql`LOWER(${extensions.id}) = LOWER(${input.extensionId})`);
+      .where(
+        sql`LOWER(${extensions.identifier}) = LOWER(${input.extensionId})`
+      );
 
     if (!existing) {
       return {
@@ -293,7 +302,7 @@ export class ExtensionRevisionsDatabase {
       .from(extensionRevisions)
       .where(
         and(
-          sql`LOWER(${extensionRevisions.extensionId}) = LOWER(${input.extensionId})`,
+          sql`${extensionRevisions.extensionId} = (SELECT id FROM extensions WHERE lower(identifier)=lower(${input.extensionId}))`,
           eq(extensionRevisions.status, "pending")
         )
       );
@@ -321,18 +330,18 @@ export class ExtensionRevisionsDatabase {
     submittedBy: string;
     developerId: string;
     content: ExtensionContent;
-  }): Promise<DatabaseResult<{ id: string }>> {
+  }): Promise<DatabaseResult<{ id: string; identifier: string }>> {
     const id = crypto.randomUUID();
 
     let result;
     try {
-      result = await this.db.run(sql`
+      result = await this.db.all<{ identifier: string }>(sql`
         INSERT INTO ${extensionRevisions}
              (id, extension_id, developer_id, submitted_by, status, content, ownership_epoch)
            SELECT ${id}, e.id, d.id, ${input.submittedBy}, 'pending', ${JSON.stringify(input.content)}, d.ownership_epoch
            FROM ${extensions} e
            JOIN ${developers} d ON d.id = e.developer_id
-           WHERE LOWER(e.id) = LOWER(${input.extensionId})
+           WHERE LOWER(e.identifier) = LOWER(${input.extensionId})
              AND d.id = ${input.developerId}
              AND EXISTS (
                SELECT 1 FROM ${users} u
@@ -354,12 +363,13 @@ export class ExtensionRevisionsDatabase {
                WHERE submitted_by = ${input.submittedBy} AND status = 'pending'
              ) < ${MAX_PENDING_REVISIONS_PER_USER}
         ON CONFLICT DO NOTHING
+        RETURNING (SELECT identifier FROM extensions WHERE id=extension_id) AS identifier
       `);
     } catch (error) {
       return contentAdmissionError("proposeAsPublisher", error);
     }
 
-    if (!result.meta?.changes) {
+    if (!result[0]) {
       try {
         return {
           data: null,
@@ -370,7 +380,7 @@ export class ExtensionRevisionsDatabase {
       }
     }
 
-    return { data: { id }, error: null };
+    return { data: { id, identifier: result[0].identifier }, error: null };
   }
 
   private async proposeAsPublisherBlockedError(input: {
@@ -427,7 +437,9 @@ export class ExtensionRevisionsDatabase {
     const [existing] = await this.db
       .select({ one: sql`1` })
       .from(extensions)
-      .where(sql`LOWER(${extensions.id}) = LOWER(${input.extensionId})`);
+      .where(
+        sql`LOWER(${extensions.identifier}) = LOWER(${input.extensionId})`
+      );
 
     if (!existing) {
       return {
@@ -441,7 +453,7 @@ export class ExtensionRevisionsDatabase {
       .from(extensionRevisions)
       .where(
         and(
-          sql`LOWER(${extensionRevisions.extensionId}) = LOWER(${input.extensionId})`,
+          sql`${extensionRevisions.extensionId} = (SELECT id FROM extensions WHERE lower(identifier)=lower(${input.extensionId}))`,
           eq(extensionRevisions.status, "pending")
         )
       );
@@ -491,7 +503,7 @@ export class ExtensionRevisionsDatabase {
         SELECT 1 FROM users u WHERE u.id=${readerId} AND u.deleted_at IS NULL
           AND (u.is_moderator=1 OR (${extensionId ?? null} IS NOT NULL AND EXISTS (
             SELECT 1 FROM extensions e JOIN developers d ON d.id=e.developer_id
-            WHERE e.id=${extensionId ?? null} AND d.owner_user_id=${readerId}
+            WHERE lower(e.identifier)=lower(${extensionId ?? null}) AND d.owner_user_id=${readerId}
           )))
       )`);
       if (decoded) {
@@ -559,7 +571,9 @@ export class ExtensionRevisionsDatabase {
             : "asc";
     const conditions: SQL[] = [];
     if (filters.extensionId) {
-      conditions.push(eq(extensionRevisions.extensionId, filters.extensionId));
+      conditions.push(
+        sql`${extensionRevisions.extensionId} = (SELECT id FROM extensions WHERE lower(identifier)=lower(${filters.extensionId}))`
+      );
     }
     if (filters.status) {
       conditions.push(eq(extensionRevisions.status, filters.status));
@@ -625,7 +639,7 @@ export class ExtensionRevisionsDatabase {
         .where(
           and(
             eq(extensionRevisions.id, id),
-            sql`LOWER(${extensionRevisions.extensionId}) = LOWER(${extensionId})`,
+            sql`${extensionRevisions.extensionId} = (SELECT id FROM extensions WHERE lower(identifier)=lower(${extensionId}))`,
             readerId
               ? sql`EXISTS (
               SELECT 1 FROM users u WHERE u.id=${readerId} AND u.deleted_at IS NULL
@@ -704,7 +718,7 @@ export class ExtensionRevisionsDatabase {
         .where(
           and(
             eq(extensionRevisions.id, id),
-            sql`LOWER(${extensionRevisions.extensionId}) = LOWER(${extensionId})`,
+            sql`${extensionRevisions.extensionId} = (SELECT id FROM extensions WHERE lower(identifier)=lower(${extensionId}))`,
             eq(extensionRevisions.status, "pending"),
             sql`EXISTS (
               SELECT 1 FROM ${users}
@@ -792,8 +806,8 @@ export class ExtensionRevisionsDatabase {
 
   // The column list publish shares with ExtensionsDatabase.moderatorCorrect()
   // in db/extensions.ts; the two differ only in published_at handling and how
-  // the row is matched (exact id here, LOWER(id) there, because corrections
-  // address legacy rows). Change the projection in both places together.
+  // the row is matched (exact UUID here, LOWER(identifier) there).
+  // Change the projection in both places together.
   private buildPublishStmt(
     content: ExtensionContent,
     revisionId: string,

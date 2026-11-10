@@ -34,7 +34,7 @@ export function registerBadgeRoutes(app: ExtensionsV2App): void {
     const db = new ExtensionBadgesDatabase(
       getExtensionsDb(c.env.DB_EXTENSIONS)
     );
-    const { data, error } = await db.getById(id);
+    const { data, error } = await db.getByIdentifier(id);
     if (error || !data)
       return c.json(
         errorBody(error, "Unable to load badge"),
