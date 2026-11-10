@@ -81,6 +81,8 @@ export function b2ObjectStore(
           {
             ...init,
             redirect: "manual",
+            // Read current origin state; public image caching belongs to the CDN.
+            cache: "no-store",
             signal: AbortSignal.timeout(15000)
           },
           credentials
