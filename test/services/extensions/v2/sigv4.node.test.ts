@@ -96,11 +96,30 @@ describe("SigV4 signer", () => {
       now
     );
     expect(request.headers.get("x-amz-content-sha256")).toBe(checksum);
-    const { signedHeaders, signature } = authParts(request);
+    const { credential, signedHeaders, signature } = authParts(request);
     expect(signedHeaders).toBe(
       "cache-control;content-type;host;x-amz-content-sha256;x-amz-date;x-amz-meta-sha256"
     );
-    expect(signature).toMatch(/^[0-9a-f]{64}$/);
+    const canonicalRequest = [
+      "PUT",
+      "/bucket/key",
+      "",
+      "cache-control:private, no-store\n" +
+        "content-type:application/zip\n" +
+        "host:s3.example.test\n" +
+        `x-amz-content-sha256:${checksum}\n` +
+        "x-amz-date:20240102T030405Z\n" +
+        `x-amz-meta-sha256:${checksum}\n`,
+      signedHeaders,
+      checksum
+    ].join("\n");
+    expect(signature).toBe(
+      expectedSignature(
+        canonicalRequest,
+        "20240102T030405Z",
+        credential.split("/").slice(1).join("/")
+      )
+    );
   });
 
   it("binds the versionId query to the signature", async () => {
