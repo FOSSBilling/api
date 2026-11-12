@@ -14,6 +14,8 @@ const centralAlertsMigrations = await readD1Migrations(
 );
 
 export default defineConfig({
+  // Match Wrangler: use Node-capable dependencies in the Workers runtime.
+  resolve: { conditions: ["workerd", "worker", "node"] },
   plugins: [
     cloudflareTest({
       wrangler: { configPath: "./wrangler.jsonc" },

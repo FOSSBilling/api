@@ -14,9 +14,9 @@ import {
   previewRequest
 } from "../../../../src/services/previews/v1/github/request";
 
-vi.mock("../../../../src/lib/github-app", () => ({
-  githubTokenProvider: () => async () => "test-github-token"
-}));
+vi.mock("../../../../src/lib/github-app", async () =>
+  (await import("../../../mocks/octokit")).githubClientMock()
+);
 
 vi.mock("@octokit/request", async () =>
   (await import("../../../mocks/octokit")).octokitRequestMock()
@@ -252,11 +252,13 @@ describe("preview GitHub budget", () => {
   });
 
   it("fails closed if reservation fails", async () => {
-    const getToken = vi.fn(async () => "test");
+    const getClient = vi.fn(async () => {
+      throw new Error("Authentication must not run without a budget");
+    });
     await expect(
       previewRequest(
         {
-          getToken,
+          getClient,
           reserve: async () => {
             throw new Error("budget unavailable");
           }
@@ -265,7 +267,7 @@ describe("preview GitHub budget", () => {
         {}
       )
     ).rejects.toThrow("Preview GitHub budget unavailable");
-    expect(getToken).not.toHaveBeenCalled();
+    expect(getClient).not.toHaveBeenCalled();
     expect(request).not.toHaveBeenCalled();
   });
 });

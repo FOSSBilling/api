@@ -1,32 +1,38 @@
-import githubAppJwt from "universal-github-app-jwt";
+import { createAppAuth } from "@octokit/auth-app";
+import { Octokit } from "@octokit/core";
+import { request } from "@octokit/request";
 import type { PlatformContext } from "./context";
 import { GitHubError } from "./github-errors";
 
-export type GitHubTokenProvider = () => Promise<string>;
+export type GitHubClient = Pick<Octokit, "request" | "graphql">;
+export type GitHubClientProvider = () => Promise<GitHubClient>;
 
-// Cache resolved credentials only: an in-flight fetch belongs to its request
-// context in Workers. Keep just the active configuration so key rotation also
-// invalidates the cached token.
+const transport = {
+  fetch: (...args: Parameters<typeof fetch>) => globalThis.fetch(...args),
+  timeout: 10_000
+};
+
+// Reuse Octokit's installation-token cache for the active credentials. Replacing
+// the auth instance on a configuration change also drops its cached tokens.
 let cached:
   | {
       clientId: string;
       installationId: string;
       privateKey: string;
-      token: string;
-      expiresAt: number;
+      authenticate: ReturnType<typeof createAppAuth>;
     }
   | undefined;
 
-export function githubTokenProvider(
+export function githubClientProvider(
   platform: Pick<PlatformContext, "getEnv">
-): GitHubTokenProvider {
-  let pending: Promise<string> | undefined;
-  return () => (pending ??= installationToken(platform));
+): GitHubClientProvider {
+  let pending: Promise<GitHubClient> | undefined;
+  return () => (pending ??= createClient(platform));
 }
 
-async function installationToken(
+async function createClient(
   platform: Pick<PlatformContext, "getEnv">
-): Promise<string> {
+): Promise<GitHubClient> {
   const clientId = platform.getEnv("GITHUB_APP_CLIENT_ID");
   const installationId = platform.getEnv("GITHUB_APP_INSTALLATION_ID");
   const privateKey = platform.getEnv("GITHUB_APP_PRIVATE_KEY");
@@ -38,63 +44,40 @@ async function installationToken(
   ) {
     throw new GitHubError("GitHub App credentials are not configured", 503);
   }
-  if (
-    cached?.clientId === clientId &&
-    cached.installationId === installationId &&
-    cached.privateKey === privateKey &&
-    cached.expiresAt > Date.now() + 60_000
-  ) {
-    return cached.token;
-  }
 
   try {
-    const { token: jwt } = await githubAppJwt({ id: clientId, privateKey });
-    const response = await fetch(
-      `https://api.github.com/app/installations/${installationId}/access_tokens`,
-      {
-        method: "POST",
-        signal: AbortSignal.timeout(10_000),
-        headers: {
-          authorization: `Bearer ${jwt}`,
-          accept: "application/vnd.github+json",
-          "content-type": "application/json",
-          "user-agent": "FOSSBilling-API"
-        },
-        body: JSON.stringify({
-          repositories: ["FOSSBilling"],
-          permissions: {
-            contents: "read",
-            actions: "read",
-            pull_requests: "read"
-          }
-        })
-      }
-    );
-    if (!response.ok) throw new Error("Token request failed");
-    const data = (await response.json()) as {
-      token?: unknown;
-      expires_at?: unknown;
-    };
-    const expiresAt =
-      typeof data.expires_at === "string" ? Date.parse(data.expires_at) : NaN;
     if (
-      typeof data.token !== "string" ||
-      !data.token ||
-      !(expiresAt > Date.now() + 60_000)
+      cached?.clientId !== clientId ||
+      cached.installationId !== installationId ||
+      cached.privateKey !== privateKey
     ) {
-      throw new Error("Invalid token response");
+      cached = {
+        clientId,
+        installationId,
+        privateKey,
+        authenticate: createAppAuth({
+          appId: clientId,
+          privateKey,
+          installationId,
+          request: request.defaults({ request: transport })
+        })
+      };
     }
-    cached = {
-      clientId,
-      installationId,
-      privateKey,
-      token: data.token,
-      expiresAt
-    };
-    return data.token;
+    // Request explicit scope before constructing the client: the automatic App
+    // auth hook otherwise issues a token with the installation's full access.
+    const { token } = await cached.authenticate({
+      type: "installation",
+      repositoryNames: ["FOSSBilling"],
+      permissions: { contents: "read", actions: "read", pull_requests: "read" }
+    });
+    return new Octokit({
+      auth: token,
+      userAgent: "FOSSBilling-API",
+      request: transport
+    });
   } catch {
-    // Never expose the signing key, JWT or GitHub's request/response objects in
-    // the callers' logs. A token-endpoint 404 must not become an entity 404.
+    // Never expose signing keys, tokens or SDK request/response objects in logs.
+    // A token-endpoint 404 must not become a missing GitHub user or artifact.
     throw new GitHubError("GitHub App authentication is unavailable", 503);
   }
 }

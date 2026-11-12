@@ -9,9 +9,9 @@ import app from "../../../../src/app/index";
 import { MockGitHubRequest } from "../../../utils/test-types";
 import { suppressConsole } from "../../../utils/mock-helpers";
 
-vi.mock("../../../../src/lib/github-app", () => ({
-  githubTokenProvider: () => async () => "test-github-token"
-}));
+vi.mock("../../../../src/lib/github-app", async () =>
+  (await import("../../../mocks/octokit")).githubClientMock()
+);
 
 vi.mock("@octokit/request", async () =>
   (await import("../../../mocks/octokit")).octokitRequestMock()

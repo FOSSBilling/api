@@ -15,7 +15,7 @@ export default defineConfig({
     coverage: {
       provider: "istanbul",
       reporter: ["text", "json", "html"],
-      include: ["test/lib/github-app.test.ts", "src/lib/adapters/node/**"]
+      include: ["src/lib/github-app.ts", "src/lib/adapters/node/**"]
     }
   }
 });

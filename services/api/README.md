@@ -99,7 +99,7 @@ Package storage configuration is listed in [PACKAGING.md](src/services/extension
 
 - `GITHUB_APP_CLIENT_ID`: Client ID of the FOSSBilling Integrations GitHub App.
 - `GITHUB_APP_INSTALLATION_ID`: Its installation ID in the FOSSBilling organization.
-- `GITHUB_APP_PRIVATE_KEY`: App signing key (PEM), stored as a secret. Use PKCS#8 for portability across runtimes; real newlines or escaped `\n` are accepted.
+- `GITHUB_APP_PRIVATE_KEY`: App signing key (PEM), stored as a secret. GitHub's downloaded PKCS#1 PEM and PKCS#8 are accepted, with real newlines or escaped `\n`.
 - `ASSERTION_SIGNING_SECRET`: Shared HMAC secret used to verify the short-lived bearer assertions minted by the Extensions site. Configure the same value in both Workers; it is never sent to clients.
 - `ASSERTION_SIGNING_SECRET_PREVIOUS`: Optional previous HMAC secret accepted during a signing-key rotation.
 - `EXTENSIONS_REVALIDATE_SECRET`: Bearer token the API sends to the Extensions site's `POST /api/revalidate` (over the `EXTENSIONS_FRONTEND` service binding) to purge the site's CDN-cached extension pages after content mutations. Configure the same value in both Workers; it is never sent to clients.
@@ -131,13 +131,16 @@ installation IDs; separate keys still have the same App authority.
 
 Set the three `GITHUB_APP_*` values as runtime variables/secrets in each deployment
 that needs GitHub access, and in `services/api/.dev.vars` locally. Do not use build
-variables or a static installation token. If the signing key is PKCS#1, convert it
-once with `openssl pkcs8 -topk8 -nocrypt -in app.pem -out app.pkcs8.pem` before
-storing it. Approve the installation's permission changes before deployment.
+variables or a static installation token. Use the full downloaded PEM; no manual
+key conversion is needed. Approve the installation's permission changes before
+deployment.
 
-The API mints installation tokens restricted to `FOSSBilling/FOSSBilling` and those
-three read permissions, and caches resolved tokens in memory until one minute
-before expiry. Key/configuration changes invalidate that cache. Authentication is
+A shared Octokit REST/GraphQL client uses App installation tokens restricted to
+`FOSSBilling/FOSSBilling` and those three read permissions. Octokit manages token
+caching and refresh; credential changes replace its auth instance and cache.
+Wrangler builds and the Workers test runner select Node-compatible dependency
+exports (`workerd,worker,node`) so Octokit accepts GitHub's downloaded PKCS#1 PEM
+directly, just as it does in Node. PKCS#8 keys also work. Authentication is
 lazy: cached responses and profile operations without a GitHub lookup do not mint
 tokens. Authentication failures use the existing unavailable/stale-cache paths;
 they never become a missing GitHub user or anonymous lookup. There are no runtime

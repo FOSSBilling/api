@@ -1,6 +1,6 @@
 import {
-  githubTokenProvider,
-  type GitHubTokenProvider
+  githubClientProvider,
+  type GitHubClientProvider
 } from "../../../lib/github-app";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
@@ -124,7 +124,7 @@ function aggregateStats(releases: Releases): StatsData {
 
 async function getStats(
   cache: ICache,
-  getGithubToken: GitHubTokenProvider,
+  getGithubClient: GitHubClientProvider,
   downloadBucket: R2Bucket,
   waitUntil?: (promise: Promise<unknown>) => void
 ): Promise<{
@@ -150,7 +150,7 @@ async function getStats(
     // overwrite that cache with GitHub-only URLs for up to a day.
     releases = await getReleases(
       cache,
-      getGithubToken,
+      getGithubClient,
       downloadBucket,
       false,
       waitUntil
@@ -227,7 +227,7 @@ registerCachedRoute("/data", async (c) => {
   const platform = getPlatform(c);
   const result = await getStats(
     platform.getCache("CACHE_KV"),
-    githubTokenProvider(platform),
+    githubClientProvider(platform),
     c.env.DOWNLOAD_BUCKET,
     platform.waitUntil
   );

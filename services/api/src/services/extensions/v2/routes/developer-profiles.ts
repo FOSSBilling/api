@@ -1,4 +1,4 @@
-import { githubTokenProvider } from "../../../../lib/github-app";
+import { githubClientProvider } from "../../../../lib/github-app";
 import {
   getOptionalAuth,
   optionalAuth,
@@ -195,7 +195,7 @@ export function registerDeveloperProfileRoutes(app: ExtensionsV2App): void {
     const { data, error, changed } = await db.upsertOwn(
       auth.userId,
       body,
-      githubTokenProvider(platform),
+      githubClientProvider(platform),
       // Keep this as a callback so upsertOwn can run its cheap
       // existing-profile/id checks first; updates and known-taken ids must not
       // spend creation allowance.
@@ -319,7 +319,7 @@ export function registerDeveloperProfileRoutes(app: ExtensionsV2App): void {
     const { data, error } = await db.reverifyOwn(
       auth.userId,
       check_url,
-      githubTokenProvider(platform)
+      githubClientProvider(platform)
     );
     if (error || !data) {
       const status =

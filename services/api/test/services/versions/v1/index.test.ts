@@ -29,9 +29,9 @@ import {
 // Edge entries are cleared between tests to exercise live handlers.
 const PUBLIC_HEADERS = { authorization: "test-bypass-cache" } as const;
 
-vi.mock("../../../../src/lib/github-app", () => ({
-  githubTokenProvider: () => async () => "test-github-token"
-}));
+vi.mock("../../../../src/lib/github-app", async () =>
+  (await import("../../../mocks/octokit")).githubClientMock()
+);
 
 vi.mock("@octokit/request", async () =>
   (await import("../../../mocks/octokit")).octokitRequestMock()

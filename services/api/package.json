@@ -6,8 +6,8 @@
   "license": "AGPL-3.0-only",
   "scripts": {
     "cf-typegen": "wrangler types --env-interface CloudflareBindings --env-file .dev.vars.example",
-    "cf-deploy": "npm run db:migrate:all:remote && wrangler deploy --minify",
-    "dev": "wrangler dev",
+    "cf-deploy": "npm run db:migrate:all:remote && WRANGLER_BUILD_CONDITIONS=workerd,worker,node wrangler deploy --minify",
+    "dev": "WRANGLER_BUILD_CONDITIONS=workerd,worker,node wrangler dev",
     "db:generate:extensions": "drizzle-kit generate --config drizzle.extensions.config.ts",
     "db:generate:central-alerts": "drizzle-kit generate --config drizzle.central-alerts.config.ts",
     "db:migrate:extensions-v2:local": "wrangler d1 migrations apply DB_EXTENSIONS --local",
@@ -21,14 +21,15 @@
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
     "test:workers": "vitest run",
-    "build": "wrangler deploy --dry-run --outdir dist --minify && node scripts/prepare-deployment.ts",
+    "build": "WRANGLER_BUILD_CONDITIONS=workerd,worker,node wrangler deploy --dry-run --outdir dist --minify && node scripts/prepare-deployment.ts",
     "cf-preview": "wrangler preview --config dist/wrangler.json"
   },
   "dependencies": {
     "@fossbilling/extension-packaging": "*",
     "@fossbilling/logging": "*",
     "@hono/zod-openapi": "1.6.3",
-    "@octokit/graphql": "9.0.5",
+    "@octokit/auth-app": "8.3.1",
+    "@octokit/core": "7.0.8",
     "@octokit/request": "10.0.16",
     "@scalar/hono-api-reference": "0.12.18",
     "badge-maker": "6.0.0",
@@ -36,12 +37,12 @@
     "drizzle-orm": "0.45.4",
     "hono": "4.13.17",
     "semver": "7.8.6",
-    "universal-github-app-jwt": "2.2.2",
     "uuid": "14.0.3",
     "zod": "4.6.7"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "1.6.1",
+    "@octokit/graphql": "9.0.5",
     "@types/semver": "7.8.0",
     "@zip.js/zip.js": "2.24.0",
     "drizzle-kit": "0.31.11",

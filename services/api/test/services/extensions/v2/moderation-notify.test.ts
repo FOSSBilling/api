@@ -19,9 +19,9 @@ import {
 
 // Hoisted so no v2 suite can make a real GitHub call. harness.ts applies the
 // default "not found" behaviour in beforeEach and documents why.
-vi.mock("../../../../src/lib/github-app", () => ({
-  githubTokenProvider: () => async () => "test-github-token"
-}));
+vi.mock("../../../../src/lib/github-app", async () =>
+  (await import("../../../mocks/octokit")).githubClientMock()
+);
 
 vi.mock("@octokit/request", async () =>
   (await import("../../../mocks/octokit")).octokitRequestMock()
