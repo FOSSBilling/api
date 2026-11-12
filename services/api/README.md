@@ -171,8 +171,9 @@ Validation and artifact builds run on branch pushes and PRs. A push can deploy o
 after workspace validation, the build and D1 migrations succeed. `main` targets
 production; other branches target Previews once `API_PREVIEW_RESOURCES` is configured.
 Until then, branch builds report that Preview migrations and deployment are skipped;
-validation and artifact checks still run. PR runs, including forks, never receive
-deployment credentials or apply remote migrations.
+validation and artifact checks still run. The configured PR jobs, including forks,
+run validation and build checks without forwarding deployment credentials or
+applying remote migrations.
 
 The artifact contains the compiled Worker, `wrangler.json`, and SQL migrations.
 Deployment does not rebuild the Worker. Production migrations use that artifact's
@@ -182,26 +183,26 @@ Migration jobs serialize access to the shared staging databases.
 
 #### Setup before switching deployment
 
-1. Store distinct `CLOUDFLARE_API_TOKEN` secrets only in the GitHub `production`
-   and `preview` environments. Remove any repository or organization secret with
-   that name accessible to this repository: branch workflows can read those
-   secrets without entering a protected environment. Set `CLOUDFLARE_ACCOUNT_ID`
-   as a repository variable shared by both deployment targets.
+1. Set `CLOUDFLARE_API_TOKEN` as a repository secret and `CLOUDFLARE_ACCOUNT_ID`
+   as a repository variable. Configure GitHub `production` and `preview`
+   environments, and restrict `production` to `main`.
 
-   Restrict `production` to `main`; merging to `main` authorizes production
-   deployment, so merge authority must be trusted. Require approval from designated trusted
-   deployment maintainers on `preview`, and disable administrator bypass. A
-   maintainer may approve their own branches; other collaborators must not be
-   able to approve deployment jobs. Review the exact commit's workflow, scripts,
-   dependencies, configuration and migrations before releasing credentials.
+   Like `fossbilling.org`, this setup trusts repository maintainers with branch
+   push access to use the deployment credential. Repository secrets are available
+   to workflows those maintainers can modify; environment restrictions and the
+   workflow's `main` condition select deployment targets but do not protect a
+   repository secret from branch workflows. Fork PR runs do not receive the
+   deployment token.
 
-   Production needs Editor access to the API Worker, Workers Routes Write for
-   its zone, D1 Read/Write for migrations, and Queues Read/Write to configure the
-   consumer. Preview needs Editor access to the API Worker and D1 Read/Write for
-   staging migrations, without Queue or route permissions. Worker Editor also
-   permits production deployment of that Worker: a separate Preview token and
-   staging bindings do not replace the approval gate. Preview data resources and
-   runtime secrets must be separate from production.
+   Scope the token to the API Worker and its zone. It needs Worker Editor,
+   Workers Routes Write for route changes, D1 Read/Write for migrations, and
+   Queues Read/Write to configure the existing consumer. Worker Editor covers
+   both production and Previews of that Worker. Separate staging data and runtime
+   secrets isolate test state, not the deployment credential's authority.
+
+   If branch writers must not have production deployment authority, use protected
+   environment secrets with trusted deployment approval instead. That is a
+   different access policy, not a requirement of this trusted-maintainer setup.
 
 2. Provision staging D1 databases, KV namespaces, a download bucket and a separately
    deployed staging Extensions frontend. Set the repository variable `API_PREVIEW_RESOURCES`
