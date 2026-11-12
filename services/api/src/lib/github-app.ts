@@ -8,8 +8,11 @@ export type GitHubClient = Pick<Octokit, "request" | "graphql">;
 export type GitHubClientProvider = () => Promise<GitHubClient>;
 
 const transport = {
-  fetch: (...args: Parameters<typeof fetch>) => globalThis.fetch(...args),
-  timeout: 10_000
+  fetch: ((input, init) =>
+    globalThis.fetch(input, {
+      ...init,
+      signal: init?.signal ?? AbortSignal.timeout(10_000)
+    })) satisfies typeof fetch
 };
 
 // Reuse Octokit's installation-token cache for the active credentials. Replacing
