@@ -10,11 +10,9 @@ node_modules/
 .wrangler
 
 # env
-.env
-.env.production
-.dev.vars
-.dev.vars.*
-!services/api/.dev.vars.example
+.env*
+.dev.vars*
+!.dev.vars.example
 
 # logs
 logs/
