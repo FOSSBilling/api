@@ -135,17 +135,12 @@ variables or a static installation token. Use the full downloaded PEM; no manual
 key conversion is needed. Approve the installation's permission changes before
 deployment.
 
-A shared Octokit REST/GraphQL client uses App installation tokens restricted to
-`FOSSBilling/FOSSBilling` and those three read permissions. Octokit manages token
-caching and refresh; credential changes replace its auth instance and cache.
-Wrangler builds and the Workers test runner select Node-compatible dependency
-exports (`workerd,worker,node`) so Octokit accepts GitHub's downloaded PKCS#1 PEM
-directly, just as it does in Node. PKCS#8 keys also work. Authentication is
-lazy: cached responses and profile operations without a GitHub lookup do not mint
-tokens. Authentication failures use the existing unavailable/stale-cache paths;
-they never become a missing GitHub user or anonymous lookup. There are no runtime
-calls to a secrets manager. Remove the old runtime `GITHUB_TOKEN` after setting the
-App credentials; GitHub Actions' built-in `GITHUB_TOKEN` is unrelated.
+The GitHub client requests installation tokens restricted to `FOSSBilling/FOSSBilling`
+and the three read permissions above. Octokit handles token caching and refresh;
+authentication runs only for live GitHub lookups. Wrangler builds and Workers tests
+select `workerd,worker,node` dependency exports to use Octokit's native Node key
+handling. After deploying and verifying App authentication, remove the old runtime
+`GITHUB_TOKEN`. GitHub Actions' built-in token is separate and should remain.
 
 ## Development
 

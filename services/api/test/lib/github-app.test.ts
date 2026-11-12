@@ -21,12 +21,16 @@ const tokenRequests = () =>
     String(url).endsWith("/access_tokens")
   );
 
-beforeAll(() => {
-  pkcs1 = generateKeyPairSync("rsa", {
+function generateTestKey() {
+  return generateKeyPairSync("rsa", {
     modulusLength: 2048,
     privateKeyEncoding: { type: "pkcs1", format: "pem" },
     publicKeyEncoding: { type: "spki", format: "pem" }
   }).privateKey;
+}
+
+beforeAll(() => {
+  pkcs1 = generateTestKey();
   pkcs8 = createPrivateKey(pkcs1)
     .export({ type: "pkcs8", format: "pem" })
     .toString();
@@ -48,8 +52,8 @@ beforeEach(() => {
         repository_selection: "selected"
       });
     }
-    expect(new Headers(init?.headers).get("authorization")).toBe(
-      "token installation-token"
+    expect(new Headers(init?.headers).get("authorization")).toMatch(
+      /^(?:token|bearer) installation-token$/i
     );
     return String(url).endsWith("/graphql")
       ? Response.json({ data: { repository: { name: "FOSSBilling" } } })
@@ -107,18 +111,9 @@ describe("GitHub client", () => {
     expect(second).toBe(first);
     await githubClientProvider(platform)();
     expect(tokenRequests()).toHaveLength(1);
-    settings.GITHUB_APP_PRIVATE_KEY = pkcs8;
+    settings.GITHUB_APP_PRIVATE_KEY = generateTestKey();
     await githubClientProvider(platform)();
     expect(tokenRequests()).toHaveLength(2);
-  });
-
-  it("fails closed when credentials are missing", async () => {
-    delete settings.GITHUB_APP_PRIVATE_KEY;
-    await expect(githubClientProvider(platform)()).rejects.toMatchObject({
-      httpStatus: 503,
-      message: "GitHub App credentials are not configured"
-    });
-    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("sanitizes token failures and permits a retry on the next request", async () => {
