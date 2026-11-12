@@ -6,8 +6,8 @@
   "license": "AGPL-3.0-only",
   "scripts": {
     "cf-typegen": "wrangler types --env-interface CloudflareBindings --env-file .dev.vars.example",
-    "cf-deploy": "npm run db:migrate:all:remote && WRANGLER_BUILD_CONDITIONS=workerd,worker,node wrangler deploy --minify",
-    "dev": "WRANGLER_BUILD_CONDITIONS=workerd,worker,node wrangler dev",
+    "cf-deploy": "npm run db:migrate:all:remote && cross-env WRANGLER_BUILD_CONDITIONS=workerd,worker,node wrangler deploy --minify",
+    "dev": "cross-env WRANGLER_BUILD_CONDITIONS=workerd,worker,node wrangler dev",
     "db:generate:extensions": "drizzle-kit generate --config drizzle.extensions.config.ts",
     "db:generate:central-alerts": "drizzle-kit generate --config drizzle.central-alerts.config.ts",
     "db:migrate:extensions-v2:local": "wrangler d1 migrations apply DB_EXTENSIONS --local",
@@ -21,7 +21,7 @@
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
     "test:workers": "vitest run",
-    "build": "WRANGLER_BUILD_CONDITIONS=workerd,worker,node wrangler deploy --dry-run --outdir dist --minify && node scripts/prepare-deployment.ts",
+    "build": "cross-env WRANGLER_BUILD_CONDITIONS=workerd,worker,node wrangler deploy --dry-run --outdir dist --minify && node scripts/prepare-deployment.ts",
     "cf-preview": "wrangler preview --config dist/wrangler.json"
   },
   "dependencies": {
@@ -45,6 +45,7 @@
     "@octokit/graphql": "9.0.5",
     "@types/semver": "7.8.0",
     "@zip.js/zip.js": "2.24.0",
+    "cross-env": "10.1.0",
     "drizzle-kit": "0.31.11",
     "wrangler": "4.158.0"
   }

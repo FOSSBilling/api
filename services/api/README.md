@@ -146,7 +146,7 @@ handling. After deploying and verifying App authentication, remove the old runti
 
 ### Local Setup
 
-1. Copy `services/api/.dev.vars.example` to `services/api/.dev.vars` and set your runtime variables and secrets:
+1. Copy `.dev.vars.example` to `.dev.vars` and set your runtime variables and secrets:
 
    The example contains placeholders only. `cf-typegen` uses it to generate stable
    binding types without reading local credentials.

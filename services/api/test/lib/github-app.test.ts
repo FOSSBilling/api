@@ -9,6 +9,7 @@ import {
 } from "vitest";
 import { createPrivateKey, generateKeyPairSync } from "node:crypto";
 import { githubClientProvider } from "../../src/lib/github-app";
+import { checkGithubEntity } from "../../src/services/extensions/v2/github/verification";
 
 let pkcs1: string;
 let pkcs8: string;
@@ -114,6 +115,18 @@ describe("GitHub client", () => {
     settings.GITHUB_APP_PRIVATE_KEY = generateTestKey();
     await githubClientProvider(platform)();
     expect(tokenRequests()).toHaveLength(2);
+  });
+
+  it("keeps a token-endpoint 404 unavailable during developer verification", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 404 }));
+    const result = await checkGithubEntity(
+      "fossbilling",
+      githubClientProvider(platform)
+    );
+    expect(result.status).toBe("unavailable");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(tokenRequests()).toHaveLength(1);
   });
 
   it("sanitizes token failures and permits a retry on the next request", async () => {

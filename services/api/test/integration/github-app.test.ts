@@ -6,8 +6,6 @@ import {
 import { env } from "cloudflare:workers";
 import { request } from "@octokit/request";
 import app from "../../src/app/index";
-import { githubClientProvider } from "../../src/lib/github-app";
-import { checkGithubEntity } from "../../src/services/extensions/v2/github/verification";
 import { isolateEdgeCache } from "../utils/isolate-edge-cache";
 import { suppressConsole } from "../utils/mock-helpers";
 
@@ -68,16 +66,5 @@ it("serves the release cache even when App credentials are unavailable", async (
 it("returns unavailable on an uncached release lookup without App credentials", async () => {
   const response = await releases();
   expect(response.status).toBe(503);
-  expect(request).not.toHaveBeenCalled();
-});
-
-it("does not turn an authentication outage into a missing developer", async () => {
-  const result = await checkGithubEntity(
-    "fossbilling",
-    githubClientProvider({
-      getEnv: () => undefined
-    })
-  );
-  expect(result.status).toBe("unavailable");
   expect(request).not.toHaveBeenCalled();
 });
