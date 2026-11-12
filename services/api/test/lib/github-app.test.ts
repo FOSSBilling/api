@@ -7,12 +7,11 @@ import {
   it,
   vi
 } from "vitest";
-import { createPrivateKey, generateKeyPairSync } from "node:crypto";
+import { generateKeyPairSync } from "node:crypto";
 import { githubClientProvider } from "../../src/lib/github-app";
 import { checkGithubEntity } from "../../src/services/extensions/v2/github/verification";
 
 let pkcs1: string;
-let pkcs8: string;
 let sequence = 0;
 let settings: Record<string, string>;
 const fetchMock = vi.fn<typeof fetch>();
@@ -32,9 +31,6 @@ function generateTestKey() {
 
 beforeAll(() => {
   pkcs1 = generateTestKey();
-  pkcs8 = createPrivateKey(pkcs1)
-    .export({ type: "pkcs8", format: "pem" })
-    .toString();
 });
 
 beforeEach(() => {
@@ -69,42 +65,37 @@ afterEach(() => {
 });
 
 describe("GitHub client", () => {
-  it.each(["PKCS#1", "PKCS#8"])(
-    "accepts %s PEMs and authenticates REST and GraphQL with restricted tokens",
-    async (format) => {
-      settings.GITHUB_APP_PRIVATE_KEY =
-        format === "PKCS#1" ? pkcs1 : pkcs8.replace(/\n/g, "\\n");
-      const getClient = githubClientProvider(platform);
-      expect(fetchMock).not.toHaveBeenCalled();
-      const github = await getClient();
-      expect(
-        (
-          await github.request("GET /users/{username}", {
-            username: "FOSSBilling"
-          })
-        ).data.login
-      ).toBe("FOSSBilling");
-      expect(
-        await github.graphql(
-          '{ repository(owner: "FOSSBilling", name: "FOSSBilling") { name } }'
-        )
-      ).toEqual({ repository: { name: "FOSSBilling" } });
-      expect(tokenRequests()).toHaveLength(1);
-      const [url, init] = tokenRequests()[0];
-      expect(url).toBe(
-        "https://api.github.com/app/installations/123/access_tokens"
-      );
-      expect(init?.method).toBe("POST");
-      expect(JSON.parse(init?.body as string)).toEqual({
-        repositories: ["FOSSBilling"],
-        permissions: {
-          contents: "read",
-          actions: "read",
-          pull_requests: "read"
-        }
-      });
-    }
-  );
+  it("accepts GitHub's downloaded PEM and authenticates REST and GraphQL with restricted tokens", async () => {
+    const getClient = githubClientProvider(platform);
+    expect(fetchMock).not.toHaveBeenCalled();
+    const github = await getClient();
+    expect(
+      (
+        await github.request("GET /users/{username}", {
+          username: "FOSSBilling"
+        })
+      ).data.login
+    ).toBe("FOSSBilling");
+    expect(
+      await github.graphql(
+        '{ repository(owner: "FOSSBilling", name: "FOSSBilling") { name } }'
+      )
+    ).toEqual({ repository: { name: "FOSSBilling" } });
+    expect(tokenRequests()).toHaveLength(1);
+    const [url, init] = tokenRequests()[0];
+    expect(url).toBe(
+      "https://api.github.com/app/installations/123/access_tokens"
+    );
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(init?.body as string)).toEqual({
+      repositories: ["FOSSBilling"],
+      permissions: {
+        contents: "read",
+        actions: "read",
+        pull_requests: "read"
+      }
+    });
+  });
 
   it("reuses the request's client and Octokit's token cache until credentials change", async () => {
     const getClient = githubClientProvider(platform);

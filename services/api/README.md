@@ -99,7 +99,7 @@ Package storage configuration is listed in [PACKAGING.md](src/services/extension
 
 - `GITHUB_APP_CLIENT_ID`: Client ID of the FOSSBilling Integrations GitHub App.
 - `GITHUB_APP_INSTALLATION_ID`: Its installation ID in the FOSSBilling organization.
-- `GITHUB_APP_PRIVATE_KEY`: App signing key (PEM), stored as a secret. GitHub's downloaded PKCS#1 PEM and PKCS#8 are accepted, with real newlines or escaped `\n`.
+- `GITHUB_APP_PRIVATE_KEY`: GitHub's downloaded App private key (PEM), stored as a secret.
 - `ASSERTION_SIGNING_SECRET`: Shared HMAC secret used to verify the short-lived bearer assertions minted by the Extensions site. Configure the same value in both Workers; it is never sent to clients.
 - `ASSERTION_SIGNING_SECRET_PREVIOUS`: Optional previous HMAC secret accepted during a signing-key rotation.
 - `EXTENSIONS_REVALIDATE_SECRET`: Bearer token the API sends to the Extensions site's `POST /api/revalidate` (over the `EXTENSIONS_FRONTEND` service binding) to purge the site's CDN-cached extension pages after content mutations. Configure the same value in both Workers; it is never sent to clients.
@@ -117,30 +117,14 @@ Stats also use the GitHub App credentials. For the assertion format and the rota
 
 ### GitHub App authentication
 
-Install **FOSSBilling Integrations** on `FOSSBilling/FOSSBilling` with repository
-**Contents**, **Actions** and **Pull requests** permissions set to **Read-only**
-(Metadata read is automatic). Contents covers releases and compatibility files;
-Actions covers preview artifacts and runs; Pull requests resolves preview heads.
-Developer checks read public GitHub profiles; identity and organization ownership
-still come from the caller's linked identity in the auth service.
+Install **FOSSBilling Integrations** on `FOSSBilling/FOSSBilling` with **Contents**,
+**Actions** and **Pull requests** permissions set to **Read-only**. Set the three
+`GITHUB_APP_*` runtime values above, using GitHub's downloaded PEM without conversion.
+Use the preview key locally and in Previews Base, and a separate production key.
 
-Use separate API preview and production private keys so they can be rotated
-independently. Use the preview key locally and in Previews Base, and the production
-key in the API Worker's production settings. Both use the same App client and
-installation IDs; separate keys still have the same App authority.
-
-Set the three `GITHUB_APP_*` values as runtime variables/secrets in each deployment
-that needs GitHub access, and in `services/api/.dev.vars` locally. Do not use build
-variables or a static installation token. Use the full downloaded PEM; no manual
-key conversion is needed. Approve the installation's permission changes before
-deployment.
-
-The GitHub client requests installation tokens restricted to `FOSSBilling/FOSSBilling`
-and the three read permissions above. Octokit handles token caching and refresh;
-authentication runs only for live GitHub lookups. Wrangler builds and Workers tests
-select `workerd,worker,node` dependency exports to use Octokit's native Node key
-handling. After deploying and verifying App authentication, remove the old runtime
-`GITHUB_TOKEN`. GitHub Actions' built-in token is separate and should remain.
+Octokit manages short-lived installation tokens, restricted to that repository and
+those read permissions. Remove the old runtime `GITHUB_TOKEN` after deployment is
+verified; GitHub Actions' built-in token remains unchanged.
 
 ## Development
 
