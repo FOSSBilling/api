@@ -25,6 +25,10 @@ import { request as ghRequest } from "@octokit/request";
 import { graphql } from "@octokit/graphql";
 import { ApiResponse } from "../../../utils/test-types";
 
+vi.mock("../../../../src/lib/github-app", () => ({
+  githubTokenProvider: () => async () => "test-github-token"
+}));
+
 vi.mock("@octokit/request", async () =>
   (await import("../../../mocks/octokit")).octokitRequestMock()
 );

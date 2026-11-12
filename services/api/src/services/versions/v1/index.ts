@@ -1,3 +1,7 @@
+import {
+  githubTokenProvider,
+  type GitHubTokenProvider
+} from "../../../lib/github-app";
 import { bearerAuth } from "hono/bearer-auth";
 import { Hono, type Context, type Handler, type MiddlewareHandler } from "hono";
 import { cors } from "hono/cors";
@@ -173,7 +177,7 @@ async function loadReleases(
   const platform = getPlatform(c);
   return getReleases(
     platform.getCache("CACHE_KV"),
-    platform.getEnv("GITHUB_TOKEN") || "",
+    githubTokenProvider(platform),
     c.env.DOWNLOAD_BUCKET,
     updateCache,
     platform.waitUntil
@@ -302,7 +306,7 @@ versionsV1.get(
     const platform = getPlatform(c);
     const result = await getReleases(
       platform.getCache("CACHE_KV"),
-      platform.getEnv("GITHUB_TOKEN") || "",
+      githubTokenProvider(platform),
       c.env.DOWNLOAD_BUCKET,
       true
       // No waitUntil: /update's contract is "refresh the cache", so the
@@ -484,7 +488,7 @@ export function resetUpdateTokenCache() {
 
 export async function getReleases(
   cache: ICache,
-  githubToken: string,
+  getGithubToken: GitHubTokenProvider,
   downloadBucket: R2Bucket,
   updateCache: boolean = false,
   waitUntil?: (promise: Promise<unknown>) => void
@@ -515,6 +519,7 @@ export async function getReleases(
   // per isolate instead of stampeding GitHub with N copies of it.
   return singleFlight("versions:releases", async () => {
     try {
+      const githubToken = await getGithubToken();
       const result = await ghRequest("GET /repos/{owner}/{repo}/releases", {
         owner: REPO_OWNER,
         repo: REPO_NAME,

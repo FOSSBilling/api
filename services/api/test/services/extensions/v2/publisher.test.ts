@@ -26,6 +26,10 @@ import {
 } from "../../../lib/auth/m2m-helper";
 
 // Hoisted so no v2 suite can make a real GitHub call (see moderation.test.ts).
+vi.mock("../../../../src/lib/github-app", () => ({
+  githubTokenProvider: () => async () => "test-github-token"
+}));
+
 vi.mock("@octokit/request", async () =>
   (await import("../../../mocks/octokit")).octokitRequestMock()
 );

@@ -4,6 +4,10 @@ import { db, get, setupExtensionsV2Tests } from "./harness";
 import { insertDeveloper, insertExtension } from "./db-fixtures";
 import { wrapD1WithHook } from "./db-interceptor";
 
+vi.mock("../../../../src/lib/github-app", () => ({
+  githubTokenProvider: () => async () => "test-github-token"
+}));
+
 vi.mock("@octokit/request", async () =>
   (await import("../../../mocks/octokit")).octokitRequestMock()
 );

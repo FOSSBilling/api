@@ -13,6 +13,10 @@ import {
 import { StoredExtensionContentSchema } from "../../../../src/services/extensions/v2/schemas/extensions";
 import { insertExtension, insertUser } from "./db-fixtures";
 
+vi.mock("../../../../src/lib/github-app", () => ({
+  githubTokenProvider: () => async () => "test-github-token"
+}));
+
 vi.mock("@octokit/request", async () =>
   (await import("../../../mocks/octokit")).octokitRequestMock()
 );

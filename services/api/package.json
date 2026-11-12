@@ -5,7 +5,7 @@
   "type": "module",
   "license": "AGPL-3.0-only",
   "scripts": {
-    "cf-typegen": "wrangler types --env-interface CloudflareBindings",
+    "cf-typegen": "wrangler types --env-interface CloudflareBindings --env-file .dev.vars.example",
     "cf-deploy": "npm run db:migrate:all:remote && wrangler deploy --minify",
     "dev": "wrangler dev",
     "db:generate:extensions": "drizzle-kit generate --config drizzle.extensions.config.ts",
@@ -25,6 +25,8 @@
     "cf-preview": "wrangler preview --config dist/wrangler.json"
   },
   "dependencies": {
+    "@fossbilling/extension-packaging": "*",
+    "@fossbilling/logging": "*",
     "@hono/zod-openapi": "1.6.3",
     "@octokit/graphql": "9.0.5",
     "@octokit/request": "10.0.16",
@@ -34,16 +36,15 @@
     "drizzle-orm": "0.45.4",
     "hono": "4.13.17",
     "semver": "7.8.6",
+    "universal-github-app-jwt": "2.2.2",
     "uuid": "14.0.3",
-    "zod": "4.6.7",
-    "@fossbilling/extension-packaging": "*",
-    "@fossbilling/logging": "*"
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "1.6.1",
     "@types/semver": "7.8.0",
+    "@zip.js/zip.js": "2.24.0",
     "drizzle-kit": "0.31.11",
-    "wrangler": "4.158.0",
-    "@zip.js/zip.js": "2.24.0"
+    "wrangler": "4.158.0"
   }
 }

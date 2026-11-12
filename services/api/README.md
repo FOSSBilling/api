@@ -97,7 +97,9 @@ For local development, put operational values and credentials in the ignored
 `.dev.vars` file. Document variable names and placeholders, not production values.
 Package storage configuration is listed in [PACKAGING.md](src/services/extensions/v2/PACKAGING.md).
 
-- `GITHUB_TOKEN`: A GitHub Personal Access Token (classic) with public repo read access.
+- `GITHUB_APP_CLIENT_ID`: Client ID of the FOSSBilling Integrations GitHub App.
+- `GITHUB_APP_INSTALLATION_ID`: Its installation ID in the FOSSBilling organization.
+- `GITHUB_APP_PRIVATE_KEY`: App signing key (PEM), stored as a secret. Use PKCS#8 for portability across runtimes; real newlines or escaped `\n` are accepted.
 - `ASSERTION_SIGNING_SECRET`: Shared HMAC secret used to verify the short-lived bearer assertions minted by the Extensions site. Configure the same value in both Workers; it is never sent to clients.
 - `ASSERTION_SIGNING_SECRET_PREVIOUS`: Optional previous HMAC secret accepted during a signing-key rotation.
 - `EXTENSIONS_REVALIDATE_SECRET`: Bearer token the API sends to the Extensions site's `POST /api/revalidate` (over the `EXTENSIONS_FRONTEND` service binding) to purge the site's CDN-cached extension pages after content mutations. Configure the same value in both Workers; it is never sent to clients.
@@ -111,21 +113,43 @@ Package storage configuration is listed in [PACKAGING.md](src/services/extension
 - `M2M_ISSUER`, `M2M_JWKS_URL`, `M2M_AUDIENCE`: Issuer, JWKS endpoint, and expected audience for machine-to-machine access tokens minted by the central auth service (`FOSSBilling/auth`). Defaults live in `wrangler.jsonc`; preview environments need them pointed at the issuing preview. See [extensions v2 README](src/services/extensions/v2/README.md#machine-publishing).
 
 The extension-specific settings apply to extensions v2; Versions, Previews and
-Stats also use `GITHUB_TOKEN`. For the assertion format and the rotation procedure, see [its README](src/services/extensions/v2/README.md#authentication).
+Stats also use the GitHub App credentials. For the assertion format and the rotation procedure, see [its README](src/services/extensions/v2/README.md#authentication).
+
+### GitHub App authentication
+
+Install **FOSSBilling Integrations** on `FOSSBilling/FOSSBilling` with repository
+**Contents**, **Actions** and **Pull requests** permissions set to **Read-only**
+(Metadata read is automatic). Contents covers releases and compatibility files;
+Actions covers preview artifacts and runs; Pull requests resolves preview heads.
+Developer checks read public GitHub profiles; identity and organization ownership
+still come from the caller's linked identity in the auth service.
+
+Use a dedicated API private key so it can be rotated independently of other
+Integrations consumers; separate keys still have the same App authority.
+
+Set the three `GITHUB_APP_*` values as runtime variables/secrets in each deployment
+that needs GitHub access, and in `services/api/.dev.vars` locally. Do not use build
+variables or a static installation token. If the signing key is PKCS#1, convert it
+once with `openssl pkcs8 -topk8 -nocrypt -in app.pem -out app.pkcs8.pem` before
+storing it. Approve the installation's permission changes before deployment.
+
+The API mints installation tokens restricted to `FOSSBilling/FOSSBilling` and those
+three read permissions, and caches resolved tokens in memory until one minute
+before expiry. Key/configuration changes invalidate that cache. Authentication is
+lazy: cached responses and profile operations without a GitHub lookup do not mint
+tokens. Authentication failures use the existing unavailable/stale-cache paths;
+they never become a missing GitHub user or anonymous lookup. There are no runtime
+calls to a secrets manager. Remove the old runtime `GITHUB_TOKEN` after setting the
+App credentials; GitHub Actions' built-in `GITHUB_TOKEN` is unrelated.
 
 ## Development
 
 ### Local Setup
 
-1. Create a `.dev.vars` file for local runtime variables and secrets:
+1. Copy `services/api/.dev.vars.example` to `services/api/.dev.vars` and set your runtime variables and secrets:
 
-   ```env
-   GITHUB_TOKEN="your-token"
-   ASSERTION_SIGNING_SECRET="local-shared-secret"
-   EXTENSIONS_REVALIDATE_SECRET="local-revalidate-secret"
-   # Optional while rotating the shared assertion secret.
-   # ASSERTION_SIGNING_SECRET_PREVIOUS="previous-local-shared-secret"
-   ```
+   The example contains placeholders only. `cf-typegen` uses it to generate stable
+   binding types without reading local credentials.
 
 2. Apply migrations to the local D1 databases:
 

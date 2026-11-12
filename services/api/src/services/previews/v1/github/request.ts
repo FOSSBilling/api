@@ -1,10 +1,12 @@
+import { githubTokenProvider } from "../../../../lib/github-app";
 import { Context } from "hono";
 import { request } from "@octokit/request";
 import { GitHubError } from "../../../../lib/github-errors";
+import { getPlatform } from "../../../../lib/middleware";
 import { sha256Hex } from "../../../../lib/hash";
 
 export interface PreviewGitHub {
-  token: string;
+  getToken: () => Promise<string>;
   reserve: () => Promise<boolean>;
 }
 
@@ -64,7 +66,7 @@ export function previewGitHub(
   const identity = clientBudgetIdentity(c.req.header("CF-Connecting-IP"));
   let remaining = MAX_REQUEST_SUBREQUESTS;
   return {
-    token: c.env.GITHUB_TOKEN,
+    getToken: githubTokenProvider(getPlatform(c)),
     reserve: async () => {
       if (remaining === 0) return false;
       // Consume before awaiting so concurrent calls cannot exceed the ceiling.
@@ -100,5 +102,8 @@ export async function previewRequest(
       "preview_budget_exhausted"
     );
   }
-  return request(route, parameters);
+  return request(route, {
+    ...parameters,
+    headers: { authorization: `Bearer ${await github.getToken()}` }
+  });
 }

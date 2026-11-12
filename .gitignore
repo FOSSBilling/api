@@ -14,6 +14,7 @@ node_modules/
 .env.production
 .dev.vars
 .dev.vars.*
+!services/api/.dev.vars.example
 
 # logs
 logs/
