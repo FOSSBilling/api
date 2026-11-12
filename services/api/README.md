@@ -124,8 +124,10 @@ Actions covers preview artifacts and runs; Pull requests resolves preview heads.
 Developer checks read public GitHub profiles; identity and organization ownership
 still come from the caller's linked identity in the auth service.
 
-Use a dedicated API private key so it can be rotated independently of other
-Integrations consumers; separate keys still have the same App authority.
+Use separate API preview and production private keys so they can be rotated
+independently. Use the preview key locally and in Previews Base, and the production
+key in the API Worker's production settings. Both use the same App client and
+installation IDs; separate keys still have the same App authority.
 
 Set the three `GITHUB_APP_*` values as runtime variables/secrets in each deployment
 that needs GitHub access, and in `services/api/.dev.vars` locally. Do not use build
@@ -233,8 +235,10 @@ Migration jobs serialize access to the shared staging databases.
    staging resources; they do not automatically receive separate D1/KV/R2 data.
 
 3. Configure Preview runtime secrets in the API Worker's **Previews Base** settings.
-   Use a separate assertion-signing secret, revalidation secret and read-only GitHub
-   token. Match the revalidation secret with the staging frontend. Set M2M issuer,
+   Use a separate assertion-signing secret, revalidation secret and GitHub App
+   preview key, alongside `GITHUB_APP_CLIENT_ID` and `GITHUB_APP_INSTALLATION_ID`
+   (see [GitHub App authentication](#github-app-authentication)). Match the
+   revalidation secret with the staging frontend. Set M2M issuer,
    JWKS and audience variables there when using a separate test issuer. Operational
    production variables and secrets remain dashboard-managed with `keep_vars: true`.
 4. Configure required checks for the new validation/build job names, then disable the
