@@ -97,7 +97,9 @@ For local development, put operational values and credentials in the ignored
 `.dev.vars` file. Document variable names and placeholders, not production values.
 Package storage configuration is listed in [PACKAGING.md](src/services/extensions/v2/PACKAGING.md).
 
-- `GITHUB_TOKEN`: A GitHub Personal Access Token (classic) with public repo read access.
+- `GITHUB_APP_CLIENT_ID`: Client ID of the FOSSBilling Integrations GitHub App.
+- `GITHUB_APP_INSTALLATION_ID`: Its installation ID in the FOSSBilling organization.
+- `GITHUB_APP_PRIVATE_KEY`: GitHub's downloaded App private key (PEM), stored as a secret.
 - `ASSERTION_SIGNING_SECRET`: Shared HMAC secret used to verify the short-lived bearer assertions minted by the Extensions site. Configure the same value in both Workers; it is never sent to clients.
 - `ASSERTION_SIGNING_SECRET_PREVIOUS`: Optional previous HMAC secret accepted during a signing-key rotation.
 - `EXTENSIONS_REVALIDATE_SECRET`: Bearer token the API sends to the Extensions site's `POST /api/revalidate` (over the `EXTENSIONS_FRONTEND` service binding) to purge the site's CDN-cached extension pages after content mutations. Configure the same value in both Workers; it is never sent to clients.
@@ -111,21 +113,29 @@ Package storage configuration is listed in [PACKAGING.md](src/services/extension
 - `M2M_ISSUER`, `M2M_JWKS_URL`, `M2M_AUDIENCE`: Issuer, JWKS endpoint, and expected audience for machine-to-machine access tokens minted by the central auth service (`FOSSBilling/auth`). Defaults live in `wrangler.jsonc`; preview environments need them pointed at the issuing preview. See [extensions v2 README](src/services/extensions/v2/README.md#machine-publishing).
 
 The extension-specific settings apply to extensions v2; Versions, Previews and
-Stats also use `GITHUB_TOKEN`. For the assertion format and the rotation procedure, see [its README](src/services/extensions/v2/README.md#authentication).
+Stats also use the GitHub App credentials. For the assertion format and the rotation procedure, see [its README](src/services/extensions/v2/README.md#authentication).
+
+### GitHub App authentication
+
+Install **FOSSBilling Integrations** on `FOSSBilling/FOSSBilling` with **Contents**,
+**Actions** and **Pull requests** permissions set to **Read-only**. Set the three
+`GITHUB_APP_*` runtime values above, using GitHub's downloaded PEM without conversion.
+Use separate keys: `api-dev.private-key` for local development,
+`api-preview.private-key` for Previews Base, and `api-production.private-key` for
+production. All use the same App client and installation IDs.
+
+Octokit manages short-lived installation tokens, restricted to that repository and
+those read permissions. Remove the old runtime `GITHUB_TOKEN` after deployment is
+verified; GitHub Actions' built-in token remains unchanged.
 
 ## Development
 
 ### Local Setup
 
-1. Create a `.dev.vars` file for local runtime variables and secrets:
+1. Copy `.dev.vars.example` to `.dev.vars` and set your runtime variables and secrets:
 
-   ```env
-   GITHUB_TOKEN="your-token"
-   ASSERTION_SIGNING_SECRET="local-shared-secret"
-   EXTENSIONS_REVALIDATE_SECRET="local-revalidate-secret"
-   # Optional while rotating the shared assertion secret.
-   # ASSERTION_SIGNING_SECRET_PREVIOUS="previous-local-shared-secret"
-   ```
+   The example contains placeholders only. `cf-typegen` uses it to generate stable
+   binding types without reading local credentials.
 
 2. Apply migrations to the local D1 databases:
 
@@ -209,8 +219,10 @@ Migration jobs serialize access to the shared staging databases.
    staging resources; they do not automatically receive separate D1/KV/R2 data.
 
 3. Configure Preview runtime secrets in the API Worker's **Previews Base** settings.
-   Use a separate assertion-signing secret, revalidation secret and read-only GitHub
-   token. Match the revalidation secret with the staging frontend. Set M2M issuer,
+   Use a separate assertion-signing secret, revalidation secret and GitHub App
+   preview key, alongside `GITHUB_APP_CLIENT_ID` and `GITHUB_APP_INSTALLATION_ID`
+   (see [GitHub App authentication](#github-app-authentication)). Match the
+   revalidation secret with the staging frontend. Set M2M issuer,
    JWKS and audience variables there when using a separate test issuer. Operational
    production variables and secrets remain dashboard-managed with `keep_vars: true`.
 4. Configure required checks for the new validation/build job names, then disable the

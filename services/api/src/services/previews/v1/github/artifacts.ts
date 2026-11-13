@@ -89,8 +89,7 @@ async function listArtifacts(
       repo: REPO_NAME,
       ...(name ? { name } : {}),
       per_page: 100,
-      page,
-      headers: { Authorization: `Bearer ${github.token}` }
+      page
     }
   );
   return result.data.artifacts as RawArtifact[];
@@ -156,8 +155,7 @@ async function listRunArtifacts(
       owner: REPO_OWNER,
       repo: REPO_NAME,
       run_id: runId,
-      per_page: 100,
-      headers: { Authorization: `Bearer ${github.token}` }
+      per_page: 100
     }
   );
   return result.data.artifacts as RawArtifact[];
@@ -187,8 +185,7 @@ async function findArtifactByRunHeadSha(
         repo: REPO_NAME,
         head_sha: shaLower,
         per_page: 100,
-        page,
-        headers: { Authorization: `Bearer ${github.token}` }
+        page
       }
     );
     const runs = (result.data.workflow_runs ?? []) as Array<{
@@ -322,8 +319,7 @@ export async function resolvePullRequestHeadSha(
       {
         owner: REPO_OWNER,
         repo: REPO_NAME,
-        pull_number: prNumber,
-        headers: { Authorization: `Bearer ${github.token}` }
+        pull_number: prNumber
       }
     );
     return { status: "found", data: result.data.head.sha };
@@ -351,8 +347,7 @@ export async function getArtifactDownloadUrl(
         repo: REPO_NAME,
         artifact_id: artifactId,
         archive_format: "zip",
-        request: { redirect: "manual" },
-        headers: { Authorization: `Bearer ${github.token}` }
+        request: { redirect: "manual" }
       }
     );
 

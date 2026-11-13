@@ -1,3 +1,4 @@
+import { githubClientProvider } from "../../../../lib/github-app";
 import { requireActiveAuth, requireModerator } from "../middleware";
 import { getExtensionsDb } from "../../../../lib/db";
 import { getPlatform } from "../../../../lib/middleware";
@@ -93,7 +94,7 @@ export function registerOwnershipRoutes(app: ExtensionsV2App): void {
       id,
       auth.userId,
       note,
-      platform.getEnv("GITHUB_TOKEN")
+      githubClientProvider(platform)
     );
     if (error || !data) {
       return c.json(

@@ -1,3 +1,4 @@
+import type { GitHubClientProvider } from "../../../../lib/github-app";
 import { DatabaseError } from "../../../../lib/interfaces";
 import { ExtensionsDb } from "../../../../lib/db";
 import {
@@ -39,9 +40,8 @@ export function githubUnavailableError(
       };
 }
 
-// `githubToken` authenticates the GitHub entity-existence lookup only (a
-// service-level credential, raises the public rate limit) — it is never
-// the claimant's own token, which never leaves the auth service. Shared by
+// `getGithubClient` supplies service-authenticated GitHub access for the entity
+// lookup. The claimant's own token never leaves the auth service. Shared by
 // claim() and upsertOwn(): both need the same question answered — does a
 // real GitHub org/user exist for this id, and if so, does the caller's own
 // linked GitHub identity match it? A positive mismatch is the only automated
@@ -60,7 +60,7 @@ export async function verifyGithubOwnership(
   developerId: string,
   developerType: Developer["type"],
   callerId: string,
-  githubToken?: string,
+  getGithubClient: GitHubClientProvider,
   publisherUrl?: string
 ): Promise<GithubOwnershipVerificationResult> {
   // The D1 identity read and the GitHub entity lookup are independent -
@@ -69,7 +69,7 @@ export async function verifyGithubOwnership(
   // leave it to finish (it never rejects: DatabaseResult methods classify
   // their own errors).
   const identityLookup = new UsersDatabase(db).getGithubIdentity(callerId);
-  const githubEntity = await checkGithubEntity(developerId, githubToken ?? "");
+  const githubEntity = await checkGithubEntity(developerId, getGithubClient);
 
   if (githubEntity.status === "unavailable") {
     return { error: githubUnavailableError(githubEntity.reason) };

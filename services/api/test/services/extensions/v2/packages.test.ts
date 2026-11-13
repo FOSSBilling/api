@@ -47,6 +47,10 @@ import {
 } from "./harness";
 import { insertUser, getExtension, getDeveloper, UUID_V7 } from "./db-fixtures";
 
+vi.mock("../../../../src/lib/github-app", async () =>
+  (await import("../../../mocks/octokit")).githubClientMock()
+);
+
 vi.mock("@octokit/request", async () =>
   (await import("../../../mocks/octokit")).octokitRequestMock()
 );

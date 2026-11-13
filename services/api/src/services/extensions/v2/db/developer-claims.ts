@@ -1,3 +1,4 @@
+import type { GitHubClientProvider } from "../../../../lib/github-app";
 import { and, asc, desc, eq, gt, lt, or, sql, SQL } from "drizzle-orm";
 import { DatabaseResult } from "../../../../lib/interfaces";
 import { ExtensionsDb } from "../../../../lib/db";
@@ -119,8 +120,8 @@ export class DeveloperClaimsDatabase {
   async claim(
     identifier: string,
     claimantId: string,
-    note?: string,
-    githubToken?: string
+    note: string | undefined,
+    getGithubClient: GitHubClientProvider
   ): Promise<DatabaseResult<DeveloperClaim>> {
     try {
       const [developer] = await this.db
@@ -182,7 +183,7 @@ export class DeveloperClaimsDatabase {
         developer.identifier,
         developer.type as Developer["type"],
         claimantId,
-        githubToken
+        getGithubClient
       );
 
       if ("error" in check) {

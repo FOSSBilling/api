@@ -14,6 +14,10 @@ import {
 import { getDeveloper, insertDeveloper, insertUser } from "./db-fixtures";
 
 // Hoisted so no v2 suite can make a real GitHub call.
+vi.mock("../../../../src/lib/github-app", async () =>
+  (await import("../../../mocks/octokit")).githubClientMock()
+);
+
 vi.mock("@octokit/request", async () =>
   (await import("../../../mocks/octokit")).octokitRequestMock()
 );

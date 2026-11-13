@@ -14,13 +14,14 @@ const centralAlertsMigrations = await readD1Migrations(
 );
 
 export default defineConfig({
+  // Match Wrangler: use Node-capable dependencies in the Workers runtime.
+  resolve: { conditions: ["workerd", "worker", "node"] },
   plugins: [
     cloudflareTest({
       wrangler: { configPath: "./wrangler.jsonc" },
       miniflare: {
         // Add test environment variables
         bindings: {
-          GITHUB_TOKEN: "test-github-token",
           UPDATE_TOKEN: "test-update-token",
           ASSERTION_SIGNING_SECRET: "test-assertion-signing-secret",
           M2M_ISSUER: "https://auth.example.test",

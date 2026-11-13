@@ -1,3 +1,5 @@
+import { createCloudflareBindings } from "../../../../src/lib/adapters/cloudflare";
+import { platformMiddleware } from "../../../../src/lib/middleware";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:workers";
 import {
@@ -11,6 +13,10 @@ import {
   previewGitHub,
   previewRequest
 } from "../../../../src/services/previews/v1/github/request";
+
+vi.mock("../../../../src/lib/github-app", async () =>
+  (await import("../../../mocks/octokit")).githubClientMock()
+);
 
 vi.mock("@octokit/request", async () =>
   (await import("../../../mocks/octokit")).octokitRequestMock()
@@ -200,6 +206,10 @@ describe("preview GitHub budget", () => {
 
   it("caps concurrent subrequests before awaiting reservations", async () => {
     const probe = new Hono<{ Bindings: CloudflareBindings }>();
+    probe.use(
+      "*",
+      platformMiddleware(createCloudflareBindings(env), () => {})
+    );
     probe.get("/", async (c) => {
       const github = previewGitHub(c);
       const allowed = await Promise.all(
@@ -242,10 +252,13 @@ describe("preview GitHub budget", () => {
   });
 
   it("fails closed if reservation fails", async () => {
+    const getClient = vi.fn(async () => {
+      throw new Error("Authentication must not run without a budget");
+    });
     await expect(
       previewRequest(
         {
-          token: "test",
+          getClient,
           reserve: async () => {
             throw new Error("budget unavailable");
           }
@@ -254,6 +267,7 @@ describe("preview GitHub budget", () => {
         {}
       )
     ).rejects.toThrow("Preview GitHub budget unavailable");
+    expect(getClient).not.toHaveBeenCalled();
     expect(request).not.toHaveBeenCalled();
   });
 });
