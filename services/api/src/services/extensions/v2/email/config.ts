@@ -9,7 +9,7 @@ export type EmailProviderName = "mxroute" | "resend";
 // namespace (see DB_EXTENSIONS), so an unscoped EMAIL_FROM would collide
 // with the next service that sends mail.
 export function resolveEmailProvider(env: EnvReader): EmailProviderName | null {
-  switch (env.getEnv("EXTENSIONS_V2_EMAIL_PROVIDER")?.toLowerCase()) {
+  switch (env.getEnv("EXTENSIONS_EMAIL_PROVIDER")?.toLowerCase()) {
     case "mxroute":
       return "mxroute";
     case "resend":
@@ -20,10 +20,10 @@ export function resolveEmailProvider(env: EnvReader): EmailProviderName | null {
 }
 
 export function loadEmailIdentity(env: EnvReader): EmailIdentity {
-  // Blank counts as unset: an empty EXTENSIONS_V2_EMAIL_FROM would otherwise
+  // Blank counts as unset: an empty EXTENSIONS_EMAIL_FROM would otherwise
   // become an invalid sender address instead of falling back to the default.
-  const from = env.getEnv("EXTENSIONS_V2_EMAIL_FROM")?.trim();
-  const replyTo = env.getEnv("EXTENSIONS_V2_EMAIL_REPLY_TO")?.trim();
+  const from = env.getEnv("EXTENSIONS_EMAIL_FROM")?.trim();
+  const replyTo = env.getEnv("EXTENSIONS_EMAIL_REPLY_TO")?.trim();
   return {
     from: from ? from : "noreply@fossbilling.org",
     replyTo: replyTo ? replyTo : undefined

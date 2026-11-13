@@ -3,4 +3,4 @@ GITHUB_APP_INSTALLATION_ID="your-installation-id"
 GITHUB_APP_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----"
 ASSERTION_SIGNING_SECRET="local-shared-secret" # Must match `FOSSBilling/extensions`
 EXTENSIONS_REVALIDATE_SECRET="local-revalidate-secret"
-EXTENSIONS_V2_MXROUTE_PASSWORD="local-mailbox-password"
+EXTENSIONS_EMAIL_PASSWORD="local-email-password"

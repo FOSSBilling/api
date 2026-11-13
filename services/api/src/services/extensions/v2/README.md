@@ -160,7 +160,7 @@ For organization developer IDs, GitHub membership auto-verifies only against a v
 
 Revision approve/reject, delist/relist, developer approve, and claim approve/reject email the affected author unless the moderator passes `?notify=false`. Bot decisions use the same path, marked with an `[auto policy=…]` `review_note` prefix.
 
-Recipients: developer `contact_email`, falling back to the owning account's email; claim decisions go to the claimant's account email. Sending is best-effort via `waitUntil` and never fails the write; the result carries `notified: boolean`. See `email/` for the provider abstraction (`mxroute`, `resend`, `disabled`) and the root README for `EXTENSIONS_V2_EMAIL_*`.
+Recipients: developer `contact_email`, falling back to the owning account's email; claim decisions go to the claimant's account email. Sending is best-effort via `waitUntil` and never fails the write; the result carries `notified: boolean`. See `email/` for the provider abstraction (`mxroute`, `resend`, `disabled`) and the root README for `EXTENSIONS_EMAIL_*`.
 
 ## Limits and budgets
 

@@ -22,9 +22,9 @@ export function loadMxrouteConfig(
   env: EnvReader,
   identity: EmailIdentity
 ): MxrouteConfig | null {
-  const server = env.getEnv("EXTENSIONS_V2_MXROUTE_SERVER");
-  const username = env.getEnv("EXTENSIONS_V2_MXROUTE_USERNAME");
-  const password = env.getEnv("EXTENSIONS_V2_MXROUTE_PASSWORD");
+  const server = env.getEnv("EXTENSIONS_EMAIL_SERVER");
+  const username = env.getEnv("EXTENSIONS_EMAIL_USERNAME");
+  const password = env.getEnv("EXTENSIONS_EMAIL_PASSWORD");
   if (!server || !username || !password) return null;
   return { ...identity, server, username, password };
 }

@@ -26,10 +26,10 @@ function reader(vars: Record<string, string>): EnvReader {
 const IDENTITY = { from: "extensions@fossbilling.org" };
 
 const MXROUTE_VARS = {
-  EXTENSIONS_V2_EMAIL_PROVIDER: "mxroute",
-  EXTENSIONS_V2_MXROUTE_SERVER: "tuesday.mxrouting.net",
-  EXTENSIONS_V2_MXROUTE_USERNAME: "extensions@fossbilling.org",
-  EXTENSIONS_V2_MXROUTE_PASSWORD: "secret"
+  EXTENSIONS_EMAIL_PROVIDER: "mxroute",
+  EXTENSIONS_EMAIL_SERVER: "tuesday.mxrouting.net",
+  EXTENSIONS_EMAIL_USERNAME: "extensions@fossbilling.org",
+  EXTENSIONS_EMAIL_PASSWORD: "secret"
 };
 
 function jsonResponse(payload: unknown, status = 200): Response {
@@ -40,16 +40,16 @@ describe("email config", () => {
   it("resolves no provider by default", () => {
     expect(resolveEmailProvider(reader({}))).toBeNull();
     expect(
-      resolveEmailProvider(reader({ EXTENSIONS_V2_EMAIL_PROVIDER: "pigeon" }))
+      resolveEmailProvider(reader({ EXTENSIONS_EMAIL_PROVIDER: "pigeon" }))
     ).toBeNull();
   });
 
   it("resolves the selected provider case-insensitively", () => {
     expect(
-      resolveEmailProvider(reader({ EXTENSIONS_V2_EMAIL_PROVIDER: "MXRoute" }))
+      resolveEmailProvider(reader({ EXTENSIONS_EMAIL_PROVIDER: "MXRoute" }))
     ).toBe("mxroute");
     expect(
-      resolveEmailProvider(reader({ EXTENSIONS_V2_EMAIL_PROVIDER: "resend" }))
+      resolveEmailProvider(reader({ EXTENSIONS_EMAIL_PROVIDER: "resend" }))
     ).toBe("resend");
   });
 
@@ -61,8 +61,8 @@ describe("email config", () => {
     expect(
       loadEmailIdentity(
         reader({
-          EXTENSIONS_V2_EMAIL_FROM: "extensions@fossbilling.org",
-          EXTENSIONS_V2_EMAIL_REPLY_TO: "extensions@fossbilling.org"
+          EXTENSIONS_EMAIL_FROM: "extensions@fossbilling.org",
+          EXTENSIONS_EMAIL_REPLY_TO: "extensions@fossbilling.org"
         })
       )
     ).toEqual({
@@ -70,7 +70,7 @@ describe("email config", () => {
       replyTo: "extensions@fossbilling.org"
     });
     expect(
-      loadEmailIdentity(reader({ EXTENSIONS_V2_EMAIL_FROM: "  " })).from
+      loadEmailIdentity(reader({ EXTENSIONS_EMAIL_FROM: "  " })).from
     ).toBe("noreply@fossbilling.org");
   });
 
@@ -83,7 +83,7 @@ describe("email config", () => {
     });
     expect(
       loadMxrouteConfig(
-        reader({ EXTENSIONS_V2_EMAIL_PROVIDER: "mxroute" }),
+        reader({ EXTENSIONS_EMAIL_PROVIDER: "mxroute" }),
         IDENTITY
       )
     ).toBeNull();
@@ -92,7 +92,7 @@ describe("email config", () => {
   it("loads a complete resend config and rejects a missing key", () => {
     expect(
       loadResendConfig(
-        reader({ EXTENSIONS_V2_RESEND_API_KEY: "re_key" }),
+        reader({ EXTENSIONS_EMAIL_PASSWORD: "re_key" }),
         IDENTITY
       )
     ).toEqual({ ...IDENTITY, apiKey: "re_key" });
@@ -190,7 +190,7 @@ describe("MxrouteSender", () => {
 
 describe("ResendSender", () => {
   const config = loadResendConfig(
-    reader({ EXTENSIONS_V2_RESEND_API_KEY: "re_key" }),
+    reader({ EXTENSIONS_EMAIL_PASSWORD: "re_key" }),
     IDENTITY
   )!;
 
@@ -235,7 +235,7 @@ describe("factory", () => {
     );
 
     const incompleteResend = createEmailSender(
-      reader({ EXTENSIONS_V2_EMAIL_PROVIDER: "resend" })
+      reader({ EXTENSIONS_EMAIL_PROVIDER: "resend" })
     );
     expect(incompleteResend).toBeInstanceOf(DisabledSender);
     await expect(
@@ -246,7 +246,7 @@ describe("factory", () => {
     });
 
     const incomplete = createEmailSender(
-      reader({ EXTENSIONS_V2_EMAIL_PROVIDER: "mxroute" })
+      reader({ EXTENSIONS_EMAIL_PROVIDER: "mxroute" })
     );
     expect(incomplete).toBeInstanceOf(DisabledSender);
     await expect(
@@ -292,7 +292,7 @@ describe("default fetch binding", () => {
       ).resolves.toEqual({ ok: true });
 
       const resendConfig = loadResendConfig(
-        reader({ EXTENSIONS_V2_RESEND_API_KEY: "re_key" }),
+        reader({ EXTENSIONS_EMAIL_PASSWORD: "re_key" }),
         IDENTITY
       )!;
       await expect(

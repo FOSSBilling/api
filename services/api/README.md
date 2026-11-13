@@ -86,7 +86,7 @@ We use [Cloudflare D1](https://developers.cloudflare.com/d1/) and [KV](https://d
 
 ### Environment Variables
 
-Production B2 connection details and MXroute server/username are managed in the
+Production B2 connection details and email server/username are managed in the
 Worker dashboard under **Settings > Variables and Secrets** as runtime variables.
 Credentials are stored as secrets. Build environment variables do not configure
 the running Worker. `keep_vars: true` preserves dashboard-managed variables on
@@ -103,12 +103,11 @@ Package storage configuration is listed in [PACKAGING.md](src/services/extension
 - `ASSERTION_SIGNING_SECRET`: Shared HMAC secret used to verify the short-lived bearer assertions minted by the Extensions site. Configure the same value in both Workers; it is never sent to clients.
 - `ASSERTION_SIGNING_SECRET_PREVIOUS`: Optional previous HMAC secret accepted during a signing-key rotation.
 - `EXTENSIONS_REVALIDATE_SECRET`: Bearer token the API sends to the Extensions site's `POST /api/revalidate` (over the `EXTENSIONS_FRONTEND` service binding) to purge the site's CDN-cached extension pages after content mutations. Configure the same value in both Workers; it is never sent to clients.
-- `EXTENSIONS_V2_EMAIL_PROVIDER`: `mxroute` or `resend` to send moderator notification emails, or unset/`disabled` to skip sending.
-- `EXTENSIONS_V2_EMAIL_FROM`: Sender address for notification emails (default `noreply@fossbilling.org`).
-- `EXTENSIONS_V2_EMAIL_REPLY_TO`: Optional Reply-To address for a monitored inbox. Omit when unset (no Reply-To header is sent) — notification emails do not invite replies.
-- `EXTENSIONS_V2_MXROUTE_SERVER`, `EXTENSIONS_V2_MXROUTE_USERNAME`: Dashboard-managed runtime variables identifying the mailbox for the MXroute SMTP API (`https://smtpapi.mxroute.com/`). Required when `EXTENSIONS_V2_EMAIL_PROVIDER=mxroute`.
-- `EXTENSIONS_V2_MXROUTE_PASSWORD`: Mailbox password, stored as a secret. Required when `EXTENSIONS_V2_EMAIL_PROVIDER=mxroute`.
-- `EXTENSIONS_V2_RESEND_API_KEY`: API key for Resend. Required when `EXTENSIONS_V2_EMAIL_PROVIDER=resend`.
+- `EXTENSIONS_EMAIL_PROVIDER`: `mxroute` or `resend` to send moderator notification emails, or unset/`disabled` to skip sending.
+- `EXTENSIONS_EMAIL_FROM`: Sender address for notification emails (default `noreply@fossbilling.org`).
+- `EXTENSIONS_EMAIL_REPLY_TO`: Optional Reply-To address for a monitored inbox. Omit when unset (no Reply-To header is sent) — notification emails do not invite replies.
+- `EXTENSIONS_EMAIL_SERVER`, `EXTENSIONS_EMAIL_USERNAME`: Mail server and login used by the MXroute adapter. Required for `mxroute`; unused by `resend`.
+- `EXTENSIONS_EMAIL_PASSWORD`: Secret containing the mailbox password for `mxroute` or API key for `resend`.
 - `EXTENSIONS_RETENTION_MODE`: `dry-run` (report only) or `compact` (prune old revision bodies). See [extensions v2 README](src/services/extensions/v2/README.md#revisions-and-retention).
 - `M2M_ISSUER`, `M2M_JWKS_URL`, `M2M_AUDIENCE`: Issuer, JWKS endpoint, and expected audience for machine-to-machine access tokens minted by the central auth service (`FOSSBilling/auth`). Defaults live in `wrangler.jsonc`; preview environments need them pointed at the issuing preview. See [extensions v2 README](src/services/extensions/v2/README.md#machine-publishing).
 
