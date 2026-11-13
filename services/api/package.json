@@ -47,6 +47,6 @@
     "@zip.js/zip.js": "2.24.0",
     "cross-env": "10.1.0",
     "drizzle-kit": "0.31.11",
-    "wrangler": "4.158.0"
+    "wrangler": "4.159.0"
   }
 }
