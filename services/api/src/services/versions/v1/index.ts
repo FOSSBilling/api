@@ -1,10 +1,13 @@
+import {
+  githubClientProvider,
+  type GitHubClient,
+  type GitHubClientProvider
+} from "../../../lib/github-app";
 import { bearerAuth } from "hono/bearer-auth";
 import { Hono, type Context, type Handler, type MiddlewareHandler } from "hono";
 import { cors } from "hono/cors";
 import { etag } from "hono/etag";
 import { prettyJSON } from "hono/pretty-json";
-import { graphql } from "@octokit/graphql";
-import { request as ghRequest } from "@octokit/request";
 import { trimTrailingSlash } from "hono/trailing-slash";
 import {
   compare as semverCompare,
@@ -173,7 +176,7 @@ async function loadReleases(
   const platform = getPlatform(c);
   return getReleases(
     platform.getCache("CACHE_KV"),
-    platform.getEnv("GITHUB_TOKEN") || "",
+    githubClientProvider(platform),
     c.env.DOWNLOAD_BUCKET,
     updateCache,
     platform.waitUntil
@@ -302,7 +305,7 @@ versionsV1.get(
     const platform = getPlatform(c);
     const result = await getReleases(
       platform.getCache("CACHE_KV"),
-      platform.getEnv("GITHUB_TOKEN") || "",
+      githubClientProvider(platform),
       c.env.DOWNLOAD_BUCKET,
       true
       // No waitUntil: /update's contract is "refresh the cache", so the
@@ -484,7 +487,7 @@ export function resetUpdateTokenCache() {
 
 export async function getReleases(
   cache: ICache,
-  githubToken: string,
+  getGithubClient: GitHubClientProvider,
   downloadBucket: R2Bucket,
   updateCache: boolean = false,
   waitUntil?: (promise: Promise<unknown>) => void
@@ -515,14 +518,15 @@ export async function getReleases(
   // per isolate instead of stampeding GitHub with N copies of it.
   return singleFlight("versions:releases", async () => {
     try {
-      const result = await ghRequest("GET /repos/{owner}/{repo}/releases", {
-        owner: REPO_OWNER,
-        repo: REPO_NAME,
-        headers: {
-          Authorization: `Bearer ${githubToken}`
-        },
-        per_page: 100
-      });
+      const github = await getGithubClient();
+      const result = await github.request(
+        "GET /repos/{owner}/{repo}/releases",
+        {
+          owner: REPO_OWNER,
+          repo: REPO_NAME,
+          per_page: 100
+        }
+      );
 
       if (!Array.isArray(result.data)) {
         logWarn("versions", "Unexpected GitHub releases response format", {
@@ -604,10 +608,7 @@ export async function getReleases(
       let batchPhpVersions = new Map<string, string>();
       if (releasesToFetch.length > 0) {
         try {
-          batchPhpVersions = await getBatchPhpVersions(
-            githubToken,
-            releasesToFetch
-          );
+          batchPhpVersions = await getBatchPhpVersions(github, releasesToFetch);
           logInfo("versions", "Batch fetched PHP versions via GraphQL", {
             requested: releasesToFetch.length,
             resolved: batchPhpVersions.size
@@ -858,7 +859,7 @@ interface PhpVersionBatchItem {
 }
 
 async function getBatchPhpVersions(
-  githubToken: string,
+  github: GitHubClient,
   releases: PhpVersionBatchItem[]
 ): Promise<Map<string, string>> {
   if (releases.length === 0) return new Map();
@@ -872,11 +873,9 @@ async function getBatchPhpVersions(
 
   const query = `{ repository(owner: "${REPO_OWNER}", name: "${REPO_NAME}") {\n${fields}\n} }`;
 
-  const data = await graphql<{
+  const data = await github.graphql<{
     repository: Record<string, { text?: string } | null>;
-  }>(query, {
-    headers: { authorization: `Bearer ${githubToken}` }
-  });
+  }>(query);
 
   const result = new Map<string, string>();
 

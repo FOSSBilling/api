@@ -1,4 +1,4 @@
-import { request as ghRequest } from "@octokit/request";
+import type { GitHubClientProvider } from "../../../../lib/github-app";
 import {
   AuthError,
   classifyGitHubError,
@@ -71,12 +71,12 @@ function redactedFailureMessage(message: string): string {
 // and invalid data so callers never mistake an outage for a missing account.
 export async function checkGithubEntity(
   id: string,
-  githubToken: string
+  getGithubClient: GitHubClientProvider
 ): Promise<GithubEntityResult> {
   try {
-    const result = await ghRequest("GET /users/{username}", {
-      username: id,
-      headers: githubToken ? { authorization: `Bearer ${githubToken}` } : {}
+    const github = await getGithubClient();
+    const result = await github.request("GET /users/{username}", {
+      username: id
     });
     if (
       typeof result.data !== "object" ||

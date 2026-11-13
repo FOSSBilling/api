@@ -21,6 +21,10 @@ import {
   VersionInfo
 } from "../../../utils/test-types";
 
+vi.mock("../../../../src/lib/github-app", async () =>
+  (await import("../../../mocks/octokit")).githubClientMock()
+);
+
 vi.mock("@octokit/request", async () =>
   (await import("../../../mocks/octokit")).octokitRequestMock()
 );

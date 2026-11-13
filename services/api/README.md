@@ -97,7 +97,9 @@ For local development, put operational values and credentials in the ignored
 `.dev.vars` file. Document variable names and placeholders, not production values.
 Package storage configuration is listed in [PACKAGING.md](src/services/extensions/v2/PACKAGING.md).
 
-- `GITHUB_TOKEN`: A GitHub Personal Access Token (classic) with public repo read access.
+- `GITHUB_APP_CLIENT_ID`: Client ID of the FOSSBilling Integrations GitHub App.
+- `GITHUB_APP_INSTALLATION_ID`: Its installation ID in the FOSSBilling organization.
+- `GITHUB_APP_PRIVATE_KEY`: GitHub's downloaded App private key (PEM), stored as a secret.
 - `ASSERTION_SIGNING_SECRET`: Shared HMAC secret used to verify the short-lived bearer assertions minted by the Extensions site. Configure the same value in both Workers; it is never sent to clients.
 - `ASSERTION_SIGNING_SECRET_PREVIOUS`: Optional previous HMAC secret accepted during a signing-key rotation.
 - `EXTENSIONS_REVALIDATE_SECRET`: Bearer token the API sends to the Extensions site's `POST /api/revalidate` (over the `EXTENSIONS_FRONTEND` service binding) to purge the site's CDN-cached extension pages after content mutations. Configure the same value in both Workers; it is never sent to clients.
@@ -111,21 +113,29 @@ Package storage configuration is listed in [PACKAGING.md](src/services/extension
 - `M2M_ISSUER`, `M2M_JWKS_URL`, `M2M_AUDIENCE`: Issuer, JWKS endpoint, and expected audience for machine-to-machine access tokens minted by the central auth service (`FOSSBilling/auth`). Defaults live in `wrangler.jsonc`; preview environments need them pointed at the issuing preview. See [extensions v2 README](src/services/extensions/v2/README.md#machine-publishing).
 
 The extension-specific settings apply to extensions v2; Versions, Previews and
-Stats also use `GITHUB_TOKEN`. For the assertion format and the rotation procedure, see [its README](src/services/extensions/v2/README.md#authentication).
+Stats also use the GitHub App credentials. For the assertion format and the rotation procedure, see [its README](src/services/extensions/v2/README.md#authentication).
+
+### GitHub App authentication
+
+Install **FOSSBilling Integrations** on `FOSSBilling/FOSSBilling` with **Contents**,
+**Actions** and **Pull requests** permissions set to **Read-only**. Set the three
+`GITHUB_APP_*` runtime values above, using GitHub's downloaded PEM without conversion.
+Use separate keys: `api-dev.private-key` for local development,
+`api-preview.private-key` for Previews Base, and `api-production.private-key` for
+production. All use the same App client and installation IDs.
+
+Octokit manages short-lived installation tokens, restricted to that repository and
+those read permissions. Remove the old runtime `GITHUB_TOKEN` after deployment is
+verified; GitHub Actions' built-in token remains unchanged.
 
 ## Development
 
 ### Local Setup
 
-1. Create a `.dev.vars` file for local runtime variables and secrets:
+1. Copy `.dev.vars.example` to `.dev.vars` and set your runtime variables and secrets:
 
-   ```env
-   GITHUB_TOKEN="your-token"
-   ASSERTION_SIGNING_SECRET="local-shared-secret"
-   EXTENSIONS_REVALIDATE_SECRET="local-revalidate-secret"
-   # Optional while rotating the shared assertion secret.
-   # ASSERTION_SIGNING_SECRET_PREVIOUS="previous-local-shared-secret"
-   ```
+   The example contains placeholders only. `cf-typegen` uses it to generate stable
+   binding types without reading local credentials.
 
 2. Apply migrations to the local D1 databases:
 
@@ -176,12 +186,12 @@ run validation and build checks without forwarding deployment credentials or
 applying remote migrations.
 
 The artifact contains the compiled Worker, `wrangler.json`, and SQL migrations.
-Deployment does not rebuild the Worker. Production migrations use that artifact's
-production bindings. Preview migrations use its generated
+Deployment uses the same Node version as the build and does not rebuild the Worker.
+Production migrations use its production bindings. Preview migrations use its generated
 `wrangler.preview-migrations.json`, derived from the same bindings used by the Preview.
 Migration jobs serialize access to the shared staging databases.
 
-#### Setup before switching deployment
+#### Deployment setup
 
 1. Set `CLOUDFLARE_API_TOKEN` as a repository secret and `CLOUDFLARE_ACCOUNT_ID`
    as a repository variable. Configure GitHub `production` and `preview`
@@ -194,11 +204,11 @@ Migration jobs serialize access to the shared staging databases.
    repository secret from branch workflows. Fork PR runs do not receive the
    deployment token.
 
-   Scope the token to the API Worker and its zone. It needs Worker Editor,
-   Workers Routes Write for route changes, D1 Read/Write for migrations, and
-   Queues Read/Write to configure the existing consumer. Worker Editor covers
-   both production and Previews of that Worker. Separate staging data and runtime
-   secrets isolate test state, not the deployment credential's authority.
+   Scope the token to the API Worker and its zone. It needs Individual Workers
+   Editor for that Worker, Workers Routes Write for route changes, D1 Read/Write
+   for migrations, and Queues Read/Write to configure the existing consumer.
+   The Worker permission covers both production and Previews. Separate staging data
+   and runtime secrets isolate test state, not the deployment credential's authority.
 
    If branch writers must not have production deployment authority, use protected
    environment secrets with trusted deployment approval instead. That is a
@@ -227,11 +237,11 @@ Migration jobs serialize access to the shared staging databases.
 
 3. Configure Preview runtime secrets in the API Worker's **Previews Base** settings.
    Use separate assertion-signing and revalidation secrets, matching both with
-   the staging frontend. Use a read-only GitHub token if authenticated GitHub
-   requests are needed. Set M2M issuer,
+   the staging frontend. Set all three `GITHUB_APP_*` values, selecting the preview
+   private key (see [GitHub App authentication](#github-app-authentication)). Set M2M issuer,
    JWKS and audience variables there when using a separate test issuer. Operational
    production variables and secrets remain dashboard-managed with `keep_vars: true`.
-4. Configure required checks for the new validation/build job names, then disable the
+4. Configure required checks for the validation/build jobs, then disable the
    API's Cloudflare Workers Builds Git integration to avoid duplicate deployments.
 
 The workflow compiles the branch's Preview settings into the artifact. Each Preview
@@ -263,3 +273,18 @@ before running `npm run cf-preview`; CI performs those steps automatically.
 `npm run cf-deploy` remains a deliberate manual production command. It applies remote
 migrations and deploys through Wrangler. Neither command deploys the separate
 [extension packager](../extension-packager/README.md). Production packaging remains disabled.
+
+A dashboard change can trigger Wrangler's remote configuration comparison. If its
+custom-domain metadata lookup returns 403 with the Worker-scoped CI token, use a
+one-off local-auth deployment rather than broadening the token. After validation,
+build and migrations pass, unset `CLOUDFLARE_API_TOKEN` locally and use an existing
+Wrangler OAuth login to deploy that `main` run's artifact (replace `RUN_ID`):
+
+```sh
+gh run download RUN_ID --name api-worker-build --dir .wrangler/deployment
+npx wrangler deploy --config .wrangler/deployment/wrangler.json --keep-vars
+```
+
+Download into an empty directory, keep `EXTENSION_PACKAGES_MODE=disabled`, then
+rerun the failed CI deployment job. Further dashboard changes can trigger the same
+comparison again.

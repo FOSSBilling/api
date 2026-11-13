@@ -95,8 +95,8 @@ Endpoints are not listed here. The service publishes its own contract:
   resolve GitHub's signed redirect URL live, never cached - it expires in
   about a minute, and Cloudflare KV's 60s minimum TTL leaves no safe margin
   to cache it without risking handing out an already-expired URL.
-- `GITHUB_TOKEN` is required for GitHub API access (shared with
-  `versions/v1`).
+- GitHub App credentials are required for GitHub reads (shared with
+  `versions/v1`); see [API configuration](../../../../README.md#github-app-authentication).
 - `DOWNLOAD_BUCKET` (R2 binding) backs `/main` - see `wrangler.jsonc` for the
   bucket this points at and why.
 

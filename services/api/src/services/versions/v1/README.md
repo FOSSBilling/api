@@ -141,7 +141,7 @@ When GitHub is unavailable and no cached data exists:
 
 - All responses include a `stale` field that is `true` when cached data is served after a failed fetch.
 - `details` includes the GitHub HTTP status and error code when available.
-- `GITHUB_TOKEN` is required for GitHub API access.
+- GitHub App credentials are required for uncached GitHub reads; see [API configuration](../../../../README.md#github-app-authentication).
 - `DOWNLOAD_BUCKET` (R2 binding, shared with `previews/v1`) backs `download_url`/`digest` below.
 - Releases before 0.5.0 read `src/composer.json`; newer releases use `composer.json`.
 - `download_url` is `download.fossbilling.org` when the release has been mirrored to R2 and the requesting client's own version trusts that host (see `Update::$allowedDownloadPrefixes` in FOSSBilling/FOSSBilling) - github.com has no AAAA record, so IPv6-only hosts can't reach a GitHub asset URL. It falls back to the GitHub asset URL otherwise. Mirroring began at 0.8.0, so releases before that are never looked up in R2 at all.

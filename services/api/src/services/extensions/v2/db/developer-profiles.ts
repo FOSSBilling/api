@@ -1,3 +1,4 @@
+import type { GitHubClientProvider } from "../../../../lib/github-app";
 import { v7 as uuidv7 } from "uuid";
 import { and, asc, desc, eq, gt, isNull, lt, or, sql, SQL } from "drizzle-orm";
 import { DatabaseResult } from "../../../../lib/interfaces";
@@ -158,7 +159,7 @@ export class DeveloperProfilesDatabase {
     }
   }
 
-  // githubToken — see the comment on verifyGithubOwnership(). Only consulted
+  // getGithubClient — see the comment on verifyGithubOwnership(). Only consulted
   // when creating a brand-new profile (the identifier is immutable once
   // owned, so an update can't need re-verifying); guards against squatting
   // on an id that matches a real GitHub org/user the caller doesn't control,
@@ -167,7 +168,7 @@ export class DeveloperProfilesDatabase {
   async upsertOwn(
     userId: string,
     developer: Developer,
-    githubToken?: string,
+    getGithubClient: GitHubClientProvider,
     allowCreationAttempt: () => Promise<boolean> = async () => true
   ): Promise<DatabaseResult<DeveloperProfile> & { changed?: boolean }> {
     try {
@@ -230,7 +231,7 @@ export class DeveloperProfilesDatabase {
           developer.identifier,
           developer.type,
           userId,
-          githubToken,
+          getGithubClient,
           developer.URL
         );
 
@@ -1010,15 +1011,15 @@ export class DeveloperProfilesDatabase {
   // own already-synced github_login/github_orgs. Called opportunistically
   // on every login for a developer-owning user, and by the owner's own
   // "Re-verify" action — both share this one method.
-  // checkUrl/githubToken — only set by the owner's own manual "Re-verify"
+  // checkUrl/getGithubClient — only set by the owner's own manual "Re-verify"
   // button, never by the opportunistic per-login call in extensions'
   // auth/callback.ts. Re-checking Publisher URL against GitHub's on-file
   // website needs a fresh GitHub API call (unlike the identity match below),
   // so it stays opt-in to keep the automatic login path GitHub-API-free.
   async reverifyOwn(
     userId: string,
-    checkUrl?: boolean,
-    githubToken?: string
+    checkUrl: boolean,
+    getGithubClient: GitHubClientProvider
   ): Promise<DatabaseResult<DeveloperProfile>> {
     try {
       const [row] = await this.db
@@ -1143,10 +1144,7 @@ export class DeveloperProfilesDatabase {
       if (!matches) {
         writeUrlVerified = true;
       } else if (checkUrl) {
-        const entity = await checkGithubEntity(
-          row.identifier,
-          githubToken ?? ""
-        );
+        const entity = await checkGithubEntity(row.identifier, getGithubClient);
         // An unavailable lookup is explicitly inconclusive, not a disproof,
         // so it leaves the stored URL verification signal untouched rather
         // than clearing a real prior verification over a transient failure.

@@ -65,7 +65,7 @@ Each service documents its own contract and operational detail in its own `READM
 
 ## Configuration & Secrets
 
-- Local secrets go in `.dev.vars` (for example `GITHUB_TOKEN="..."`).
+- Local secrets go in `.dev.vars` (for example `GITHUB_APP_PRIVATE_KEY="..."`).
 - Bindings, cron, and vars are defined in `wrangler.jsonc` (D1, KV, R2, Durable Objects, rate limiters, service bindings); keep names aligned with `CloudflareBindings`.
 - Use Wrangler secrets for production tokens instead of committing them.
 - `ASSERTION_SIGNING_SECRET`: HMAC key the extensions v2 API uses to verify short-lived bearer assertions minted by the extensions site (`src/lib/auth/bearer-assertion.ts`). Not sent over the wire — only signs/verifies server-side in each Worker. Add `ASSERTION_SIGNING_SECRET="..."` to `.dev.vars` for local dev; set via `wrangler secret put ASSERTION_SIGNING_SECRET` in production, matching the value configured in the extensions site's Worker.

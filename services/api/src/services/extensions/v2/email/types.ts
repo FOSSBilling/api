@@ -21,7 +21,7 @@ export const defaultFetch: FetchFn = (...args) => globalThis.fetch(...args);
 
 // Minimal env surface the email subsystem needs. Shaped to match
 // PlatformContext, so routes pass getPlatform(c) directly — the same way
-// GITHUB_TOKEN and the assertion secrets are read everywhere else.
+// GitHub App credentials and the assertion secrets are read everywhere else.
 export interface EnvReader {
   getEnv(key: string): string | undefined;
 }

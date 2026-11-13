@@ -4,6 +4,7 @@ export default defineConfig({
   test: {
     environment: "node",
     include: [
+      "test/lib/github-app.test.ts",
       "test/lib/adapters/node/**/*.test.ts",
       "test/services/extensions/v2/migrations.test.ts",
       "test/**/*.node.test.ts"
@@ -14,7 +15,7 @@ export default defineConfig({
     coverage: {
       provider: "istanbul",
       reporter: ["text", "json", "html"],
-      include: ["src/lib/adapters/node/**"]
+      include: ["src/lib/github-app.ts", "src/lib/adapters/node/**"]
     }
   }
 });

@@ -13,3 +13,15 @@ export function octokitRequestMock() {
   });
   return { request };
 }
+
+// Feature suites supply REST/GraphQL responses; App authentication has its own
+// tests against real Octokit clients and a mocked HTTP transport.
+export function githubClientMock() {
+  return {
+    githubClientProvider: () => async () => ({
+      request: (await import("@octokit/request")).request,
+      graphql: async (query: string, options?: Record<string, unknown>) =>
+        (await import("@octokit/graphql")).graphql(query, options)
+    })
+  };
+}
