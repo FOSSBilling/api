@@ -144,7 +144,7 @@ jobs:
       contents: read
       actions: read
       pull-requests: write
-    uses: FOSSBilling/.workflows/.github/workflows/cloudflare-workers.yml@8c78a3fd6a46bdb6c47edf7046b172e14097ddf0 # main
+    uses: FOSSBilling/.workflows/.github/workflows/cloudflare-workers.yml@ac7148138a750dd1298dadb50a263b97e4a0ff0f
     with:
       operation: deploy
       mode: preview
@@ -157,6 +157,7 @@ jobs:
       artifact-name: api-worker-build
       artifact-path: services/api/dist/
       config-path: services/api/dist/wrangler.json
+      node-version: "26.13.1"
       wrangler-version: ${{ needs.build.outputs.wrangler-version }}
     secrets:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -166,7 +167,7 @@ jobs:
     name: Deploy Production
     needs: [validation, build, migrations]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    uses: FOSSBilling/.workflows/.github/workflows/cloudflare-workers.yml@8c78a3fd6a46bdb6c47edf7046b172e14097ddf0 # main
+    uses: FOSSBilling/.workflows/.github/workflows/cloudflare-workers.yml@ac7148138a750dd1298dadb50a263b97e4a0ff0f
     with:
       operation: deploy
       mode: production
@@ -175,6 +176,7 @@ jobs:
       artifact-name: api-worker-build
       artifact-path: services/api/dist/
       config-path: services/api/dist/wrangler.json
+      node-version: "26.13.1"
       wrangler-version: ${{ needs.build.outputs.wrangler-version }}
     secrets:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
