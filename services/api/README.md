@@ -120,7 +120,9 @@ Stats also use the GitHub App credentials. For the assertion format and the rota
 Install **FOSSBilling Integrations** on `FOSSBilling/FOSSBilling` with **Contents**,
 **Actions** and **Pull requests** permissions set to **Read-only**. Set the three
 `GITHUB_APP_*` runtime values above, using GitHub's downloaded PEM without conversion.
-Use the preview key locally and in Previews Base, and a separate production key.
+Use separate keys: `api-dev.private-key` for local development,
+`api-preview.private-key` for Previews Base, and `api-production.private-key` for
+production. All use the same App client and installation IDs.
 
 Octokit manages short-lived installation tokens, restricted to that repository and
 those read permissions. Remove the old runtime `GITHUB_TOKEN` after deployment is
