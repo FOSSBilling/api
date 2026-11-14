@@ -203,11 +203,16 @@ Migration jobs serialize access to the shared staging databases.
    repository secret from branch workflows. Fork PR runs do not receive the
    deployment token.
 
-   Scope the token to the API Worker and its zone. It needs
-   `Individual Workers Editor` for that Worker, `Workers Routes Write` for route changes, `D1 Read`
-   and `D1 Write` for migrations, and `Queues Read` and `Queues Write` to configure
-   the existing consumer.
-   The Worker permission covers both production and Previews. Separate staging data
+   The token needs `Individual Workers Editor` for the API Worker,
+   `Workers Routes Write` for its zone, `D1 Read` and `D1 Write` for migrations,
+   and `Queues Read` and `Queues Write` to configure the existing consumer.
+   Also grant `Workers Content Read-Only` at the Workers product scope in the
+   FOSSBilling account: Wrangler's configuration comparison after dashboard edits
+   reads account-level Custom Domain metadata, which does not support per-Worker
+   roles. This grants read access to Worker source and configuration across the
+   account; Worker write access remains restricted to the API Worker.
+   See [Cloudflare's Workers permissions](https://developers.cloudflare.com/workers/authorization/workers/).
+   The Worker edit permission covers both production and Previews. Separate staging data
    and runtime secrets isolate test state, not the deployment credential's authority.
 
    If branch writers must not have production deployment authority, use protected
@@ -273,19 +278,3 @@ before running `npm run cf-preview`; CI performs those steps automatically.
 `npm run cf-deploy` remains a deliberate manual production command. It applies remote
 migrations and deploys through Wrangler. Neither command deploys the separate
 [extension packager](../extension-packager/README.md). Production packaging remains disabled.
-
-A dashboard change can trigger Wrangler's remote configuration comparison. If its
-custom-domain metadata lookup returns 403 with the Worker-scoped CI token, use a
-one-off local-auth deployment rather than broadening the token. Build artifacts
-expire after one day; after expiry, rerun the full CI workflow to rebuild them.
-After validation, build and migrations pass, unset `CLOUDFLARE_API_TOKEN` locally.
-Use an existing Wrangler OAuth login to deploy that `main` run's artifact (replace `RUN_ID`):
-
-```sh
-gh run download RUN_ID --name api-worker-build --dir .wrangler/deployment
-npx wrangler deploy --config .wrangler/deployment/wrangler.json --keep-vars
-```
-
-Download into an empty directory, keep `EXTENSION_PACKAGES_MODE=disabled`, then
-rerun the failed CI deployment job. Further dashboard changes can trigger the same
-comparison again.
