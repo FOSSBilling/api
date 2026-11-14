@@ -100,6 +100,7 @@ jobs:
       deployment: false
     concurrency:
       group: api-migrations-${{ github.ref == 'refs/heads/main' && 'production' || 'preview' }}
+      queue: max
       cancel-in-progress: false
     steps:
       - name: Checkout Code
@@ -162,6 +163,53 @@ jobs:
     secrets:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+
+  staging:
+    name: Deploy Staging API
+    needs: [validation, build]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.API_PREVIEW_RESOURCES != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: preview
+      deployment: false
+    concurrency:
+      group: api-migrations-preview
+      queue: max
+      cancel-in-progress: false
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98
+        with:
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
+        with:
+          node-version: "26.13.1"
+          cache: npm
+      - name: Install Dependencies
+        run: npm ci
+      - name: Download Deployment Artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: api-worker-build
+          path: services/api/dist/
+      - name: Apply Staging Migrations and Deploy
+        id: staging
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          for binding in DB_CENTRAL_ALERTS DB_EXTENSIONS; do
+            npm exec -- wrangler d1 migrations apply "$binding" --remote --config services/api/dist/wrangler.preview-migrations.json
+          done
+          WRANGLER_OUTPUT_FILE_PATH="$RUNNER_TEMP/staging-deployment.jsonl" npm exec -- wrangler preview --config services/api/dist/wrangler.json --name staging --message "main $GITHUB_SHA"
+          url=$(jq -er 'select(.type == "preview") | .preview_urls[0]' "$RUNNER_TEMP/staging-deployment.jsonl")
+          printf 'url=%s\n' "$url" >> "$GITHUB_OUTPUT"
+      - name: Check Staging API
+        env:
+          STAGING_API_URL: ${{ steps.staging.outputs.url }}
+        run: curl --fail --silent --show-error --max-time 30 --retry 3 --retry-delay 2 --output /dev/null "$STAGING_API_URL/extensions/v2/extensions"
 
   deploy:
     name: Deploy Production

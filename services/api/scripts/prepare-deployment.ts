@@ -10,13 +10,12 @@ import { fileURLToPath } from "node:url";
 import { experimental_readRawConfig, type Unstable_RawConfig } from "wrangler";
 import { z } from "zod";
 
-const PreviewResourcesSchema = z.strictObject({
+const PreviewResourcesSchema = z.object({
   DB_EXTENSIONS: z.uuid().toLowerCase(),
   DB_CENTRAL_ALERTS: z.uuid().toLowerCase(),
   AUTH_KV: z.string().regex(/^[a-f0-9]{32}$/),
   CACHE_KV: z.string().regex(/^[a-f0-9]{32}$/),
-  DOWNLOAD_BUCKET: z.string().min(1),
-  EXTENSIONS_FRONTEND: z.string().min(1)
+  DOWNLOAD_BUCKET: z.string().min(1)
 });
 
 // Keep the bundle, runtime bindings and migration targets in one deployable artifact.
@@ -32,8 +31,7 @@ export function prepareDeployment(root: string, previewResources?: string) {
     const production = new Set([
       ...(config.d1_databases ?? []).map((value) => value.database_id),
       ...(config.kv_namespaces ?? []).map((value) => value.id),
-      ...(config.r2_buckets ?? []).map((value) => value.bucket_name),
-      ...(config.services ?? []).map((value) => value.service)
+      ...(config.r2_buckets ?? []).map((value) => value.bucket_name)
     ]);
     const values = Object.values(resources);
     if (
@@ -85,12 +83,7 @@ export function prepareDeployment(root: string, previewResources?: string) {
       r2_buckets: [
         { binding: "DOWNLOAD_BUCKET", bucket_name: resources.DOWNLOAD_BUCKET }
       ],
-      services: [
-        {
-          binding: "EXTENSIONS_FRONTEND",
-          service: resources.EXTENSIONS_FRONTEND
-        }
-      ]
+      services: []
     };
     writeFileSync(
       join(output, "wrangler.preview-migrations.json"),

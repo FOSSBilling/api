@@ -20,8 +20,7 @@ const resources = {
   DB_CENTRAL_ALERTS: "22222222-2222-4222-8222-222222222222",
   AUTH_KV: "a".repeat(32),
   CACHE_KV: "b".repeat(32),
-  DOWNLOAD_BUCKET: "api-staging",
-  EXTENSIONS_FRONTEND: "api-staging"
+  DOWNLOAD_BUCKET: "api-staging"
 };
 const folders: string[] = [];
 afterEach(() => {
@@ -74,9 +73,11 @@ describe("API deployment artifact", () => {
     expect(artifact.previews.r2_buckets).toEqual([
       { binding: "DOWNLOAD_BUCKET", bucket_name: resources.DOWNLOAD_BUCKET }
     ]);
-    expect(artifact.previews.services).toEqual([
-      { binding: "EXTENSIONS_FRONTEND", service: resources.EXTENSIONS_FRONTEND }
-    ]);
+    expect(artifact.previews.services).toEqual([]);
+    expect(artifact.services).toEqual(source.services);
+    expect(artifact.previews.vars.EXTENSIONS_FRONTEND_URL).toBe(
+      "https://staging-extensions.fossbilling.workers.dev"
+    );
     expect(artifact.previews.vars.EXTENSION_PACKAGES_MODE).toBe("disabled");
     for (const database of source.d1_databases!) {
       const packaged = artifact.d1_databases.find(
@@ -112,7 +113,6 @@ describe("API deployment artifact", () => {
       { AUTH_KV: source.kv_namespaces![0].id },
       { CACHE_KV: source.kv_namespaces![1].id },
       { DOWNLOAD_BUCKET: source.r2_buckets![0].bucket_name },
-      { EXTENSIONS_FRONTEND: source.services![0].service },
       { AUTH_KV: resources.CACHE_KV }
     ];
     for (const override of overrides) {
