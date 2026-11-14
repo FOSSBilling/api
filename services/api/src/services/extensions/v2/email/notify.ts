@@ -36,7 +36,7 @@ export async function sendModerationNotification(
     let to: string | null;
     let extensionName: string | undefined;
     let developerName: string | undefined;
-    let developerId = input.developerId;
+    let developerId: string | undefined;
 
     if (input.kind === "claim-approved" || input.kind === "claim-rejected") {
       if (!input.claimantId) {
