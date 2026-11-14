@@ -254,8 +254,10 @@ receives isolated Durable Object state; the data bindings above are shared stagi
 resources. A frontend service binding calls that Worker's normal deployment, so use a
 staging Worker name rather than the production Extensions worker. Configure that
 frontend with HTTP API transport and a Preview API URL, without production routes
-or API bindings. A long-lived Preview such as `staging` can back this frontend;
-refresh it from the prepared artifact with `npm run cf-preview --workspace @fossbilling/api -- --name staging`.
+or API bindings. The fixed `staging` Preview at
+`https://staging-api.fossbilling.workers.dev` is refreshed on pushes to `main`, after
+validation and the artifact build. Its job applies staging migrations, deploys the
+same artifact with Preview bindings, and checks the public extensions endpoint.
 Register its OAuth callback with a dedicated test client before testing sign-in.
 
 Cloudflare Previews cannot consume Queues or receive Cron Triggers. Their configuration
