@@ -100,6 +100,7 @@ jobs:
       deployment: false
     concurrency:
       group: api-migrations-${{ github.ref == 'refs/heads/main' && 'production' || 'preview' }}
+      queue: max
       cancel-in-progress: false
     steps:
       - name: Checkout Code
@@ -174,6 +175,7 @@ jobs:
       deployment: false
     concurrency:
       group: api-migrations-preview
+      queue: max
       cancel-in-progress: false
     steps:
       - name: Checkout Code
