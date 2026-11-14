@@ -195,6 +195,7 @@ jobs:
           name: api-worker-build
           path: services/api/dist/
       - name: Apply Staging Migrations and Deploy
+        id: staging
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
@@ -202,9 +203,13 @@ jobs:
           for binding in DB_CENTRAL_ALERTS DB_EXTENSIONS; do
             npm exec -- wrangler d1 migrations apply "$binding" --remote --config services/api/dist/wrangler.preview-migrations.json
           done
-          npm exec -- wrangler preview --config services/api/dist/wrangler.json --name staging --message "main $GITHUB_SHA"
+          WRANGLER_OUTPUT_FILE_PATH="$RUNNER_TEMP/staging-deployment.jsonl" npm exec -- wrangler preview --config services/api/dist/wrangler.json --name staging --message "main $GITHUB_SHA"
+          url=$(jq -er 'select(.type == "preview") | .preview_urls[0]' "$RUNNER_TEMP/staging-deployment.jsonl")
+          printf 'url=%s\n' "$url" >> "$GITHUB_OUTPUT"
       - name: Check Staging API
-        run: curl --fail --silent --show-error --max-time 30 --retry 3 --retry-delay 2 --output /dev/null https://staging-api.fossbilling.workers.dev/extensions/v2/extensions
+        env:
+          STAGING_API_URL: ${{ steps.staging.outputs.url }}
+        run: curl --fail --silent --show-error --max-time 30 --retry 3 --retry-delay 2 --output /dev/null "$STAGING_API_URL/extensions/v2/extensions"
 
   deploy:
     name: Deploy Production

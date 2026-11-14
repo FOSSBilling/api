@@ -258,7 +258,8 @@ because service bindings cannot target named Previews; production retains its
 private frontend service binding. The fixed API `staging` Preview at
 `https://staging-api.fossbilling.workers.dev` is refreshed on pushes to `main`, after
 validation and the artifact build. Its job applies staging migrations, deploys the
-same artifact with Preview bindings, and checks the public extensions endpoint.
+same artifact with Preview bindings, and checks the public extensions endpoint
+using the Preview URL returned by Wrangler.
 Here `staging` is a named Preview, not a Git branch; its source is `main`.
 Register the directory's staging OAuth callback with the dedicated preview client
 before testing sign-in.
