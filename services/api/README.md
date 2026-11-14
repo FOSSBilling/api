@@ -258,6 +258,7 @@ or API bindings. The fixed `staging` Preview at
 `https://staging-api.fossbilling.workers.dev` is refreshed on pushes to `main`, after
 validation and the artifact build. Its job applies staging migrations, deploys the
 same artifact with Preview bindings, and checks the public extensions endpoint.
+Here `staging` is a named Preview, not a Git branch; its source is `main`.
 Register its OAuth callback with a dedicated test client before testing sign-in.
 
 Cloudflare Previews cannot consume Queues or receive Cron Triggers. Their configuration
