@@ -202,7 +202,7 @@ jobs:
           done
           npm exec -- wrangler preview --config services/api/dist/wrangler.json --name staging --message "main $GITHUB_SHA"
       - name: Check Staging API
-        run: curl --fail --silent --show-error --retry 3 --retry-delay 2 --output /dev/null https://staging-api.fossbilling.workers.dev/extensions/v2/extensions
+        run: curl --fail --silent --show-error --max-time 30 --retry 3 --retry-delay 2 --output /dev/null https://staging-api.fossbilling.workers.dev/extensions/v2/extensions
 
   deploy:
     name: Deploy Production
