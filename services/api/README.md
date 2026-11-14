@@ -103,7 +103,7 @@ Package storage configuration is listed in [PACKAGING.md](src/services/extension
 - `ASSERTION_SIGNING_SECRET`: Shared HMAC secret used to verify the short-lived bearer assertions minted by the Extensions site. Configure the same value in both Workers; it is never sent to clients.
 - `ASSERTION_SIGNING_SECRET_PREVIOUS`: Optional previous HMAC secret accepted during a signing-key rotation.
 - `EXTENSIONS_REVALIDATE_SECRET`: Bearer token the API sends to the Extensions site's `POST /api/revalidate` (over the `EXTENSIONS_FRONTEND` service binding) to purge the site's CDN-cached extension pages after content mutations. Configure the same value in both Workers; it is never sent to clients.
-- `EXTENSIONS_EMAIL_PROVIDER`: `mxroute` or `resend` to send moderator notification emails, or unset/`disabled` to skip sending.
+- `EXTENSIONS_EMAIL_PROVIDER`: Dashboard-managed runtime setting (`disabled` for local development and Previews). Use `mxroute` or `resend` to send moderator notification emails, or unset/`disabled` to skip sending.
 - `EXTENSIONS_EMAIL_FROM`: Sender address for notification emails (default `noreply@fossbilling.org`).
 - `EXTENSIONS_EMAIL_REPLY_TO`: Optional Reply-To address for a monitored inbox. Omit when unset (no Reply-To header is sent) — notification emails do not invite replies.
 - `EXTENSIONS_EMAIL_SERVER`, `EXTENSIONS_EMAIL_USERNAME`: Mail server and login used by the MXroute adapter. Required for `mxroute`; unused by `resend`.

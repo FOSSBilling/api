@@ -29,7 +29,6 @@
     "EXTENSION_PACKAGES_BASE_URL": "https://api.fossbilling.net/extensions/v2",
     "EXTENSION_ASSETS_PUBLIC_URL": "https://extensions-assets.fossbilling.net",
     "EXTENSIONS_RETENTION_MODE": "dry-run",
-    "EXTENSIONS_EMAIL_PROVIDER": "mxroute",
     "M2M_ISSUER": "https://auth.fossbilling.net",
     "M2M_JWKS_URL": "https://auth.fossbilling.net/.well-known/jwks.json",
     "M2M_AUDIENCE": "https://api.fossbilling.net"
