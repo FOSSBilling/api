@@ -219,8 +219,8 @@ Migration jobs serialize access to the shared staging databases.
    environment secrets with trusted deployment approval instead. That is a
    different access policy, not a requirement of this trusted-maintainer setup.
 
-2. Provision staging D1 databases, KV namespaces, a download bucket and a separately
-   deployed staging Extensions frontend. Set the repository variable `API_PREVIEW_RESOURCES`
+2. Provision staging D1 databases, KV namespaces and a download bucket. Set the repository
+   variable `API_PREVIEW_RESOURCES`
    to their identifiers, using the following JSON shape:
 
    ```json
@@ -229,8 +229,7 @@ Migration jobs serialize access to the shared staging databases.
      "DB_CENTRAL_ALERTS": "<staging-alerts-database-uuid>",
      "AUTH_KV": "<staging-auth-namespace-id>",
      "CACHE_KV": "<staging-cache-namespace-id>",
-     "DOWNLOAD_BUCKET": "<staging-download-bucket-name>",
-     "EXTENSIONS_FRONTEND": "<staging-extensions-worker-name>"
+     "DOWNLOAD_BUCKET": "<staging-download-bucket-name>"
    }
    ```
 
@@ -242,7 +241,8 @@ Migration jobs serialize access to the shared staging databases.
 
 3. Configure Preview runtime secrets in the API Worker's **Previews Base** settings.
    Use separate assertion-signing and revalidation secrets, matching both with
-   the staging frontend. Set all three `GITHUB_APP_*` values, selecting the preview
+   the directory's named `staging` Preview. Set all three `GITHUB_APP_*` values,
+   selecting the preview
    private key (see [GitHub App authentication](#github-app-authentication)). Set M2M issuer,
    JWKS and audience variables there when using a separate test issuer. Operational
    production variables and secrets remain dashboard-managed with `keep_vars: true`.
@@ -251,15 +251,17 @@ Migration jobs serialize access to the shared staging databases.
 
 The workflow compiles the branch's Preview settings into the artifact. Each Preview
 receives isolated Durable Object state; the data bindings above are shared staging
-resources. A frontend service binding calls that Worker's normal deployment, so use a
-staging Worker name rather than the production Extensions worker. Configure that
-frontend with HTTP API transport and a Preview API URL, without production routes
-or API bindings. The fixed `staging` Preview at
+resources. The directory's named `staging` Preview at
+`https://staging-extensions.fossbilling.workers.dev` uses HTTP API transport.
+Preview API cache invalidations also use HTTP (`EXTENSIONS_FRONTEND_URL`),
+because service bindings cannot target named Previews; production retains its
+private frontend service binding. The fixed API `staging` Preview at
 `https://staging-api.fossbilling.workers.dev` is refreshed on pushes to `main`, after
 validation and the artifact build. Its job applies staging migrations, deploys the
 same artifact with Preview bindings, and checks the public extensions endpoint.
 Here `staging` is a named Preview, not a Git branch; its source is `main`.
-Register its OAuth callback with a dedicated test client before testing sign-in.
+Register the directory's staging OAuth callback with the dedicated preview client
+before testing sign-in.
 
 Cloudflare Previews cannot consume Queues or receive Cron Triggers. Their configuration
 therefore disables packaging and notification email, and omits Queue bindings. Full

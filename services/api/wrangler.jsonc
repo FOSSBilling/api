@@ -121,6 +121,7 @@
   "previews": {
     "vars": {
       "ENVIRONMENT": "preview",
+      "EXTENSIONS_FRONTEND_URL": "https://staging-extensions.fossbilling.workers.dev",
       "EXTENSION_PACKAGES_MODE": "disabled",
       "EXTENSIONS_EMAIL_PROVIDER": "disabled",
       "EXTENSIONS_RETENTION_MODE": "dry-run"

@@ -18,6 +18,10 @@ export function createCloudflareBindings(
 ): IPlatformBindings {
   let bindings = bindingsCache.get(env);
   if (!bindings) {
+    const environment = new CloudflareEnvironmentAdapter(
+      env as unknown as Record<string, unknown>
+    );
+    const frontendUrl = environment.get("EXTENSIONS_FRONTEND_URL");
     bindings = {
       queues: env.EXTENSION_PACKAGE_QUEUE
         ? {
@@ -26,9 +30,25 @@ export function createCloudflareBindings(
             )
           }
         : {},
-      services: {
-        EXTENSIONS_FRONTEND: (request) => env.EXTENSIONS_FRONTEND.fetch(request)
-      },
+      services: env.EXTENSIONS_FRONTEND
+        ? {
+            EXTENSIONS_FRONTEND: (request) =>
+              env.EXTENSIONS_FRONTEND.fetch(request)
+          }
+        : frontendUrl
+          ? {
+              // Named Previews cannot be targeted by a service binding.
+              EXTENSIONS_FRONTEND: (request) => {
+                const url = new URL(request.url);
+                return globalThis.fetch(
+                  new Request(
+                    new URL(url.pathname + url.search, frontendUrl),
+                    request
+                  )
+                );
+              }
+            }
+          : {},
       rateLimiters: {
         EXTENSION_WRITE_RATE_LIMITER: async (key) =>
           (await env.EXTENSION_WRITE_RATE_LIMITER.limit({ key })).success,
@@ -39,9 +59,7 @@ export function createCloudflareBindings(
         CACHE_KV: new CloudflareKVAdapter(env.CACHE_KV),
         AUTH_KV: new CloudflareKVAdapter(env.AUTH_KV)
       },
-      environment: new CloudflareEnvironmentAdapter(
-        env as unknown as Record<string, unknown>
-      )
+      environment
     };
     bindingsCache.set(env, bindings);
   }
