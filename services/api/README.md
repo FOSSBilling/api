@@ -203,9 +203,10 @@ Migration jobs serialize access to the shared staging databases.
    repository secret from branch workflows. Fork PR runs do not receive the
    deployment token.
 
-   Scope the token to the API Worker and its zone. It needs Individual Workers
-   Editor for that Worker, Workers Routes Write for route changes, D1 Read/Write
-   for migrations, and Queues Read/Write to configure the existing consumer.
+   Scope the token to the API Worker and its zone. It needs
+   `Individual Workers Editor` for that Worker, `Workers Routes Write` for route changes, `D1 Read`
+   and `D1 Write` for migrations, and `Queues Read` and `Queues Write` to configure
+   the existing consumer.
    The Worker permission covers both production and Previews. Separate staging data
    and runtime secrets isolate test state, not the deployment credential's authority.
 
@@ -275,9 +276,10 @@ migrations and deploys through Wrangler. Neither command deploys the separate
 
 A dashboard change can trigger Wrangler's remote configuration comparison. If its
 custom-domain metadata lookup returns 403 with the Worker-scoped CI token, use a
-one-off local-auth deployment rather than broadening the token. After validation,
-build and migrations pass, unset `CLOUDFLARE_API_TOKEN` locally and use an existing
-Wrangler OAuth login to deploy that `main` run's artifact (replace `RUN_ID`):
+one-off local-auth deployment rather than broadening the token. Build artifacts
+expire after one day; after expiry, rerun the full CI workflow to rebuild them.
+After validation, build and migrations pass, unset `CLOUDFLARE_API_TOKEN` locally.
+Use an existing Wrangler OAuth login to deploy that `main` run's artifact (replace `RUN_ID`):
 
 ```sh
 gh run download RUN_ID --name api-worker-build --dir .wrangler/deployment
