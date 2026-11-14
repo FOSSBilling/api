@@ -81,7 +81,7 @@ We use [Cloudflare D1](https://developers.cloudflare.com/d1/) and [KV](https://d
 - **R2 Bucket** (`DOWNLOAD_BUCKET`): Shared by versions, previews, and stats for release/preview zips — see [`src/services/previews/v1/README.md`](src/services/previews/v1/README.md) and the comment in `wrangler.jsonc` for which bucket this points at and why.
 - **Durable Object** (`PREVIEW_GITHUB_BUDGET`): Token bucket limiting previews GitHub calls. Policy lives in `src/services/previews/v1/budget.ts`.
 - **Rate limiters** (`EXTENSION_WRITE_RATE_LIMITER`, `PROFILE_CREATION_RATE_LIMITER`): Edge pacing for extension writes and profile creation. Durable quotas are enforced in D1; see [extensions v2 README](src/services/extensions/v2/README.md#limits-and-budgets).
-- **Service binding** (`EXTENSIONS_FRONTEND`): Private binding to the Extensions site worker, used to purge cached extension pages after mutations.
+- **Service binding** (`EXTENSIONS_FRONTEND`): Production-only private binding to the Extensions site Worker, used to purge cached extension pages after mutations. Previews use HTTP instead (see `EXTENSIONS_FRONTEND_URL` below).
 - **Cron** (`0 * * * *`): Hourly extension resource maintenance. See [extensions v2 README](src/services/extensions/v2/README.md#revisions-and-retention).
 
 ### Environment Variables
@@ -102,7 +102,8 @@ Package storage configuration is listed in [PACKAGING.md](src/services/extension
 - `GITHUB_APP_PRIVATE_KEY`: GitHub's downloaded App private key (PEM), stored as a secret.
 - `ASSERTION_SIGNING_SECRET`: Shared HMAC secret used to verify the short-lived bearer assertions minted by the Extensions site. Configure the same value in both Workers; it is never sent to clients.
 - `ASSERTION_SIGNING_SECRET_PREVIOUS`: Optional previous HMAC secret accepted during a signing-key rotation.
-- `EXTENSIONS_REVALIDATE_SECRET`: Bearer token the API sends to the Extensions site's `POST /api/revalidate` (over the `EXTENSIONS_FRONTEND` service binding) to purge the site's CDN-cached extension pages after content mutations. Configure the same value in both Workers; it is never sent to clients.
+- `EXTENSIONS_REVALIDATE_SECRET`: Bearer token used for the Extensions site's `POST /api/revalidate`, sent through the `EXTENSIONS_FRONTEND` service binding in production or over HTTP in Previews. Configure the same value in the API and its target directory deployment; it is never sent to browser clients.
+- `EXTENSIONS_FRONTEND_URL`: Preview directory origin used for HTTP cache invalidation when there is no `EXTENSIONS_FRONTEND` service binding. Set in `wrangler.jsonc` to the named staging directory Preview; generated Preview deployments omit the production binding.
 - `EXTENSIONS_EMAIL_PROVIDER`: Production secret managed in the Worker dashboard. Local development sets `disabled` in `.dev.vars`; Previews set `disabled` in `wrangler.jsonc`. Use `mxroute` or `resend` to send moderator notification emails, or unset/`disabled` to skip sending.
 - `EXTENSIONS_EMAIL_FROM`: Sender address for notification emails (default `noreply@fossbilling.org`).
 - `EXTENSIONS_EMAIL_REPLY_TO`: Optional Reply-To address for a monitored inbox. Omit when unset (no Reply-To header is sent) — notification emails do not invite replies.
@@ -242,8 +243,7 @@ Migration jobs serialize access to the shared staging databases.
 3. Configure Preview runtime secrets in the API Worker's **Previews Base** settings.
    Use separate assertion-signing and revalidation secrets, matching both with
    the directory's named `staging` Preview. Set all three `GITHUB_APP_*` values,
-   selecting the preview
-   private key (see [GitHub App authentication](#github-app-authentication)). Set M2M issuer,
+   selecting the preview private key (see [GitHub App authentication](#github-app-authentication)). Set M2M issuer,
    JWKS and audience variables there when using a separate test issuer. Operational
    production variables and secrets remain dashboard-managed with `keep_vars: true`.
 4. Configure required checks for the validation/build jobs, then disable the

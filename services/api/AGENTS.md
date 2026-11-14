@@ -69,7 +69,7 @@ Each service documents its own contract and operational detail in its own `READM
 - Bindings, cron, and vars are defined in `wrangler.jsonc` (D1, KV, R2, Durable Objects, rate limiters, service bindings); keep names aligned with `CloudflareBindings`.
 - Use Wrangler secrets for production tokens instead of committing them.
 - `ASSERTION_SIGNING_SECRET`: HMAC key the extensions v2 API uses to verify short-lived bearer assertions minted by the extensions site (`src/lib/auth/bearer-assertion.ts`). Not sent over the wire — only signs/verifies server-side in each Worker. Add `ASSERTION_SIGNING_SECRET="..."` to `.dev.vars` for local dev; set via `wrangler secret put ASSERTION_SIGNING_SECRET` in production, matching the value configured in the extensions site's Worker.
-- `EXTENSIONS_REVALIDATE_SECRET`: bearer token the extensions v2 API sends to the extensions site's `POST /api/revalidate` (over the `EXTENSIONS_FRONTEND` service binding) to purge the site's CDN-cached extension pages after content mutations. Must match the value configured in the extensions site's Worker. Same local/prod setup as `ASSERTION_SIGNING_SECRET`.
+- `EXTENSIONS_REVALIDATE_SECRET`: bearer token the extensions v2 API sends to the directory's `POST /api/revalidate` to purge cached pages after content mutations. Production uses the `EXTENSIONS_FRONTEND` service binding; Previews use HTTP to `EXTENSIONS_FRONTEND_URL`, configured in `wrangler.jsonc`. The secret must match the target directory deployment.
 
 ## Cache Revalidation
 
