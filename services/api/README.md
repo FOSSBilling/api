@@ -86,7 +86,7 @@ We use [Cloudflare D1](https://developers.cloudflare.com/d1/) and [KV](https://d
 
 ### Environment Variables
 
-Production B2 connection details and MXroute server/username are managed in the
+Production B2 connection details and email server/username are managed in the
 Worker dashboard under **Settings > Variables and Secrets** as runtime variables.
 Credentials are stored as secrets. Build environment variables do not configure
 the running Worker. `keep_vars: true` preserves dashboard-managed variables on
@@ -103,12 +103,11 @@ Package storage configuration is listed in [PACKAGING.md](src/services/extension
 - `ASSERTION_SIGNING_SECRET`: Shared HMAC secret used to verify the short-lived bearer assertions minted by the Extensions site. Configure the same value in both Workers; it is never sent to clients.
 - `ASSERTION_SIGNING_SECRET_PREVIOUS`: Optional previous HMAC secret accepted during a signing-key rotation.
 - `EXTENSIONS_REVALIDATE_SECRET`: Bearer token the API sends to the Extensions site's `POST /api/revalidate` (over the `EXTENSIONS_FRONTEND` service binding) to purge the site's CDN-cached extension pages after content mutations. Configure the same value in both Workers; it is never sent to clients.
-- `EXTENSIONS_V2_EMAIL_PROVIDER`: `mxroute` or `resend` to send moderator notification emails, or unset/`disabled` to skip sending.
-- `EXTENSIONS_V2_EMAIL_FROM`: Sender address for notification emails (default `noreply@fossbilling.org`).
-- `EXTENSIONS_V2_EMAIL_REPLY_TO`: Optional Reply-To address for a monitored inbox. Omit when unset (no Reply-To header is sent) — notification emails do not invite replies.
-- `EXTENSIONS_V2_MXROUTE_SERVER`, `EXTENSIONS_V2_MXROUTE_USERNAME`: Dashboard-managed runtime variables identifying the mailbox for the MXroute SMTP API (`https://smtpapi.mxroute.com/`). Required when `EXTENSIONS_V2_EMAIL_PROVIDER=mxroute`.
-- `EXTENSIONS_V2_MXROUTE_PASSWORD`: Mailbox password, stored as a secret. Required when `EXTENSIONS_V2_EMAIL_PROVIDER=mxroute`.
-- `EXTENSIONS_V2_RESEND_API_KEY`: API key for Resend. Required when `EXTENSIONS_V2_EMAIL_PROVIDER=resend`.
+- `EXTENSIONS_EMAIL_PROVIDER`: Production secret managed in the Worker dashboard. Local development sets `disabled` in `.dev.vars`; Previews set `disabled` in `wrangler.jsonc`. Use `mxroute` or `resend` to send moderator notification emails, or unset/`disabled` to skip sending.
+- `EXTENSIONS_EMAIL_FROM`: Sender address for notification emails (default `noreply@fossbilling.org`).
+- `EXTENSIONS_EMAIL_REPLY_TO`: Optional Reply-To address for a monitored inbox. Omit when unset (no Reply-To header is sent) — notification emails do not invite replies.
+- `EXTENSIONS_EMAIL_SERVER`, `EXTENSIONS_EMAIL_USERNAME`: Mail server and login used by the MXroute adapter. Required for `mxroute`; unused by `resend`.
+- `EXTENSIONS_EMAIL_PASSWORD`: Secret containing the mailbox password for `mxroute` or API key for `resend`.
 - `EXTENSIONS_RETENTION_MODE`: `dry-run` (report only) or `compact` (prune old revision bodies). See [extensions v2 README](src/services/extensions/v2/README.md#revisions-and-retention).
 - `M2M_ISSUER`, `M2M_JWKS_URL`, `M2M_AUDIENCE`: Issuer, JWKS endpoint, and expected audience for machine-to-machine access tokens minted by the central auth service (`FOSSBilling/auth`). Defaults live in `wrangler.jsonc`; preview environments need them pointed at the issuing preview. See [extensions v2 README](src/services/extensions/v2/README.md#machine-publishing).
 
@@ -181,22 +180,40 @@ Validation and artifact builds run on branch pushes and PRs. A push can deploy o
 after workspace validation, the build and D1 migrations succeed. `main` targets
 production; other branches target Previews once `API_PREVIEW_RESOURCES` is configured.
 Until then, branch builds report that Preview migrations and deployment are skipped;
-validation and artifact checks still run. PR runs, including forks, never receive
-deployment credentials or apply remote migrations.
+validation and artifact checks still run. The configured PR jobs, including forks,
+run validation and build checks without forwarding deployment credentials or
+applying remote migrations.
 
 The artifact contains the compiled Worker, `wrangler.json`, and SQL migrations.
-Deployment does not rebuild the Worker. Production migrations use that artifact's
-production bindings. Preview migrations use its generated
+Deployment uses the same Node version as the build and does not rebuild the Worker.
+Production migrations use its production bindings. Preview migrations use its generated
 `wrangler.preview-migrations.json`, derived from the same bindings used by the Preview.
 Migration jobs serialize access to the shared staging databases.
 
-#### Setup before switching deployment
+#### Deployment setup
 
-1. Configure GitHub `production` and `preview` environments, each with its own
-   `CLOUDFLARE_API_TOKEN` secret. Set `CLOUDFLARE_ACCOUNT_ID` as a repository variable
-   shared by both deployment targets. Restrict the production environment to `main`.
-   Deployment tokens need Workers deployment and
-   D1 migration permissions; Preview credentials and resources must be non-production.
+1. Set `CLOUDFLARE_API_TOKEN` as a repository secret and `CLOUDFLARE_ACCOUNT_ID`
+   as a repository variable. Configure GitHub `production` and `preview`
+   environments, and restrict `production` to `main`.
+
+   Like `fossbilling.org`, this setup trusts repository maintainers with branch
+   push access to use the deployment credential. Repository secrets are available
+   to workflows those maintainers can modify; environment restrictions and the
+   workflow's `main` condition select deployment targets but do not protect a
+   repository secret from branch workflows. Fork PR runs do not receive the
+   deployment token.
+
+   Scope the token to the API Worker and its zone. It needs
+   `Individual Workers Editor` for that Worker, `Workers Routes Write` for route changes, `D1 Read`
+   and `D1 Write` for migrations, and `Queues Read` and `Queues Write` to configure
+   the existing consumer.
+   The Worker permission covers both production and Previews. Separate staging data
+   and runtime secrets isolate test state, not the deployment credential's authority.
+
+   If branch writers must not have production deployment authority, use protected
+   environment secrets with trusted deployment approval instead. That is a
+   different access policy, not a requirement of this trusted-maintainer setup.
+
 2. Provision staging D1 databases, KV namespaces, a download bucket and a separately
    deployed staging Extensions frontend. Set the repository variable `API_PREVIEW_RESOURCES`
    to their identifiers, using the following JSON shape:
@@ -219,19 +236,22 @@ Migration jobs serialize access to the shared staging databases.
    staging resources; they do not automatically receive separate D1/KV/R2 data.
 
 3. Configure Preview runtime secrets in the API Worker's **Previews Base** settings.
-   Use a separate assertion-signing secret, revalidation secret and GitHub App
-   preview key, alongside `GITHUB_APP_CLIENT_ID` and `GITHUB_APP_INSTALLATION_ID`
-   (see [GitHub App authentication](#github-app-authentication)). Match the
-   revalidation secret with the staging frontend. Set M2M issuer,
+   Use separate assertion-signing and revalidation secrets, matching both with
+   the staging frontend. Set all three `GITHUB_APP_*` values, selecting the preview
+   private key (see [GitHub App authentication](#github-app-authentication)). Set M2M issuer,
    JWKS and audience variables there when using a separate test issuer. Operational
    production variables and secrets remain dashboard-managed with `keep_vars: true`.
-4. Configure required checks for the new validation/build job names, then disable the
+4. Configure required checks for the validation/build jobs, then disable the
    API's Cloudflare Workers Builds Git integration to avoid duplicate deployments.
 
 The workflow compiles the branch's Preview settings into the artifact. Each Preview
 receives isolated Durable Object state; the data bindings above are shared staging
 resources. A frontend service binding calls that Worker's normal deployment, so use a
-staging Worker name rather than the production Extensions worker.
+staging Worker name rather than the production Extensions worker. Configure that
+frontend with HTTP API transport and a Preview API URL, without production routes
+or API bindings. A long-lived Preview such as `staging` can back this frontend;
+refresh it from the prepared artifact with `npm run cf-preview --workspace @fossbilling/api -- --name staging`.
+Register its OAuth callback with a dedicated test client before testing sign-in.
 
 Cloudflare Previews cannot consume Queues or receive Cron Triggers. Their configuration
 therefore disables packaging and notification email, and omits Queue bindings. Full
@@ -253,3 +273,19 @@ before running `npm run cf-preview`; CI performs those steps automatically.
 `npm run cf-deploy` remains a deliberate manual production command. It applies remote
 migrations and deploys through Wrangler. Neither command deploys the separate
 [extension packager](../extension-packager/README.md). Production packaging remains disabled.
+
+A dashboard change can trigger Wrangler's remote configuration comparison. If its
+custom-domain metadata lookup returns 403 with the Worker-scoped CI token, use a
+one-off local-auth deployment rather than broadening the token. Build artifacts
+expire after one day; after expiry, rerun the full CI workflow to rebuild them.
+After validation, build and migrations pass, unset `CLOUDFLARE_API_TOKEN` locally.
+Use an existing Wrangler OAuth login to deploy that `main` run's artifact (replace `RUN_ID`):
+
+```sh
+gh run download RUN_ID --name api-worker-build --dir .wrangler/deployment
+npx wrangler deploy --config .wrangler/deployment/wrangler.json --keep-vars
+```
+
+Download into an empty directory, keep `EXTENSION_PACKAGES_MODE=disabled`, then
+rerun the failed CI deployment job. Further dashboard changes can trigger the same
+comparison again.
