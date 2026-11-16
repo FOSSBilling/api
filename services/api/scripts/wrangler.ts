@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { constants } from "node:os";
@@ -17,7 +17,16 @@ const child = spawn(
 );
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
-  process.on(signal, () => child.kill(signal));
+  process.on(signal, () => {
+    if (process.platform === "win32" && child.pid) {
+      // Windows cannot forward POSIX signals; stop Wrangler's descendants too.
+      spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
+        stdio: "ignore"
+      });
+    } else {
+      child.kill(signal);
+    }
+  });
 }
 
 child.on("error", (error) => {
