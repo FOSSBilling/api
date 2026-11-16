@@ -17,6 +17,6 @@
   },
   "devDependencies": {
     "tsx": "4.23.15",
-    "@zip.js/zip.js": "2.24.0"
+    "@zip.js/zip.js": "2.25.0"
   }
 }
