@@ -141,7 +141,7 @@ describe("API deployment artifact", () => {
     }
   });
 
-  it("rejects missing, malformed and duplicated Preview bindings", () => {
+  it("rejects missing, malformed, duplicated and unknown Preview bindings", () => {
     const overrides: ((config: Unstable_RawConfig) => void)[] = [
       (config) => {
         delete config.previews;
@@ -177,12 +177,33 @@ describe("API deployment artifact", () => {
           binding: "UNKNOWN",
           database_id: "11111111-1111-4111-8111-111111111111"
         });
+      },
+      (config) => {
+        config.previews!.kv_namespaces!.push({
+          binding: "UNKNOWN",
+          id: "a".repeat(32)
+        });
+      },
+      (config) => {
+        config.previews!.r2_buckets!.push({
+          binding: "UNKNOWN",
+          bucket_name: "extra-preview-bucket"
+        });
+      },
+      (config) => {
+        config.previews!.d1_databases![0].binding = "UNKNOWN";
+      },
+      (config) => {
+        config.previews!.kv_namespaces![0].binding = "UNKNOWN";
+      },
+      (config) => {
+        config.previews!.r2_buckets![0].binding = "UNKNOWN";
       }
     ];
     for (const override of overrides) {
       const folder = fixture(override);
       expect(() => prepareDeployment(folder)).toThrow();
-      expect(existsSync(join(folder, "dist/wrangler.json"))).toBe(false);
+      expect(existsSync(join(folder, "dist"))).toBe(false);
     }
   });
 });

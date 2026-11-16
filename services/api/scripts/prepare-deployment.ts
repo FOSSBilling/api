@@ -65,6 +65,7 @@ export function prepareDeployment(root: string) {
   for (const group of groups) {
     const bindings = group.preview.map((value) => value.binding);
     if (
+      bindings.length !== group.production.length ||
       new Set(bindings).size !== bindings.length ||
       group.production.some((value) => !bindings.includes(value.binding))
     )

@@ -266,7 +266,7 @@ workflow references in both files.
 From the repository root, `npm run build:api` validates the bundle and prepares the
 artifact without remote writes. The artifact always includes the Preview bindings
 from `wrangler.jsonc` and their generated migration configuration. Apply staging
-migrations using `dist/wrangler.preview-migrations.json` before running
+migrations using `services/api/dist/wrangler.preview-migrations.json` before running
 `npm run cf-preview`; CI performs those steps automatically.
 
 `npm run cf-deploy` remains a deliberate manual production command. It applies remote
