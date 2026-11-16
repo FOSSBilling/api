@@ -179,9 +179,8 @@ from [FOSSBilling/.workflows](https://github.com/FOSSBilling/.workflows), matchi
 
 Validation and artifact builds run on branch pushes and PRs. A push can deploy only
 after workspace validation, the build and D1 migrations succeed. `main` targets
-production; other branches target Previews once `API_PREVIEW_RESOURCES` is configured.
-Until then, branch builds report that Preview migrations and deployment are skipped;
-validation and artifact checks still run. The configured PR jobs, including forks,
+production; other branches target Previews using the resource bindings in
+`wrangler.jsonc` under `previews`. The configured PR jobs, including forks,
 run validation and build checks without forwarding deployment credentials or
 applying remote migrations.
 
@@ -220,25 +219,15 @@ Migration jobs serialize access to the shared staging databases.
    environment secrets with trusted deployment approval instead. That is a
    different access policy, not a requirement of this trusted-maintainer setup.
 
-2. Provision staging D1 databases, KV namespaces and a download bucket. Set the repository
-   variable `API_PREVIEW_RESOURCES`
-   to their identifiers, using the following JSON shape:
+2. Configure staging D1 databases, KV namespaces and a download bucket in
+   `wrangler.jsonc` under `previews.d1_databases`, `previews.kv_namespaces` and
+   `previews.r2_buckets`. The checked-in identifiers point to the shared staging
+   resources. These identifiers are not credentials.
 
-   ```json
-   {
-     "DB_EXTENSIONS": "<staging-extensions-database-uuid>",
-     "DB_CENTRAL_ALERTS": "<staging-alerts-database-uuid>",
-     "AUTH_KV": "<staging-auth-namespace-id>",
-     "CACHE_KV": "<staging-cache-namespace-id>",
-     "DOWNLOAD_BUCKET": "<staging-download-bucket-name>"
-   }
-   ```
-
-   The build refuses production resource IDs and duplicated IDs. These are operational
-   identifiers, not credentials. The variable is optional for local production bundle
-   checks. When absent, CI skips Preview migrations and deployment; a malformed or
-   production resource configuration still fails the build. Previews share these
-   staging resources; they do not automatically receive separate D1/KV/R2 data.
+   The build rejects production resources, duplicate staging IDs, missing bindings
+   and malformed identifiers. Previews share staging D1/KV/R2 data. D1 migration
+   paths come from the corresponding production binding. The former
+   `API_PREVIEW_RESOURCES` repository variable is no longer used and can be removed.
 
 3. Configure Preview runtime secrets in the API Worker's **Previews Base** settings.
    Use separate assertion-signing and revalidation secrets, matching both with
@@ -277,9 +266,10 @@ workflow references in both files.
 #### Local deployment commands
 
 From the repository root, `npm run build:api` validates the bundle and prepares the
-artifact without remote writes. To prepare a Preview artifact, supply
-`API_PREVIEW_RESOURCES` in the environment when building. Apply its staging migrations
-before running `npm run cf-preview`; CI performs those steps automatically.
+artifact without remote writes. The artifact always includes the Preview bindings
+from `wrangler.jsonc` and their generated migration configuration. Apply staging
+migrations using `dist/wrangler.preview-migrations.json` before running
+`npm run cf-preview`; CI performs those steps automatically.
 
 `npm run cf-deploy` remains a deliberate manual production command. It applies remote
 migrations and deploys through Wrangler. Neither command deploys the separate

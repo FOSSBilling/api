@@ -6,6 +6,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  writeFileSync,
   symlinkSync
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,22 +16,22 @@ import { experimental_readRawConfig, type Unstable_RawConfig } from "wrangler";
 import { prepareDeployment } from "../scripts/prepare-deployment";
 
 const service = fileURLToPath(new URL("../", import.meta.url));
-const resources = {
-  DB_EXTENSIONS: "11111111-1111-4111-8111-111111111111",
-  DB_CENTRAL_ALERTS: "22222222-2222-4222-8222-222222222222",
-  AUTH_KV: "a".repeat(32),
-  CACHE_KV: "b".repeat(32),
-  DOWNLOAD_BUCKET: "api-staging"
-};
 const folders: string[] = [];
 afterEach(() => {
   for (const folder of folders.splice(0))
     rmSync(folder, { recursive: true, force: true });
 });
-function fixture() {
+function fixture(update?: (config: Unstable_RawConfig) => void) {
   const folder = mkdtempSync(join(tmpdir(), "api-deployment-"));
   folders.push(folder);
   copyFileSync(join(service, "wrangler.jsonc"), join(folder, "wrangler.jsonc"));
+  if (update) {
+    const config = experimental_readRawConfig({
+      config: join(folder, "wrangler.jsonc")
+    }).rawConfig;
+    update(config);
+    writeFileSync(join(folder, "wrangler.jsonc"), JSON.stringify(config));
+  }
   symlinkSync(join(service, "src"), join(folder, "src"), "dir");
   return folder;
 }
@@ -43,7 +44,7 @@ describe("API deployment artifact", () => {
     const source: Unstable_RawConfig = experimental_readRawConfig({
       config: join(folder, "wrangler.jsonc")
     }).rawConfig;
-    prepareDeployment(folder, JSON.stringify(resources));
+    prepareDeployment(folder);
     const artifact = read(folder, "wrangler.json");
     expect(artifact.main).toBe("index.js");
     expect(artifact.no_bundle).toBe(true);
@@ -58,21 +59,15 @@ describe("API deployment artifact", () => {
         ]
       )
     ).toEqual(
-      source.d1_databases!.map((db) => [
-        db.binding,
-        resources[db.binding as "DB_EXTENSIONS" | "DB_CENTRAL_ALERTS"]
-      ])
+      source.previews!.d1_databases!.map((db) => [db.binding, db.database_id])
     );
     expect(
       read(folder, "wrangler.preview-migrations.json").d1_databases
     ).toEqual(artifact.previews.d1_databases);
-    expect(artifact.previews.kv_namespaces).toEqual([
-      { binding: "AUTH_KV", id: resources.AUTH_KV },
-      { binding: "CACHE_KV", id: resources.CACHE_KV }
-    ]);
-    expect(artifact.previews.r2_buckets).toEqual([
-      { binding: "DOWNLOAD_BUCKET", bucket_name: resources.DOWNLOAD_BUCKET }
-    ]);
+    expect(artifact.previews.kv_namespaces).toEqual(
+      source.previews!.kv_namespaces
+    );
+    expect(artifact.previews.r2_buckets).toEqual(source.previews!.r2_buckets);
     expect(artifact.previews.services).toEqual([]);
     expect(artifact.services).toEqual(source.services);
     expect(artifact.previews.vars.EXTENSIONS_FRONTEND_URL).toBe(
@@ -94,33 +89,99 @@ describe("API deployment artifact", () => {
           readFileSync(join(original, name))
         );
     }
-    // Rebuilding without Preview resources cannot reuse a stale migration target.
+    // Rebuilding after a binding change must replace the previous migration target.
+    source.previews!.d1_databases![0].database_id =
+      "11111111-1111-4111-8111-111111111111";
+    writeFileSync(join(folder, "wrangler.jsonc"), JSON.stringify(source));
     prepareDeployment(folder);
     expect(
-      existsSync(join(folder, "dist/wrangler.preview-migrations.json"))
-    ).toBe(false);
-    expect(read(folder, "wrangler.json").previews.d1_databases).toBeUndefined();
+      read(folder, "wrangler.preview-migrations.json").d1_databases[0]
+        .database_id
+    ).toBe(source.previews!.d1_databases![0].database_id);
   });
+
   it("rejects production resources and duplicated staging IDs before writing an artifact", () => {
-    const folder = fixture();
-    const source: Unstable_RawConfig = experimental_readRawConfig({
-      config: join(folder, "wrangler.jsonc")
-    }).rawConfig;
-    const overrides = [
-      { DB_EXTENSIONS: source.d1_databases![0].database_id },
-      { DB_EXTENSIONS: source.d1_databases![0].database_id!.toUpperCase() },
-      { DB_EXTENSIONS: resources.DB_CENTRAL_ALERTS },
-      { AUTH_KV: source.kv_namespaces![0].id },
-      { CACHE_KV: source.kv_namespaces![1].id },
-      { DOWNLOAD_BUCKET: source.r2_buckets![0].bucket_name },
-      { AUTH_KV: resources.CACHE_KV }
+    const overrides: ((config: Unstable_RawConfig) => void)[] = [
+      (config) => {
+        config.previews!.d1_databases![0].database_id =
+          config.d1_databases![0].database_id;
+      },
+      (config) => {
+        config.previews!.d1_databases![0].database_id =
+          config.d1_databases![0].database_id!.toUpperCase();
+      },
+      (config) => {
+        config.previews!.d1_databases![0].database_id =
+          config.previews!.d1_databases![1].database_id;
+      },
+      (config) => {
+        config.previews!.kv_namespaces![0].id = config.kv_namespaces![0].id;
+      },
+      (config) => {
+        config.previews!.kv_namespaces![1].id = config.kv_namespaces![1].id;
+      },
+      (config) => {
+        config.previews!.r2_buckets![0].bucket_name =
+          config.r2_buckets![0].bucket_name;
+      },
+      (config) => {
+        config.previews!.kv_namespaces![0].id =
+          config.previews!.kv_namespaces![1].id;
+      }
     ];
     for (const override of overrides) {
-      expect(() =>
-        prepareDeployment(folder, JSON.stringify({ ...resources, ...override }))
-      ).toThrow(
-        "API_PREVIEW_RESOURCES must use distinct non-production resources"
+      const folder = fixture(override);
+      expect(() => prepareDeployment(folder)).toThrow(
+        "Preview resources must use distinct non-production resources"
       );
+      expect(existsSync(join(folder, "dist/wrangler.json"))).toBe(false);
+      expect(
+        existsSync(join(folder, "dist/wrangler.preview-migrations.json"))
+      ).toBe(false);
+    }
+  });
+
+  it("rejects missing, malformed and duplicated Preview bindings", () => {
+    const overrides: ((config: Unstable_RawConfig) => void)[] = [
+      (config) => {
+        delete config.previews;
+      },
+      (config) => {
+        delete config.previews!.kv_namespaces;
+      },
+      (config) => {
+        config.previews!.d1_databases!.pop();
+      },
+      (config) => {
+        config.previews!.kv_namespaces = [];
+      },
+      (config) => {
+        config.previews!.r2_buckets = [];
+      },
+      (config) => {
+        config.previews!.d1_databases![0].database_id = "invalid";
+      },
+      (config) => {
+        config.previews!.kv_namespaces![0].id = "invalid";
+      },
+      (config) => {
+        config.previews!.r2_buckets![0].bucket_name = "";
+      },
+      (config) => {
+        config.previews!.d1_databases!.push({
+          ...config.previews!.d1_databases![0]
+        });
+      },
+      (config) => {
+        config.previews!.d1_databases!.push({
+          binding: "UNKNOWN",
+          database_id: "11111111-1111-4111-8111-111111111111"
+        });
+      }
+    ];
+    for (const override of overrides) {
+      const folder = fixture(override);
+      expect(() => prepareDeployment(folder)).toThrow();
       expect(existsSync(join(folder, "dist/wrangler.json"))).toBe(false);
     }
   });

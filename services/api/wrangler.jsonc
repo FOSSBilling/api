@@ -119,6 +119,25 @@
     }
   ],
   "previews": {
+    // Shared staging resources used by branch Previews and the named staging Preview.
+    "d1_databases": [
+      {
+        "binding": "DB_CENTRAL_ALERTS",
+        "database_id": "2a01de94-a555-4602-9f3f-61c1985752db"
+      },
+      {
+        "binding": "DB_EXTENSIONS",
+        "database_id": "951c630e-49ed-47d2-9eea-ae2aa2293be5"
+      }
+    ],
+    "kv_namespaces": [
+      { "binding": "AUTH_KV", "id": "5fd5ebd911844bbdae98c1b0006520f1" },
+      { "binding": "CACHE_KV", "id": "7b0abe2477b54b5eae6ba15beb23b75c" }
+    ],
+    "r2_buckets": [
+      { "binding": "DOWNLOAD_BUCKET", "bucket_name": "api-preview-downloads" }
+    ],
+    "services": [],
     "vars": {
       "ENVIRONMENT": "preview",
       "EXTENSIONS_FRONTEND_URL": "https://staging-extensions.fossbilling.workers.dev",
