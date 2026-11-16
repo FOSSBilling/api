@@ -11,41 +11,77 @@ import { experimental_readRawConfig, type Unstable_RawConfig } from "wrangler";
 import { z } from "zod";
 
 const PreviewResourcesSchema = z.object({
-  DB_EXTENSIONS: z.uuid().toLowerCase(),
-  DB_CENTRAL_ALERTS: z.uuid().toLowerCase(),
-  AUTH_KV: z.string().regex(/^[a-f0-9]{32}$/),
-  CACHE_KV: z.string().regex(/^[a-f0-9]{32}$/),
-  DOWNLOAD_BUCKET: z.string().min(1)
+  d1_databases: z.array(
+    z.looseObject({
+      binding: z.string(),
+      database_id: z.uuid().toLowerCase()
+    })
+  ),
+  kv_namespaces: z.array(
+    z.looseObject({
+      binding: z.string(),
+      id: z.string().regex(/^[a-f0-9]{32}$/)
+    })
+  ),
+  r2_buckets: z.array(
+    z.looseObject({
+      binding: z.string(),
+      bucket_name: z.string().min(1)
+    })
+  )
 });
 
 // Keep the bundle, runtime bindings and migration targets in one deployable artifact.
-export function prepareDeployment(root: string, previewResources?: string) {
+export function prepareDeployment(root: string) {
   const config: Unstable_RawConfig = experimental_readRawConfig({
     config: join(root, "wrangler.jsonc")
   }).rawConfig;
   const output = join(root, "dist");
-  const resources = previewResources
-    ? PreviewResourcesSchema.parse(JSON.parse(previewResources))
-    : undefined;
-  if (resources) {
-    const production = new Set([
-      ...(config.d1_databases ?? []).map((value) => value.database_id),
-      ...(config.kv_namespaces ?? []).map((value) => value.id),
-      ...(config.r2_buckets ?? []).map((value) => value.bucket_name)
-    ]);
-    const values = Object.values(resources);
+  const resources = PreviewResourcesSchema.parse(config.previews);
+  const production = new Set([
+    ...(config.d1_databases ?? []).map((value) =>
+      value.database_id?.toLowerCase()
+    ),
+    ...(config.kv_namespaces ?? []).map((value) => value.id),
+    ...(config.r2_buckets ?? []).map((value) => value.bucket_name)
+  ]);
+  const groups = [
+    {
+      preview: resources.d1_databases,
+      production: config.d1_databases ?? [],
+      ids: resources.d1_databases.map((value) => value.database_id)
+    },
+    {
+      preview: resources.kv_namespaces,
+      production: config.kv_namespaces ?? [],
+      ids: resources.kv_namespaces.map((value) => value.id)
+    },
+    {
+      preview: resources.r2_buckets,
+      production: config.r2_buckets ?? [],
+      ids: resources.r2_buckets.map((value) => value.bucket_name)
+    }
+  ];
+  for (const group of groups) {
+    const bindings = group.preview.map((value) => value.binding);
     if (
-      values.some((value) => production.has(value)) ||
-      resources.DB_EXTENSIONS === resources.DB_CENTRAL_ALERTS ||
-      resources.AUTH_KV === resources.CACHE_KV
+      bindings.length !== group.production.length ||
+      new Set(bindings).size !== bindings.length ||
+      group.production.some((value) => !bindings.includes(value.binding))
     )
       throw new Error(
-        "API_PREVIEW_RESOURCES must use distinct non-production resources"
+        "Preview resources must configure each production binding exactly once"
+      );
+    if (
+      group.ids.some((value) => production.has(value)) ||
+      new Set(group.ids).size !== group.ids.length
+    )
+      throw new Error(
+        "Preview resources must use distinct non-production resources"
       );
   }
   mkdirSync(output, { recursive: true });
   rmSync(join(output, "migrations"), { recursive: true, force: true });
-  rmSync(join(output, "wrangler.preview-migrations.json"), { force: true });
   config.d1_databases = (config.d1_databases ?? []).map((database) => {
     if (!database.migrations_dir)
       throw new Error(`Missing migrations_dir for ${database.binding}`);
@@ -60,36 +96,25 @@ export function prepareDeployment(root: string, previewResources?: string) {
       );
     return { ...database, migrations_dir: migrations };
   });
-  if (resources) {
-    const databaseIds: Record<string, string> = {
-      DB_EXTENSIONS: resources.DB_EXTENSIONS,
-      DB_CENTRAL_ALERTS: resources.DB_CENTRAL_ALERTS
-    };
-    const stagingDatabases = (config.d1_databases ?? []).map((database) => {
-      const id = databaseIds[database.binding];
-      if (!id)
-        throw new Error(
-          `No Preview database configured for ${database.binding}`
-        );
-      return { ...database, database_id: id, database_name: undefined };
-    });
-    config.previews = {
-      ...config.previews,
-      d1_databases: stagingDatabases,
-      kv_namespaces: [
-        { binding: "AUTH_KV", id: resources.AUTH_KV },
-        { binding: "CACHE_KV", id: resources.CACHE_KV }
-      ],
-      r2_buckets: [
-        { binding: "DOWNLOAD_BUCKET", bucket_name: resources.DOWNLOAD_BUCKET }
-      ],
-      services: []
-    };
-    writeFileSync(
-      join(output, "wrangler.preview-migrations.json"),
-      JSON.stringify({ d1_databases: stagingDatabases }, null, 2) + "\n"
+  const stagingDatabases = resources.d1_databases.map((database) => {
+    const source = config.d1_databases?.find(
+      (value) => value.binding === database.binding
     );
-  }
+    if (!source)
+      throw new Error(
+        `No migration source configured for Preview database ${database.binding}`
+      );
+    return { ...database, migrations_dir: source.migrations_dir };
+  });
+  config.previews = {
+    ...config.previews,
+    ...resources,
+    d1_databases: stagingDatabases
+  };
+  writeFileSync(
+    join(output, "wrangler.preview-migrations.json"),
+    JSON.stringify({ d1_databases: stagingDatabases }, null, 2) + "\n"
+  );
   Reflect.deleteProperty(config, "$schema");
   config.main = "index.js";
   config.no_bundle = true;
@@ -103,6 +128,6 @@ if (
   process.argv[1] &&
   resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 ) {
-  prepareDeployment(process.cwd(), process.env.API_PREVIEW_RESOURCES);
+  prepareDeployment(process.cwd());
   console.log("Prepared API deployment configuration and migrations.");
 }
