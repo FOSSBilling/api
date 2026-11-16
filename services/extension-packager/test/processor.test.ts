@@ -33,7 +33,6 @@ const config: Record<string, string> = {
   EXTENSION_PACKAGES_S3_ENDPOINT: "https://s3.example.test",
   EXTENSION_PACKAGES_S3_REGION: "test-region",
   EXTENSION_PACKAGES_S3_BUCKET: "private-packages",
-  EXTENSION_PACKAGES_S3_PREFIX: "test",
   EXTENSION_PACKAGES_S3_ACCESS_KEY_ID: "test-key",
   EXTENSION_PACKAGES_S3_SECRET_ACCESS_KEY: "test-secret"
 };
@@ -64,7 +63,7 @@ function fixture() {
     string,
     { bytes: Uint8Array<ArrayBuffer>; checksum: string }
   >();
-  const key = (id: string) => "/private-packages/test/packages/" + id;
+  const key = (id: string) => "/private-packages/packages/" + id;
   const handler = (request: Request) =>
     handlePackageProcessing(request, (name) => config[name]);
   const fetch = vi.fn(async (request: Request) => {

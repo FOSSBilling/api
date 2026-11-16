@@ -34,8 +34,6 @@ export function configuredPackageStore(
       url.hash ||
       url.pathname !== "/extensions/v2" ||
       !getEnv("EXTENSION_PACKAGES_S3_ENDPOINT") ||
-      !getEnv("EXTENSION_PACKAGES_S3_PREFIX") ||
-      getEnv("EXTENSION_PACKAGES_S3_PREFIX") === "local" ||
       !getEnv("EXTENSION_ASSETS_S3_ENDPOINT") ||
       !getEnv("EXTENSION_ASSETS_PUBLIC_URL")
     ) {

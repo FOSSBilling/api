@@ -47,7 +47,7 @@ function expectedSignature(
 describe("SigV4 signer", () => {
   it("signs GET with the empty payload hash and sorted headers", async () => {
     const request = await signS3Request(
-      new URL("https://s3.example.test/private-packages/local/packages/id"),
+      new URL("https://s3.example.test/private-packages/packages/id"),
       { method: "GET" },
       credentials,
       now
@@ -61,7 +61,7 @@ describe("SigV4 signer", () => {
     expect(signedHeaders).toBe("host;x-amz-content-sha256;x-amz-date");
     const canonicalRequest = [
       "GET",
-      "/private-packages/local/packages/id",
+      "/private-packages/packages/id",
       "",
       "host:s3.example.test\n" +
         `x-amz-content-sha256:${EMPTY}\n` +

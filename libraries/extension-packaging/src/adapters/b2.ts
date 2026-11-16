@@ -20,10 +20,6 @@ export function b2ObjectStore(
   };
   const origin = new URL(get("ENDPOINT"));
   const bucket = get("BUCKET");
-  const prefix =
-    kind === "packages"
-      ? (getEnv("EXTENSION_PACKAGES_S3_PREFIX") ?? "local")
-      : "";
   if (
     origin.protocol !== "https:" ||
     origin.username ||
@@ -31,8 +27,7 @@ export function b2ObjectStore(
     origin.search ||
     origin.hash ||
     origin.pathname !== "/" ||
-    !/^[a-zA-Z0-9-]+$/.test(bucket) ||
-    (kind === "packages" && !/^[a-zA-Z0-9_-]+$/.test(prefix))
+    !/^[a-zA-Z0-9-]+$/.test(bucket)
   )
     throw unavailable("Invalid package storage configuration");
   if (kind === "assets") {
@@ -65,7 +60,7 @@ export function b2ObjectStore(
     // Keys come from D1 reservations, never from caller-supplied paths.
     if (!pattern.test(key)) throw unavailable("Invalid storage object ID");
     return new URL(
-      `/${bucket}/${kind === "packages" ? `${prefix}/packages/` : ""}${key}`,
+      `/${bucket}/${kind === "packages" ? "packages/" : ""}${key}`,
       origin
     );
   }

@@ -67,7 +67,7 @@ describe("B2 object storage", () => {
         headers: { "x-amz-meta-sha256": checksum }
       });
     });
-    const storage = store();
+    const storage = store({ BUCKET: "preview-packages" });
     await storage.put(objectId, bytes, checksum);
     expect(
       new Uint8Array(
@@ -77,7 +77,7 @@ describe("B2 object storage", () => {
     expect(requests.map((r) => r.method)).toEqual(["PUT", "GET"]);
     for (const request of requests) {
       expect(request.url).toBe(
-        `https://s3.example.test/private-packages/local/packages/${objectId}`
+        `https://s3.example.test/preview-packages/packages/${objectId}`
       );
       expect(request.headers.get("Authorization")).toMatch(
         /^AWS4-HMAC-SHA256 /
@@ -236,7 +236,6 @@ describe("B2 object storage", () => {
     ])
       expect(() => store({ ENDPOINT })).toThrow("configuration");
     expect(() => store({ SECRET_ACCESS_KEY: undefined })).toThrow("incomplete");
-    expect(() => store({ PREFIX: "../other" })).toThrow("configuration");
     await expect(store().get("../other")).rejects.toThrow("object ID");
     await expect(
       store().put(objectId, new Uint8Array([1]), "wrong")

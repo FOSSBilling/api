@@ -11,12 +11,21 @@ Package routes are disabled by default. Local development and production enablem
 ## Local development and testing
 
 Run the API through the normal `npm run dev` command. Use ignored `.dev.vars`
-for local credentials, set `ENVIRONMENT=local` and `EXTENSION_PACKAGES_MODE=local`,
+for local credentials, set `ENVIRONMENT=development` and `EXTENSION_PACKAGES_MODE=local`,
 and set `EXTENSION_PACKAGES_BASE_URL` to the local API's `/extensions/v2` URL.
 Apply local migrations with `npm run db:migrate:all:local`. The configured Queue
 runs locally under Wrangler; start the Node packager as described below. B2
-requests use the configured buckets and development keys, so use a separate key
-and package object prefix.
+requests use the development package bucket and its bucket-restricted keys. Use
+separate private package buckets for each environment:
+
+| Environment | Private package bucket               |
+| ----------- | ------------------------------------ |
+| Production  | `fb-extensions-packages`             |
+| Preview     | `fb-extensions-packages-preview`     |
+| Development | `fb-extensions-packages-development` |
+
+The API and packager must use the same bucket within each environment. All branch
+Previews share the preview bucket; local development uses the development bucket.
 
 From the repository root, `npm test` covers the package lifecycle through the real API routes and
 D1 repository, with mocked S3 responses and prepared image fixtures. Node tests
@@ -166,10 +175,9 @@ process must receive them in its own configuration file.
 ```dotenv
 EXTENSION_PACKAGES_S3_ENDPOINT="https://s3.<region>.backblazeb2.com"
 EXTENSION_PACKAGES_S3_REGION="<region>"
-EXTENSION_PACKAGES_S3_BUCKET="your-development-packages-bucket"
+EXTENSION_PACKAGES_S3_BUCKET="fb-extensions-packages-development"
 EXTENSION_PACKAGES_S3_ACCESS_KEY_ID="your-keyID"
 EXTENSION_PACKAGES_S3_SECRET_ACCESS_KEY="your-applicationKey"
-EXTENSION_PACKAGES_S3_PREFIX="local"
 ```
 
 Keep this bucket private. Use a separate development key restricted to the bucket
@@ -182,7 +190,7 @@ failure returns 503 rather than silently switching storage backends.
 The B2 adapter signs uploads with their SHA-256 payload, stores checksum metadata
 and verifies both metadata and downloaded bytes on reads.
 
-Source and built ZIPs use `local/packages/<object-id>`. Object IDs are allocated
+Source and built ZIPs use `packages/<object-id>` inside the environment's bucket. Object IDs are allocated
 once by D1 before upload. Uploads carry a signed SHA-256 payload and private cache
 headers. Reads are bounded to 17 MiB and verify artifact bytes before returning a
 ZIP through the existing permission-checked download route. B2 URLs and credentials
@@ -241,15 +249,14 @@ Keep B2 daily caps and alerts configured for download and transaction charges.
 ## Production configuration (prepared locally)
 
 The top-level Wrangler configuration declares bindings, public URLs and deployment
-controls, keeping `EXTENSION_PACKAGES_MODE=disabled`. B2 endpoints, regions, bucket
-names and the package prefix are dashboard-managed runtime variables. Configure
+controls, keeping `EXTENSION_PACKAGES_MODE=disabled`. B2 endpoints, regions and
+bucket names are dashboard-managed runtime variables. Configure
 these under the Worker's **Settings > Variables and Secrets**, not build settings:
 
-| Runtime variables                                                                                | Purpose                                                              |
-| ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------- |
-| `EXTENSION_PACKAGES_S3_ENDPOINT`, `EXTENSION_PACKAGES_S3_REGION`, `EXTENSION_PACKAGES_S3_BUCKET` | Private ZIP storage connection                                       |
-| `EXTENSION_PACKAGES_S3_PREFIX`                                                                   | ZIP object prefix; production requires an explicit non-`local` value |
-| `EXTENSION_ASSETS_S3_ENDPOINT`, `EXTENSION_ASSETS_S3_REGION`, `EXTENSION_ASSETS_S3_BUCKET`       | Public image storage connection                                      |
+| Runtime variables                                                                                | Purpose                         |
+| ------------------------------------------------------------------------------------------------ | ------------------------------- |
+| `EXTENSION_PACKAGES_S3_ENDPOINT`, `EXTENSION_PACKAGES_S3_REGION`, `EXTENSION_PACKAGES_S3_BUCKET` | Private ZIP storage connection  |
+| `EXTENSION_ASSETS_S3_ENDPOINT`, `EXTENSION_ASSETS_S3_REGION`, `EXTENSION_ASSETS_S3_BUCKET`       | Public image storage connection |
 
 `keep_vars: true` preserves these values during Wrangler deployments. Do not
 reintroduce them in the committed `vars` map. Keep development values in ignored
@@ -277,9 +284,10 @@ Before deployment (including an automatic deployment after merge):
    merging a disabled API alone does not make package submission available.
 
 Production requires HTTPS download URLs with the `/extensions/v2` base path,
-complete credentials for both B2 buckets, an explicit non-`local` ZIP object prefix,
-a public asset URL and an authenticated extension packager. An incomplete configuration fails with 503;
-it cannot fall back to local ZIP storage. Private package objects use the configured prefix.
+complete credentials for its private package and public asset buckets, a public
+asset URL and an authenticated extension packager. An incomplete configuration
+fails with 503; it cannot fall back to local ZIP storage. Private package objects
+use `packages/<object UUID>` in the bucket selected for that environment.
 Public image objects use the UUID-based layout described above.
 
 The disabled mode blocks package reads as well as writes. Once managed releases
