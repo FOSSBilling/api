@@ -78,6 +78,10 @@ describe("API deployment artifact", () => {
       const packaged = artifact.d1_databases.find(
         (db: { binding: string }) => db.binding === database.binding
       );
+      const preview = artifact.previews.d1_databases.find(
+        (db: { binding: string }) => db.binding === database.binding
+      );
+      expect(preview.migrations_dir).toBe(packaged.migrations_dir);
       const original = join(service, database.migrations_dir!);
       const copied = join(folder, "dist", packaged.migrations_dir);
       const sql = readdirSync(original)
