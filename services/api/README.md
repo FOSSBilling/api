@@ -125,8 +125,7 @@ Use separate keys: `api-dev.private-key` for local development,
 production. All use the same App client and installation IDs.
 
 Octokit manages short-lived installation tokens, restricted to that repository and
-those read permissions. Remove the old runtime `GITHUB_TOKEN` after deployment is
-verified; GitHub Actions' built-in token remains unchanged.
+those read permissions.
 
 ## Development
 
@@ -226,8 +225,7 @@ Migration jobs serialize access to the shared staging databases.
 
    The build rejects production resources, duplicate staging IDs, missing bindings
    and malformed identifiers. Previews share staging D1/KV/R2 data. D1 migration
-   paths come from the corresponding production binding. The former
-   `API_PREVIEW_RESOURCES` repository variable is no longer used and can be removed.
+   paths come from the corresponding production binding.
 
 3. Configure Preview runtime secrets in the API Worker's **Previews Base** settings.
    Use separate assertion-signing and revalidation secrets, matching both with
