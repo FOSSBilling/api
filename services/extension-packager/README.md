@@ -55,16 +55,19 @@ Native Sharp and sanitizer dependencies remain external so Netlify includes thei
 binaries and WASM files. Verify those files and the deployed runtime before
 enabling processing.
 
-Set these six variables through Netlify's dashboard, CLI or API for the function runtime:
+Set these five variables through Netlify's dashboard, CLI or API for the function runtime:
 
 ```dotenv
 EXTENSION_PACKAGER_SECRET=<shared-with-the-API>
 EXTENSION_PACKAGES_S3_ENDPOINT=https://s3.<region>.backblazeb2.com
-EXTENSION_PACKAGES_S3_REGION=<region>
 EXTENSION_PACKAGES_S3_BUCKET=fb-extensions-packages
 EXTENSION_PACKAGES_S3_ACCESS_KEY_ID=<bucket-restricted-keyID>
 EXTENSION_PACKAGES_S3_SECRET_ACCESS_KEY=<applicationKey>
 ```
+
+The B2 adapter derives the signing region from the standard
+`https://s3.<region>.backblazeb2.com` endpoint. Local R2 uses `auto` internally;
+neither needs a separate region variable.
 
 Keep these production values in the production deploy context. Preview deployments
 use `fb-extensions-packages-preview`, its own restricted B2 key and a separate shared

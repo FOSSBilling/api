@@ -193,11 +193,14 @@ bucket-restricted key:
 
 ```dotenv
 EXTENSION_PACKAGES_S3_ENDPOINT="https://s3.<region>.backblazeb2.com"
-EXTENSION_PACKAGES_S3_REGION="<region>"
 EXTENSION_PACKAGES_S3_BUCKET="fb-extensions-packages"
 EXTENSION_PACKAGES_S3_ACCESS_KEY_ID="your-keyID"
 EXTENSION_PACKAGES_S3_SECRET_ACCESS_KEY="your-applicationKey"
 ```
+
+The B2 adapter derives its signing region from the standard
+`https://s3.<region>.backblazeb2.com` endpoint for both packages and assets.
+Local R2 uses `auto` internally; no separate region settings are needed.
 
 Keep the bucket private. The API key needs read, write and delete-file permissions;
 the packager needs read and write. No public URL or domain is required. Preview
@@ -225,7 +228,6 @@ Configure these on the deployed API; local development uses its local asset buck
 
 ```dotenv
 EXTENSION_ASSETS_S3_ENDPOINT="https://s3.<region>.backblazeb2.com"
-EXTENSION_ASSETS_S3_REGION="<region>"
 EXTENSION_ASSETS_S3_BUCKET="fb-extensions-assets"
 EXTENSION_ASSETS_S3_ACCESS_KEY_ID="your-keyID"
 EXTENSION_ASSETS_S3_SECRET_ACCESS_KEY="your-applicationKey"
@@ -267,14 +269,14 @@ Keep B2 daily caps and alerts configured for download and transaction charges.
 ## Production configuration (prepared locally)
 
 The top-level Wrangler configuration declares bindings, public URLs and deployment
-controls, keeping `EXTENSION_PACKAGES_MODE=disabled`. B2 endpoints, regions and
+controls, keeping `EXTENSION_PACKAGES_MODE=disabled`. B2 endpoints and
 bucket names are dashboard-managed runtime variables. Configure
 these under the Worker's **Settings > Variables and Secrets**, not build settings:
 
-| Runtime variables                                                                                | Purpose                         |
-| ------------------------------------------------------------------------------------------------ | ------------------------------- |
-| `EXTENSION_PACKAGES_S3_ENDPOINT`, `EXTENSION_PACKAGES_S3_REGION`, `EXTENSION_PACKAGES_S3_BUCKET` | Private ZIP storage connection  |
-| `EXTENSION_ASSETS_S3_ENDPOINT`, `EXTENSION_ASSETS_S3_REGION`, `EXTENSION_ASSETS_S3_BUCKET`       | Public image storage connection |
+| Runtime variables                                                | Purpose                         |
+| ---------------------------------------------------------------- | ------------------------------- |
+| `EXTENSION_PACKAGES_S3_ENDPOINT`, `EXTENSION_PACKAGES_S3_BUCKET` | Private ZIP storage connection  |
+| `EXTENSION_ASSETS_S3_ENDPOINT`, `EXTENSION_ASSETS_S3_BUCKET`     | Public image storage connection |
 
 `keep_vars: true` preserves these values during Wrangler deployments. Do not
 reintroduce them in the committed `vars` map. Keep development values in ignored

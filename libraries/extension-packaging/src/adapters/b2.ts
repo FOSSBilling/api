@@ -23,7 +23,11 @@ export function b2ObjectStore(
   const bucket = get("BUCKET");
   // Wrangler's local R2 S3 endpoint is HTTP, path-prefixed and unversioned.
   const local = isLocalDevelopmentUrl(origin, getEnv("ENVIRONMENT"));
+  const region = local
+    ? "auto"
+    : /^s3\.([a-z0-9-]+)\.backblazeb2\.com$/.exec(origin.hostname)?.[1];
   if (
+    !region ||
     (origin.protocol !== "https:" && !local) ||
     origin.username ||
     origin.password ||
@@ -53,7 +57,7 @@ export function b2ObjectStore(
   const credentials = {
     accessKeyId: get("ACCESS_KEY_ID"),
     secretAccessKey: get("SECRET_ACCESS_KEY"),
-    region: get("REGION")
+    region
   };
   const uuid = "[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}";
   const pattern =

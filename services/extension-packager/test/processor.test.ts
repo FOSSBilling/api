@@ -30,8 +30,7 @@ const manifest = {
 };
 const config: Record<string, string> = {
   EXTENSION_PACKAGER_SECRET: "local-test-secret",
-  EXTENSION_PACKAGES_S3_ENDPOINT: "https://s3.example.test",
-  EXTENSION_PACKAGES_S3_REGION: "test-region",
+  EXTENSION_PACKAGES_S3_ENDPOINT: "https://s3.test-region.backblazeb2.com",
   EXTENSION_PACKAGES_S3_BUCKET: "private-packages",
   EXTENSION_PACKAGES_S3_ACCESS_KEY_ID: "test-key",
   EXTENSION_PACKAGES_S3_SECRET_ACCESS_KEY: "test-secret"
@@ -70,7 +69,7 @@ function fixture() {
     const url = new URL(request.url);
     if (url.hostname === "processor.example.test") return handler(request);
     if (url.hostname === "127.0.0.1") return nativeFetch(request);
-    if (url.hostname !== "s3.example.test")
+    if (url.hostname !== "s3.test-region.backblazeb2.com")
       throw new Error("Unexpected network request");
     expect(request.cache).toBe("no-store");
     if (request.method === "PUT") {
