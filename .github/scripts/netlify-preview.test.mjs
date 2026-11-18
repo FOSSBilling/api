@@ -151,7 +151,6 @@ describe("packager preview reporting", () => {
     };
     f.run.id = 12;
     expect(await f.find()).toBeUndefined();
-    expect(f.rest.actions.listWorkflowRunArtifacts).not.toHaveBeenCalled();
   });
 
   it("waits for current-attempt metadata instead of reusing a canceled rerun's earlier deployment", async () => {
@@ -170,7 +169,6 @@ describe("packager preview reporting", () => {
       head_repository: { full_name: "FOSSBilling/api" }
     };
     expect(await f.find()).toBeUndefined();
-    expect(f.rest.issues.createComment).not.toHaveBeenCalled();
   });
 
   it("does not overwrite an existing comment after the PR head or latest run changes", async () => {

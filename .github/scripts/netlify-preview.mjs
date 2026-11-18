@@ -81,7 +81,6 @@ export async function findPreview({ github, context, runAttempt }) {
   if (!artifact) return;
   return {
     runId: run.id,
-    runAttempt: run.run_attempt,
     sha: run.head_sha,
     branch,
     artifactId: artifact.id,
@@ -161,10 +160,7 @@ export async function publishPreview({ github, context, preview, metadata }) {
       per_page: 1
     });
     const latest = data.workflow_runs[0];
-    if (
-      latest?.id !== preview.runId ||
-      latest.run_attempt !== preview.runAttempt
-    )
+    if (latest?.id !== preview.runId || latest.run_attempt !== preview.attempt)
       continue;
     if (existing)
       await github.rest.issues.updateComment({
