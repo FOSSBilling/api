@@ -10,22 +10,36 @@ Package routes are disabled by default. Local development and production enablem
 
 ## Local development and testing
 
-Run the API through the normal `npm run dev` command. Use ignored `.dev.vars`
-for local credentials, set `ENVIRONMENT=development` and `EXTENSION_PACKAGES_MODE=local`,
-and set `EXTENSION_PACKAGES_BASE_URL` to the local API's `/extensions/v2` URL.
-Apply local migrations with `npm run db:migrate:all:local`. The configured Queue
-runs locally under Wrangler; start the Node packager as described below. B2
-requests use the development package bucket and its bucket-restricted keys. Use
-separate private package buckets for each environment:
+Run `npm run dev` and `npm run extension-packager:dev` in separate terminals at the
+repository root. Apply local migrations with `npm run db:migrate:all:local`.
+The API's normal `.dev.vars` is still used for authentication; package processing
+needs no B2 credentials. Both development commands apply
+`libraries/extension-packaging/development.env` after service-specific env files,
+deliberately overriding old B2 and packager settings. Other service settings remain
+available from `.dev.vars`. The shared settings select development mode, the local
+processor and loopback S3/public endpoints.
 
-| Environment | Private package bucket               |
-| ----------- | ------------------------------------ |
-| Production  | `fb-extensions-packages`             |
-| Preview     | `fb-extensions-packages-preview`     |
-| Development | `fb-extensions-packages-development` |
+The API dev command includes a development-only Wrangler configuration that serves
+`extension-packages-local` and `extension-assets-local` through the
+[local R2 S3 API](https://developers.cloudflare.com/r2/local-development/).
+The endpoint is experimental and supported by the pinned Wrangler version. Both
+services use the existing S3 adapter; no R2 binding reaches package domain code.
+Objects persist under `services/api/.wrangler/state`. The Queue and D1 also run
+locally. Nothing is uploaded to B2 during development.
+
+Local defaults use API port 8787 and packager port 8790. Local storage is unversioned;
+B2 cleanup still requires an explicit version ID. HTTP storage and asset URLs are
+accepted only on loopback addresses with `ENVIRONMENT=development`.
+
+Deployed environments use separate private B2 package buckets:
+
+| Environment | Private package bucket           |
+| ----------- | -------------------------------- |
+| Production  | `fb-extensions-packages`         |
+| Preview     | `fb-extensions-packages-preview` |
 
 The API and packager must use the same bucket within each environment. All branch
-Previews share the preview bucket; local development uses the development bucket.
+Previews share the preview bucket. There is no development B2 bucket.
 
 Preview packaging stays disabled (`EXTENSION_PACKAGES_MODE=disabled`) until its
 package and asset B2 settings and bucket-restricted keys are configured, together
@@ -172,26 +186,24 @@ Approval updates the listing to the existing CDN URL and performs no image copy.
 The revision ID is checked before changing the listing URL to avoid overwriting a
 newer publication.
 
-## Private B2 package testing
+## Private B2 package storage
 
-Set these in the integrated local API's ignored `.dev.vars`. The directory
-worktree's root `.dev.vars` may hold the development credentials, but the API
-process must receive them in its own configuration file.
+Configure the deployed API and packager with their environment's bucket and
+bucket-restricted key:
 
 ```dotenv
 EXTENSION_PACKAGES_S3_ENDPOINT="https://s3.<region>.backblazeb2.com"
 EXTENSION_PACKAGES_S3_REGION="<region>"
-EXTENSION_PACKAGES_S3_BUCKET="fb-extensions-packages-development"
+EXTENSION_PACKAGES_S3_BUCKET="fb-extensions-packages"
 EXTENSION_PACKAGES_S3_ACCESS_KEY_ID="your-keyID"
 EXTENSION_PACKAGES_S3_SECRET_ACCESS_KEY="your-applicationKey"
 ```
 
-Keep this bucket private. Use a separate development key restricted to the bucket
-with read, write and delete-file permissions. No public URL or domain is required.
-Use `EXTENSION_PACKAGES_MODE=local` only outside production. The committed production configuration remains disabled.
-Tests run the B2 adapter against mocked S3 responses. Local development uses B2
-with development credentials. An incomplete S3 configuration or upstream
-failure returns 503 rather than silently switching storage backends.
+Keep the bucket private. The API key needs read, write and delete-file permissions;
+the packager needs read and write. No public URL or domain is required. Preview
+uses its own bucket and credentials. The committed production configuration remains
+disabled. An incomplete S3 configuration or upstream failure returns 503 rather than
+silently switching storage backends.
 
 The B2 adapter signs uploads with their SHA-256 payload, stores checksum metadata
 and verifies both metadata and downloaded bytes on reads.
@@ -207,14 +219,14 @@ Cleanup identifies the stored B2 version and deletes it explicitly. Deleting onl
 by name would leave billable versions behind. Failed deletion retains the D1
 reservation for retry.
 
-## B2 asset and Cloudflare testing
+## B2 assets and Cloudflare
 
-Add these to the local API's ignored `.dev.vars`:
+Configure these on the deployed API; local development uses its local asset bucket:
 
 ```dotenv
 EXTENSION_ASSETS_S3_ENDPOINT="https://s3.<region>.backblazeb2.com"
 EXTENSION_ASSETS_S3_REGION="<region>"
-EXTENSION_ASSETS_S3_BUCKET="your-development-assets-bucket"
+EXTENSION_ASSETS_S3_BUCKET="fb-extensions-assets"
 EXTENSION_ASSETS_S3_ACCESS_KEY_ID="your-keyID"
 EXTENSION_ASSETS_S3_SECRET_ACCESS_KEY="your-applicationKey"
 EXTENSION_ASSETS_PUBLIC_URL="https://extensions-assets.fossbilling.net"

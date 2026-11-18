@@ -7,7 +7,7 @@
   "scripts": {
     "cf-typegen": "wrangler types --env-interface CloudflareBindings --env-file .dev.vars.example",
     "cf-deploy": "npm run db:migrate:all:remote && node scripts/wrangler.ts deploy --minify",
-    "dev": "node scripts/wrangler.ts dev",
+    "dev": "node scripts/wrangler.ts dev --infer-origin-from-routes=false --config wrangler.jsonc --config wrangler.local-storage.jsonc --env-file .dev.vars --env-file ../../libraries/extension-packaging/development.env",
     "db:generate:extensions": "drizzle-kit generate --config drizzle.extensions.config.ts",
     "db:generate:central-alerts": "drizzle-kit generate --config drizzle.central-alerts.config.ts",
     "db:migrate:extensions-v2:local": "wrangler d1 migrations apply DB_EXTENSIONS --local",

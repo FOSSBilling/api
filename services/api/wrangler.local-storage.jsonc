@@ -1,0 +1,29 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "extension-local-storage",
+  "main": "scripts/local-storage.ts",
+  "compatibility_date": "2026-11-17",
+  // Local S3/public endpoints include buckets from every Worker in this dev session.
+  "r2_buckets": [
+    {
+      "binding": "PACKAGES",
+      "bucket_name": "extension-packages-local",
+      "local_dev": {
+        "experimental_s3_credentials": {
+          "accessKeyId": "local-access-key",
+          "secretAccessKey": "local-secret-key"
+        }
+      }
+    },
+    {
+      "binding": "ASSETS",
+      "bucket_name": "extension-assets-local",
+      "local_dev": {
+        "experimental_s3_credentials": {
+          "accessKeyId": "local-access-key",
+          "secretAccessKey": "local-secret-key"
+        }
+      }
+    }
+  ]
+}

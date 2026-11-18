@@ -23,8 +23,8 @@ are installed for the build host.
 
 ```sh
 npm ci
-npm run dev                    # API, using services/api/.dev.vars
-npm run extension-packager:dev  # Node packager, using services/extension-packager/.dev.vars
+npm run dev                    # API and local S3 storage
+npm run extension-packager:dev  # Node packager, sharing the local S3 storage
 ```
 
 API migrations and other service-specific commands use npm's workspace option:
@@ -35,7 +35,9 @@ npm run test:workers --workspace @fossbilling/api
 npm test --workspace @fossbilling/extension-packager
 ```
 
-See the service READMEs for local storage and authentication configuration. Runtime
+Both development commands use local package and image storage by default, with
+no B2 credentials required. The API's `.dev.vars` still supplies authentication
+settings. See the service READMEs for details. Runtime
 secrets and local state stay beside their service and are ignored by Git.
 
 ## Checks
