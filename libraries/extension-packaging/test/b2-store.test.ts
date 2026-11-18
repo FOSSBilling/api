@@ -225,6 +225,24 @@ describe("B2 object storage", () => {
     await expect(store().delete(objectId)).rejects.toThrow("cleanup failed");
   });
 
+  it("restricts local S3 endpoints to development", () => {
+    const settings: Record<string, string> = {
+      ...config,
+      ENDPOINT: "http://127.0.0.1:8787/cdn-cgi/local/r2/s3/"
+    };
+    for (const environment of [undefined, "production", "preview"]) {
+      expect(() =>
+        b2ObjectStore(
+          (name) =>
+            name === "ENVIRONMENT"
+              ? environment
+              : settings[name.replace("EXTENSION_PACKAGES_S3_", "")],
+          "packages"
+        )
+      ).toThrow("configuration");
+    }
+  });
+
   it("rejects unsafe configuration, keys and mismatched upload checksums before network access", async () => {
     const fetch = vi.fn();
     vi.stubGlobal("fetch", fetch);

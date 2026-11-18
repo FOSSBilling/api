@@ -996,7 +996,12 @@ describe("stored directory packages", () => {
     );
     return writer.close();
   }
-  it("stores pending icons at unlisted B2 URLs using the permanent draft UUID", async () => {
+  it("stores pending icons using the permanent draft UUID and publishes local asset URLs in development", async () => {
+    Object.assign(env, {
+      ENVIRONMENT: "development",
+      EXTENSION_ASSETS_PUBLIC_URL:
+        "http://127.0.0.1:8787/cdn-cgi/local/r2/public/extension-assets-local"
+    });
     const artifact = await built(manifest(), await iconSource());
     const draft = (await getExtension(db, "package-demo"))!;
     expect(draft.id).toMatch(UUID_V7);
@@ -1044,7 +1049,7 @@ describe("stored directory packages", () => {
     const published = (await getExtension(db, "package-demo"))!;
     expect(published.id).toBe(draft.id);
     expect(published.icon_url).toBe(
-      `https://extensions-assets.fossbilling.net/${objectKey}`
+      `${env.EXTENSION_ASSETS_PUBLIC_URL}/${objectKey}`
     );
     expect(b2.calls).toHaveLength(callsBeforeApproval);
     const edited = await built(
@@ -1073,6 +1078,7 @@ describe("stored directory packages", () => {
       )
     ).toHaveLength(1);
   });
+
   it("fails preparation on asset upload errors and retries without changing storage backends", async () => {
     const source = await iconSource();
     const original = b2.fetch.getMockImplementation()!;

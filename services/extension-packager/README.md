@@ -8,42 +8,29 @@ to the same standard Request/Response handler used locally in `src/handler.ts`.
 
 ## Local development
 
-Install dependencies with `npm ci` from the repository root. Put development settings
-in the ignored `services/extension-packager/.dev.vars` file. It needs:
-
-```dotenv
-EXTENSION_PACKAGER_SECRET=local-shared-secret
-EXTENSION_PACKAGES_S3_ENDPOINT=https://s3.example.invalid
-EXTENSION_PACKAGES_S3_REGION=development-region
-EXTENSION_PACKAGES_S3_BUCKET=fb-extensions-packages-development
-EXTENSION_PACKAGES_S3_ACCESS_KEY_ID=development-key
-EXTENSION_PACKAGES_S3_SECRET_ACCESS_KEY=development-secret
-```
-
-Use the development bucket and bucket-restricted credentials locally. The API and
-packager must use the same private bucket for each environment:
-
-| Environment | Private package bucket               |
-| ----------- | ------------------------------------ |
-| Production  | `fb-extensions-packages`             |
-| Preview     | `fb-extensions-packages-preview`     |
-| Development | `fb-extensions-packages-development` |
-
-Objects use `packages/<object UUID>` inside each bucket. All branch Previews share
-the preview bucket; local development uses the development bucket.
-Configure `services/api/.dev.vars` with
-`EXTENSION_PACKAGER_URL=http://127.0.0.1:8790/process` and the same shared secret.
-The public asset bucket credentials remain configured only on the API.
-
-From the repository root:
+Install dependencies with `npm ci` from the repository root. Start the API and
+packager in separate terminals:
 
 ```sh
+npm run dev
 npm run extension-packager:dev
-npm test --workspace @fossbilling/extension-packager
 ```
 
-The server listens on `127.0.0.1:8790`; `EXTENSION_PACKAGER_PORT` can override the port.
-Tests use simulated S3 responses and do not touch live B2 buckets.
+The API command also starts Wrangler's local R2 S3 service. Both commands load the
+same non-secret defaults from `libraries/extension-packaging/development.env`,
+after their service's optional `.dev.vars` settings. The API still needs its own
+`.dev.vars` for authentication. The packager needs no B2 credentials or local
+secret file.
+
+The packager listens on `127.0.0.1:8790`. It reads and writes ZIPs in
+`extension-packages-local` through the API's local S3 endpoint on port 8787.
+The API stores prepared icons in `extension-assets-local` and serves them locally.
+Objects persist in the API's `.wrangler/state` across restarts. These buckets exist
+only on your machine; no R2 or B2 bucket is created remotely.
+
+Local S3 uses Wrangler's experimental endpoint, supported by the pinned Wrangler
+version. Production continues to use private B2 storage. Ordinary tests mock S3;
+the API's local-storage test also exercises the real local R2 endpoint.
 
 ## Netlify deployment
 
@@ -67,10 +54,22 @@ Native Sharp and sanitizer dependencies remain external so Netlify includes thei
 binaries and WASM files. Verify those files and the deployed runtime before
 enabling processing.
 
-Set the six variables listed above through Netlify's dashboard, CLI or API for the
-function runtime. Use the corresponding environment's bucket and bucket-restricted
-B2 key, with a separate shared secret per environment. Keep production values in
-the production deploy context.
+Set these six variables through Netlify's dashboard, CLI or API for the function runtime:
+
+```dotenv
+EXTENSION_PACKAGER_SECRET=<shared-with-the-API>
+EXTENSION_PACKAGES_S3_ENDPOINT=https://s3.<region>.backblazeb2.com
+EXTENSION_PACKAGES_S3_REGION=<region>
+EXTENSION_PACKAGES_S3_BUCKET=fb-extensions-packages
+EXTENSION_PACKAGES_S3_ACCESS_KEY_ID=<bucket-restricted-keyID>
+EXTENSION_PACKAGES_S3_SECRET_ACCESS_KEY=<applicationKey>
+```
+
+Keep these production values in the production deploy context. Preview deployments
+use `fb-extensions-packages-preview`, its own restricted B2 key and a separate shared
+secret. The API and packager must use the same bucket and shared secret within each
+environment. All branch Previews share the preview bucket. Development uses local
+storage, with no development B2 bucket.
 Do not provide public asset bucket credentials, D1 credentials or API administration
 tokens. Netlify runtime variables do not come from `netlify.toml`; redeploy after changing them.
 

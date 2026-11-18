@@ -1,6 +1,7 @@
 import { PACKAGE_LIMITS } from "../limits";
 import { sha256 } from "../checksum";
 import { PackageError } from "../errors";
+import { isLocalDevelopmentUrl } from "../urls";
 import { boundedBytes, type PackageStore } from "../store";
 import { signS3Request, type S3RequestInit } from "./sigv4";
 
@@ -20,13 +21,15 @@ export function b2ObjectStore(
   };
   const origin = new URL(get("ENDPOINT"));
   const bucket = get("BUCKET");
+  // Wrangler's local R2 S3 endpoint is HTTP, path-prefixed and unversioned.
+  const local = isLocalDevelopmentUrl(origin, getEnv("ENVIRONMENT"));
   if (
-    origin.protocol !== "https:" ||
+    (origin.protocol !== "https:" && !local) ||
     origin.username ||
     origin.password ||
     origin.search ||
     origin.hash ||
-    origin.pathname !== "/" ||
+    (!local && origin.pathname !== "/") ||
     !/^[a-zA-Z0-9-]+$/.test(bucket)
   )
     throw unavailable("Invalid package storage configuration");
@@ -38,7 +41,8 @@ export function b2ObjectStore(
       throw unavailable("Invalid public asset URL configuration");
     }
     if (
-      base.protocol !== "https:" ||
+      (base.protocol !== "https:" &&
+        !isLocalDevelopmentUrl(base, getEnv("ENVIRONMENT"))) ||
       base.username ||
       base.password ||
       base.search ||
@@ -60,8 +64,7 @@ export function b2ObjectStore(
     // Keys come from D1 reservations, never from caller-supplied paths.
     if (!pattern.test(key)) throw unavailable("Invalid storage object ID");
     return new URL(
-      `/${bucket}/${kind === "packages" ? "packages/" : ""}${key}`,
-      origin
+      `${origin.href.replace(/\/$/, "")}/${bucket}/${kind === "packages" ? "packages/" : ""}${key}`
     );
   }
   async function request(url: URL, init: S3RequestInit) {
@@ -149,14 +152,16 @@ export function b2ObjectStore(
     },
     async delete(key) {
       const url = target(key);
-      const head = await request(url, { method: "HEAD" });
-      await head.body?.cancel();
-      if (head.status === 404) return;
-      const version = head.headers.get("x-amz-version-id");
-      if (!head.ok || !version)
-        throw unavailable("Unable to identify package version for cleanup");
-      // B2 DELETE without versionId only adds a marker and keeps billable bytes.
-      url.searchParams.set("versionId", version);
+      if (!local) {
+        const head = await request(url, { method: "HEAD" });
+        await head.body?.cancel();
+        if (head.status === 404) return;
+        const version = head.headers.get("x-amz-version-id");
+        if (!head.ok || !version)
+          throw unavailable("Unable to identify package version for cleanup");
+        // B2 DELETE without versionId only adds a marker and keeps billable bytes.
+        url.searchParams.set("versionId", version);
+      }
       const response = await request(url, { method: "DELETE" });
       await response.body?.cancel();
       if (!response.ok && response.status !== 404)

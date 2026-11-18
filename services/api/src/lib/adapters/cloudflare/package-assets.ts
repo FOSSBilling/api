@@ -3,6 +3,7 @@ import { logError } from "@fossbilling/logging";
 import { revalidateExtensions } from "../../../services/extensions/v2/revalidate";
 import type { Context } from "hono";
 import { getPlatform } from "../../middleware";
+import { isLocalDevelopmentUrl } from "@fossbilling/extension-packaging/urls";
 import { PackageError } from "@fossbilling/extension-packaging/errors";
 
 // Publishing changes the listing URL only; icons are already stored in B2.
@@ -24,7 +25,8 @@ async function updatePublishedIconUrl(
     );
   const publicBase = new URL(base);
   if (
-    publicBase.protocol !== "https:" ||
+    (publicBase.protocol !== "https:" &&
+      !isLocalDevelopmentUrl(publicBase, platform.getEnv("ENVIRONMENT"))) ||
     publicBase.username ||
     publicBase.password ||
     publicBase.search ||
