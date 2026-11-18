@@ -256,9 +256,12 @@ before testing sign-in.
 Cloudflare Previews cannot consume Queues or receive Cron Triggers. Preview package
 messages use `extension-packages-preview`, consumed by the fixed
 `api-package-preview-consumer` Worker with staging resources. The staging job
-updates this consumer on `main`; branch Previews share it. Packaging remains
-disabled by default until its runtime settings are configured, and notification
-email is disabled. See [packaging setup](src/services/extensions/v2/PACKAGING.md)
+updates this consumer on `main`; branch Previews share it. The API Preview's
+package routes default to `EXTENSION_PACKAGES_MODE=disabled` under `previews.vars`
+in `services/api/wrangler.jsonc`. The consumer is deployed with that mode enabled
+and needs complete runtime settings before its first deployment. This API setting
+does not configure the separate Netlify packager. Notification email is disabled.
+See [packaging setup](src/services/extensions/v2/PACKAGING.md)
 and [Cloudflare's Preview resource behaviour](https://developers.cloudflare.com/workers/previews/resources/).
 
 The [Cloudflare Events workflow](../../.github/workflows/cloudflare-events.yml) runs the
