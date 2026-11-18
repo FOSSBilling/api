@@ -29,5 +29,9 @@ export default defineConfig(
     files: ["**/*.config.ts", "**/worker-configuration.d.ts"],
     extends: [tseslint.configs.disableTypeChecked]
   },
+  {
+    files: [".github/scripts/**/*.mjs"],
+    languageOptions: { parserOptions: { projectService: false } }
+  },
   globalIgnores(["**/coverage/", "**/.wrangler/", "**/dist/", "**/.netlify/"])
 );

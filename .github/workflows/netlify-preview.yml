@@ -1,0 +1,66 @@
+name: Netlify Preview Comment
+
+on:
+  workflow_call:
+  workflow_run:
+    workflows: ["CI/CD"]
+    types: [completed]
+  pull_request_target:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: write
+
+jobs:
+  comment:
+    name: Sync Packager Preview Comment
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    concurrency:
+      group: netlify-preview-comment-${{ github.repository }}-${{ github.event.pull_request.head.ref || github.event.workflow_run.head_branch || github.ref_name }}
+      cancel-in-progress: false
+    steps:
+      # PR-target and workflow-run events use default-branch reporting code.
+      # Direct reusable calls trust the maintainer's pushed commit, as deployment does.
+      - name: Checkout Reporting Code
+        uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98
+        with:
+          ref: ${{ github.event_name == 'push' && github.sha || github.event.repository.default_branch }}
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Find Preview Attempt
+        id: preview
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        with:
+          script: |
+            const { findPreview } = await import(`${process.env.GITHUB_WORKSPACE}/.github/scripts/netlify-preview.mjs`);
+            const preview = await findPreview({ github, context, runAttempt: Number(process.env.RUN_ATTEMPT) });
+            if (!preview) return;
+            core.setOutput('metadata', JSON.stringify(preview));
+            core.setOutput('artifact-id', preview.artifactId);
+            core.setOutput('run-id', preview.runId);
+      - name: Download Preview Metadata
+        if: steps.preview.outputs.artifact-id
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          artifact-ids: ${{ steps.preview.outputs.artifact-id }}
+          path: ${{ runner.temp }}/packager-preview
+          run-id: ${{ steps.preview.outputs.run-id }}
+          github-token: ${{ github.token }}
+      - name: Update Preview Comment
+        if: steps.preview.outputs.artifact-id
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          PREVIEW_METADATA: ${{ steps.preview.outputs.metadata }}
+        with:
+          script: |
+            const fs = require('node:fs');
+            const path = require('node:path');
+            const { publishPreview } = await import(`${process.env.GITHUB_WORKSPACE}/.github/scripts/netlify-preview.mjs`);
+            const metadata = JSON.parse(fs.readFileSync(path.join(process.env.RUNNER_TEMP, 'packager-preview/preview.json'), 'utf8'));
+            await publishPreview({ github, context, preview: JSON.parse(process.env.PREVIEW_METADATA), metadata });
