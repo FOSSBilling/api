@@ -70,7 +70,9 @@ jobs:
       - name: Build Deployment Artifact
         run: npm run build:api
       - name: Validate Deployment Artifact
-        run: npm exec -- wrangler deploy --dry-run --config services/api/dist/wrangler.json
+        run: |
+          npm exec -- wrangler deploy --dry-run --config services/api/dist/wrangler.json
+          npm exec -- wrangler deploy --dry-run --config services/api/dist/package-preview-consumer/wrangler.json
       - name: Upload Deployment Artifact
         if: github.event_name == 'push'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -342,6 +344,7 @@ jobs:
           for binding in DB_CENTRAL_ALERTS DB_EXTENSIONS; do
             npm exec -- wrangler d1 migrations apply "$binding" --remote --config services/api/dist/wrangler.preview-migrations.json
           done
+          npm exec -- wrangler deploy --config services/api/dist/package-preview-consumer/wrangler.json
           WRANGLER_OUTPUT_FILE_PATH="$RUNNER_TEMP/staging-deployment.jsonl" npm exec -- wrangler preview --config services/api/dist/wrangler.json --name staging --message "main $GITHUB_SHA"
           url=$(jq -er 'select(.type == "preview") | .preview_urls[0]' "$RUNNER_TEMP/staging-deployment.jsonl")
           printf 'url=%s\n' "$url" >> "$GITHUB_OUTPUT"

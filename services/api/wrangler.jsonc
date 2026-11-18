@@ -138,6 +138,14 @@
       { "binding": "DOWNLOAD_BUCKET", "bucket_name": "api-preview-downloads" }
     ],
     "services": [],
+    "queues": {
+      "producers": [
+        {
+          "binding": "EXTENSION_PACKAGE_QUEUE",
+          "queue": "extension-packages-preview"
+        }
+      ]
+    },
     "vars": {
       "ENVIRONMENT": "preview",
       "EXTENSIONS_FRONTEND_URL": "https://staging-extensions.fossbilling.workers.dev",
