@@ -27,6 +27,12 @@ separate private package buckets for each environment:
 The API and packager must use the same bucket within each environment. All branch
 Previews share the preview bucket; local development uses the development bucket.
 
+Preview packaging stays disabled (`EXTENSION_PACKAGES_MODE=disabled`) until its
+package and asset B2 settings and bucket-restricted keys are configured, together
+with the Preview packager URL and shared secret. Set the API's Preview runtime
+values in **Previews Base** and on existing Previews individually. The packager
+setup and B2 variable names are documented below.
+
 From the repository root, `npm test` covers the package lifecycle through the real API routes and
 D1 repository, with mocked S3 responses and prepared image fixtures. Node tests
 also exercise package preparation and B2 storage without a Cloudflare runtime.
