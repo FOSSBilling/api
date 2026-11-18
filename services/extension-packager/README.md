@@ -56,7 +56,14 @@ recompile source or depend on Netlify's short-lived build cache:
 | Other branch pushes | `branch-<branch-name-hash>` alias | Branch deploys context |
 
 PR runs validate and build without deploying or receiving deployment credentials.
-Deployment links appear in the GitHub Actions job summary, without extra PR comments.
+Deployment links appear in the job summary and one updated packager comment per
+same-repository PR, alongside the existing API Preview comment. It shows only the
+latest attempt's build, checks and deployment status. Failed attempts do not link
+to an older deployment as if it were current. Unchanged comments are not rewritten.
+As with Cloudflare Previews, each attempt records a small metadata artifact. The
+reporting workflow also runs when a PR opens or CI finishes, so it covers PRs
+opened after deployment and failed builds. Privileged events use reporting code
+from the default branch and never execute PR code or receive Netlify credentials.
 Production uploads use `--prod`; aliases use the **Branch deploys** runtime
 variables. The CLI's `--context` flag only applies when building, so it is not
 passed with `--no-build`. `staging` is reserved for the fixed deployment. Avoid
@@ -82,7 +89,7 @@ The jobs use the existing `production` and `preview` GitHub environments and the
 same trusted-maintainer model as API deployments. Deployment credentials are only
 available to branch-push deployment jobs, not PR validation jobs.
 
-Once the workflow deploys successfully, unlink the project's Git repository under
+After merging this workflow and verifying its deployment, unlink the project's Git repository under
 **Project configuration → Developer settings → Continuous deployment → Repository**.
 This removes automatic Git builds and their PR notifications while retaining
 CLI deployments. Until cutover, stop Netlify's automatic builds to avoid duplicate
