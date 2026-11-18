@@ -57,10 +57,10 @@ recompile source or depend on Netlify's short-lived build cache:
 
 PR runs validate and build without deploying or receiving deployment credentials.
 Deployment links appear in the GitHub Actions job summary, without extra PR comments.
-CLI aliases use the **Branch deploys** runtime variables. The workflow also passes
-that context explicitly to the CLI, rather than relying on its `dev` default.
-`staging` is reserved for the fixed deployment. Avoid Git branch deployments with
-matching aliases and branch-specific variable overrides for these aliases.
+Production uploads use `--prod`; aliases use the **Branch deploys** runtime
+variables. The CLI's `--context` flag only applies when building, so it is not
+passed with `--no-build`. `staging` is reserved for the fixed deployment. Avoid
+Git branch deployments with matching aliases and branch-specific variable overrides.
 
 ### Project and Actions setup
 

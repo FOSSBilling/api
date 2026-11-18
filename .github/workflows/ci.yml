@@ -168,13 +168,13 @@ jobs:
           : "${NETLIFY_AUTH_TOKEN:?Set the NETLIFY_AUTH_TOKEN Actions secret}"
           : "${NETLIFY_SITE_ID:?Set the NETLIFY_SITE_ID Actions variable}"
           if [ "$DEPLOY_TARGET" = production ]; then
-            args=(--prod --context production)
+            args=(--prod)
           else
             alias=staging
             if [ "$DEPLOY_TARGET" = preview ]; then
               alias="branch-$(printf '%s' "$GITHUB_REF_NAME" | sha256sum | cut -c1-16)"
             fi
-            args=(--alias "$alias" --context branch-deploy)
+            args=(--alias "$alias")
           fi
           npm exec -- netlify deploy --filter @fossbilling/extension-packager --no-build --skip-functions-cache "${args[@]}" --message "$GITHUB_REF_NAME $GITHUB_SHA" --json > "$RUNNER_TEMP/netlify-deployment.json"
           url=$(jq -er '.deploy_url' "$RUNNER_TEMP/netlify-deployment.json")
