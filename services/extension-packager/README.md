@@ -16,11 +16,12 @@ npm run dev
 npm run extension-packager:dev
 ```
 
-The API command also starts Wrangler's local R2 S3 service. Both commands load the
-same non-secret defaults from `libraries/extension-packaging/development.env`,
-after their service's optional `.dev.vars` settings. The API still needs its own
-`.dev.vars` for authentication. The packager needs no B2 credentials or local
-secret file.
+The API command also starts Wrangler's local R2 S3 service. Both commands apply
+`libraries/extension-packaging/development.env` after service-specific `.dev.vars`
+files. This deliberately overrides old B2 and packager settings so normal
+development stays local. Other service settings still come from `.dev.vars`.
+The API needs its own `.dev.vars` for authentication; the packager needs no B2
+credentials or local secret file.
 
 The packager listens on `127.0.0.1:8790`. It reads and writes ZIPs in
 `extension-packages-local` through the API's local S3 endpoint on port 8787.

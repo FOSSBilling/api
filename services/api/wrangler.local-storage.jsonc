@@ -3,6 +3,7 @@
   "name": "extension-local-storage",
   "main": "scripts/local-storage.ts",
   "compatibility_date": "2026-11-17",
+  // Local S3/public endpoints include buckets from every Worker in this dev session.
   "r2_buckets": [
     {
       "binding": "PACKAGES",

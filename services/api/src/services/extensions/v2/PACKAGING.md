@@ -13,9 +13,11 @@ Package routes are disabled by default. Local development and production enablem
 Run `npm run dev` and `npm run extension-packager:dev` in separate terminals at the
 repository root. Apply local migrations with `npm run db:migrate:all:local`.
 The API's normal `.dev.vars` is still used for authentication; package processing
-needs no B2 credentials. Both development commands load the shared local defaults
-from `libraries/extension-packaging/development.env` after service-specific env files.
-These select development mode, the local processor and loopback S3/public endpoints.
+needs no B2 credentials. Both development commands apply
+`libraries/extension-packaging/development.env` after service-specific env files,
+deliberately overriding old B2 and packager settings. Other service settings remain
+available from `.dev.vars`. The shared settings select development mode, the local
+processor and loopback S3/public endpoints.
 
 The API dev command includes a development-only Wrangler configuration that serves
 `extension-packages-local` and `extension-assets-local` through the
