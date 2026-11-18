@@ -15,14 +15,23 @@ in the ignored `services/extension-packager/.dev.vars` file. It needs:
 EXTENSION_PACKAGER_SECRET=local-shared-secret
 EXTENSION_PACKAGES_S3_ENDPOINT=https://s3.example.invalid
 EXTENSION_PACKAGES_S3_REGION=development-region
-EXTENSION_PACKAGES_S3_BUCKET=development-bucket
-EXTENSION_PACKAGES_S3_PREFIX=local
+EXTENSION_PACKAGES_S3_BUCKET=fb-extensions-packages-development
 EXTENSION_PACKAGES_S3_ACCESS_KEY_ID=development-key
 EXTENSION_PACKAGES_S3_SECRET_ACCESS_KEY=development-secret
 ```
 
-Use the actual development bucket settings locally, matching the API's private bucket
-and object prefix. Configure `services/api/.dev.vars` with
+Use the development bucket and bucket-restricted credentials locally. The API and
+packager must use the same private bucket for each environment:
+
+| Environment | Private package bucket               |
+| ----------- | ------------------------------------ |
+| Production  | `fb-extensions-packages`             |
+| Preview     | `fb-extensions-packages-preview`     |
+| Development | `fb-extensions-packages-development` |
+
+Objects use `packages/<object UUID>` inside each bucket. All branch Previews share
+the preview bucket; local development uses the development bucket.
+Configure `services/api/.dev.vars` with
 `EXTENSION_PACKAGER_URL=http://127.0.0.1:8790/process` and the same shared secret.
 The public asset bucket credentials remain configured only on the API.
 
@@ -58,9 +67,10 @@ Native Sharp and sanitizer dependencies remain external so Netlify includes thei
 binaries and WASM files. Verify those files and the deployed runtime before
 enabling processing.
 
-Set the seven variables listed above through Netlify's dashboard, CLI or API for the
-function runtime. Use production credentials and a separate randomly generated shared
-secret for production. Keep production values in the production deploy context.
+Set the six variables listed above through Netlify's dashboard, CLI or API for the
+function runtime. Use the corresponding environment's bucket and bucket-restricted
+B2 key, with a separate shared secret per environment. Keep production values in
+the production deploy context.
 Do not provide public asset bucket credentials, D1 credentials or API administration
 tokens. Netlify runtime variables do not come from `netlify.toml`; redeploy after changing them.
 

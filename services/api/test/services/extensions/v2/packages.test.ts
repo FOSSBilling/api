@@ -62,7 +62,7 @@ const manifest = () =>
     "package-demo",
     ExtensionContentSchema.parse(sampleContent())
   );
-const packageKey = (id: string) => `/test-packages/local/packages/${id}`;
+const packageKey = (id: string) => `/test-packages/packages/${id}`;
 let b2: ReturnType<typeof mockB2>;
 const preparedSvg =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M0 0h24v24z"/></svg>';
@@ -86,7 +86,6 @@ function mockB2() {
     EXTENSION_PACKAGES_S3_ENDPOINT: "https://s3.example.test",
     EXTENSION_PACKAGES_S3_REGION: "test-region",
     EXTENSION_PACKAGES_S3_BUCKET: "test-packages",
-    EXTENSION_PACKAGES_S3_PREFIX: "local",
     EXTENSION_PACKAGES_S3_ACCESS_KEY_ID: "test-key",
     EXTENSION_PACKAGES_S3_SECRET_ACCESS_KEY: "test-secret",
     EXTENSION_ASSETS_S3_ENDPOINT: "https://s3.example.test",
@@ -208,8 +207,7 @@ afterEach(() => {
     "REGION",
     "BUCKET",
     "ACCESS_KEY_ID",
-    "SECRET_ACCESS_KEY",
-    "PREFIX"
+    "SECRET_ACCESS_KEY"
   ])
     Reflect.deleteProperty(env, `EXTENSION_PACKAGES_S3_${suffix}`);
   Reflect.deleteProperty(env, "EXTENSION_PACKAGER_URL");
@@ -775,9 +773,7 @@ describe("stored directory packages", () => {
     expect(uploads).toHaveLength(5); // source, two manifests, staged icon and shared public icon
     expect(
       uploads.filter((request) =>
-        new URL(request.url).pathname.startsWith(
-          "/test-packages/local/packages/"
-        )
+        new URL(request.url).pathname.startsWith("/test-packages/packages/")
       )
     ).toHaveLength(4);
     expect(
@@ -1554,8 +1550,9 @@ describe("stored directory packages", () => {
     expect((await upload()).status).toBe(503); // localhost URL / incomplete storage
     env.EXTENSION_PACKAGES_BASE_URL =
       "https://api.fossbilling.net/extensions/v2";
-    expect((await upload()).status).toBe(503); // local object prefix cannot enable production
-    Object.assign(env, { EXTENSION_PACKAGES_S3_PREFIX: "production" });
+    Reflect.deleteProperty(env, "EXTENSION_PACKAGES_S3_BUCKET");
+    expect((await upload()).status).toBe(503);
+    Object.assign(env, { EXTENSION_PACKAGES_S3_BUCKET: "production-packages" });
     Reflect.deleteProperty(env, "EXTENSION_ASSETS_S3_SECRET_ACCESS_KEY");
     expect((await upload()).status).toBe(503);
     Object.assign(env, {
@@ -1575,12 +1572,12 @@ describe("stored directory packages", () => {
     );
     expect(requests.length).toBeGreaterThan(0);
     expect(
-      requests.every((request) => request.url.includes("/production/packages/"))
+      requests.every((request) =>
+        new URL(request.url).pathname.startsWith(
+          "/production-packages/packages/"
+        )
+      )
     ).toBe(true);
-    Object.assign(env, { EXTENSION_PACKAGES_S3_PREFIX: "local" });
-    expect((await upload()).status).toBe(503);
-    Reflect.deleteProperty(env, "EXTENSION_PACKAGES_S3_PREFIX");
-    Object.assign(env, { ENVIRONMENT: "local" });
   });
 
   it("rejects missing or malformed processor configuration before accepting an upload", async () => {
