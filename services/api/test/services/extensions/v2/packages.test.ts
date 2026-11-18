@@ -83,13 +83,11 @@ function mockB2() {
   Object.assign(env, {
     EXTENSION_PACKAGER_URL: "https://processor.example.test/process",
     EXTENSION_PACKAGER_SECRET: "test-processor-secret",
-    EXTENSION_PACKAGES_S3_ENDPOINT: "https://s3.example.test",
-    EXTENSION_PACKAGES_S3_REGION: "test-region",
+    EXTENSION_PACKAGES_S3_ENDPOINT: "https://s3.test-region.backblazeb2.com",
     EXTENSION_PACKAGES_S3_BUCKET: "test-packages",
     EXTENSION_PACKAGES_S3_ACCESS_KEY_ID: "test-key",
     EXTENSION_PACKAGES_S3_SECRET_ACCESS_KEY: "test-secret",
-    EXTENSION_ASSETS_S3_ENDPOINT: "https://s3.example.test",
-    EXTENSION_ASSETS_S3_REGION: "test-region",
+    EXTENSION_ASSETS_S3_ENDPOINT: "https://s3.test-region.backblazeb2.com",
     EXTENSION_ASSETS_S3_BUCKET: "test-assets",
     EXTENSION_ASSETS_S3_ACCESS_KEY_ID: "test-key",
     EXTENSION_ASSETS_S3_SECRET_ACCESS_KEY: "test-secret",
@@ -195,7 +193,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
   for (const key of [
     "S3_ENDPOINT",
-    "S3_REGION",
     "S3_BUCKET",
     "S3_ACCESS_KEY_ID",
     "S3_SECRET_ACCESS_KEY",
@@ -204,7 +201,6 @@ afterEach(() => {
     Reflect.deleteProperty(env, `EXTENSION_ASSETS_${key}`);
   for (const suffix of [
     "ENDPOINT",
-    "REGION",
     "BUCKET",
     "ACCESS_KEY_ID",
     "SECRET_ACCESS_KEY"
@@ -224,7 +220,7 @@ afterEach(() => {
       expect(request.cache).toBe("no-store");
       continue;
     }
-    expect(url.hostname).toBe("s3.example.test");
+    expect(url.hostname).toBe("s3.test-region.backblazeb2.com");
     expect(request.headers.get("Authorization")).toMatch(/^AWS4-HMAC-SHA256 /);
     expect(["PUT", "GET", "HEAD", "DELETE"]).toContain(request.method);
     if (request.method === "DELETE")
@@ -361,9 +357,10 @@ describe("publisher package builds", () => {
     vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
       const request =
         input instanceof Request ? input : new Request(input, init);
-      return ["s3.example.test", "processor.example.test"].includes(
-        new URL(request.url).hostname
-      )
+      return [
+        "s3.test-region.backblazeb2.com",
+        "processor.example.test"
+      ].includes(new URL(request.url).hostname)
         ? b2.fetch(request)
         : jwksFetch(input, init);
     });
@@ -1147,7 +1144,7 @@ describe("stored directory packages", () => {
     ).toEqual(["image/avif", "image/png"]);
     expect((await getExtension(db, "package-demo"))?.icon_url).toBe(
       uploads[1].url.replace(
-        "https://s3.example.test/test-assets",
+        "https://s3.test-region.backblazeb2.com/test-assets",
         "https://extensions-assets.fossbilling.net"
       )
     );
@@ -1630,7 +1627,7 @@ describe("stored directory packages", () => {
     Reflect.deleteProperty(env, "EXTENSION_PACKAGES_S3_ENDPOINT");
     expect((await upload()).status).toBe(503);
     Object.assign(env, {
-      EXTENSION_PACKAGES_S3_ENDPOINT: "https://s3.example.test"
+      EXTENSION_PACKAGES_S3_ENDPOINT: "https://s3.test-region.backblazeb2.com"
     });
     await db
       .prepare("UPDATE users SET deleted_at=CURRENT_TIMESTAMP WHERE id='owner'")

@@ -5,8 +5,7 @@ import { PACKAGE_LIMITS } from "../src/limits";
 
 const objectId = "134cf413-b5ab-4f57-b2ad-520020af880d";
 const config: Record<string, string> = {
-  ENDPOINT: "https://s3.example.test",
-  REGION: "eu-central-003",
+  ENDPOINT: "https://s3.eu-central-003.backblazeb2.com",
   BUCKET: "private-packages",
   ACCESS_KEY_ID: "test-key",
   SECRET_ACCESS_KEY: "test-secret"
@@ -67,7 +66,10 @@ describe("B2 object storage", () => {
         headers: { "x-amz-meta-sha256": checksum }
       });
     });
-    const storage = store({ BUCKET: "preview-packages" });
+    const storage = store({
+      ENDPOINT: "https://s3.us-west-004.backblazeb2.com",
+      BUCKET: "preview-packages"
+    });
     await storage.put(objectId, bytes, checksum);
     expect(
       new Uint8Array(
@@ -77,10 +79,10 @@ describe("B2 object storage", () => {
     expect(requests.map((r) => r.method)).toEqual(["PUT", "GET"]);
     for (const request of requests) {
       expect(request.url).toBe(
-        `https://s3.example.test/preview-packages/packages/${objectId}`
+        `https://s3.us-west-004.backblazeb2.com/preview-packages/packages/${objectId}`
       );
       expect(request.headers.get("Authorization")).toMatch(
-        /^AWS4-HMAC-SHA256 /
+        /^AWS4-HMAC-SHA256 Credential=test-key\/\d{8}\/us-west-004\/s3\/aws4_request,/
       );
       expect(request.redirect).toBe("manual");
       expect(request.cache).toBe("no-store");
@@ -127,8 +129,8 @@ describe("B2 object storage", () => {
       ]);
       for (const request of requests) {
         expect(new URL(request.url).pathname).toBe(`/public-assets/${key}`);
-        expect(request.headers.get("Authorization")).toContain(
-          "AWS4-HMAC-SHA256"
+        expect(request.headers.get("Authorization")).toMatch(
+          /^AWS4-HMAC-SHA256 Credential=test-key\/\d{8}\/eu-central-003\/s3\/aws4_request,/
         );
         expect(request.cache).toBe("no-store");
       }
@@ -247,10 +249,13 @@ describe("B2 object storage", () => {
     const fetch = vi.fn();
     vi.stubGlobal("fetch", fetch);
     for (const ENDPOINT of [
-      "http://s3.example.test",
-      "https://key:secret@s3.example.test",
-      "https://s3.example.test/path",
-      "https://s3.example.test?key=value"
+      "http://s3.eu-central-003.backblazeb2.com",
+      "https://key:secret@s3.eu-central-003.backblazeb2.com",
+      "https://s3.eu-central-003.backblazeb2.com/path",
+      "https://s3.eu-central-003.backblazeb2.com?key=value",
+      "https://s3.example.test",
+      "https://s3..backblazeb2.com",
+      "https://s3.eu-central-003.backblazeb2.com.example.test"
     ])
       expect(() => store({ ENDPOINT })).toThrow("configuration");
     expect(() => store({ SECRET_ACCESS_KEY: undefined })).toThrow("incomplete");
