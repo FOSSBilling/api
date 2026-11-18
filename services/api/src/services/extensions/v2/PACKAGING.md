@@ -106,6 +106,26 @@ The package workflow contains no Cloudflare binding types or SDK calls. A differ
 runtime supplies these interfaces and its own queue consumer; the rest of the API
 still has existing platform integrations outside this package workflow.
 
+Named Cloudflare Previews can produce Queue messages but cannot consume them or
+receive Cron Triggers. The API's Preview producer uses `extension-packages-preview`.
+`wrangler.package-preview-consumer.jsonc` deploys `api-package-preview-consumer`
+with the existing queue/recovery handlers, staging D1 and that Queue. It exposes
+no HTTP endpoint. Its committed configuration sets `EXTENSION_PACKAGES_MODE=enabled`,
+so Queue processing and hourly recovery are active from its first deployment,
+independently of the API Preview's package-mode flag. Complete the consumer's
+runtime package/asset storage settings and packager credentials before the first
+`main` deployment, using the same Preview values as the staging API.
+Its hourly trigger recovers interrupted dispatches in staging only.
+All API Previews using this Queue share that fixed consumer; their branch-specific
+queue handlers do not run.
+
+The API build includes the consumer bundle and deployment config in the existing
+artifact. On `main`, the staging CI job applies migrations, deploys that consumer,
+then deploys the named staging API Preview. Its existing Cloudflare token needs
+**Individual Workers → Editor** access to `api-package-preview-consumer` as well as
+its existing API and Queue permissions. No additional deployment secret is needed.
+Production deployment does not deploy the preview consumer or enable packaging.
+
 Wrangler declares the production producer/consumer pair; local development emulates it. The
 consumer handles one message at a time, with concurrency limited to one. Duplicate
 delivery uses a 20-minute processing lease; a busy duplicate is delayed until that

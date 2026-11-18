@@ -183,7 +183,8 @@ production; other branches target Previews using the resource bindings in
 run validation and build checks without forwarding deployment credentials or
 applying remote migrations.
 
-The artifact contains the compiled Worker, `wrangler.json`, and SQL migrations.
+The artifact contains the compiled API and preview consumer, their deployment
+configurations, and SQL migrations.
 Deployment uses the same Node version as the build and does not rebuild the Worker.
 Production migrations use its production bindings. Preview migrations use its generated
 `wrangler.preview-migrations.json`, derived from the same bindings used by the Preview.
@@ -202,14 +203,15 @@ Migration jobs serialize access to the shared staging databases.
    repository secret from branch workflows. Fork PR runs do not receive the
    deployment token.
 
-   The token needs `Individual Workers Editor` for the API Worker,
+   The token needs `Individual Workers Editor` for `api` and
+   `api-package-preview-consumer`,
    `Workers Routes Write` for its zone, `D1 Read` and `D1 Write` for migrations,
-   and `Queues Read` and `Queues Write` to configure the existing consumer.
+   and `Queues Read` and `Queues Write` to configure Queue consumers.
    Also grant `Workers Content Read-Only` at the Workers product scope in the
    FOSSBilling account: Wrangler's configuration comparison after dashboard edits
    reads account-level Custom Domain metadata, which does not support per-Worker
    roles. This grants read access to Worker source and configuration across the
-   account; Worker write access remains restricted to the API Worker.
+   account; Worker write access remains restricted to those two Workers.
    See [Cloudflare's Workers permissions](https://developers.cloudflare.com/workers/authorization/workers/).
    The Worker edit permission covers both production and Previews. Separate staging data
    and runtime secrets isolate test state, not the deployment credential's authority.
@@ -245,16 +247,22 @@ because service bindings cannot target named Previews; production retains its
 private frontend service binding. The fixed API `staging` Preview at
 `https://staging-api.fossbilling.workers.dev` is refreshed on pushes to `main`, after
 validation and the artifact build. Its job applies staging migrations, deploys the
-same artifact with Preview bindings, and checks the public extensions endpoint
-using the Preview URL returned by Wrangler.
+packaging consumer and named API Preview from the same artifact, then checks the
+public extensions endpoint using the Preview URL returned by Wrangler.
 Here `staging` is a named Preview, not a Git branch; its source is `main`.
 Register the directory's staging OAuth callback with the dedicated preview client
 before testing sign-in.
 
-Cloudflare Previews cannot consume Queues or receive Cron Triggers. Their configuration
-therefore disables packaging and notification email, and omits Queue bindings. Full
-packaging/consumer testing needs a separately deployed staging Worker and Queue, or the
-controlled production test. See [Cloudflare's Preview resource behaviour](https://developers.cloudflare.com/workers/previews/resources/).
+Cloudflare Previews cannot consume Queues or receive Cron Triggers. Preview package
+messages use `extension-packages-preview`, consumed by the fixed
+`api-package-preview-consumer` Worker with staging resources. The staging job
+updates this consumer on `main`; branch Previews share it. The API Preview's
+package routes default to `EXTENSION_PACKAGES_MODE=disabled` under `previews.vars`
+in `services/api/wrangler.jsonc`. The consumer is deployed with that mode enabled
+and needs complete runtime settings before its first deployment. This API setting
+does not configure the separate Netlify packager. Notification email is disabled.
+See [packaging setup](src/services/extensions/v2/PACKAGING.md)
+and [Cloudflare's Preview resource behaviour](https://developers.cloudflare.com/workers/previews/resources/).
 
 The [Cloudflare Events workflow](../../.github/workflows/cloudflare-events.yml) runs the
 trusted shared comment handler on workflow completion and PR events. It reads deployment
@@ -265,7 +273,8 @@ workflow references in both files.
 
 From the repository root, `npm run build:api` validates the bundle and prepares the
 artifact without remote writes. The artifact always includes the Preview bindings
-from `wrangler.jsonc` and their generated migration configuration. Apply staging
+from `wrangler.jsonc`, their generated migration configuration, and the preview
+consumer bundle/configuration. Apply staging
 migrations using `services/api/dist/wrangler.preview-migrations.json` before running
 `npm run cf-preview`; CI performs those steps automatically.
 
