@@ -74,19 +74,10 @@ export async function findPreview({ github, context, runAttempt }) {
     github.rest.actions.listWorkflowRunArtifacts,
     { ...context.repo, run_id: run.id, per_page: 100 }
   );
-  const artifact = artifacts
-    .filter((item) => !item.expired && item.name.startsWith(artifactPrefix))
-    .map((item) => ({
-      id: item.id,
-      attempt: Number(item.name.slice(artifactPrefix.length))
-    }))
-    .filter(
-      (item) =>
-        Number.isInteger(item.attempt) &&
-        item.attempt > 0 &&
-        item.attempt <= run.run_attempt
-    )
-    .sort((a, b) => b.attempt - a.attempt)[0];
+  const artifact = artifacts.find(
+    (item) =>
+      !item.expired && item.name === `${artifactPrefix}${run.run_attempt}`
+  );
   if (!artifact) return;
   return {
     runId: run.id,
@@ -94,7 +85,7 @@ export async function findPreview({ github, context, runAttempt }) {
     sha: run.head_sha,
     branch,
     artifactId: artifact.id,
-    attempt: artifact.attempt,
+    attempt: run.run_attempt,
     prs: prs.map((pr) => pr.number)
   };
 }
@@ -125,7 +116,7 @@ export async function publishPreview({ github, context, preview, metadata }) {
     marker,
     "### Extension Packager Preview",
     "",
-    `Commit [\`${preview.sha.slice(0, 7)}\`](${repoUrl}/commit/${preview.sha}) · [CI logs](${logs})`,
+    `Commit [\`${preview.sha.slice(0, 7)}\`](${repoUrl}/commit/${preview.sha}) · Attempt ${preview.attempt} · [CI logs](${logs})`,
     "",
     "| Build | Checks | Deployment |",
     "| --- | --- | --- |",

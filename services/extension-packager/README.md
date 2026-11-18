@@ -57,13 +57,17 @@ recompile source or depend on Netlify's short-lived build cache:
 
 PR runs validate and build without deploying or receiving deployment credentials.
 Deployment links appear in the job summary and one updated packager comment per
-same-repository PR, alongside the existing API Preview comment. It shows only the
-latest attempt's build, checks and deployment status. Failed attempts do not link
-to an older deployment as if it were current. Unchanged comments are not rewritten.
+same-repository PR, alongside the existing API Preview comment. It identifies the
+reported commit and CI attempt. Only metadata from the current attempt is used;
+canceled reruns without metadata do not fall back to an earlier deployment.
+Failed attempts do not link to an older deployment as if it were current.
+Unchanged comments are not rewritten.
 As with Cloudflare Previews, each attempt records a small metadata artifact. The
 reporting workflow also runs when a PR opens or CI finishes, so it covers PRs
-opened after deployment and failed builds. Privileged events use reporting code
-from the default branch and never execute PR code or receive Netlify credentials.
+opened after deployment and failed builds. `pull_request_target` and `workflow_run`
+use default-branch reporting code. Direct `workflow_call` jobs on same-repository
+pushes use the pushed code with PR-write permission under the trusted-maintainer
+model. No reporting job receives Netlify credentials.
 Production uploads use `--prod`; aliases use the **Branch deploys** runtime
 variables. The CLI's `--context` flag only applies when building, so it is not
 passed with `--no-build`. `staging` is reserved for the fixed deployment. Avoid
@@ -138,9 +142,10 @@ production and allows loopback HTTP for local development.
 The function must be reachable by the API without a Netlify browser login; its
 bearer secret authenticates processing requests.
 
-Deploying the packager does not enable package processing. Keep production and
-Preview `EXTENSION_PACKAGES_MODE=disabled` until storage, runtime and end-to-end
-verification are complete.
+Deploying the packager does not enable API package processing. Keep
+`EXTENSION_PACKAGES_MODE=disabled` in the API's `services/api/wrangler.jsonc` for
+production and Previews until storage, runtime and end-to-end verification are
+complete. This setting is not a Netlify runtime variable.
 
 ## Processing and recovery
 

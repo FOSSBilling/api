@@ -23,8 +23,8 @@ jobs:
       group: netlify-preview-comment-${{ github.repository }}-${{ github.event.pull_request.head.ref || github.event.workflow_run.head_branch || github.ref_name }}
       cancel-in-progress: false
     steps:
-      # Privileged events run only default-branch reporting code, never PR code.
-      # Direct calls come from trusted same-repository branch pushes.
+      # PR-target and workflow-run events use default-branch reporting code.
+      # Direct reusable calls trust the maintainer's pushed commit, as deployment does.
       - name: Checkout Reporting Code
         uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98
         with:

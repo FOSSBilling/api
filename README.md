@@ -79,8 +79,8 @@ See the [API deployment setup](services/api/README.md#deployment) for GitHub env
 staging resource IDs, Preview secrets, migration behaviour and the Workers Builds cutover.
 All API production and Preview deployments require validation, the API build and
 migrations to succeed. Previews keep package processing disabled because Cloudflare Previews
-cannot consume Queues. Production packaging also remains disabled pending Netlify
-runtime verification and the controlled production package test.
+cannot consume Queues. Production API package processing also remains disabled
+pending Netlify runtime verification and the controlled production package test.
 
 `npm run cf-deploy` remains the explicit manual production command; it applies
 remote migrations and deploys the API. It does not deploy the packager.

@@ -154,28 +154,47 @@ describe("packager preview reporting", () => {
     expect(f.rest.actions.listWorkflowRunArtifacts).not.toHaveBeenCalled();
   });
 
-  it("waits for metadata and can reuse an earlier attempt on a comment-only rerun", async () => {
+  it("waits for current-attempt metadata instead of reusing a canceled rerun's earlier deployment", async () => {
     const f = fixture();
     const artifact = f.artifacts.pop();
     expect(await f.find()).toBeUndefined();
     f.artifacts.push(artifact);
     f.run.run_attempt = 2;
-    const preview = await f.find();
-    expect(preview.attempt).toBe(1);
-    await f.publish(preview);
-    expect(f.comments[0].body).toContain("/attempts/1");
+    f.context.eventName = "workflow_run";
+    f.context.payload.workflow_run = {
+      ...f.run,
+      event: "push",
+      status: "completed",
+      conclusion: "cancelled",
+      head_branch: f.pr.head.ref,
+      head_repository: { full_name: "FOSSBilling/api" }
+    };
+    expect(await f.find()).toBeUndefined();
+    expect(f.rest.issues.createComment).not.toHaveBeenCalled();
   });
 
-  it("does not overwrite the comment after the PR head or latest run changes", async () => {
+  it("does not overwrite an existing comment after the PR head or latest run changes", async () => {
     const f = fixture();
+    await f.publish(await f.find());
+    const original = f.comments[0].body;
+    f.run.run_attempt = 2;
+    f.artifacts.push({
+      id: 22,
+      name: "extension-packager-preview-attempt-2",
+      expired: false
+    });
     const preview = await f.find();
+    const metadata = { ...f.metadata, attempt: 2 };
     f.pr.head.sha = "b".repeat(40);
-    await f.publish(preview);
-    expect(f.rest.issues.createComment).not.toHaveBeenCalled();
+    await f.publish(preview, metadata);
+    expect(f.rest.issues.updateComment).not.toHaveBeenCalled();
+    expect(f.comments[0].body).toBe(original);
     f.pr.head.sha = preview.sha;
     f.run.id = 12;
-    await f.publish(preview);
-    expect(f.rest.issues.createComment).not.toHaveBeenCalled();
+    await f.publish(preview, metadata);
+    expect(f.rest.issues.updateComment).not.toHaveBeenCalled();
+    expect(f.comments[0].body).toBe(original);
+    expect(f.comments).toHaveLength(1);
   });
 
   it("rejects mismatched artifact metadata before publishing", async () => {
