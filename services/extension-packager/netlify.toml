@@ -1,4 +1,7 @@
+# GitHub Actions compiles this service offline; the CLI packages and deploys it.
+# Context-specific runtime credentials belong in Netlify's environment settings.
 [build]
+  command = "npm run build:netlify --workspace @fossbilling/extension-packager"
   publish = "services/extension-packager/netlify/public"
 
 [build.environment]
@@ -6,6 +9,5 @@
   NODE_VERSION = "24"
 
 [functions]
-  directory = "services/extension-packager/netlify/functions"
-  node_bundler = "esbuild"
+  directory = "services/extension-packager/.netlify/functions-source"
   external_node_modules = ["sharp", "@zeropress/svg-hush"]

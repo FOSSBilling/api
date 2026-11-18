@@ -7,7 +7,8 @@
   "scripts": {
     "dev": "tsx --env-file-if-exists=.dev.vars --env-file=../../libraries/extension-packaging/development.env scripts/extension-packager-dev.ts",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build:netlify": "esbuild netlify/functions/extension-packager.ts --bundle --platform=node --format=esm --target=node24 --external:sharp --external:@zeropress/svg-hush/* --outdir=.netlify/functions-source --out-extension:.js=.mjs"
   },
   "dependencies": {
     "@fossbilling/extension-packaging": "*",

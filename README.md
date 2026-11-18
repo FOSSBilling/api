@@ -48,6 +48,7 @@ npm run lint
 npm run typecheck
 npm test
 npm run build:api  # Wrangler dry run; does not deploy or apply remote migrations
+npm run build:extension-packager  # Offline Netlify function build
 ```
 
 Each workspace owns its tests and type checking. The root test and type-check
@@ -58,6 +59,10 @@ from the repository root; do not create service-specific lockfiles.
 
 The services deploy independently from the same repository. Netlify configuration
 and setup are documented in the [packager README](services/extension-packager/README.md).
+The same CI/CD workflow compiles the function without credentials and deploys
+it through the Netlify CLI after validation. Main updates production and fixed
+staging in one Netlify project; other branch pushes update preview aliases using
+separate preview runtime credentials and storage.
 
 The API uses the same pinned [shared Cloudflare workflow](https://github.com/FOSSBilling/.workflows)
 as `fossbilling.org`. [CI/CD](.github/workflows/ci.yml) validates the workspaces and
@@ -72,8 +77,8 @@ builds a self-contained Worker artifact, including deployment configuration and 
 
 See the [API deployment setup](services/api/README.md#deployment) for GitHub environments,
 staging resource IDs, Preview secrets, migration behaviour and the Workers Builds cutover.
-All production and Preview deployments require validation, the build and migrations
-to succeed. Previews keep package processing disabled because Cloudflare Previews
+All API production and Preview deployments require validation, the API build and
+migrations to succeed. Previews keep package processing disabled because Cloudflare Previews
 cannot consume Queues. Production packaging also remains disabled pending Netlify
 runtime verification and the controlled production package test.
 

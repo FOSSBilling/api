@@ -81,6 +81,105 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  build-packager:
+    name: Build Extension Packager
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98
+        with:
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
+        with:
+          # Match the stable Netlify function runtime; validation still uses Node 26.
+          node-version: "24"
+          cache: npm
+      - name: Install Dependencies
+        run: npm ci
+      - name: Build Function Bundle
+        run: npm run build:extension-packager
+      - name: Check Packaged Function
+        env:
+          EXTENSION_PACKAGER_SECRET: bundle-check
+        run: |
+          bundle_dir=$(mktemp -d)
+          unzip -q services/extension-packager/.netlify/functions/extension-packager.zip -d "$bundle_dir"
+          FUNCTION_MODULE=$(find "$bundle_dir" -type f -name extension-packager.mjs)
+          export FUNCTION_MODULE
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { pathToFileURL } from 'node:url';
+          const { default: handler } = await import(pathToFileURL(process.env.FUNCTION_MODULE));
+          const response = await handler(new Request('https://packager.invalid/', { method: 'POST' }));
+          assert.equal(response.status, 401);
+          NODE
+      - name: Upload Compiled Function
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: extension-packager-build
+          path: services/extension-packager/.netlify/functions-source/extension-packager.mjs
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+
+  deploy-packager:
+    name: Deploy Extension Packager (${{ matrix.target }})
+    needs: [validation, build-packager]
+    if: github.event_name == 'push' && github.ref_type == 'branch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(github.ref == 'refs/heads/main' && '["production", "staging"]' || '["preview"]') }}
+    environment:
+      name: ${{ matrix.target == 'production' && 'production' || 'preview' }}
+      deployment: false
+    concurrency:
+      group: extension-packager-${{ matrix.target == 'preview' && github.ref || matrix.target }}
+      queue: max
+      cancel-in-progress: false
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98
+        with:
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
+        with:
+          node-version: "24"
+          cache: npm
+      - name: Install Dependencies
+        run: npm ci
+      - name: Download Compiled Function
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: extension-packager-build
+          path: services/extension-packager/.netlify/functions-source/
+      - name: Package and Deploy Function
+        env:
+          DEPLOY_TARGET: ${{ matrix.target }}
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ vars.NETLIFY_SITE_ID }}
+        run: |
+          : "${NETLIFY_AUTH_TOKEN:?Set the NETLIFY_AUTH_TOKEN Actions secret}"
+          : "${NETLIFY_SITE_ID:?Set the NETLIFY_SITE_ID Actions variable}"
+          if [ "$DEPLOY_TARGET" = production ]; then
+            args=(--prod --context production)
+          else
+            alias=staging
+            if [ "$DEPLOY_TARGET" = preview ]; then
+              alias="branch-$(printf '%s' "$GITHUB_REF_NAME" | sha256sum | cut -c1-16)"
+            fi
+            args=(--alias "$alias" --context branch-deploy)
+          fi
+          npm exec -- netlify deploy --filter @fossbilling/extension-packager --no-build --skip-functions-cache "${args[@]}" --message "$GITHUB_REF_NAME $GITHUB_SHA" --json > "$RUNNER_TEMP/netlify-deployment.json"
+          url=$(jq -er '.deploy_url' "$RUNNER_TEMP/netlify-deployment.json")
+          printf '[Extension packager (%s)](%s/.netlify/functions/extension-packager)\n' "$DEPLOY_TARGET" "$url" >> "$GITHUB_STEP_SUMMARY"
+
   migrations:
     name: Apply API Migrations
     needs: [validation, build]

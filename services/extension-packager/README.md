@@ -35,27 +35,68 @@ the API's local-storage test also exercises the real local R2 endpoint.
 
 ## Netlify deployment
 
-Create a dedicated Netlify project connected to this repository:
+Use one Netlify project, `fb-api-packager`, for production and previews. GitHub
+Actions builds and deploys the function through the pinned Netlify CLI in the root
+lockfile. Only the packager and its imported libraries are deployed to Netlify;
+the API continues to deploy separately to Cloudflare.
 
-- Base directory: leave unset to install from the repository root and its lockfile.
-- Package directory: `services/extension-packager`.
-- Build command: leave blank; Netlify bundles the function automatically.
-- Configuration: `services/extension-packager/netlify.toml`.
-- Publish directory: `services/extension-packager/netlify/public` (empty placeholder).
-- Functions directory: `services/extension-packager/netlify/functions`.
+The [CI/CD workflow](../../.github/workflows/ci.yml) builds the function without
+credentials on every push and PR, using `npm run build:extension-packager`. A smoke
+check loads the handler from the extracted ZIP to catch missing entry points or
+dependencies.
 
-Paths in `netlify.toml` are relative to the repository-root base directory, following
-[Netlify's monorepo configuration](https://docs.netlify.com/build/configure-builds/monorepos/).
-The Netlify configuration currently selects Node.js 24, a stable Lambda runtime.
-[AWS lists Node.js 26 as public preview](https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtimes.html),
-so it is not yet the production hosting target. The code is tested on Node.js 26;
-this runtime selection belongs only to the Netlify adapter.
+Deployment jobs download the compiled function after validation succeeds, then
+Netlify packages it with the pinned native dependencies before upload. They do not
+recompile source or depend on Netlify's short-lived build cache:
 
-Native Sharp and sanitizer dependencies remain external so Netlify includes their
-binaries and WASM files. Verify those files and the deployed runtime before
-enabling processing.
+| Source              | Deployment                        | Netlify variables      |
+| ------------------- | --------------------------------- | ---------------------- |
+| `main`              | Production project URL            | Production context     |
+| `main`              | Fixed `staging` alias             | Branch deploys context |
+| Other branch pushes | `branch-<branch-name-hash>` alias | Branch deploys context |
 
-Set these five variables through Netlify's dashboard, CLI or API for the function runtime:
+PR runs validate and build without deploying or receiving deployment credentials.
+Deployment links appear in the GitHub Actions job summary, without extra PR comments.
+CLI aliases use the **Branch deploys** runtime variables. The workflow also passes
+that context explicitly to the CLI, rather than relying on its `dev` default.
+`staging` is reserved for the fixed deployment. Avoid Git branch deployments with
+matching aliases and branch-specific variable overrides for these aliases.
+
+### Project and Actions setup
+
+Configure the existing project with the repository root as its base directory and
+`services/extension-packager` as its package directory. Its configuration file is
+`services/extension-packager/netlify.toml`; publish and function paths are relative
+to the repository root. The build command compiles the service and shared
+TypeScript libraries with esbuild before Netlify packages the function. This
+avoids Netlify's tracer rewriting workspace imports over the entry point.
+
+Set these GitHub Actions settings on the API repository:
+
+- Secret `NETLIFY_AUTH_TOKEN`: a Netlify deployment token from the account managing
+  the project.
+- Variable `NETLIFY_SITE_ID`: `0a290ce5-3f4b-4541-bfe5-ef80a242e29b`, the existing
+  project's ID.
+
+The jobs use the existing `production` and `preview` GitHub environments and the
+same trusted-maintainer model as API deployments. Deployment credentials are only
+available to branch-push deployment jobs, not PR validation jobs.
+
+Once the workflow deploys successfully, unlink the project's Git repository under
+**Project configuration → Developer settings → Continuous deployment → Repository**.
+This removes automatic Git builds and their PR notifications while retaining
+CLI deployments. Until cutover, stop Netlify's automatic builds to avoid duplicate
+deployments. Do not enable the setting that restricts production deployments to Git.
+
+The packager build and deploy jobs use Node.js 24 to match the stable function
+runtime; application validation uses Node.js 26. Sharp and the SVG sanitizer stay
+external so Netlify includes their native binaries and WASM files. GitHub's Linux
+runner packages these dependencies; do not deploy a native bundle built on macOS.
+
+### Runtime variables
+
+Set these five variables through Netlify's dashboard, CLI or API, available to the
+function runtime:
 
 ```dotenv
 EXTENSION_PACKAGER_SECRET=<shared-with-the-API>
@@ -65,26 +106,34 @@ EXTENSION_PACKAGES_S3_ACCESS_KEY_ID=<bucket-restricted-keyID>
 EXTENSION_PACKAGES_S3_SECRET_ACCESS_KEY=<applicationKey>
 ```
 
-The B2 adapter derives the signing region from the standard
-`https://s3.<region>.backblazeb2.com` endpoint. Local R2 uses `auto` internally;
-neither needs a separate region variable.
+Set production values specifically for **Production**. Set preview values for
+**Branch deploys**: `fb-extensions-packages-preview`, its own restricted B2 key and
+a separate shared secret. CLI aliases use this context, not Netlify's Git-based
+**Deploy Previews** context. Do not put production credentials in **All deploy
+contexts**, where previews could inherit them.
 
-Keep these production values in the production deploy context. Preview deployments
-use `fb-extensions-packages-preview`, its own restricted B2 key and a separate shared
-secret. The API and packager must use the same bucket and shared secret within each
-environment. All branch Previews share the preview bucket. Development uses local
-storage, with no development B2 bucket.
+The B2 adapter derives the signing region from the standard endpoint. No separate
+region variable is needed. The API and packager must use the same bucket and
+shared secret within each environment. All branch previews share the preview
+bucket; development uses local storage, with no development B2 bucket.
 Do not provide public asset bucket credentials, D1 credentials or API administration
-tokens. Netlify runtime variables do not come from `netlify.toml`; redeploy after changing them.
+tokens. Runtime variables do not come from `netlify.toml`; redeploy after changing them.
 
-After deployment, set the API's dashboard-managed `EXTENSION_PACKAGER_URL` to
-`https://<project>.netlify.app/.netlify/functions/extension-packager`, and set its
-`EXTENSION_PACKAGER_SECRET` to the same secret. The HTTP adapter requires
-HTTPS in production and allows loopback HTTP for local development.
+Configure each API environment with its matching dashboard-managed
+`EXTENSION_PACKAGER_URL` and `EXTENSION_PACKAGER_SECRET`:
 
-Deploying this project only deploys the packager and its imported code. It does not
-start or deploy the API. A Git-connected project can redeploy its configured branch
-independently of the API's GitHub Actions deployment.
+- Production: `https://fb-api-packager.netlify.app/.netlify/functions/extension-packager`.
+- Preview: `https://staging--fb-api-packager.netlify.app/.netlify/functions/extension-packager`.
+
+A branch API can use its matching packager alias for testing a change to both
+services; otherwise it uses fixed staging. The HTTP adapter requires HTTPS in
+production and allows loopback HTTP for local development.
+The function must be reachable by the API without a Netlify browser login; its
+bearer secret authenticates processing requests.
+
+Deploying the packager does not enable package processing. Keep production and
+Preview `EXTENSION_PACKAGES_MODE=disabled` until storage, runtime and end-to-end
+verification are complete.
 
 ## Processing and recovery
 
