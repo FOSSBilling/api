@@ -1,16 +1,15 @@
 import { z } from "@hono/zod-openapi";
 import { ManifestSchema } from "./manifest";
 
+import { PackageTargetSchema } from "@fossbilling/extension-packaging/processor";
+
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
 export const PackageUploadRequestSchema = z.strictObject({
-  manifest: ManifestSchema,
+  target: PackageTargetSchema,
   bytes: z.number().int().min(1),
   sha256
 });
-export const PackageBuildSchema = z.union([
-  z.strictObject({ upload_id: z.uuid() }),
-  z.strictObject({ manifest: ManifestSchema, source_id: z.uuid() })
-]);
+export const PackageBuildSchema = z.strictObject({ upload_id: z.uuid() });
 export const PackageParamSchema = z.object({ packageId: z.uuid() });
 export const PackageArtifactSchema = z
   .object({
@@ -28,7 +27,7 @@ export const PackagingJobParamSchema = z.object({ jobId: z.uuid() });
 export const PackagingJobSchema = z
   .object({
     id: z.uuid(),
-    extension_identifier: z.string(),
+    extension_identifier: z.string().nullable(),
     status: z.enum(["queued", "processing", "ready", "failed"]),
     artifact: z.union([PackageArtifactSchema, z.null()]),
     error: z

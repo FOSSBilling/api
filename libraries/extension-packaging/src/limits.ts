@@ -3,6 +3,7 @@ export const PACKAGE_LIMITS = {
   sourceBytes: 5 * 1024 * 1024,
   expandedBytes: 16 * 1024 * 1024,
   entries: 500,
+  manifestBytes: 256 * 1024,
   pathLength: 1024,
   pathDepth: 32
 } as const;

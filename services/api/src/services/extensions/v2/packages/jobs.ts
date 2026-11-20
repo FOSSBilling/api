@@ -1,5 +1,5 @@
 import { logError } from "@fossbilling/logging";
-import type { Manifest } from "../schemas/manifest";
+import type { PackageTarget } from "@fossbilling/extension-packaging/processor";
 import type { PackageOwner } from "./repository";
 import { PackageError } from "@fossbilling/extension-packaging/errors";
 
@@ -7,8 +7,7 @@ export interface PackagingJob {
   id: string;
   fingerprint: string;
   owner: PackageOwner;
-  manifest: Manifest;
-  sourceId: string | null;
+  target: PackageTarget;
   uploadObjectId: string | null;
   uploadSha256: string | null;
   status: "queued" | "processing" | "ready" | "failed";

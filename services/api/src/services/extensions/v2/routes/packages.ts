@@ -24,7 +24,8 @@ import { cleanupPackageObjects } from "../packages/build";
 import { PackageError } from "@fossbilling/extension-packaging/errors";
 import { PACKAGE_LIMITS } from "@fossbilling/extension-packaging/limits";
 import { packageStore } from "../packages/store";
-import { ManifestSchema, type Manifest } from "../schemas/manifest";
+import type { PackageTarget } from "@fossbilling/extension-packaging/processor";
+import { ManifestSchema } from "../schemas/manifest";
 import type { PackageOwner } from "../packages/repository";
 import {
   PackageArtifactSchema,
@@ -75,7 +76,8 @@ async function jobResponse(db: D1Database, job: PackagingJob) {
   return {
     result: {
       id: job.id,
-      extension_identifier: job.manifest.id,
+      extension_identifier:
+        artifact?.extension_identifier ?? job.target.id ?? null,
       status: job.status,
       artifact: artifact ? artifactResponse(artifact).result : null,
       error: job.status === "failed" ? job.error : null,
@@ -89,12 +91,12 @@ const uploadLifetimeSeconds = 300;
 
 async function packageFingerprint(
   owner: PackageOwner,
-  manifest: Manifest,
+  target: PackageTarget,
   source: string
 ) {
   return sha256(
     new Uint8Array(
-      new TextEncoder().encode(canonicalJson({ owner, manifest, source }))
+      new TextEncoder().encode(canonicalJson({ owner, target, source }))
     )
   );
 }
@@ -103,7 +105,7 @@ const packageErrors = {
   ...authErrorResponses(),
   404: errorResponse("Package not found"),
   409: errorResponse(
-    "Source version conflict, ownership changed, or storage quota exhausted"
+    "A published release is locked, ownership changed, or storage quota is exhausted"
   ),
   413: errorResponse("Upload exceeds size limit"),
   422: errorResponse("Invalid manifest or source ZIP"),
@@ -146,25 +148,6 @@ export function registerPackageRoutes(app: ExtensionsV2App) {
     },
     paceContentIp()
   );
-  async function packageOwner(
-    c: Context,
-    repository: PackageBuildDatabase,
-    manifest: Manifest,
-    sourceId?: string
-  ) {
-    const publisher = getPublisher(c);
-    let userId = getAuth(c).userId;
-    if (sourceId && !publisher) {
-      const correction = await repository.correctionOwner(
-        userId,
-        sourceId,
-        manifest
-      );
-      if (correction) userId = correction.owner_user_id;
-    }
-    return repository.getOwner(userId, manifest.id, publisher);
-  }
-
   app.openapi(
     createRoute({
       method: "post",
@@ -200,7 +183,7 @@ export function registerPackageRoutes(app: ExtensionsV2App) {
     }),
     async (c) => {
       try {
-        const { manifest, bytes, sha256: checksum } = c.req.valid("json");
+        const { target, bytes, sha256: checksum } = c.req.valid("json");
         if (bytes > PACKAGE_LIMITS.sourceBytes)
           throw new PackageError(
             "BODY_TOO_LARGE",
@@ -209,10 +192,14 @@ export function registerPackageRoutes(app: ExtensionsV2App) {
           );
         const db = c.env.DB_EXTENSIONS;
         const repository = new PackageBuildDatabase(db);
-        const owner = await packageOwner(c, repository, manifest);
+        const owner = await repository.getOwner(
+          getAuth(c).userId,
+          target.id ?? null,
+          getPublisher(c)
+        );
         const dispatcher = packageDispatcher(c.env);
         const scope = await dispatcher.scope();
-        const fingerprint = await packageFingerprint(owner, manifest, checksum);
+        const fingerprint = await packageFingerprint(owner, target, checksum);
         const existing = await new PackagingJobsDatabase(db, scope).find(
           fingerprint
         );
@@ -224,7 +211,7 @@ export function registerPackageRoutes(app: ExtensionsV2App) {
         const now = Math.floor(Date.now() / 1000);
         const { id, expires_at: expiresAt } = await repository.reserveUpload(
           owner,
-          manifest,
+          target,
           {
             scope,
             fingerprint,
@@ -255,8 +242,7 @@ export function registerPackageRoutes(app: ExtensionsV2App) {
       method: "post",
       path: "/packages",
       tags: ["Packages"],
-      summary:
-        "Confirm a source upload or queue a rebuild from a stored source",
+      summary: "Confirm an upload and queue ZIP validation",
       security: [{ Bearer: [] }],
       middleware: [
         requireContentWrite(),
@@ -290,30 +276,19 @@ export function registerPackageRoutes(app: ExtensionsV2App) {
         const dispatcher = packageDispatcher(c.env);
         const scope = await dispatcher.scope();
         const jobs = new PackagingJobsDatabase(db, scope);
-        const sourceId = "source_id" in request ? request.source_id : null;
-        const uploadId = "upload_id" in request ? request.upload_id : null;
-        const upload = uploadId
-          ? await repository.getUpload(
-              uploadId,
-              scope,
-              getAuth(c).userId,
-              getPublisher(c)
-            )
-          : null;
-        const manifest =
-          "manifest" in request ? request.manifest : upload?.manifest;
-        if (!manifest)
+        const uploadId = request.upload_id;
+        const upload = await repository.getUpload(
+          uploadId,
+          scope,
+          getAuth(c).userId,
+          getPublisher(c)
+        );
+        if (!upload)
           throw new PackageError(
             "UPLOAD_NOT_FOUND",
             "Package upload not found",
             404
           );
-        const owner =
-          upload?.owner ??
-          (await packageOwner(c, repository, manifest, sourceId ?? undefined));
-        const fingerprint =
-          upload?.fingerprint ??
-          (await packageFingerprint(owner, manifest, sourceId!));
 
         const baseUrl = getPlatform(c).getEnv("EXTENSION_PACKAGES_BASE_URL");
         if (!baseUrl)
@@ -323,36 +298,33 @@ export function registerPackageRoutes(app: ExtensionsV2App) {
             503
           );
 
-        let job = await jobs.find(fingerprint);
+        let job = await jobs.find(upload.fingerprint);
         if (!job) {
-          if (upload && uploadId) {
-            if (upload.expires_at <= Math.floor(Date.now() / 1000))
-              throw new PackageError(
-                "UPLOAD_EXPIRED",
-                "Package upload expired; select the ZIP and try again",
-                409
-              );
-            const stored = await packageStore(c)!.head(uploadId);
-            if (
-              !stored ||
-              stored.bytes !== upload.bytes ||
-              stored.checksum !== upload.sha256
-            )
-              throw new PackageError(
-                "UPLOAD_INCOMPLETE",
-                "The uploaded ZIP is missing or does not match the reservation",
-                409
-              );
-          }
+          if (upload.expires_at <= Math.floor(Date.now() / 1000))
+            throw new PackageError(
+              "UPLOAD_EXPIRED",
+              "Package upload expired; select the ZIP and try again",
+              409
+            );
+          const stored = await packageStore(c)!.head(uploadId);
+          if (
+            !stored ||
+            stored.bytes !== upload.bytes ||
+            stored.checksum !== upload.sha256
+          )
+            throw new PackageError(
+              "UPLOAD_INCOMPLETE",
+              "The uploaded ZIP is missing or does not match the reservation",
+              409
+            );
           // Arm recovery before inserting so an interrupted request can be picked up.
           await dispatcher.wake();
           job = await jobs.create({
-            fingerprint,
-            owner,
-            manifest,
-            sourceId,
+            fingerprint: upload.fingerprint,
+            owner: upload.owner,
+            target: upload.target,
             uploadObjectId: uploadId,
-            uploadSha256: upload?.sha256 ?? null
+            uploadSha256: upload.sha256
           });
         }
         if (job.status === "queued") await dispatcher.wake(true);
@@ -402,13 +374,14 @@ export function registerPackageRoutes(app: ExtensionsV2App) {
         ).get(c.req.valid("param").jobId);
         if (!job)
           throw new PackageError("NOT_FOUND", "Packaging job not found", 404);
+        const response = await jobResponse(db, job);
         const userId = getAuth(c).userId;
         const moderator = await repository.isModerator(userId);
         if (!moderator) {
           const publisher = getPublisher(c);
           const owner = await repository.getOwner(
             userId,
-            job.manifest.id,
+            response.result.extension_identifier,
             publisher
           );
           if (
@@ -419,7 +392,7 @@ export function registerPackageRoutes(app: ExtensionsV2App) {
           )
             throw new PackageError("NOT_FOUND", "Packaging job not found", 404);
         }
-        return c.json(await jobResponse(db, job), 200);
+        return c.json(response, 200);
       } catch (error) {
         return failure(c, error);
       }

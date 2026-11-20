@@ -1,11 +1,5 @@
 import { PACKAGE_LIMITS } from "./limits";
-import { sha256 } from "./checksum";
-import {
-  Uint8ArrayReader,
-  Uint8ArrayWriter,
-  ZipReader,
-  ZipWriter
-} from "@zip.js/zip.js";
+import { Uint8ArrayReader, ZipReader } from "@zip.js/zip.js";
 import { ManifestSchema } from "./manifest";
 
 const zipOptions = {
@@ -41,31 +35,28 @@ function validatePath(filename: string, directory: boolean) {
   return path;
 }
 
-/** Validate source files and build a bounded archive with directory metadata. */
-export async function buildExtensionPackage(
+/** Validate the uploaded archive and read its listing metadata. */
+export async function validateExtensionPackage(
   source: Uint8Array<ArrayBuffer>,
-  manifestInput: unknown,
   signal?: AbortSignal
 ) {
-  const manifest = ManifestSchema.parse(manifestInput);
   if (source.byteLength > PACKAGE_LIMITS.sourceBytes) {
     throw new Error("Source ZIP exceeds size limit");
   }
+  if (
+    source.length < 4 ||
+    new DataView(source.buffer, source.byteOffset, 4).getUint32(0, true) !==
+      0x04034b50
+  )
+    throw new Error("Expected a ZIP without a prepended payload");
   const reader = new ZipReader(new Uint8ArrayReader(source), {
     ...zipOptions,
     signal
   });
-  const files: {
-    path: string;
-    bytes: Uint8Array<ArrayBuffer>;
-    compression?: {
-      passThrough: true;
-      compressionMethod: number;
-      uncompressedSize: number;
-      crc32?: number;
-    };
-    icon?: Uint8Array<ArrayBuffer>;
-  }[] = [];
+  let manifestBytes: Uint8Array<ArrayBuffer> | undefined;
+  let icon: Uint8Array<ArrayBuffer> | undefined;
+  let iconName: string | undefined;
+  let files = 0;
   const paths = new Map<string, boolean>();
   let count = 0;
   let expandedBytes = 0;
@@ -85,6 +76,11 @@ export async function buildExtensionPackage(
       const fileType = (entry.externalFileAttributes >>> 16) & 0o170000;
       if (
         entry.encrypted ||
+        entry.symlink ||
+        entry.setuid ||
+        entry.setgid ||
+        (entry.directory &&
+          (!entry.filename.endsWith("/") || entry.uncompressedSize !== 0)) ||
         (fileType !== 0 &&
           fileType !== (entry.directory ? 0o040000 : 0o100000)) ||
         ![0, 8].includes(entry.compressionMethod)
@@ -97,11 +93,24 @@ export async function buildExtensionPackage(
       ) {
         throw new Error("Source ZIP exceeds expanded size limit");
       }
-      if (entry.directory) continue;
       // Bound the actual decompressed bytes, not just the untrusted ZIP header.
-      const isIcon = /^icon\.(svg|png|webp|avif)$/.test(path);
+      const isIcon =
+        !entry.directory && /^icon\.(svg|png|webp|avif)$/.test(path);
+      const isManifest = path === "manifest.json";
+      if (key === "manifest.json" && !isManifest)
+        throw new Error("Manifest must be named manifest.json");
+      if (
+        isManifest &&
+        (entry.directory ||
+          entry.uncompressedSize > PACKAGE_LIMITS.manifestBytes)
+      )
+        throw new Error("Expected a root manifest.json file up to 256 KiB");
+      if (isIcon && icon) throw new Error("Include only one package icon");
       const chunks: Uint8Array[] = [];
       let length = 0;
+      // zip.js also exposes getData on directories at runtime.
+      if (!("getData" in entry))
+        throw new Error("Unable to validate ZIP entry");
       await entry.getData(
         new WritableStream<Uint8Array>({
           write(chunk) {
@@ -110,41 +119,31 @@ export async function buildExtensionPackage(
             if (expandedBytes > PACKAGE_LIMITS.expandedBytes) {
               throw new Error("Source ZIP exceeds expanded size limit");
             }
-            if (isIcon) chunks.push(chunk.slice());
+            if (isManifest && length > PACKAGE_LIMITS.manifestBytes)
+              throw new Error("Manifest exceeds size limit");
+            if (entry.directory && length)
+              throw new Error("ZIP directory entry contains data");
+            if (isIcon || isManifest) chunks.push(chunk.slice());
           }
         })
       );
       if (length !== entry.uncompressedSize) {
         throw new Error("Source ZIP entry has inconsistent size");
       }
-      const icon = isIcon ? new Uint8Array(length) : undefined;
-      let offset = 0;
-      for (const chunk of chunks) {
-        icon!.set(chunk, offset);
-        offset += chunk.byteLength;
-      }
-      // Validate the existing manifest's ZIP entry too, then replace its bytes.
-      if (key === "manifest.json") {
-        if (path !== "manifest.json") {
-          throw new Error("Manifest must be named manifest.json");
+      if (!isManifest && !entry.directory) files++;
+      if (isManifest || isIcon) {
+        const bytes = new Uint8Array(length);
+        let offset = 0;
+        for (const chunk of chunks) {
+          bytes.set(chunk, offset);
+          offset += chunk.byteLength;
         }
-      } else {
-        // CRC and expanded-size validation above still decompresses every file.
-        // Copy its original compressed payload instead of compressing it again.
-        const bytes = await entry.getData(new Uint8ArrayWriter(), {
-          passThrough: true
-        });
-        files.push({
-          path,
-          bytes,
-          icon,
-          compression: {
-            passThrough: true,
-            compressionMethod: entry.compressionMethod,
-            uncompressedSize: entry.uncompressedSize,
-            crc32: entry.signature
-          }
-        });
+        if (isManifest) {
+          manifestBytes = bytes;
+        } else {
+          icon = bytes;
+          iconName = path;
+        }
       }
     }
   } finally {
@@ -160,40 +159,15 @@ export async function buildExtensionPackage(
       parts.pop();
     }
   }
-  if (paths.get("manifest.json") === true) {
-    throw new Error("Manifest path is a directory");
-  }
-  if (!files.length) throw new Error("Package contains no source files");
-  const icons = files.filter((file) =>
-    /^icon\.(svg|png|webp|avif)$/.test(file.path)
+  if (!manifestBytes)
+    throw new Error("Package must contain a root manifest.json");
+  if (!files) throw new Error("Package contains no source files");
+  const manifest = ManifestSchema.parse(
+    JSON.parse(
+      new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(
+        manifestBytes
+      )
+    )
   );
-  if (icons.length > 1) throw new Error("Include only one package icon");
-
-  const manifestBytes = new Uint8Array(
-    new TextEncoder().encode(JSON.stringify(manifest, null, 2) + "\n")
-  );
-  files.push({ path: "manifest.json", bytes: manifestBytes });
-  files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-  const writer = new ZipWriter(new Uint8ArrayWriter(), {
-    ...zipOptions,
-    signal,
-    level: 6,
-    lastModDate: new Date("1980-01-01T00:00:00Z"),
-    extendedTimestamp: false
-  });
-  for (const file of files) {
-    await writer.add(
-      file.path,
-      new Uint8ArrayReader(file.bytes),
-      file.compression
-    );
-  }
-  const bytes = await writer.close();
-  return {
-    bytes,
-    manifest,
-    packageSha256: await sha256(bytes),
-    icon: icons[0]?.icon ?? null,
-    iconName: icons[0]?.path
-  };
+  return { manifest, icon, iconName };
 }

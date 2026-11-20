@@ -532,7 +532,7 @@ export const packageUploads = sqliteTable(
       .references(() => packageObjects.id, { onDelete: "cascade" }),
     dispatchScope: text("dispatch_scope").notNull(),
     fingerprint: text("fingerprint").notNull(),
-    manifest: text("manifest").notNull(),
+    target: text("target").notNull(),
     owner: text("owner").notNull(),
     sha256: text("sha256").notNull(),
     expiresAt: integer("expires_at").notNull()
@@ -566,7 +566,8 @@ export const packageSources = sqliteTable(
     uniqueIndex("idx_package_source_version").on(
       table.profileGeneration,
       table.extensionIdentifier,
-      table.version
+      table.version,
+      table.sha256
     ),
     index("idx_package_sources_extension").on(table.extensionIdentifier),
     uniqueIndex("idx_package_sources_object").on(table.objectId)
@@ -581,7 +582,6 @@ export const packageArtifacts = sqliteTable(
       .notNull()
       .references(() => packageSources.id),
     manifest: text("manifest").notNull(),
-    manifestHash: text("manifest_hash").notNull(),
     sha256: text("sha256").notNull(),
     objectId: text("object_id")
       .notNull()
@@ -593,9 +593,9 @@ export const packageArtifacts = sqliteTable(
       .default(sql`CURRENT_TIMESTAMP`)
   },
   (table) => [
-    uniqueIndex("idx_package_artifact_manifest").on(
+    uniqueIndex("idx_package_artifact_checksum").on(
       table.sourceId,
-      table.manifestHash
+      table.sha256
     ),
     uniqueIndex("idx_package_artifacts_object").on(table.objectId)
   ]
@@ -622,8 +622,7 @@ export const packagingJobs = sqliteTable(
     dispatchScope: text("dispatch_scope").notNull().default(""),
     ownerUserId: text("owner_user_id").notNull(),
     owner: text("owner").notNull(),
-    manifest: text("manifest").notNull(),
-    sourceId: text("source_id"),
+    target: text("target").notNull(),
     uploadObjectId: text("upload_object_id").references(
       () => packageObjects.id
     ),

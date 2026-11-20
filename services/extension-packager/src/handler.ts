@@ -33,8 +33,7 @@ export async function handlePackageProcessing(
     });
   const signal = AbortSignal.any([request.signal, AbortSignal.timeout(45000)]);
   try {
-    // A 64 KiB manifest string can expand in UTF-8, alongside request metadata.
-    const bytes = await boundedBytes(request.body, 256 * 1024);
+    const bytes = await boundedBytes(request.body, 4 * 1024);
     let input;
     try {
       input = ProcessingInputSchema.parse(

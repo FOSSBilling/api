@@ -1,3 +1,4 @@
+import type { PackageTarget } from "@fossbilling/extension-packaging/processor";
 import { v7 as uuidv7 } from "uuid";
 import { ARTIFACT_SELECT } from "./packages";
 import { canonicalJson } from "../packages/manifest";
@@ -37,7 +38,7 @@ function extensionAvailable(identifier: string) {
 function ownerPredicate() {
   return `EXISTS (SELECT 1 FROM developers d JOIN users u ON u.id=d.owner_user_id WHERE d.id=? AND d.profile_generation=? AND d.ownership_epoch=? AND d.owner_user_id=? AND u.deleted_at IS NULL AND ${extensionAvailable("?")} AND (? IS NULL OR EXISTS (SELECT 1 FROM m2m_publisher_clients p WHERE p.client_id=? AND p.developer_id=d.id AND p.ownership_epoch=d.ownership_epoch AND p.revoked_at IS NULL)))`;
 }
-function ownerParams(owner: PackageOwner, id: string) {
+function ownerParams(owner: PackageOwner, id: string | null) {
   return [
     owner.id,
     owner.profile_generation,
@@ -66,7 +67,7 @@ export class PackageBuildDatabase implements PackageRepository {
   constructor(private readonly db: D1Database) {}
   async getOwner(
     userId: string,
-    extensionId: string,
+    extensionId: string | null,
     publisher?: PackagePublisher | null
   ) {
     const owner = await this.db
@@ -83,18 +84,23 @@ export class PackageBuildDatabase implements PackageRepository {
       );
     return { ...owner, publisher_client_id: publisher?.clientId };
   }
-  async findSource(generation: string, identifier: string, version: string) {
+  async findSource(
+    generation: string,
+    identifier: string,
+    version: string,
+    sha256: string
+  ) {
     return this.db
       .prepare(
-        "SELECT id,sha256,object_id FROM package_sources WHERE profile_generation=? AND extension_identifier=? AND version=?"
+        "SELECT id,sha256,object_id FROM package_sources WHERE profile_generation=? AND extension_identifier=? AND version=? AND sha256=?"
       )
-      .bind(generation, identifier, version)
+      .bind(generation, identifier, version, sha256)
       .first<SourceRow>();
   }
-  async findArtifact(sourceId: string, manifestHash: string) {
+  async findArtifact(sourceId: string, checksum: string) {
     return this.db
-      .prepare(`${ARTIFACT_SELECT} WHERE a.source_id=? AND a.manifest_hash=?`)
-      .bind(sourceId, manifestHash)
+      .prepare(`${ARTIFACT_SELECT} WHERE a.source_id=? AND a.sha256=?`)
+      .bind(sourceId, checksum)
       .first<ArtifactRow>();
   }
   async hasIcon(sourceId: string) {
@@ -107,7 +113,7 @@ export class PackageBuildDatabase implements PackageRepository {
   }
   private objectReservation(
     owner: PackageOwner,
-    extensionId: string,
+    extensionId: string | null,
     id: string,
     bytes: number,
     uploadLookup?: readonly [
@@ -140,7 +146,7 @@ export class PackageBuildDatabase implements PackageRepository {
   }
   async reserveObject(
     owner: PackageOwner,
-    extensionId: string,
+    extensionId: string | null,
     id: string,
     bytes: number
   ) {
@@ -154,7 +160,7 @@ export class PackageBuildDatabase implements PackageRepository {
   }
   async reserveUpload(
     owner: PackageOwner,
-    manifest: Manifest,
+    target: PackageTarget,
     input: {
       bytes: number;
       scope: string;
@@ -176,16 +182,16 @@ export class PackageBuildDatabase implements PackageRepository {
       id: string;
       expires_at: number;
     }>([
-      this.objectReservation(owner, manifest.id, id, input.bytes, lookup),
+      this.objectReservation(owner, target.id ?? null, id, input.bytes, lookup),
       this.db
         .prepare(
-          `INSERT INTO package_uploads (id, dispatch_scope, fingerprint, manifest, owner, sha256, expires_at)
+          `INSERT INTO package_uploads (id, dispatch_scope, fingerprint, target, owner, sha256, expires_at)
         SELECT id,?,?,?,?,?,? FROM package_objects WHERE id=?`
         )
         .bind(
           input.scope,
           input.fingerprint,
-          JSON.stringify(manifest),
+          JSON.stringify(target),
           JSON.stringify(owner),
           input.sha256,
           input.expiresAt,
@@ -195,7 +201,7 @@ export class PackageBuildDatabase implements PackageRepository {
         .prepare(
           `${activeUpload} AND ${ownerPredicate()} ORDER BY r.expires_at DESC LIMIT 1`
         )
-        .bind(...lookup, ...ownerParams(owner, manifest.id))
+        .bind(...lookup, ...ownerParams(owner, target.id ?? null))
     ]);
     const reservation = matched.results[0];
     if (!reservation) throw packageAdmissionError();
@@ -209,7 +215,7 @@ export class PackageBuildDatabase implements PackageRepository {
   ) {
     const row = await this.db
       .prepare(
-        `SELECT r.fingerprint, r.manifest, r.owner, r.sha256, r.expires_at, o.bytes
+        `SELECT r.fingerprint, r.target, r.owner, r.sha256, r.expires_at, o.bytes
         FROM package_uploads r
         JOIN package_objects o ON o.id=r.id
         JOIN developers d ON d.owner_user_id=o.created_by
@@ -220,7 +226,7 @@ export class PackageBuildDatabase implements PackageRepository {
           AND d.profile_generation=json_extract(r.owner,'$.profile_generation')
           AND d.ownership_epoch=json_extract(r.owner,'$.ownership_epoch')
           AND json_extract(r.owner,'$.publisher_client_id') IS ?
-          AND ${extensionAvailable("json_extract(r.manifest,'$.id')")}`
+          AND ${extensionAvailable("json_extract(r.target,'$.id')")}`
       )
       .bind(
         id,
@@ -230,7 +236,7 @@ export class PackageBuildDatabase implements PackageRepository {
       )
       .first<{
         fingerprint: string;
-        manifest: string;
+        target: string;
         owner: string;
         sha256: string;
         expires_at: number;
@@ -239,7 +245,7 @@ export class PackageBuildDatabase implements PackageRepository {
     return row
       ? {
           ...row,
-          manifest: JSON.parse(row.manifest) as Manifest,
+          target: JSON.parse(row.target) as PackageTarget,
           owner: JSON.parse(row.owner) as PackageOwner
         }
       : null;
@@ -308,12 +314,12 @@ export class PackageBuildDatabase implements PackageRepository {
         source.object_id
       )
       .run();
-    return await this.db
-      .prepare(
-        "SELECT id,sha256,object_id FROM package_sources WHERE profile_generation=? AND extension_identifier=? AND version=?"
-      )
-      .bind(owner.profile_generation, manifest.id, manifest.version)
-      .first<SourceRow>();
+    return this.findSource(
+      owner.profile_generation,
+      manifest.id,
+      manifest.version,
+      source.sha256
+    );
   }
   async ensureDraft(owner: PackageOwner, identifier: string) {
     // Reserve the permanent identity only after ZIP and icon validation succeeds.
@@ -350,7 +356,6 @@ export class PackageBuildDatabase implements PackageRepository {
     artifact: {
       id: string;
       sourceId: string;
-      manifestHash: string;
       sha256: string;
       objectId: string;
       downloadUrl: string;
@@ -358,15 +363,14 @@ export class PackageBuildDatabase implements PackageRepository {
   ) {
     await this.db
       .prepare(
-        `INSERT INTO package_artifacts (id,source_id,manifest,manifest_hash,sha256,object_id,download_url)
-    SELECT ?,?,?,?,?,?,? WHERE ${ownerPredicate()} AND EXISTS (SELECT 1 FROM package_objects WHERE id=? AND deleting=0)
+        `INSERT INTO package_artifacts (id,source_id,manifest,sha256,object_id,download_url)
+    SELECT ?,?,?,?,?,? WHERE ${ownerPredicate()} AND EXISTS (SELECT 1 FROM package_objects WHERE id=? AND deleting=0)
     ON CONFLICT DO NOTHING`
       )
       .bind(
         artifact.id,
         artifact.sourceId,
         canonicalJson(manifest),
-        artifact.manifestHash,
         artifact.sha256,
         artifact.objectId,
         artifact.downloadUrl,
@@ -374,7 +378,7 @@ export class PackageBuildDatabase implements PackageRepository {
         artifact.objectId
       )
       .run();
-    return this.findArtifact(artifact.sourceId, artifact.manifestHash);
+    return this.findArtifact(artifact.sourceId, artifact.sha256);
   }
   async linkIcon(
     owner: PackageOwner,
@@ -424,17 +428,16 @@ export class PackageBuildDatabase implements PackageRepository {
         .first()
     );
   }
-  async correctionOwner(userId: string, sourceId: string, manifest: Manifest) {
-    return this.db
-      .prepare(
-        `SELECT d.owner_user_id FROM package_sources s
-      JOIN developers d ON d.profile_generation=s.profile_generation
-      JOIN users moderator ON moderator.id=? AND moderator.is_moderator=1 AND moderator.deleted_at IS NULL
-      WHERE s.id=? AND s.extension_identifier=? AND s.version=?
-      AND EXISTS (SELECT 1 FROM package_artifacts a WHERE a.source_id=s.id AND a.published_at IS NOT NULL)`
-      )
-      .bind(userId, sourceId, manifest.id, manifest.version)
-      .first<{ owner_user_id: string }>();
+  async isPublishedVersion(identifier: string, version: string) {
+    return Boolean(
+      await this.db
+        .prepare(
+          `SELECT 1 FROM package_sources s JOIN package_artifacts a ON a.source_id=s.id
+      WHERE s.extension_identifier=? AND s.version=? AND a.published_at IS NOT NULL LIMIT 1`
+        )
+        .bind(identifier, version)
+        .first()
+    );
   }
   async getArtifactForReader(id: string, userId: string) {
     return this.db

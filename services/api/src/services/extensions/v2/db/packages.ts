@@ -29,13 +29,14 @@ export async function validatePackageContent(
   }
   const published = await db
     .prepare(
-      `SELECT DISTINCT s.version FROM package_artifacts a JOIN package_sources s ON s.id=a.source_id WHERE s.extension_identifier=? AND a.published_at IS NOT NULL`
+      `SELECT s.version, a.id FROM package_artifacts a JOIN package_sources s ON s.id=a.source_id WHERE s.extension_identifier=? AND a.published_at IS NOT NULL`
     )
     .bind(id)
-    .all<{ version: string }>();
+    .all<{ version: string; id: string }>();
   const publishedVersions = new Set(
     published.results.map((row) => row.version)
   );
+  const publishedIds = new Set(published.results.map((row) => row.id));
   const managed = publishedVersions.size > 0;
   const hasArtifacts = content.releases.some((r) => r.artifact_id);
   const selectedCount = content.releases.filter(
@@ -65,7 +66,7 @@ export async function validatePackageContent(
     );
   if ((managed || hasArtifacts) && !latest.artifact_id)
     return fail(
-      "The latest release needs a directory-built package; upload its source ZIP first"
+      "The latest release needs a validated package; upload its ZIP first"
     );
   const artifactIds = [
     ...new Set(
@@ -88,14 +89,16 @@ export async function validatePackageContent(
       return fail("Duplicate release version");
     versions.add(version);
     if (!release.artifact_id) {
-      if (release.sha256)
-        return fail("Checksums require a directory-built artifact");
+      if (release.sha256) return fail("Checksums require a validated package");
       if (publishedVersions.has(version))
-        return fail(
-          "A directory-built release cannot be replaced with an external download"
-        );
+        return fail("Published release ZIPs are locked; upload a new version");
       continue;
     }
+    if (
+      publishedVersions.has(version) &&
+      !publishedIds.has(release.artifact_id)
+    )
+      return fail("Published release ZIPs are locked; upload a new version");
     const artifact = artifacts.get(release.artifact_id);
     if (
       !artifact ||
@@ -110,11 +113,15 @@ export async function validatePackageContent(
     if (
       release === latest &&
       (content.download_url !== artifact.download_url ||
-        canonicalJson(manifest) !== canonicalJson(contentManifest(id, content)))
+        canonicalJson(manifest) !==
+          canonicalJson(
+            contentManifest(id, {
+              ...content,
+              description: manifest.description
+            })
+          ))
     )
-      return fail(
-        "Overview metadata must match the latest package manifest; rebuild it before submitting"
-      );
+      return fail("Overview metadata must match the latest package manifest");
   }
   return null;
 }

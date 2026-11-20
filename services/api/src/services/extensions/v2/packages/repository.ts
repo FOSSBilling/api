@@ -46,22 +46,21 @@ export interface IconObject {
 export interface PackageRepository {
   getOwner(
     userId: string,
-    identifier: string,
+    identifier: string | null,
     publisher?: PackagePublisher | null
   ): Promise<PackageOwner>;
   findSource(
     generation: string,
     identifier: string,
-    version: string
+    version: string,
+    sha256: string
   ): Promise<SourceRow | null>;
-  findArtifact(
-    sourceId: string,
-    manifestHash: string
-  ): Promise<ArtifactRow | null>;
+  findArtifact(sourceId: string, checksum: string): Promise<ArtifactRow | null>;
+  isPublishedVersion(identifier: string, version: string): Promise<boolean>;
   hasIcon(sourceId: string): Promise<boolean>;
   reserveObject(
     owner: PackageOwner,
-    identifier: string,
+    identifier: string | null,
     id: string,
     bytes: number
   ): Promise<void>;
@@ -81,7 +80,6 @@ export interface PackageRepository {
     artifact: {
       id: string;
       sourceId: string;
-      manifestHash: string;
       sha256: string;
       objectId: string;
       downloadUrl: string;

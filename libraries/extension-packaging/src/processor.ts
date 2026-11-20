@@ -13,21 +13,30 @@ const output = z
     sha256: checksum
   })
   .strict();
+export const PackageTargetSchema = z.strictObject({
+  id: ManifestSchema.shape.id.optional(),
+  version: ManifestSchema.shape.version.optional()
+});
+export type PackageTarget = z.infer<typeof PackageTargetSchema>;
+
 export const ProcessingInputSchema = z
   .object({
-    manifest: ManifestSchema,
+    target: PackageTargetSchema,
     source: z.object({ id: z.uuid(), sha256: checksum }).strict(),
     archive: z.uuid(),
-    icons: z.tuple([z.uuid(), z.uuid()]).optional()
+    icons: z.tuple([z.uuid(), z.uuid()])
   })
   .strict()
   .refine((value) => {
-    const keys = [value.source.id, value.archive, ...(value.icons ?? [])];
+    const keys = [value.source.id, value.archive, ...value.icons];
     return new Set(keys).size === keys.length;
   }, "Processing object IDs must be distinct");
 export const ProcessingResultSchema = z
   .object({
-    archive: output,
+    manifest: ManifestSchema,
+    archive: output.extend({
+      bytes: output.shape.bytes.max(PACKAGE_LIMITS.sourceBytes)
+    }),
     icons: z
       .array(
         output

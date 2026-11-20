@@ -1,4 +1,4 @@
-import { buildExtensionPackage } from "./zip";
+import { validateExtensionPackage } from "./zip";
 import { PACKAGE_LIMITS } from "./limits";
 import { sha256 } from "./checksum";
 import { PackageError } from "./errors";
@@ -27,9 +27,9 @@ export async function processPackage(
       "Source ZIP is unavailable or failed checksum verification",
       503
     );
-  let built;
+  let validated;
   try {
-    built = await buildExtensionPackage(source, input.manifest, signal);
+    validated = await validateExtensionPackage(source, signal);
   } catch (error) {
     signal?.throwIfAborted();
     throw new PackageError(
@@ -40,16 +40,26 @@ export async function processPackage(
       422
     );
   }
-  const variants =
-    input.icons && built.icon
-      ? await images.prepare(built.icon, built.iconName === "icon.svg")
-      : [];
+  const { manifest } = validated;
+  if (
+    (input.target.id && input.target.id !== manifest.id) ||
+    (input.target.version && input.target.version !== manifest.version)
+  )
+    throw new PackageError(
+      "INVALID_PACKAGE",
+      "ZIP manifest does not match the expected extension or release version",
+      422
+    );
+  const variants = validated.icon
+    ? await images.prepare(validated.icon, validated.iconName === "icon.svg")
+    : [];
   signal?.throwIfAborted();
-  await store.put(input.archive, built.bytes, built.packageSha256);
+  // Seal the validated bytes at a key that has never had a client PUT URL.
+  await store.put(input.archive, source, input.source.sha256);
   const icons: ProcessingResult["icons"] = [];
   for (const [index, variant] of variants.entries()) {
     signal?.throwIfAborted();
-    const id = input.icons![index];
+    const id = input.icons[index];
     const checksum = await sha256(variant.bytes);
     await store.put(id, variant.bytes, checksum);
     icons.push({
@@ -61,7 +71,8 @@ export async function processPackage(
   }
   signal?.throwIfAborted();
   return ProcessingResultSchema.parse({
-    archive: { bytes: built.bytes.length, sha256: built.packageSha256 },
+    manifest,
+    archive: { bytes: source.length, sha256: input.source.sha256 },
     icons
   });
 }

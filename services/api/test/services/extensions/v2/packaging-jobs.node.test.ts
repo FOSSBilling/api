@@ -16,18 +16,7 @@ function repository() {
       ownership_epoch: 1,
       owner_user_id: "owner"
     },
-    manifest: {
-      manifest_version: 1,
-      type: "module",
-      id: "example",
-      name: "Example",
-      version: "1.0.0",
-      description: "Example",
-      author: { name: "Developer" },
-      license: "MIT",
-      requires: { fossbilling: "*" }
-    },
-    sourceId: null,
+    target: { id: "example" },
     uploadObjectId: "upload",
     uploadSha256: "checksum",
     status: "queued",

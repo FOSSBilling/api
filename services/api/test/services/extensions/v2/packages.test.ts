@@ -40,6 +40,7 @@ import {
   put,
   db
 } from "./harness";
+import { wrapD1WithHook } from "./db-interceptor";
 import { insertUser, getExtension, getDeveloper, UUID_V7 } from "./db-fixtures";
 
 vi.mock("../../../../src/lib/github-app", async () =>
@@ -234,28 +235,29 @@ afterEach(() => {
       expect(url.searchParams.get("versionId")).toBeTruthy();
   }
 });
-async function zip(content = "<?php // source") {
+async function zip(content = "<?php // source", metadata = manifest()) {
   const writer = new ZipWriter(new Uint8ArrayWriter(), options);
   await writer.add("Service.php", new TextReader(content));
+  await writer.add("manifest.json", new TextReader(JSON.stringify(metadata)));
   return writer.close();
 }
 async function reserveUpload(
-  metadata: unknown,
+  target: { id?: string; version?: string },
   source: Uint8Array<ArrayBuffer>,
   headers: Record<string, string>
 ) {
   return post(`${root}/package-uploads`, headers, {
-    manifest: metadata,
+    target: { id: target.id, version: target.version },
     bytes: source.byteLength,
     sha256: await sha256(source)
   });
 }
 async function prepareUpload(
-  metadata: unknown,
+  target: { id?: string; version?: string },
   source: Uint8Array<ArrayBuffer>,
   headers: Record<string, string>
 ) {
-  const response = await reserveUpload(metadata, source, headers);
+  const response = await reserveUpload(target, source, headers);
   if (!response.ok) return response;
   const { result } = (await response.json()) as {
     result:
@@ -280,19 +282,17 @@ async function prepareUpload(
   return post(`${root}/packages`, headers, { upload_id: result.id });
 }
 async function upload(
-  metadata: unknown = manifest(),
+  metadata = manifest(),
   source?: Uint8Array<ArrayBuffer>,
-  sourceId?: string,
   user = "owner",
   process = true
 ) {
   const headers = await authHeaders(user);
-  const response = sourceId
-    ? await post(`${root}/packages`, headers, {
-        manifest: metadata,
-        source_id: sourceId
-      })
-    : await prepareUpload(metadata, source ?? (await zip()), headers);
+  const response = await prepareUpload(
+    metadata,
+    source ?? (await zip(undefined, metadata)),
+    headers
+  );
   return process ? finishJob(response) : response;
 }
 async function finishJob(response: Response): Promise<Response> {
@@ -323,12 +323,8 @@ async function finishJob(response: Response): Promise<Response> {
     { status: job.error?.status ?? 503 }
   );
 }
-async function built(
-  metadata: unknown = manifest(),
-  source?: Uint8Array<ArrayBuffer>,
-  sourceId?: string
-) {
-  const response = await upload(metadata, source, sourceId);
+async function built(metadata = manifest(), source?: Uint8Array<ArrayBuffer>) {
+  const response = await upload(metadata, source);
   const body = (await response.json()) as { result: unknown };
   expect(response.status, JSON.stringify(body)).toBe(200);
   return PackageArtifactSchema.parse(body.result);
@@ -566,7 +562,6 @@ describe("queued package preparation", () => {
       const response = await upload(
         { ...manifest(), version },
         undefined,
-        undefined,
         "owner",
         false
       );
@@ -632,13 +627,7 @@ describe("queued package preparation", () => {
     await runInDurableObject(other, (instance) => {
       Object.assign(Reflect.get(instance, "env"), { ENVIRONMENT: "preview" });
     });
-    const response = await upload(
-      manifest(),
-      undefined,
-      undefined,
-      "owner",
-      false
-    );
+    const response = await upload(manifest(), undefined, "owner", false);
     expect(response.status).toBe(202);
     const { result: job } = (await response.json()) as {
       result: { id: string };
@@ -678,13 +667,7 @@ describe("queued package preparation", () => {
   });
 
   it("recovers a scoped job without an immediate wakeup and retries after a restart", async () => {
-    const response = await upload(
-      manifest(),
-      undefined,
-      undefined,
-      "owner",
-      false
-    );
+    const response = await upload(manifest(), undefined, "owner", false);
     expect(response.status).toBe(202);
     const { result: submitted } = (await response.json()) as {
       result: { id: string };
@@ -836,13 +819,7 @@ describe("queued package preparation", () => {
   });
   it("accepts a private job without preparing an artifact and deduplicates retries", async () => {
     const source = await zip();
-    const response = await upload(
-      manifest(),
-      source,
-      undefined,
-      "owner",
-      false
-    );
+    const response = await upload(manifest(), source, "owner", false);
     expect(response.status).toBe(202);
     const { result: job } = (await response.json()) as {
       result: { id: string; status: string };
@@ -854,7 +831,7 @@ describe("queued package preparation", () => {
         .first()
     ).toEqual({ count: 0 });
     expect(wake.mock.calls).toEqual([[], [true]]);
-    const repeat = await upload(manifest(), source, undefined, "owner", false);
+    const repeat = await upload(manifest(), source, "owner", false);
     expect(
       ((await repeat.json()) as { result: { id: string } }).result.id
     ).toBe(job.id);
@@ -881,13 +858,7 @@ describe("queued package preparation", () => {
     ).toBe("ready");
   });
   it("does not process a job after its developer ownership changes", async () => {
-    const response = await upload(
-      manifest(),
-      undefined,
-      undefined,
-      "owner",
-      false
-    );
+    const response = await upload(manifest(), undefined, "owner", false);
     const { result: job } = (await response.json()) as {
       result: { id: string };
     };
@@ -910,27 +881,19 @@ describe("queued package preparation", () => {
       .mockResolvedValueOnce(undefined)
       .mockRejectedValueOnce(new Error("dispatcher unavailable"));
     const source = await zip();
-    expect(
-      (await upload(manifest(), source, undefined, "owner", false)).status
-    ).toBe(503);
+    expect((await upload(manifest(), source, "owner", false)).status).toBe(503);
     const jobs = new PackagingJobsDatabase(db);
     const pending = await jobs.nextForAlarm();
     expect(pending).not.toBeNull();
 
-    const retry = await upload(manifest(), source, undefined, "owner", false);
+    const retry = await upload(manifest(), source, "owner", false);
     expect(retry.status).toBe(202);
     expect(await retry.json()).toMatchObject({ result: { id: pending!.id } });
     expect(wake).toHaveBeenLastCalledWith(true);
   });
   it("retries a missing staged upload and completes when storage recovers", async () => {
     const source = await zip();
-    const response = await upload(
-      manifest(),
-      source,
-      undefined,
-      "owner",
-      false
-    );
+    const response = await upload(manifest(), source, "owner", false);
     const { result } = (await response.json()) as { result: { id: string } };
     const jobs = new PackagingJobsDatabase(db);
     const job = (await jobs.get(result.id))!;
@@ -960,13 +923,7 @@ describe("queued package preparation", () => {
     });
   });
   it("recovers an expired processing lease without accepting stale completion", async () => {
-    const response = await upload(
-      manifest(),
-      undefined,
-      undefined,
-      "owner",
-      false
-    );
+    const response = await upload(manifest(), undefined, "owner", false);
     const { result: job } = (await response.json()) as {
       result: { id: string };
     };
@@ -996,13 +953,7 @@ describe("queued package preparation", () => {
     expect((await jobs.get(job.id))!.status).toBe("ready");
   });
   it("claims a job once across concurrent deliveries", async () => {
-    const response = await upload(
-      manifest(),
-      undefined,
-      undefined,
-      "owner",
-      false
-    );
+    const response = await upload(manifest(), undefined, "owner", false);
     const { result: job } = (await response.json()) as {
       result: { id: string };
     };
@@ -1022,9 +973,13 @@ describe("queued package preparation", () => {
 });
 
 describe("stored directory packages", () => {
-  it("uses separate B2 buckets for ZIPs and icons through preparation, correction and approval", async () => {
+  it("uses separate B2 buckets for ZIPs and icons through validation and approval", async () => {
     const requests = b2.calls;
     const writer = new ZipWriter(new Uint8ArrayWriter(), options);
+    await writer.add(
+      "manifest.json",
+      new TextReader(JSON.stringify(manifest()))
+    );
     await writer.add("Service.php", new TextReader("<?php // B2 test"));
     await writer.add(
       "icon.svg",
@@ -1032,46 +987,39 @@ describe("stored directory packages", () => {
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4"/></svg>'
       )
     );
-    const first = await built(manifest(), await writer.close());
-    const revised = await built(
-      { ...manifest(), description: "Rebuilt from B2 source" },
-      undefined,
-      first.source_id
-    );
-    expect(revised.source_id).toBe(first.source_id);
+    const source = await writer.close();
+    const artifact = await built(manifest(), source);
     const uploads = requests.filter((request) => request.method === "PUT");
-    expect(uploads).toHaveLength(5); // source, two manifests, staged icon and shared public icon
+    expect(uploads).toHaveLength(4); // upload, sealed ZIP, staged icon and public icon
     expect(
       uploads.filter((request) =>
         new URL(request.url).pathname.startsWith("/test-packages/packages/")
       )
-    ).toHaveLength(4);
+    ).toHaveLength(3);
     expect(
       uploads.filter((request) =>
         new URL(request.url).pathname.startsWith("/test-assets/extensions/")
       )
     ).toHaveLength(1);
-    const path = `${root}/packages/${revised.id}/download`;
+    const path = `${root}/packages/${artifact.id}/download`;
     const before = requests.length;
     expect((await get(path, {})).status).toBe(404);
     expect(requests.length).toBe(before);
     const owner = await get(path, await authHeaders("owner"));
     expect(owner.status).toBe(200);
-    expect(await sha256(new Uint8Array(await owner.arrayBuffer()))).toBe(
-      revised.sha256
-    );
-    expect((await get(`${root}/packages/${revised.id}/icon`, {})).status).toBe(
+    expect(new Uint8Array(await owner.arrayBuffer())).toEqual(source);
+    expect((await get(`${root}/packages/${artifact.id}/icon`, {})).status).toBe(
       404
     );
     expect(
       (
         await get(
-          `${root}/packages/${revised.id}/icon`,
+          `${root}/packages/${artifact.id}/icon`,
           await authHeaders("owner")
         )
       ).status
     ).toBe(200);
-    const revision = await submitted(revised);
+    const revision = await submitted(artifact);
     expect((await approve(revision)).status).toBe(200);
     const publicDownload = await get(path, {});
     expect(publicDownload.status).toBe(200);
@@ -1080,11 +1028,24 @@ describe("stored directory packages", () => {
     );
     expect(
       await sha256(new Uint8Array(await publicDownload.arrayBuffer()))
-    ).toBe(revised.sha256);
+    ).toBe(artifact.sha256);
   });
 
   it("keeps uploads private until approval and publishes the exact reviewed ZIP", async () => {
-    const artifact = await built();
+    const source = await zip();
+    const response = await prepareUpload(
+      {},
+      source,
+      await authHeaders("owner")
+    );
+    expect(response.status).toBe(202);
+    const initial = await response.json<{
+      result: { extension_identifier: string | null };
+    }>();
+    expect(initial.result.extension_identifier).toBeNull();
+    const prepared = await finishJob(Response.json(initial, { status: 202 }));
+    const { result } = await prepared.json<{ result: unknown }>();
+    const artifact = PackageArtifactSchema.parse(result);
     const path = `${root}/packages/${artifact.id}/download`;
     expect((await get(path, {})).status).toBe(404);
     expect((await get(path, await authHeaders("stranger"))).status).toBe(404);
@@ -1096,12 +1057,24 @@ describe("stored directory packages", () => {
     expect(download.status).toBe(200);
     expect(download.headers.get("Cache-Control")).toContain("no-store");
     const bytes = new Uint8Array(await download.arrayBuffer());
-    expect(await sha256(bytes)).toBe(artifact.sha256);
+    expect(bytes).toEqual(source);
+    expect(artifact.sha256).toBe(await sha256(source));
     const files = await unpack(bytes);
     expect(files["Service.php"]).toBe("<?php // source");
     expect(ManifestSchema.parse(JSON.parse(files["manifest.json"]))).toEqual(
       artifact.manifest
     );
+    await db
+      .prepare(
+        "UPDATE package_objects SET created_at=datetime('now','-2 days')"
+      )
+      .run();
+    const cleanup = await post(
+      `${root}/packages/cleanup`,
+      await authHeaders("moderator")
+    );
+    expect(await cleanup.json()).toEqual({ result: { deleted: 1 } });
+    expect((await get(path, {})).status).toBe(200);
     const published = await getExtension(db, "package-demo");
     expect(JSON.parse(published!.releases!)[0]).toMatchObject({
       artifact_id: artifact.id,
@@ -1117,6 +1090,10 @@ describe("stored directory packages", () => {
 
   it("serves convention icons with the same publication permissions as downloads", async () => {
     const writer = new ZipWriter(new Uint8ArrayWriter(), options);
+    await writer.add(
+      "manifest.json",
+      new TextReader(JSON.stringify(manifest()))
+    );
     await writer.add("Service.php", new TextReader("<?php"));
     await writer.add(
       "icon.svg",
@@ -1147,19 +1124,6 @@ describe("stored directory packages", () => {
       )
       .bind(artifact.source_id)
       .first();
-    await built(
-      { ...manifest(), description: "Updated metadata" },
-      undefined,
-      artifact.source_id
-    );
-    expect(
-      await db
-        .prepare(
-          "SELECT svg_object_id,avif_object_id,png_object_id FROM package_icons WHERE source_id=?"
-        )
-        .bind(artifact.source_id)
-        .first()
-    ).toEqual(before);
     const object = await db
       .prepare("SELECT object_id FROM package_artifacts WHERE id=?")
       .bind(artifact.id)
@@ -1200,38 +1164,28 @@ describe("stored directory packages", () => {
     expect(excluded.headers.get("Content-Type")).toBe("image/png");
   });
 
-  it("lets moderators rebuild published source for a correction without uploading new files", async () => {
+  it("lets moderators correct directory descriptions without changing the published ZIP", async () => {
     const artifact = await built();
-    const revision = await submitted(artifact);
-    expect((await approve(revision)).status).toBe(200);
-    const corrected = { ...manifest(), description: "Moderator correction" };
-    const response = await upload(
-      corrected,
-      undefined,
-      artifact.source_id,
-      "moderator"
+    expect((await approve(await submitted(artifact))).status).toBe(200);
+    const description = "Moderator correction";
+    const response = await post(
+      `${root}/extensions/package-demo/moderator-correct`,
+      await authHeaders("moderator"),
+      {
+        ...content(artifact),
+        description,
+        correction_note: "Correct the listing"
+      }
     );
     expect(response.status).toBe(200);
-    const next = PackageArtifactSchema.parse(
-      ((await response.json()) as { result: unknown }).result
+    const extension = (await getExtension(db, "package-demo"))!;
+    expect(extension.description).toBe(description);
+    expect(JSON.parse(extension.releases!)[0].artifact_id).toBe(artifact.id);
+    const download = await get(`${root}/packages/${artifact.id}/download`, {});
+    const files = await unpack(new Uint8Array(await download.arrayBuffer()));
+    expect(JSON.parse(files["manifest.json"]).description).toBe(
+      artifact.manifest.description
     );
-    expect(next.source_id).toBe(artifact.source_id);
-    expect(next.manifest.description).toBe(corrected.description);
-    expect(
-      (await upload(corrected, await zip(), undefined, "moderator")).status
-    ).toBe(403);
-    expect(
-      (
-        await post(
-          `${root}/extensions/package-demo/moderator-correct`,
-          await authHeaders("moderator"),
-          {
-            ...content(next),
-            correction_note: "Correct the package metadata"
-          }
-        )
-      ).status
-    ).toBe(200);
   });
 
   it("propagates runner icon rejection without reserving the source version", async () => {
@@ -1243,6 +1197,10 @@ describe("stored directory packages", () => {
       )
     );
     const writer = new ZipWriter(new Uint8ArrayWriter(), options);
+    await writer.add(
+      "manifest.json",
+      new TextReader(JSON.stringify(manifest()))
+    );
     await writer.add("icon.png", new TextReader("not an image"));
     const response = await upload(manifest(), await writer.close());
     expect(response.status).toBe(422);
@@ -1260,6 +1218,10 @@ describe("stored directory packages", () => {
       '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M0 0h24v24z"/></svg>';
     const bytes = format === "svg" ? new TextEncoder().encode(svg) : png;
     const writer = new ZipWriter(new Uint8ArrayWriter(), options);
+    await writer.add(
+      "manifest.json",
+      new TextReader(JSON.stringify(manifest()))
+    );
     await writer.add(
       `icon.${format}`,
       new Uint8ArrayReader(new Uint8Array(bytes))
@@ -1322,15 +1284,10 @@ describe("stored directory packages", () => {
       `${env.EXTENSION_ASSETS_PUBLIC_URL}/${objectKey}`
     );
     expect(b2.calls).toHaveLength(callsBeforeApproval);
-    const edited = await built(
-      { ...manifest(), description: "Updated metadata" },
-      undefined,
-      artifact.source_id
-    );
     const update = await put(
       `${root}/extensions/package-demo`,
       await authHeaders("owner"),
-      content(edited)
+      { ...content(artifact), description: "Updated listing description" }
     );
     expect(update.status).toBe(202);
     const { result } = (await update.json()) as {
@@ -1366,6 +1323,18 @@ describe("stored directory packages", () => {
     ).toEqual({ count: 0 });
     b2.fetch.mockImplementation(original);
     const artifact = await built(manifest(), source);
+    const download = await get(
+      `${root}/packages/${artifact.id}/download`,
+      await authHeaders("owner")
+    );
+    expect(new Uint8Array(await download.arrayBuffer())).toEqual(source);
+    const stored = await db
+      .prepare(
+        "SELECT s.object_id = a.object_id AS shares_zip FROM package_sources s JOIN package_artifacts a ON a.source_id=s.id WHERE a.id=?"
+      )
+      .bind(artifact.id)
+      .first();
+    expect(stored).toEqual({ shares_zip: 1 });
     expect(
       (
         await get(
@@ -1433,77 +1402,10 @@ describe("stored directory packages", () => {
     expect(await response.text()).toContain("<svg");
   });
 
-  it("deduplicates retries and builds metadata revisions using the stored source", async () => {
-    const source = await zip();
-    const first = await built(manifest(), source);
-    const retry = await built(manifest(), source);
-    expect(retry.id).toBe(first.id);
-    const second = await built(
-      { ...manifest(), description: "Corrected metadata" },
-      undefined,
-      first.source_id
-    );
-    expect(second.source_id).toBe(first.source_id);
-    expect(second.manifest.version).toBe(first.manifest.version);
-    expect(second.id).not.toBe(first.id);
-    expect(second.sha256).not.toBe(first.sha256);
-    expect(second.download_url).not.toBe(first.download_url);
-    const rows = await db
-      .prepare("SELECT count(*) AS count FROM package_objects")
-      .first<{ count: number }>();
-    expect(rows!.count).toBe(3);
-  });
-
-  it("reuses a ready artifact without reopening its stored source", async () => {
-    const artifact = await built();
-    const source = await db
-      .prepare("SELECT object_id FROM package_sources WHERE id=?")
-      .bind(artifact.source_id)
-      .first<{ object_id: string }>();
-    b2.objects.delete(packageKey(source!.object_id));
-    expect((await built(manifest(), undefined, artifact.source_id)).id).toBe(
-      artifact.id
-    );
-    expect(
-      (
-        await upload(
-          { ...manifest(), description: "Needs a rebuild" },
-          undefined,
-          artifact.source_id
-        )
-      ).status
-    ).toBe(503);
-  });
-
-  it("requires a new version for changed source and hides foreign stored sources", async () => {
-    const first = await built();
-    expect((await upload(manifest(), await zip("changed source"))).status).toBe(
-      409
-    );
-    const changed = { ...manifest(), version: "1.1.0" };
-    expect((await upload(changed, await zip("changed source"))).status).toBe(
-      200
-    );
-    await seedDeveloper("other-developer", "other");
-    expect(
-      (await upload(manifest(), undefined, first.source_id, "other")).status
-    ).toBe(403); // The package has already reserved the extension for its owner.
-    expect(
-      (
-        await upload(
-          { ...manifest(), id: "other-extension" },
-          undefined,
-          first.source_id,
-          "other"
-        )
-      ).status
-    ).toBe(404);
-  });
-
   it("rejects metadata/requirements/URL/checksum mismatches at submission", async () => {
     const artifact = await built();
     for (const patch of [
-      { description: "Not in ZIP" },
+      { name: "Not in ZIP" },
       { download_url: "https://evil.test/not-the-package.zip" },
       { requires: { fossbilling: ">=9.0.0" } },
       {
@@ -1539,53 +1441,86 @@ describe("stored directory packages", () => {
     ).toEqual({ count: 0 });
   });
 
-  it("replaces a pending package, invalidates the old review, and preserves previously published bytes", async () => {
+  it("allows a pending ZIP replacement and locks the reviewed version on publication", async () => {
     const first = await built();
     const revision = await submitted(first);
-    expect((await approve(revision)).status).toBe(200);
-    const second = await built(
-      { ...manifest(), description: "Correction" },
-      undefined,
-      first.source_id
-    );
-    const proposed = await put(
-      `${root}/extensions/package-demo`,
-      await authHeaders("owner"),
-      content(second)
-    );
-    expect(proposed.status).toBe(202);
-    const oldPending = (
-      (await proposed.json()) as { result: { revision_id: string } }
-    ).result.revision_id;
-    const third = await built(
-      { ...manifest(), description: "Final correction" },
-      undefined,
-      first.source_id
-    );
+    const replacementBytes = await zip("<?php // replacement");
+    const replacement = await built(manifest(), replacementBytes);
+    expect(replacement.sha256).not.toBe(first.sha256);
     const replaced = await put(
-      `${root}/extensions/package-demo/revisions/${oldPending}`,
+      `${root}/extensions/package-demo/revisions/${revision}`,
       await authHeaders("owner"),
-      content(third)
+      content(replacement)
     );
     expect(replaced.status).toBe(202);
-    expect((await approve(oldPending)).status).toBe(404);
-    expect(
-      (await get(`${root}/packages/${second.id}/download`, {})).status
-    ).toBe(404);
-    expect(
-      (
-        await approve(
-          ((await replaced.json()) as { result: { revision_id: string } })
-            .result.revision_id
-        )
-      ).status
-    ).toBe(200);
+    expect((await approve(revision)).status).toBe(404);
+    const { result } = await replaced.json<{
+      result: { revision_id: string };
+    }>();
+    expect((await approve(result.revision_id)).status).toBe(200);
     expect(
       (await get(`${root}/packages/${first.id}/download`, {})).status
-    ).toBe(200);
+    ).toBe(404);
+    const download = await get(
+      `${root}/packages/${replacement.id}/download`,
+      {}
+    );
+    expect(new Uint8Array(await download.arrayBuffer())).toEqual(
+      replacementBytes
+    );
     expect(
-      (await get(`${root}/packages/${third.id}/download`, {})).status
-    ).toBe(200);
+      (await upload(manifest(), await zip("<?php // another upload"))).status
+    ).toBe(409);
+    expect(
+      (
+        await put(
+          `${root}/extensions/package-demo`,
+          await authHeaders("owner"),
+          content(first)
+        )
+      ).status
+    ).toBe(409);
+    expect((await built(manifest(), replacementBytes)).id).toBe(replacement.id);
+  });
+
+  it("locks a version even when two moderator corrections pass the preflight check", async () => {
+    const original = await built();
+    expect((await approve(await submitted(original))).status).toBe(200);
+    const metadata = { ...manifest(), version: "1.1.0" };
+    const winningBytes = await zip("<?php // first correction", metadata);
+    const winner = await built(metadata, winningBytes);
+    const loser = await built(
+      metadata,
+      await zip("<?php // second correction", metadata)
+    );
+    const headers = await authHeaders("moderator");
+    const path = `${root}/extensions/package-demo/moderator-correct`;
+    const correct = (artifact: typeof winner) =>
+      post(path, headers, {
+        ...content(artifact),
+        correction_note: "Publish reviewed release"
+      });
+    env.DB_EXTENSIONS = wrapD1WithHook(db, async (sql) => {
+      if (
+        sql.includes("UPDATE extensions") &&
+        sql.includes("published_revision_id = ?")
+      ) {
+        env.DB_EXTENSIONS = db;
+        expect((await correct(winner)).status).toBe(200);
+      }
+    });
+    const stale = await correct(loser);
+    expect(stale.status).toBe(409);
+    expect(await stale.json()).toMatchObject({
+      error: {
+        message: "Published release ZIPs are locked; upload a new version"
+      }
+    });
+    const download = await get(`${root}/packages/${winner.id}/download`, {});
+    expect(new Uint8Array(await download.arrayBuffer())).toEqual(winningBytes);
+    expect(
+      (await get(`${root}/packages/${loser.id}/download`, {})).status
+    ).toBe(404);
   });
 
   it("prevents reverting a managed listing to external downloads or mutating artifacts", async () => {
@@ -1682,7 +1617,7 @@ describe("stored directory packages", () => {
     const revision = await submitted(artifact);
     await db
       .prepare(
-        "UPDATE extension_revisions SET content=json_set(content,'$.description','Changed after submission') WHERE id=?"
+        "UPDATE extension_revisions SET content=json_set(content,'$.name','Changed after submission') WHERE id=?"
       )
       .bind(revision)
       .run();
@@ -1692,31 +1627,13 @@ describe("stored directory packages", () => {
     ).toBe(404);
   });
 
-  it("detects corrupted stored source and package objects", async () => {
+  it("rejects downloads when the stored checksum metadata changes", async () => {
     const artifact = await built();
-    const source = await db
-      .prepare("SELECT object_id FROM package_sources WHERE id=?")
-      .bind(artifact.source_id)
-      .first<{ object_id: string }>();
-    b2.objects.get(packageKey(source!.object_id))!.bytes = new Uint8Array(
-      new TextEncoder().encode("corrupt")
-    ).buffer;
-    expect(
-      (
-        await upload(
-          { ...manifest(), description: "Correction" },
-          undefined,
-          artifact.source_id
-        )
-      ).status
-    ).toBe(503);
     const stored = await db
       .prepare("SELECT object_id FROM package_artifacts WHERE id=?")
       .bind(artifact.id)
       .first<{ object_id: string }>();
-    b2.objects.get(packageKey(stored!.object_id))!.bytes = new Uint8Array(
-      new TextEncoder().encode("corrupt")
-    ).buffer;
+    b2.objects.get(packageKey(stored!.object_id))!.checksum = "0".repeat(64);
     expect(
       (
         await get(
@@ -1744,7 +1661,7 @@ describe("stored directory packages", () => {
     ).toEqual({ count: 1 });
     expect(
       await db.prepare("SELECT count(*) AS count FROM package_objects").first()
-    ).toEqual({ count: 2 }); // one source ZIP and its prepared artifact
+    ).toEqual({ count: 2 }); // staging upload and the sealed archive
   });
 
   it("does not allow a removed managed release to return as an external download", async () => {
@@ -1835,13 +1752,7 @@ describe("stored directory packages", () => {
       EXTENSION_ASSETS_S3_SECRET_ACCESS_KEY: "test-secret"
     });
     const requests = b2.calls;
-    const response = await upload(
-      manifest(),
-      undefined,
-      undefined,
-      "owner",
-      false
-    );
+    const response = await upload(manifest(), undefined, "owner", false);
     expect(response.status).toBe(202);
     expect(response.headers.get("Location")).toMatch(
       /^https:\/\/api\.fossbilling\.net\/extensions\/v2\/packaging-jobs\//
@@ -1928,7 +1839,6 @@ describe("stored directory packages", () => {
   });
 
   it("counts abandoned reservations against quota and safely cleans them after a day", async () => {
-    const artifact = await built();
     const abandoned = crypto.randomUUID();
     await db
       .prepare(
@@ -1942,15 +1852,7 @@ describe("stored directory packages", () => {
       checksum: await sha256(bytes),
       version: "abandoned-version"
     });
-    expect(
-      (
-        await upload(
-          { ...manifest(), description: "quota test" },
-          undefined,
-          artifact.source_id
-        )
-      ).status
-    ).toBe(409);
+    expect((await upload()).status).toBe(409);
     await insertUser(db, { id: "moderator", is_moderator: 1 });
     const cleanup = await post(
       `${root}/packages/cleanup`,
@@ -1962,14 +1864,6 @@ describe("stored directory packages", () => {
     expect(
       b2.calls.find((request) => request.method === "DELETE")?.url
     ).toContain("versionId=abandoned-version");
-    expect(
-      (
-        await upload(
-          { ...manifest(), description: "quota test" },
-          undefined,
-          artifact.source_id
-        )
-      ).status
-    ).toBe(200);
+    expect((await upload()).status).toBe(200);
   });
 });

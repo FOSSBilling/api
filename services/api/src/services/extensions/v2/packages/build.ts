@@ -1,12 +1,17 @@
+import { PACKAGE_LIMITS } from "@fossbilling/extension-packaging/limits";
 import { sha256 } from "@fossbilling/extension-packaging/checksum";
 import {
-  MAX_PACKAGE_OBJECT_BYTES,
   MAX_PACKAGE_ICON_BYTES,
-  type PackageProcessor
+  type PackageProcessor,
+  type PackageTarget
 } from "@fossbilling/extension-packaging/processor";
 import type { Manifest } from "../schemas/manifest";
-import { canonicalJson } from "./manifest";
-import type { PackageRepository, PackageOwner, IconObject } from "./repository";
+import type {
+  PackageRepository,
+  PackageOwner,
+  PackagePublisher,
+  IconObject
+} from "./repository";
 import type { IconVariant } from "@fossbilling/extension-packaging/images";
 import { PackageError } from "@fossbilling/extension-packaging/errors";
 import {
@@ -14,20 +19,6 @@ import {
   type PackageStore
 } from "@fossbilling/extension-packaging/store";
 
-export async function reserveObject(
-  repository: PackageRepository,
-  store: PackageStore,
-  owner: PackageOwner,
-  identifier: string,
-  bytes: Uint8Array<ArrayBuffer>,
-  checksum: string,
-  id: string = crypto.randomUUID()
-) {
-  await repository.reserveObject(owner, identifier, id, bytes.length);
-  // Failed writes retain their reservation for later cleanup.
-  await store.put(id, bytes, checksum);
-  return id;
-}
 export async function cleanupPackageObjects(
   repository: PackageRepository,
   store: PackageStore
@@ -40,75 +31,83 @@ export async function cleanupPackageObjects(
   return ids.length;
 }
 
-export async function buildStoredPackage(input: {
+export async function prepareStoredPackage(input: {
   repository: PackageRepository;
   store: PackageStore;
   owner: PackageOwner;
-  manifest: Manifest;
-  upload?: { sha256: string; objectId: string };
-  sourceId?: string;
+  target: PackageTarget;
+  upload: { sha256: string; objectId: string };
+  publisher: PackagePublisher | null;
   baseUrl: string;
   processor: PackageProcessor;
 }) {
-  const { repository, store, owner, manifest } = input;
-  let source = await repository.findSource(
-    owner.profile_generation,
-    manifest.id,
-    manifest.version
-  );
-  if (input.sourceId && source?.id !== input.sourceId)
-    throw new PackageError(
-      "NOT_FOUND",
-      "Source not found for this extension version",
-      404
-    );
-  if (input.upload && source && input.upload.sha256 !== source.sha256)
-    throw new PackageError(
-      "SOURCE_CHANGED",
-      "This version already has a different source ZIP; use a new extension version",
-      409
-    );
-  const manifestJson = canonicalJson(manifest);
-  const manifestHash = await sha256(
-    new Uint8Array(new TextEncoder().encode(manifestJson))
-  );
-  if (source) {
-    const existing = await repository.findArtifact(source.id, manifestHash);
-    if (existing) return existing;
-  }
-  const upload =
-    input.upload ??
-    (source ? { objectId: source.object_id, sha256: source.sha256 } : null);
-  if (!upload) throw new PackageError("NOT_FOUND", "Source ZIP not found", 404);
-  const prepared = source && (await repository.hasIcon(source.id));
+  const { repository, store, upload, target } = input;
   const objectId = crypto.randomUUID();
-  const iconIds: [string, string] | undefined = prepared
-    ? undefined
-    : [crypto.randomUUID(), crypto.randomUUID()];
-  // Reserve worst-case output space before an external runner can write to B2.
-  // Unused/failed reservations remain discoverable by the normal cleanup job.
+  const iconIds: [string, string] = [crypto.randomUUID(), crypto.randomUUID()];
   await repository.reserveObject(
-    owner,
-    manifest.id,
+    input.owner,
+    target.id ?? null,
     objectId,
-    MAX_PACKAGE_OBJECT_BYTES
+    PACKAGE_LIMITS.sourceBytes
   );
-  for (const id of iconIds ?? [])
+  for (const id of iconIds) {
     await repository.reserveObject(
-      owner,
-      manifest.id,
+      input.owner,
+      target.id ?? null,
       id,
       MAX_PACKAGE_ICON_BYTES
     );
-  const built = await input.processor.process({
-    manifest,
+  }
+  const prepared = await input.processor.process({
+    target,
     source: { id: upload.objectId, sha256: upload.sha256 },
     archive: objectId,
     icons: iconIds
   });
-  await repository.setObjectSize(objectId, built.archive.bytes);
-  const variants: IconVariant[] = [];
-  for (const icon of built.icons) {
+  const { manifest } = prepared;
+  if (prepared.archive.sha256 !== upload.sha256)
+    throw new PackageError(
+      "PACKAGE_UNAVAILABLE",
+      "Validated archive checksum does not match the upload",
+      503
+    );
+  const owner = await repository.getOwner(
+    input.owner.owner_user_id,
+    manifest.id,
+    input.publisher
+  );
+  if (
+    owner.id !== input.owner.id ||
+    owner.profile_generation !== input.owner.profile_generation ||
+    owner.ownership_epoch !== input.owner.ownership_epoch
+  )
+    throw new PackageError(
+      "FORBIDDEN",
+      "Package ownership changed during validation",
+      403
+    );
+
+  await repository.setObjectSize(objectId, prepared.archive.bytes);
+  const existingSource = await repository.findSource(
+    owner.profile_generation,
+    manifest.id,
+    manifest.version,
+    upload.sha256
+  );
+  const existing = existingSource
+    ? await repository.findArtifact(existingSource.id, upload.sha256)
+    : null;
+  if (
+    !existing?.published_at &&
+    (await repository.isPublishedVersion(manifest.id, manifest.version))
+  )
+    throw new PackageError(
+      "RELEASE_PUBLISHED",
+      "Published release ZIPs are locked; upload a new version",
+      409
+    );
+  const variants: (IconVariant & { checksum: string })[] = [];
+  for (const icon of prepared.icons) {
     const bytes = await boundedBytes(
       await store.get(icon.id, icon.sha256),
       MAX_PACKAGE_ICON_BYTES
@@ -119,27 +118,21 @@ export async function buildStoredPackage(input: {
         "Prepared icon failed checksum verification",
         503
       );
-    variants.push({ format: icon.format, bytes });
+    variants.push({ format: icon.format, bytes, checksum: icon.sha256 });
   }
-  if (!source) {
-    source = await repository.linkSource(owner, manifest, {
+  const source =
+    existingSource ??
+    (await repository.linkSource(owner, manifest, {
       id: crypto.randomUUID(),
       sha256: upload.sha256,
-      object_id: upload.objectId
-    });
-    if (!source)
-      throw new PackageError(
-        "FORBIDDEN",
-        "Ownership changed while building",
-        403
-      );
-    if (source.sha256 !== upload.sha256)
-      throw new PackageError(
-        "SOURCE_CHANGED",
-        "Another upload reserved this version with different source files",
-        409
-      );
-  }
+      object_id: objectId
+    }));
+  if (!source)
+    throw new PackageError(
+      "FORBIDDEN",
+      "Package ownership changed during validation",
+      403
+    );
 
   const extensionId = await repository.ensureDraft(owner, manifest.id);
   await storePackageIcon({
@@ -153,25 +146,26 @@ export async function buildStoredPackage(input: {
   });
   const artifactId = crypto.randomUUID();
   const downloadUrl = `${input.baseUrl}/packages/${artifactId}/download`;
-  const artifact = await repository.linkArtifact(owner, manifest, {
-    id: artifactId,
-    sourceId: source.id,
-    manifestHash,
-    sha256: built.archive.sha256,
-    objectId,
-    downloadUrl
-  });
+  const artifact =
+    existing ??
+    (await repository.linkArtifact(owner, manifest, {
+      id: artifactId,
+      sourceId: source.id,
+      sha256: upload.sha256,
+      objectId: source.object_id,
+      downloadUrl
+    }));
   if (!artifact)
     throw new PackageError(
       "FORBIDDEN",
-      "Ownership changed while building",
+      "Ownership changed while preparing the package",
       403
     );
-  if (artifact.object_id !== objectId) {
+  if (source.object_id !== objectId) {
     await store.delete(objectId);
     await repository.removeObject(objectId);
   }
-  for (const id of iconIds ?? []) {
+  for (const id of iconIds) {
     await store.delete(id);
     await repository.removeObject(id);
   }
@@ -185,27 +179,17 @@ async function storePackageIcon(input: {
   owner: PackageOwner;
   manifest: Manifest;
   sourceId: string;
-  variants: IconVariant[];
+  variants: (IconVariant & { checksum: string })[];
 }) {
   const { repository, store, owner, manifest, sourceId, variants } = input;
   if (await repository.hasIcon(sourceId)) return;
   const assetId = crypto.randomUUID();
   const objects: IconObject[] = [];
-  for (const { format, bytes } of variants) {
-    const checksum = await sha256(bytes);
-    objects.push({
-      format,
-      id: await reserveObject(
-        repository,
-        store,
-        owner,
-        manifest.id,
-        bytes,
-        checksum,
-        `extensions/${input.extensionId}/icons/${assetId}.${format}`
-      ),
-      checksum
-    });
+  for (const { format, bytes, checksum } of variants) {
+    const id = `extensions/${input.extensionId}/icons/${assetId}.${format}`;
+    await repository.reserveObject(owner, manifest.id, id, bytes.length);
+    await store.put(id, bytes, checksum);
+    objects.push({ format, id, checksum });
   }
   const linked = await repository.linkIcon(
     owner,
