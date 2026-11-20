@@ -256,8 +256,12 @@ before testing sign-in.
 The Preview API uses a Durable Object alarm for package jobs. Each Preview has
 its own dispatcher and job scope in the shared staging database. Package routes
 default to `EXTENSION_PACKAGES_MODE=disabled` under `previews.vars`. The staging
-job still updates `api-package-preview-consumer` so it can finish jobs submitted
-by earlier queue-based deployments during the trial. Notification email is disabled.
+job still updates `api-package-preview-consumer` to drain jobs submitted by earlier
+queue-based deployments. The consumer's own `EXTENSION_PACKAGES_MODE=enabled`
+starts queue processing and hourly queue-only recovery on its first deployment,
+independently of the API Preview flag. Configure its staging package and asset
+storage settings and its credentials for the separate Netlify packager before
+that deployment. Preview notification email is disabled.
 See [packaging setup](src/services/extensions/v2/PACKAGING.md)
 and [Cloudflare's Preview resource behaviour](https://developers.cloudflare.com/workers/previews/resources/).
 
