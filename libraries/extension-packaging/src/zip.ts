@@ -192,7 +192,6 @@ export async function buildExtensionPackage(
   return {
     bytes,
     manifest,
-    sourceSha256: await sha256(source),
     packageSha256: await sha256(bytes),
     icon: icons[0]?.icon ?? null,
     iconName: icons[0]?.path

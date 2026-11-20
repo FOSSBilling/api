@@ -15,8 +15,27 @@ import { PackageError } from "@fossbilling/extension-packaging/errors";
 export const MAX_PACKAGE_STORAGE_BYTES = 512 * 1024 * 1024;
 export const MAX_PACKAGE_OBJECTS = 256;
 
+const activeOwnerAccess = `(? IS NULL AND d.owner_user_id=? OR d.id=? AND d.ownership_epoch=? AND EXISTS (SELECT 1 FROM m2m_publisher_clients p WHERE p.client_id=? AND p.developer_id=d.id AND p.ownership_epoch=d.ownership_epoch AND p.revoked_at IS NULL)) AND u.deleted_at IS NULL`;
+
+function ownerAccessParams(
+  userId: string,
+  publisher?: PackagePublisher | null
+) {
+  return [
+    publisher?.clientId ?? null,
+    userId,
+    publisher?.developerId ?? null,
+    publisher?.ownershipEpoch ?? null,
+    publisher?.clientId ?? null
+  ];
+}
+
+function extensionAvailable(identifier: string) {
+  return `NOT EXISTS (SELECT 1 FROM extensions e WHERE lower(e.identifier)=lower(${identifier}) AND e.developer_id!=d.id)`;
+}
+
 function ownerPredicate() {
-  return `EXISTS (SELECT 1 FROM developers d JOIN users u ON u.id=d.owner_user_id WHERE d.id=? AND d.profile_generation=? AND d.ownership_epoch=? AND d.owner_user_id=? AND u.deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM extensions e WHERE lower(e.identifier)=lower(?) AND e.developer_id!=d.id) AND (? IS NULL OR EXISTS (SELECT 1 FROM m2m_publisher_clients p WHERE p.client_id=? AND p.developer_id=d.id AND p.ownership_epoch=d.ownership_epoch AND p.revoked_at IS NULL)))`;
+  return `EXISTS (SELECT 1 FROM developers d JOIN users u ON u.id=d.owner_user_id WHERE d.id=? AND d.profile_generation=? AND d.ownership_epoch=? AND d.owner_user_id=? AND u.deleted_at IS NULL AND ${extensionAvailable("?")} AND (? IS NULL OR EXISTS (SELECT 1 FROM m2m_publisher_clients p WHERE p.client_id=? AND p.developer_id=d.id AND p.ownership_epoch=d.ownership_epoch AND p.revoked_at IS NULL)))`;
 }
 function ownerParams(owner: PackageOwner, id: string) {
   return [
@@ -39,16 +58,9 @@ export class PackageBuildDatabase implements PackageRepository {
   ) {
     const owner = await this.db
       .prepare(
-        `SELECT d.id,d.profile_generation,d.ownership_epoch,d.owner_user_id FROM developers d JOIN users u ON u.id=d.owner_user_id WHERE (? IS NULL AND d.owner_user_id=? OR d.id=? AND d.ownership_epoch=? AND EXISTS (SELECT 1 FROM m2m_publisher_clients p WHERE p.client_id=? AND p.developer_id=d.id AND p.ownership_epoch=d.ownership_epoch AND p.revoked_at IS NULL)) AND u.deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM extensions e WHERE lower(e.identifier)=lower(?) AND e.developer_id!=d.id)`
+        `SELECT d.id,d.profile_generation,d.ownership_epoch,d.owner_user_id FROM developers d JOIN users u ON u.id=d.owner_user_id WHERE ${activeOwnerAccess} AND ${extensionAvailable("?")}`
       )
-      .bind(
-        publisher?.clientId ?? null,
-        userId,
-        publisher?.developerId ?? null,
-        publisher?.ownershipEpoch ?? null,
-        publisher?.clientId ?? null,
-        extensionId
-      )
+      .bind(...ownerAccessParams(userId, publisher), extensionId)
       .first<PackageOwner>();
     if (!owner)
       throw new PackageError(
@@ -80,13 +92,13 @@ export class PackageBuildDatabase implements PackageRepository {
         .first()
     );
   }
-  async reserveObject(
+  private objectReservation(
     owner: PackageOwner,
     extensionId: string,
     id: string,
     bytes: number
   ) {
-    const result = await this.db
+    return this.db
       .prepare(
         `INSERT INTO package_objects (id,created_by,bytes)
     SELECT ?,?,? WHERE ${ownerPredicate()}
@@ -103,14 +115,99 @@ export class PackageBuildDatabase implements PackageRepository {
         owner.owner_user_id,
         bytes,
         MAX_PACKAGE_STORAGE_BYTES
-      )
-      .run();
+      );
+  }
+  private checkReservation(result: D1Result) {
     if (!result.meta.changes)
       throw new PackageError(
         "PACKAGE_ADMISSION",
         "Ownership changed or package storage quota is exhausted",
         409
       );
+  }
+  async reserveObject(
+    owner: PackageOwner,
+    extensionId: string,
+    id: string,
+    bytes: number
+  ) {
+    this.checkReservation(
+      await this.objectReservation(owner, extensionId, id, bytes).run()
+    );
+  }
+  async reserveUpload(
+    owner: PackageOwner,
+    manifest: Manifest,
+    input: {
+      id: string;
+      bytes: number;
+      scope: string;
+      fingerprint: string;
+      sha256: string;
+      expiresAt: number;
+    }
+  ) {
+    const [reservation] = await this.db.batch([
+      this.objectReservation(owner, manifest.id, input.id, input.bytes),
+      this.db
+        .prepare(
+          `INSERT INTO package_uploads (id, dispatch_scope, fingerprint, manifest, owner, sha256, expires_at)
+        SELECT id,?,?,?,?,?,? FROM package_objects WHERE id=?`
+        )
+        .bind(
+          input.scope,
+          input.fingerprint,
+          JSON.stringify(manifest),
+          JSON.stringify(owner),
+          input.sha256,
+          input.expiresAt,
+          input.id
+        )
+    ]);
+    this.checkReservation(reservation);
+  }
+  async getUpload(
+    id: string,
+    scope: string,
+    userId: string,
+    publisher: PackagePublisher | null
+  ) {
+    const row = await this.db
+      .prepare(
+        `SELECT r.fingerprint, r.manifest, r.owner, r.sha256, r.expires_at, o.bytes
+        FROM package_uploads r
+        JOIN package_objects o ON o.id=r.id
+        JOIN developers d ON d.owner_user_id=o.created_by
+        JOIN users u ON u.id=d.owner_user_id
+        WHERE r.id=? AND r.dispatch_scope=? AND o.deleting=0
+          AND ${activeOwnerAccess}
+          AND d.id=json_extract(r.owner,'$.id')
+          AND d.profile_generation=json_extract(r.owner,'$.profile_generation')
+          AND d.ownership_epoch=json_extract(r.owner,'$.ownership_epoch')
+          AND json_extract(r.owner,'$.publisher_client_id') IS ?
+          AND ${extensionAvailable("json_extract(r.manifest,'$.id')")}`
+      )
+      .bind(
+        id,
+        scope,
+        ...ownerAccessParams(userId, publisher),
+        publisher?.clientId ?? null
+      )
+      .first<{
+        fingerprint: string;
+        manifest: string;
+        owner: string;
+        sha256: string;
+        expires_at: number;
+        bytes: number;
+      }>();
+    return row
+      ? {
+          ...row,
+          manifest: JSON.parse(row.manifest) as Manifest,
+          owner: JSON.parse(row.owner) as PackageOwner
+        }
+      : null;
   }
   async setObjectSize(id: string, bytes: number) {
     const result = await this.db

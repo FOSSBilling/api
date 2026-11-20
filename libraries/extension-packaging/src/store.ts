@@ -13,6 +13,16 @@ export interface PackageStore {
   delete(key: string): Promise<void>;
 }
 
+export interface PackageUploadStore extends PackageStore {
+  authorizeUpload(
+    key: string,
+    bytes: number,
+    checksum: string,
+    expiresIn: number
+  ): Promise<{ url: string; headers: Record<string, string> }>;
+  head(key: string): Promise<{ bytes: number; checksum: string | null } | null>;
+}
+
 export async function boundedBytes(
   body: ReadableStream<Uint8Array> | null,
   limit: number

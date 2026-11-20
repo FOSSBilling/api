@@ -245,7 +245,7 @@ describe("B2 object storage", () => {
     }
   });
 
-  it("rejects unsafe configuration, keys and mismatched upload checksums before network access", async () => {
+  it("rejects unsafe configuration, keys and malformed upload checksums before network access", async () => {
     const fetch = vi.fn();
     vi.stubGlobal("fetch", fetch);
     for (const ENDPOINT of [

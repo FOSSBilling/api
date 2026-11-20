@@ -1,24 +1,16 @@
 import { z } from "@hono/zod-openapi";
 import { ManifestSchema } from "./manifest";
 
-export const PackageBuildSchema = z
-  .object({
-    manifest: z
-      .string()
-      .min(1)
-      .max(64 * 1024)
-      .describe("JSON manifest v1"),
-    source: z
-      .instanceof(File)
-      .optional()
-      .openapi({ type: "string", format: "binary" }),
-    source_id: z.uuid().optional()
-  })
-  .strict()
-  .refine(
-    (value) => Boolean(value.source) !== Boolean(value.source_id),
-    "Supply either a source ZIP or a stored source_id"
-  );
+const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
+export const PackageUploadRequestSchema = z.strictObject({
+  manifest: ManifestSchema,
+  bytes: z.number().int().min(1),
+  sha256
+});
+export const PackageBuildSchema = z.union([
+  z.strictObject({ upload_id: z.uuid() }),
+  z.strictObject({ manifest: ManifestSchema, source_id: z.uuid() })
+]);
 export const PackageParamSchema = z.object({ packageId: z.uuid() });
 export const PackageArtifactSchema = z
   .object({
@@ -50,3 +42,15 @@ export const PackagingJobSchema = z
     updated_at: z.string()
   })
   .openapi("PackagingJob");
+
+export const PackageReservationSchema = z
+  .discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("upload"),
+      id: z.uuid(),
+      url: z.url(),
+      headers: z.record(z.string(), z.string())
+    }),
+    z.object({ kind: z.literal("job"), job: PackagingJobSchema })
+  ])
+  .openapi("PackageReservation");
