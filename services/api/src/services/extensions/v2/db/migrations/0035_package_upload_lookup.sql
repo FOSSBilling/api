@@ -1,0 +1,1 @@
+CREATE INDEX `idx_package_uploads_lookup` ON `package_uploads` (`dispatch_scope`,`fingerprint`,`expires_at`);

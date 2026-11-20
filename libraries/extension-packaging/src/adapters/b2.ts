@@ -2,8 +2,8 @@ import { PACKAGE_LIMITS } from "../limits";
 import { sha256 } from "../checksum";
 import { PackageError } from "../errors";
 import { isLocalDevelopmentUrl } from "../urls";
-import { boundedBytes, type PackageStore } from "../store";
-import { signS3Request, type S3RequestInit } from "./sigv4";
+import { boundedBytes, type PackageUploadStore } from "../store";
+import { presignS3Put, signS3Request, type S3RequestInit } from "./sigv4";
 
 // Includes generated manifest and ZIP headers as well as the source contents.
 const MAX_STORED_BYTES = PACKAGE_LIMITS.expandedBytes + 1024 * 1024;
@@ -12,7 +12,7 @@ export function b2ObjectStore(
   getEnv: (name: string) => string | undefined,
   kind: "packages" | "assets",
   signal?: AbortSignal
-): PackageStore {
+): PackageUploadStore {
   const get = (suffix: string) => {
     const value = getEnv(`EXTENSION_${kind.toUpperCase()}_S3_${suffix}`);
     if (!value)
@@ -95,12 +95,65 @@ export function b2ObjectStore(
     }
   }
   return {
+    async authorizeUpload(key, bytes, checksum, expiresAt) {
+      if (
+        kind !== "packages" ||
+        !/^[a-f0-9]{64}$/.test(checksum) ||
+        !Number.isSafeInteger(bytes) ||
+        bytes < 1 ||
+        bytes > PACKAGE_LIMITS.sourceBytes
+      )
+        throw unavailable("Invalid package upload reservation");
+      const now = new Date();
+      const expiresIn = expiresAt - Math.floor(now.getTime() / 1000);
+      if (expiresIn <= 0)
+        throw new PackageError(
+          "UPLOAD_EXPIRED",
+          "Package upload expired; reserve a new upload",
+          409
+        );
+      const sha256Base64 = btoa(
+        String.fromCharCode(
+          ...Uint8Array.from(checksum.match(/../g)!, (byte) =>
+            Number.parseInt(byte, 16)
+          )
+        )
+      );
+      const headers = {
+        "Content-Type": "application/zip",
+        "Cache-Control": "private, no-store",
+        "x-amz-checksum-sha256": sha256Base64,
+        "x-amz-meta-sha256": checksum
+      };
+      // The HTTP client supplies Content-Length automatically for a ZIP body.
+      const url = await presignS3Put(
+        target(key),
+        { ...headers, "Content-Length": String(bytes) },
+        credentials,
+        expiresIn,
+        now
+      );
+      return { url, headers };
+    },
+    async head(key) {
+      const response = await request(target(key), { method: "HEAD" });
+      await response.body?.cancel();
+      if (response.status === 404) return null;
+      const length = response.headers.get("Content-Length");
+      if (!response.ok || length === null || !/^\d+$/.test(length))
+        throw unavailable("Unable to verify the uploaded package");
+      return {
+        bytes: Number(length),
+        checksum: response.headers.get("x-amz-meta-sha256")
+      };
+    },
     async put(key, bytes, checksum) {
+      // The caller hashes the bytes. B2 verifies that digest on the signed PUT.
       if (
         bytes.byteLength > MAX_STORED_BYTES ||
-        (await sha256(bytes)) !== checksum
+        !/^[a-f0-9]{64}$/.test(checksum)
       )
-        throw unavailable("Package object failed checksum or size validation");
+        throw unavailable("Package object has an invalid checksum or size");
       const response = await request(target(key), {
         method: "PUT",
         body: bytes,

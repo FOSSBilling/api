@@ -55,13 +55,24 @@ also exercise package preparation and B2 storage without a Cloudflare runtime.
 
 The OpenAPI reference is available at `/extensions/v2/docs`.
 
-- `POST /extensions/v2/packages` accepts manifest v1 JSON and either a ready-to-install
-  ZIP or an existing `source_id` in a multipart form. It stores the upload privately
-  and returns **202** with a job ID, status and private status URL in `Location`.
+- `POST /extensions/v2/package-uploads` accepts a manifest v1 object, the ZIP byte
+  count, and a hex SHA-256. A **200** response contains a reservation or a packaging job.
+  - `{ "result": { "kind": "upload", "id": "...", "url": "...", "headers": { ... } } }`
+    reserves storage quota and provides a five-minute PUT URL. An identical retry
+    reuses the active reservation and its expiry.
+  - `{ "result": { "kind": "job", "job": { ... } } }` returns an existing packaging
+    job. Poll it using `result.job.id`.
+
+  Send the raw ZIP to `result.url` with `result.headers` when an upload is needed.
+  The HTTP client supplies `Content-Length` for the fixed-size body.
+
+- `POST /extensions/v2/packages` accepts JSON `{ upload_id }` to confirm a direct
+  upload, or `{ manifest, source_id }` to rebuild a stored source. Confirmation
+  checks the stored length and checksum metadata before queuing the job. Both
+  paths return **202** with the job and private status URL in `Location`.
   An active owning developer profile is required. Machine publishers need
   `extensions:push` and an active mapped developer binding. Moderators may
-  rebuild published stored source for a correction, but cannot upload new files
-  for another developer.
+  rebuild published stored source for a correction using its `source_id`.
 - `GET /extensions/v2/packaging-jobs/{jobId}` returns `queued`, `processing`, `ready`
   or `failed`. Ready jobs include the artifact; failed jobs include an actionable
   error. Reads require the current owning developer/publisher or a moderator,
@@ -145,7 +156,7 @@ optional root `manifest.json`. Other files are decompressed for CRC and actual
 size validation, then their original compressed payloads are copied unchanged
 with normalized ZIP headers. Only the generated manifest is compressed. It never runs
 scripts from the archive. Input is limited to 5 MiB, 500 entries and 16 MiB of
-actual decompressed data; multipart requests are capped at 6 MiB before parsing.
+actual decompressed data. Upload reservations reject files above 5 MiB.
 Paths are limited to 1,024 characters and 32 components.
 Encrypted entries, symlinks, unsafe paths, duplicate/colliding names, file/directory
 conflicts and corrupt archives are rejected. Checksums cover the final stored ZIP.
@@ -204,15 +215,22 @@ uses its own bucket and credentials. The committed production configuration rema
 disabled. An incomplete S3 configuration or upstream failure returns 503 rather than
 silently switching storage backends.
 
-The B2 adapter signs uploads with their SHA-256 payload, stores checksum metadata
-and verifies both metadata and downloaded bytes on reads.
+Configure [bucket CORS](https://www.backblaze.com/docs/cloud-storage-cross-origin-resource-sharing-rules)
+to allow `PUT` from the directory's origin and these request headers:
+`Content-Type`, `Cache-Control`, `x-amz-checksum-sha256`, and `x-amz-meta-sha256`.
+Use the production directory origin on the production bucket and the directory
+Preview origins that need uploads on the preview bucket. Loopback development
+origins are handled by the local R2 endpoint. Configure package buckets to keep
+only the latest version of each object so repeated PUTs do not retain old versions.
 
-Source and built ZIPs use `packages/<object-id>` inside the environment's bucket. Object IDs are allocated
-once by D1 before upload. Uploads carry a signed SHA-256 payload and private cache
-headers. Reads are bounded to 17 MiB and verify artifact bytes before returning a
-ZIP through the existing permission-checked download route. B2 URLs and credentials
-are never returned to visitors. Images use the separate public asset bucket and
-its CDN hostname, including before approval.
+Source and built ZIPs use `packages/<object-id>` inside the environment's private
+bucket. A source upload URL is scoped to that key, PUT, a byte count, and its
+SHA-256. Treat the URL as a temporary credential. B2 verifies
+`x-amz-checksum-sha256` on the signed PUT. The API confirms size and metadata
+via HEAD before the packager independently verifies the stored bytes. Reads are
+bounded to 17 MiB and downloads still go through the permission-checked API.
+Images use the separate public asset bucket and its CDN hostname, including
+before approval.
 
 Cleanup identifies the stored B2 version and deletes it explicitly. Deleting only
 by name would leave billable versions behind. Failed deletion retains the D1

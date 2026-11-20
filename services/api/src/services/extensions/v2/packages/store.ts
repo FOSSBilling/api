@@ -1,10 +1,10 @@
+import type { PackageUploadStore } from "@fossbilling/extension-packaging/store";
 import { PackageError } from "@fossbilling/extension-packaging/errors";
-import type { PackageStore } from "@fossbilling/extension-packaging/store";
 import type { Context } from "hono";
 import { b2ObjectStore } from "@fossbilling/extension-packaging/adapters/b2";
 import { getPlatform } from "../../../../lib/middleware";
 
-export function packageStore(c: Context): PackageStore | null {
+export function packageStore(c: Context) {
   return configuredPackageStore((name) => getPlatform(c).getEnv(name));
 }
 
@@ -19,7 +19,7 @@ export function packageModeEnabled(
 
 export function configuredPackageStore(
   getEnv: (name: string) => string | undefined
-): PackageStore | null {
+): PackageUploadStore | null {
   const environment = getEnv("ENVIRONMENT");
   if (!packageModeEnabled(getEnv("EXTENSION_PACKAGES_MODE"), environment))
     return null;
@@ -58,6 +58,8 @@ export function configuredPackageStore(
   const storeFor = (key: string) =>
     key.startsWith("extensions/") ? assets : packages;
   return {
+    authorizeUpload: packages.authorizeUpload,
+    head: packages.head,
     put: (key, bytes, checksum) => storeFor(key).put(key, bytes, checksum),
     get: (key, checksum) => storeFor(key).get(key, checksum),
     delete: (key) => storeFor(key).delete(key)

@@ -8,12 +8,7 @@ import * as dispatch from "../../../../src/lib/adapters/cloudflare/package-dispa
 import { prepareQueuedPackage } from "../../../../src/services/extensions/v2/packages/prepare";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:workers";
-import {
-  createExecutionContext,
-  runDurableObjectAlarm,
-  runInDurableObject,
-  waitOnExecutionContext
-} from "cloudflare:test";
+import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import {
   TextReader,
   Uint8ArrayReader,
@@ -22,13 +17,15 @@ import {
   ZipReader,
   TextWriter
 } from "@zip.js/zip.js";
-import app from "../../../../src/app/index";
 import {
   signAccessToken,
   activateM2mJwks,
   deactivateM2mJwks
 } from "../../../lib/auth/m2m-helper";
-import { PackageArtifactSchema } from "../../../../src/services/extensions/v2/schemas/packages";
+import {
+  PackageArtifactSchema,
+  PackageReservationSchema
+} from "../../../../src/services/extensions/v2/schemas/packages";
 import { ManifestSchema } from "../../../../src/services/extensions/v2/schemas/manifest";
 import { ExtensionContentSchema } from "../../../../src/services/extensions/v2/schemas/extensions";
 import { contentManifest } from "../../../../src/services/extensions/v2/packages/manifest";
@@ -163,6 +160,7 @@ function mockB2() {
       return new Response(null, { status: 405 });
     return new Response(request.method === "HEAD" ? null : object.bytes, {
       headers: {
+        "Content-Length": String(object.bytes.byteLength),
         "x-amz-meta-sha256": object.checksum,
         "x-amz-version-id": object.version
       }
@@ -223,7 +221,14 @@ afterEach(() => {
       continue;
     }
     expect(url.hostname).toBe("s3.test-region.backblazeb2.com");
-    expect(request.headers.get("Authorization")).toMatch(/^AWS4-HMAC-SHA256 /);
+    if (url.searchParams.has("X-Amz-Signature")) {
+      expect(request.method).toBe("PUT");
+      expect(request.headers.get("Authorization")).toBeNull();
+    } else {
+      expect(request.headers.get("Authorization")).toMatch(
+        /^AWS4-HMAC-SHA256 /
+      );
+    }
     expect(["PUT", "GET", "HEAD", "DELETE"]).toContain(request.method);
     if (request.method === "DELETE")
       expect(url.searchParams.get("versionId")).toBeTruthy();
@@ -234,6 +239,46 @@ async function zip(content = "<?php // source") {
   await writer.add("Service.php", new TextReader(content));
   return writer.close();
 }
+async function reserveUpload(
+  metadata: unknown,
+  source: Uint8Array<ArrayBuffer>,
+  headers: Record<string, string>
+) {
+  return post(`${root}/package-uploads`, headers, {
+    manifest: metadata,
+    bytes: source.byteLength,
+    sha256: await sha256(source)
+  });
+}
+async function prepareUpload(
+  metadata: unknown,
+  source: Uint8Array<ArrayBuffer>,
+  headers: Record<string, string>
+) {
+  const response = await reserveUpload(metadata, source, headers);
+  if (!response.ok) return response;
+  const { result } = (await response.json()) as {
+    result:
+      | {
+          kind: "upload";
+          id: string;
+          url: string;
+          headers: Record<string, string>;
+        }
+      | { kind: "job"; job: { id: string } };
+  };
+  if (result.kind === "job")
+    return Response.json({ result: result.job }, { status: 202 });
+  const sent = await fetch(
+    new Request(result.url, {
+      method: "PUT",
+      headers: result.headers,
+      body: source
+    })
+  );
+  if (!sent.ok) return new Response(null, { status: 503 });
+  return post(`${root}/packages`, headers, { upload_id: result.id });
+}
 async function upload(
   metadata: unknown = manifest(),
   source?: Uint8Array<ArrayBuffer>,
@@ -242,25 +287,12 @@ async function upload(
   process = true
 ) {
   const headers = await authHeaders(user);
-  delete headers["Content-Type"];
-  const form = new FormData();
-  form.set("manifest", JSON.stringify(metadata));
-  if (sourceId) form.set("source_id", sourceId);
-  else
-    form.set(
-      "source",
-      new File([source ?? (await zip())], "source.zip", {
-        type: "application/zip"
+  const response = sourceId
+    ? await post(`${root}/packages`, headers, {
+        manifest: metadata,
+        source_id: sourceId
       })
-    );
-  const ctx = createExecutionContext();
-  const response = await app.request(
-    `${root}/packages`,
-    { method: "POST", headers, body: form },
-    env,
-    ctx
-  );
-  await waitOnExecutionContext(ctx);
+    : await prepareUpload(metadata, source ?? (await zip()), headers);
   return process ? finishJob(response) : response;
 }
 async function finishJob(response: Response): Promise<Response> {
@@ -379,20 +411,10 @@ describe("publisher package builds", () => {
   });
   afterEach(() => deactivateM2mJwks());
   async function machineBuild(scopes = ["extensions:push"], process = true) {
-    const form = new FormData();
-    form.set("manifest", JSON.stringify(manifest()));
-    form.set("source", new File([await zip()], "source.zip"));
-    const response = await app.request(
-      `${root}/packages`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${await signAccessToken({ clientId: "package-publisher", scopes })}`
-        },
-        body: form
-      },
-      env
-    );
+    const response = await prepareUpload(manifest(), await zip(), {
+      Authorization: `Bearer ${await signAccessToken({ clientId: "package-publisher", scopes })}`,
+      "Content-Type": "application/json"
+    });
     return process ? finishJob(response) : response;
   }
   it("lets an active machine publisher poll its own queued and ready job", async () => {
@@ -732,6 +754,86 @@ describe("queued package preparation", () => {
     );
   });
 
+  it("reuses an active reservation without extending its expiry", async () => {
+    const source = await zip();
+    const headers = await authHeaders("owner");
+    const reserve = async () => {
+      const response = await reserveUpload(manifest(), source, headers);
+      expect(response.status).toBe(200);
+      const { result } = await response.json<{ result: unknown }>();
+      const reservation = PackageReservationSchema.parse(result);
+      if (reservation.kind !== "upload")
+        throw new Error("Expected a source upload reservation");
+      return reservation;
+    };
+    const original = await reserve();
+    const setExpiry = db.prepare(
+      "UPDATE package_uploads SET expires_at=? WHERE id=?"
+    );
+    await setExpiry.bind(Math.floor(Date.now() / 1000) + 60, original.id).run();
+    const retry = await reserve();
+    expect(retry.id).toBe(original.id);
+    const remaining = Number(
+      new URL(retry.url).searchParams.get("X-Amz-Expires")
+    );
+    expect(remaining).toBeGreaterThan(0);
+    expect(remaining).toBeLessThanOrEqual(60);
+    expect(
+      await db.prepare("SELECT count(*) as count FROM package_objects").first()
+    ).toEqual({ count: 1 });
+
+    await setExpiry.bind(0, original.id).run();
+    const replacement = await reserve();
+    expect(replacement.id).not.toBe(original.id);
+  });
+
+  it("confirms only a reserved object with the expected bytes and checksum", async () => {
+    const source = await zip();
+    const headers = await authHeaders("owner");
+    const reserve = await reserveUpload(manifest(), source, headers);
+    expect(reserve.status).toBe(200);
+    const { result } = (await reserve.json()) as {
+      result: { id: string; url: string; headers: Record<string, string> };
+    };
+    const uploadUrl = new URL(result.url);
+    const uploadHeaders = new Headers(result.headers);
+    expect(
+      uploadUrl.searchParams.get("X-Amz-SignedHeaders")?.split(";")
+    ).toEqual(
+      expect.arrayContaining(["content-length", "x-amz-checksum-sha256"])
+    );
+    expect(uploadHeaders.has("Content-Length")).toBe(false);
+    const confirm = (actor = headers) =>
+      post(`${root}/packages`, actor, { upload_id: result.id });
+    expect((await confirm(await authHeaders("stranger"))).status).toBe(404);
+    expect((await confirm()).status).toBe(409);
+    await fetch(
+      new Request(result.url, {
+        method: "PUT",
+        headers: result.headers,
+        body: source
+      })
+    );
+    const object = b2.objects.get(packageKey(result.id))!;
+    const correctBytes = object.bytes;
+    object.bytes = correctBytes.slice(1);
+    expect((await confirm()).status).toBe(409);
+    object.bytes = correctBytes;
+    const correctChecksum = object.checksum;
+    object.checksum = "0".repeat(64);
+    expect((await confirm()).status).toBe(409);
+    object.checksum = correctChecksum;
+    const first = await confirm();
+    expect(first.status).toBe(202);
+    const repeat = await confirm();
+    expect(await repeat.json()).toEqual(await first.json());
+    await db
+      .prepare(
+        "UPDATE developers SET ownership_epoch=ownership_epoch+1 WHERE identifier='developer'"
+      )
+      .run();
+    expect((await confirm()).status).toBe(404);
+  });
   it("accepts a private job without preparing an artifact and deduplicates retries", async () => {
     const source = await zip();
     const response = await upload(
@@ -1625,7 +1727,7 @@ describe("stored directory packages", () => {
     ).toBe(503);
   });
 
-  it("concurrent identical uploads converge on one source and artifact", async () => {
+  it("concurrent identical uploads share one reservation, source and artifact", async () => {
     const source = await zip();
     const [first, second] = await Promise.all([
       built(manifest(), source),
@@ -1642,7 +1744,7 @@ describe("stored directory packages", () => {
     ).toEqual({ count: 1 });
     expect(
       await db.prepare("SELECT count(*) AS count FROM package_objects").first()
-    ).toEqual({ count: 3 }); // one duplicate staged upload remains eligible for cleanup
+    ).toEqual({ count: 2 }); // one source ZIP and its prepared artifact
   });
 
   it("does not allow a removed managed release to return as an external download", async () => {

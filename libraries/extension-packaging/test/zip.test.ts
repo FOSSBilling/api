@@ -86,7 +86,6 @@ describe("directory package builder", () => {
       "Service.php": "<?php // not executed",
       "assets/logo.svg": "<svg />"
     });
-    expect(built.sourceSha256).toBe(await sha256(source));
     expect(built.packageSha256).toBe(await sha256(built.bytes));
     const repeated = await buildExtensionPackage(source, manifest);
     expect(repeated.packageSha256).toBe(built.packageSha256);
@@ -94,7 +93,6 @@ describe("directory package builder", () => {
       ...manifest,
       description: "Corrected description"
     });
-    expect(correction.sourceSha256).toBe(built.sourceSha256);
     expect(correction.manifest.version).toBe(built.manifest.version);
     expect(correction.packageSha256).not.toBe(built.packageSha256);
   });

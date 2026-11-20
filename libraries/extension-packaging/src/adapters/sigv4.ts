@@ -1,9 +1,6 @@
 // Minimal AWS Signature Version 4 signer for S3-compatible storage.
 //
-// Covers only what the B2 package store needs: PUT/GET/HEAD/DELETE against
-// path-style https URLs with an explicit payload hash. Uses `crypto.subtle`
-// only, so it runs in Cloudflare Workers, Node, and Vitest without
-// dependencies.
+// Signs the B2 package store requests and its short-lived upload URLs.
 export interface S3Credentials {
   accessKeyId: string;
   secretAccessKey: string;
@@ -77,12 +74,7 @@ export async function signS3Request(
   const target = new URL(url.toString());
   const method = (init.method ?? "GET").toUpperCase();
   const headers = new Headers(init.headers);
-  const amzDate = now
-    .toISOString()
-    .replace(/[-:]/g, "")
-    .replace(/\.\d+Z$/, "Z");
-  const dateStamp = amzDate.slice(0, 8);
-
+  const amzDate = signingDate(now);
   const payloadHash =
     headers.get("x-amz-content-sha256") ??
     (init.body == null ? EMPTY_SHA256 : null);
@@ -106,6 +98,45 @@ export async function signS3Request(
       signedNames.add(name);
   });
   const signedHeaders = [...signedNames].sort();
+  const scope = signingScope(amzDate, credentials);
+  const signature = await sign(
+    method,
+    target,
+    headers,
+    signedHeaders,
+    payloadHash,
+    credentials,
+    amzDate
+  );
+
+  headers.set(
+    "Authorization",
+    `AWS4-HMAC-SHA256 Credential=${credentials.accessKeyId}/${scope}, ` +
+      `SignedHeaders=${signedHeaders.join(";")}, Signature=${signature}`
+  );
+  return new Request(target, { ...init, headers });
+}
+
+function signingDate(now: Date) {
+  return now
+    .toISOString()
+    .replace(/[:-]/g, "")
+    .replace(/\.\d+Z$/, "Z");
+}
+
+function signingScope(amzDate: string, credentials: S3Credentials) {
+  return `${amzDate.slice(0, 8)}/${credentials.region}/s3/aws4_request`;
+}
+
+async function sign(
+  method: string,
+  target: URL,
+  headers: Headers,
+  signedHeaders: string[],
+  payloadHash: string,
+  credentials: S3Credentials,
+  amzDate: string
+) {
   const canonicalHeaders = signedHeaders
     .map(
       (name) =>
@@ -121,7 +152,8 @@ export async function signS3Request(
     signedHeaders.join(";"),
     payloadHash
   ].join("\n");
-  const scope = `${dateStamp}/${credentials.region}/s3/aws4_request`;
+  const dateStamp = amzDate.slice(0, 8);
+  const scope = signingScope(amzDate, credentials);
   const stringToSign = [
     "AWS4-HMAC-SHA256",
     amzDate,
@@ -132,12 +164,40 @@ export async function signS3Request(
   let signingKey = await hmac(`AWS4${credentials.secretAccessKey}`, dateStamp);
   for (const value of [credentials.region, "s3", "aws4_request"])
     signingKey = await hmac(signingKey, value);
-  const signature = toHex(await hmac(signingKey, stringToSign));
+  return toHex(await hmac(signingKey, stringToSign));
+}
 
-  headers.set(
-    "Authorization",
-    `AWS4-HMAC-SHA256 Credential=${credentials.accessKeyId}/${scope}, ` +
-      `SignedHeaders=${signedHeaders.join(";")}, Signature=${signature}`
+export async function presignS3Put(
+  target: URL,
+  requiredHeaders: Record<string, string>,
+  credentials: S3Credentials,
+  expiresIn: number,
+  now: Date
+) {
+  const url = new URL(target);
+  const headers = new Headers(requiredHeaders);
+  headers.set("host", url.host);
+  const signedHeaders = [...headers.keys()].sort();
+  const amzDate = signingDate(now);
+  url.searchParams.set("X-Amz-Algorithm", "AWS4-HMAC-SHA256");
+  url.searchParams.set(
+    "X-Amz-Credential",
+    `${credentials.accessKeyId}/${signingScope(amzDate, credentials)}`
   );
-  return new Request(target, { ...init, headers });
+  url.searchParams.set("X-Amz-Date", amzDate);
+  url.searchParams.set("X-Amz-Expires", String(expiresIn));
+  url.searchParams.set("X-Amz-SignedHeaders", signedHeaders.join(";"));
+  url.searchParams.set(
+    "X-Amz-Signature",
+    await sign(
+      "PUT",
+      url,
+      headers,
+      signedHeaders,
+      "UNSIGNED-PAYLOAD",
+      credentials,
+      amzDate
+    )
+  );
+  return url.href;
 }

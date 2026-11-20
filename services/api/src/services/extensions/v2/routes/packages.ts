@@ -17,18 +17,22 @@ import {
   optionalAuth,
   getOptionalAuth,
   paceContentAccount,
-  paceContentIp
+  paceContentIp,
+  boundContentRequest
 } from "../middleware";
-import { reserveObject, cleanupPackageObjects } from "../packages/build";
+import { cleanupPackageObjects } from "../packages/build";
 import { PackageError } from "@fossbilling/extension-packaging/errors";
-import { boundedBytes } from "@fossbilling/extension-packaging/store";
+import { PACKAGE_LIMITS } from "@fossbilling/extension-packaging/limits";
 import { packageStore } from "../packages/store";
-import { ManifestSchema } from "../schemas/manifest";
+import { ManifestSchema, type Manifest } from "../schemas/manifest";
+import type { PackageOwner } from "../packages/repository";
 import {
   PackageArtifactSchema,
   PackagingJobSchema,
   PackagingJobParamSchema,
   PackageBuildSchema,
+  PackageReservationSchema,
+  PackageUploadRequestSchema,
   PackageParamSchema
 } from "../schemas/packages";
 import { errorResponse, authErrorResponses } from "../schemas/common";
@@ -81,6 +85,20 @@ async function jobResponse(db: D1Database, job: PackagingJob) {
   };
 }
 
+const uploadLifetimeSeconds = 300;
+
+async function packageFingerprint(
+  owner: PackageOwner,
+  manifest: Manifest,
+  source: string
+) {
+  return sha256(
+    new Uint8Array(
+      new TextEncoder().encode(canonicalJson({ owner, manifest, source }))
+    )
+  );
+}
+
 const packageErrors = {
   ...authErrorResponses(),
   404: errorResponse("Package not found"),
@@ -112,11 +130,12 @@ export function registerPackageRoutes(app: ExtensionsV2App) {
     await next();
   };
   app.use("/packages", availability);
+  app.use("/package-uploads", availability);
   app.use("/packages/*", availability);
   app.use("/packaging-jobs/*", availability);
   app.on(
     "POST",
-    "/packages",
+    ["/packages", "/package-uploads"],
     async (c, next) => {
       try {
         configuredPackageProcessor(getPlatform(c).getEnv);
@@ -127,71 +146,62 @@ export function registerPackageRoutes(app: ExtensionsV2App) {
     },
     paceContentIp()
   );
-  const boundUpload: MiddlewareHandler = async (c, next) => {
-    try {
-      const body = await boundedBytes(c.req.raw.body, 6 * 1024 * 1024);
-      c.req.raw = new Request(c.req.raw, { body });
-    } catch (error) {
-      return failure(c, error);
+  async function packageOwner(
+    c: Context,
+    repository: PackageBuildDatabase,
+    manifest: Manifest,
+    sourceId?: string
+  ) {
+    const publisher = getPublisher(c);
+    let userId = getAuth(c).userId;
+    if (sourceId && !publisher) {
+      const correction = await repository.correctionOwner(
+        userId,
+        sourceId,
+        manifest
+      );
+      if (correction) userId = correction.owner_user_id;
     }
-    await next();
-  };
+    return repository.getOwner(userId, manifest.id, publisher);
+  }
 
   app.openapi(
     createRoute({
       method: "post",
-      path: "/packages",
+      path: "/package-uploads",
       tags: ["Packages"],
-      summary:
-        "Queue package preparation from a distribution ZIP or stored source",
+      summary: "Reserve a private source ZIP upload or reuse an existing job",
       security: [{ Bearer: [] }],
       middleware: [
         requireContentWrite(),
         paceContentAccount(),
-        boundUpload
+        boundContentRequest()
       ] as const,
       request: {
         body: {
           required: true,
-          content: { "multipart/form-data": { schema: PackageBuildSchema } }
+          content: {
+            "application/json": { schema: PackageUploadRequestSchema }
+          }
         }
       },
       responses: {
-        202: {
-          description:
-            "Private processing job; identical requests reuse queued or completed work",
+        200: {
           content: {
             "application/json": {
-              schema: z.object({ result: PackagingJobSchema })
+              schema: z.object({ result: PackageReservationSchema })
             }
-          }
+          },
+          description:
+            "A short-lived PUT URL and required headers, or an existing job"
         },
         ...packageErrors
       }
     }),
     async (c) => {
       try {
-        const store = packageStore(c)!;
-        const form = c.req.valid("form");
-        let json: unknown;
-        try {
-          json = JSON.parse(form.manifest);
-        } catch {
-          throw new PackageError(
-            "INVALID_MANIFEST",
-            "Manifest must be valid JSON",
-            422
-          );
-        }
-        const parsed = ManifestSchema.safeParse(json);
-        if (!parsed.success)
-          throw new PackageError(
-            "INVALID_MANIFEST",
-            "Manifest failed validation",
-            422
-          );
-        const manifest = parsed.data;
-        if (form.source && form.source.size > 5 * 1024 * 1024)
+        const { manifest, bytes, sha256: checksum } = c.req.valid("json");
+        if (bytes > PACKAGE_LIMITS.sourceBytes)
           throw new PackageError(
             "BODY_TOO_LARGE",
             "Source ZIP exceeds 5 MiB",
@@ -199,22 +209,112 @@ export function registerPackageRoutes(app: ExtensionsV2App) {
           );
         const db = c.env.DB_EXTENSIONS;
         const repository = new PackageBuildDatabase(db);
-        const publisher = getPublisher(c);
-        let ownerUserId = getAuth(c).userId;
-        // Moderator corrections can rebuild published source, but cannot upload new files for another developer.
-        if (form.source_id && !publisher) {
-          const correction = await repository.correctionOwner(
-            ownerUserId,
-            form.source_id,
-            manifest
-          );
-          if (correction) ownerUserId = correction.owner_user_id;
-        }
-        const owner = await repository.getOwner(
-          ownerUserId,
-          manifest.id,
-          publisher
+        const owner = await packageOwner(c, repository, manifest);
+        const dispatcher = packageDispatcher(c.env);
+        const scope = await dispatcher.scope();
+        const fingerprint = await packageFingerprint(owner, manifest, checksum);
+        const existing = await new PackagingJobsDatabase(db, scope).find(
+          fingerprint
         );
+        if (existing) {
+          if (existing.status === "queued") await dispatcher.wake(true);
+          const { result: job } = await jobResponse(db, existing);
+          return c.json({ result: { kind: "job" as const, job } }, 200);
+        }
+        const now = Math.floor(Date.now() / 1000);
+        const { id, expires_at: expiresAt } = await repository.reserveUpload(
+          owner,
+          manifest,
+          {
+            scope,
+            fingerprint,
+            bytes,
+            sha256: checksum,
+            now,
+            expiresAt: now + uploadLifetimeSeconds
+          }
+        );
+        const upload = await packageStore(c)!.authorizeUpload(
+          id,
+          bytes,
+          checksum,
+          expiresAt
+        );
+        return c.json(
+          { result: { kind: "upload" as const, id, ...upload } },
+          200
+        );
+      } catch (error) {
+        return failure(c, error);
+      }
+    }
+  );
+
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/packages",
+      tags: ["Packages"],
+      summary:
+        "Confirm a source upload or queue a rebuild from a stored source",
+      security: [{ Bearer: [] }],
+      middleware: [
+        requireContentWrite(),
+        paceContentAccount(),
+        boundContentRequest()
+      ] as const,
+      request: {
+        body: {
+          required: true,
+          content: { "application/json": { schema: PackageBuildSchema } }
+        }
+      },
+      responses: {
+        202: {
+          content: {
+            "application/json": {
+              schema: z.object({ result: PackagingJobSchema })
+            }
+          },
+          description:
+            "Private processing job; identical requests reuse queued or completed work"
+        },
+        ...packageErrors
+      }
+    }),
+    async (c) => {
+      try {
+        const db = c.env.DB_EXTENSIONS;
+        const repository = new PackageBuildDatabase(db);
+        const request = c.req.valid("json");
+        const dispatcher = packageDispatcher(c.env);
+        const scope = await dispatcher.scope();
+        const jobs = new PackagingJobsDatabase(db, scope);
+        const sourceId = "source_id" in request ? request.source_id : null;
+        const uploadId = "upload_id" in request ? request.upload_id : null;
+        const upload = uploadId
+          ? await repository.getUpload(
+              uploadId,
+              scope,
+              getAuth(c).userId,
+              getPublisher(c)
+            )
+          : null;
+        const manifest =
+          "manifest" in request ? request.manifest : upload?.manifest;
+        if (!manifest)
+          throw new PackageError(
+            "UPLOAD_NOT_FOUND",
+            "Package upload not found",
+            404
+          );
+        const owner =
+          upload?.owner ??
+          (await packageOwner(c, repository, manifest, sourceId ?? undefined));
+        const fingerprint =
+          upload?.fingerprint ??
+          (await packageFingerprint(owner, manifest, sourceId!));
+
         const baseUrl = getPlatform(c).getEnv("EXTENSION_PACKAGES_BASE_URL");
         if (!baseUrl)
           throw new PackageError(
@@ -222,45 +322,37 @@ export function registerPackageRoutes(app: ExtensionsV2App) {
             "Package download URL is not configured",
             503
           );
-        const dispatcher = packageDispatcher(c.env);
-        const jobs = new PackagingJobsDatabase(db, await dispatcher.scope());
-        const source = form.source
-          ? new Uint8Array(await form.source.arrayBuffer())
-          : undefined;
-        const uploadSha256 = source ? await sha256(source) : null;
-        const fingerprint = await sha256(
-          new Uint8Array(
-            new TextEncoder().encode(
-              canonicalJson({
-                owner,
-                manifest,
-                source: uploadSha256 ?? form.source_id
-              })
-            )
-          )
-        );
+
         let job = await jobs.find(fingerprint);
         if (!job) {
-          const uploadObjectId = source
-            ? await reserveObject(
-                repository,
-                store,
-                owner,
-                manifest.id,
-                source,
-                uploadSha256!
-              )
-            : null;
-          // Arm recovery before inserting, so an interrupted request leaves
-          // a job the alarm can pick up even if the immediate wakeup never runs.
+          if (upload && uploadId) {
+            if (upload.expires_at <= Math.floor(Date.now() / 1000))
+              throw new PackageError(
+                "UPLOAD_EXPIRED",
+                "Package upload expired; select the ZIP and try again",
+                409
+              );
+            const stored = await packageStore(c)!.head(uploadId);
+            if (
+              !stored ||
+              stored.bytes !== upload.bytes ||
+              stored.checksum !== upload.sha256
+            )
+              throw new PackageError(
+                "UPLOAD_INCOMPLETE",
+                "The uploaded ZIP is missing or does not match the reservation",
+                409
+              );
+          }
+          // Arm recovery before inserting so an interrupted request can be picked up.
           await dispatcher.wake();
           job = await jobs.create({
             fingerprint,
             owner,
             manifest,
-            sourceId: form.source_id ?? null,
-            uploadObjectId,
-            uploadSha256
+            sourceId,
+            uploadObjectId: uploadId,
+            uploadSha256: upload?.sha256 ?? null
           });
         }
         if (job.status === "queued") await dispatcher.wake(true);
