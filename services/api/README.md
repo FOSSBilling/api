@@ -209,7 +209,7 @@ Migration jobs serialize access to the shared staging databases.
    FOSSBilling account: Wrangler's configuration comparison after dashboard edits
    reads account-level Custom Domain metadata, which does not support per-Worker
    roles. This grants read access to Worker source and configuration across the
-   account. Worker write access is scoped to `api`.
+   account.
    See [Cloudflare's Workers permissions](https://developers.cloudflare.com/workers/authorization/workers/).
    The Worker edit permission covers both production and Previews. Separate staging data
    and runtime secrets isolate test state, not the deployment credential's authority.
