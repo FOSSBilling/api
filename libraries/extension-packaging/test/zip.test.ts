@@ -1,15 +1,7 @@
 import { describe, expect, it } from "vitest";
-import {
-  TextReader,
-  TextWriter,
-  Uint8ArrayReader,
-  Uint8ArrayWriter,
-  ZipReader,
-  ZipWriter
-} from "@zip.js/zip.js";
-import { buildExtensionPackage } from "../src/zip";
+import { TextReader, Uint8ArrayWriter, ZipWriter } from "@zip.js/zip.js";
+import { validateExtensionPackage } from "../src/zip";
 import { PACKAGE_LIMITS } from "../src/limits";
-import { sha256 } from "../src/checksum";
 
 const manifest = {
   manifest_version: 1,
@@ -33,29 +25,11 @@ async function zip(
   }
   return writer.close();
 }
-async function contents(bytes: Uint8Array<ArrayBuffer>) {
-  const reader = new ZipReader(new Uint8ArrayReader(bytes), options);
-  try {
-    const result: Record<string, string> = {};
-    for await (const entry of reader.getEntriesGenerator()) {
-      if (!entry.directory)
-        result[entry.filename] = await entry.getData(new TextWriter());
-    }
-    return result;
-  } finally {
-    await reader.close();
-  }
-}
-
-describe("directory package builder", () => {
+describe("ZIP validation", () => {
   it("stops ZIP processing when its caller aborts", async () => {
     const source = await zip([["Service.php", "<?php // package source"]]);
     const controller = new AbortController();
-    const processing = buildExtensionPackage(
-      source,
-      manifest,
-      controller.signal
-    );
+    const processing = validateExtensionPackage(source, controller.signal);
     controller.abort();
     await expect(processing).rejects.toThrow();
   });
@@ -66,79 +40,44 @@ describe("directory package builder", () => {
       "a".repeat(PACKAGE_LIMITS.pathLength + 1)
     ]) {
       await expect(
-        buildExtensionPackage(await zip([[path, "file"]]), manifest)
+        validateExtensionPackage(await zip([[path, "file"]]))
       ).rejects.toThrow(/path exceeds/);
     }
     const path = "a/".repeat(PACKAGE_LIMITS.pathDepth - 1) + "file.php";
     await expect(
-      buildExtensionPackage(await zip([[path, "file"]]), manifest)
+      validateExtensionPackage(
+        await zip([
+          [path, "file"],
+          ["manifest.json", JSON.stringify(manifest)]
+        ])
+      )
     ).resolves.toMatchObject({ manifest });
   });
-  it("replaces the manifest and preserves every source file", async () => {
+  it("reads metadata with valid Unicode escapes and ordinary directory entries", async () => {
+    const description = "Example extension 🚀 \\ud800";
+    const manifestJson = JSON.stringify({ ...manifest, description }).replace(
+      "🚀",
+      String.raw`\ud83d\ude80`
+    );
     const source = await zip([
-      ["manifest.json", "old metadata"],
-      ["Service.php", "<?php // not executed"],
-      ["assets/logo.svg", "<svg />"]
+      ["manifest.json", manifestJson],
+      ["assets/", ""],
+      ["assets/example.css", "body {}"]
     ]);
-    const built = await buildExtensionPackage(source, manifest);
-    expect(await contents(built.bytes)).toEqual({
-      "manifest.json": JSON.stringify(manifest, null, 2) + "\n",
-      "Service.php": "<?php // not executed",
-      "assets/logo.svg": "<svg />"
+    await expect(validateExtensionPackage(source)).resolves.toMatchObject({
+      manifest: { ...manifest, description }
     });
-    expect(built.packageSha256).toBe(await sha256(built.bytes));
-    const repeated = await buildExtensionPackage(source, manifest);
-    expect(repeated.packageSha256).toBe(built.packageSha256);
-    const correction = await buildExtensionPackage(source, {
-      ...manifest,
-      description: "Corrected description"
-    });
-    expect(correction.manifest.version).toBe(built.manifest.version);
-    expect(correction.packageSha256).not.toBe(built.packageSha256);
   });
-
-  it.each([0, 8])(
-    "preserves the exact compressed payload for method %i",
-    async (compressionMethod) => {
-      const source = await zip(
-        [["file.php", "<?php // repeated contents\n".repeat(2000)]],
-        { compressionMethod, level: 1 }
-      );
-      const built = await buildExtensionPackage(source, manifest);
-      async function payload(bytes: Uint8Array<ArrayBuffer>) {
-        const reader = new ZipReader(new Uint8ArrayReader(bytes), options);
-        try {
-          const entries = await reader.getEntries();
-          const entry = entries.find((entry) => entry.filename === "file.php")!;
-          if (!entry || entry.directory)
-            throw new Error("Expected a regular file");
-          return {
-            method: entry.compressionMethod,
-            bytes: await entry.getData(new Uint8ArrayWriter(), {
-              passThrough: true
-            })
-          };
-        } finally {
-          await reader.close();
-        }
-      }
-      const original = await payload(source);
-      expect(original.method).toBe(compressionMethod);
-      expect(await payload(built.bytes)).toEqual(original);
-      expect((await contents(built.bytes))["file.php"]).toBe(
-        "<?php // repeated contents\n".repeat(2000)
-      );
-    }
-  );
 
   it.each(["svg", "png", "webp", "avif"])(
     "discovers icon.%s without a manifest field",
     async (format) => {
       const source = await zip([
         [`icon.${format}`, "image bytes"],
-        ["file.php", "<?php"]
+        ["file.php", "<?php"],
+        ["manifest.json", JSON.stringify(manifest)]
       ]);
-      const built = await buildExtensionPackage(source, manifest);
+      const built = await validateExtensionPackage(source);
       const icon = built.icon;
       expect(new TextDecoder().decode(icon!)).toBe("image bytes");
       expect(built.manifest).not.toHaveProperty("icon_url");
@@ -149,33 +88,73 @@ describe("directory package builder", () => {
       ["icon.svg", "svg"],
       ["icon.png", "png"]
     ]);
-    await expect(buildExtensionPackage(source, manifest)).rejects.toThrow(
-      "only one"
-    );
+    await expect(validateExtensionPackage(source)).rejects.toThrow("only one");
     await expect(
-      buildExtensionPackage(await zip([["file.php", "<?php"]]), {
-        ...manifest,
-        icon_url: "icon.svg"
-      })
+      validateExtensionPackage(
+        await zip([
+          ["file.php", "<?php"],
+          [
+            "manifest.json",
+            JSON.stringify({ ...manifest, icon_url: "icon.svg" })
+          ]
+        ])
+      )
     ).rejects.toThrow();
   });
   it("does not discover nested or unrelated images", async () => {
-    const built = await buildExtensionPackage(
-      await zip([["assets/icon.svg", "image"]]),
-      manifest
+    const result = await validateExtensionPackage(
+      await zip([
+        ["assets/icon.svg", "image"],
+        ["manifest.json", JSON.stringify(manifest)]
+      ])
     );
-    expect(built.icon).toBeNull();
+    expect(result.icon).toBeUndefined();
   });
 
-  it("inserts a missing manifest and rejects invalid metadata", async () => {
-    const source = await zip([["file.php", "<?php"]]);
-    const built = await buildExtensionPackage(source, manifest);
-    expect(JSON.parse((await contents(built.bytes))["manifest.json"])).toEqual(
-      manifest
-    );
+  it("requires a root manifest with valid metadata", async () => {
     await expect(
-      buildExtensionPackage(source, { ...manifest, version: "nope" })
+      validateExtensionPackage(await zip([["file.php", "<?php"]]))
+    ).rejects.toThrow("root manifest.json");
+    await expect(
+      validateExtensionPackage(
+        await zip([
+          ["file.php", "<?php"],
+          ["manifest.json", JSON.stringify({ ...manifest, version: "nope" })]
+        ])
+      )
     ).rejects.toThrow();
+  });
+
+  it("rejects a manifest with a UTF-8 byte order mark", async () => {
+    const source = await zip([
+      ["file.php", "<?php"],
+      ["manifest.json", "\uFEFF" + JSON.stringify(manifest)]
+    ]);
+    await expect(validateExtensionPackage(source)).rejects.toThrow(
+      "without a byte order mark"
+    );
+  });
+
+  it.each([
+    [
+      "a decimal manifest version",
+      JSON.stringify(manifest).replace(
+        '"manifest_version":1',
+        '"manifest_version":1.0'
+      ),
+      "manifest_version must be written as the integer 1"
+    ],
+    [
+      "an unpaired Unicode escape in an overwritten field",
+      String.raw`{"description":"\ud800",` + JSON.stringify(manifest).slice(1),
+      "unpaired Unicode surrogate escape"
+    ]
+  ])("rejects %s", async (_name, manifestJson, message) => {
+    const source = await zip([
+      ["file.php", "<?php"],
+      ["manifest.json", manifestJson]
+    ]);
+    await expect(validateExtensionPackage(source)).rejects.toThrow(message);
   });
 
   it.each([
@@ -189,61 +168,54 @@ describe("directory package builder", () => {
     "NUL.txt"
   ])("rejects unsafe path %s", async (path) => {
     await expect(
-      buildExtensionPackage(await zip([[path, "test"]]), manifest)
+      validateExtensionPackage(await zip([[path, "test"]]))
     ).rejects.toThrow(/Unsafe/);
   });
 
   it("rejects case collisions, file/directory conflicts and symlinks", async () => {
     await expect(
-      buildExtensionPackage(
+      validateExtensionPackage(
         await zip([
           ["A.php", "a"],
           ["a.php", "b"]
-        ]),
-        manifest
+        ])
       )
     ).rejects.toThrow("Duplicate package path");
     await expect(
-      buildExtensionPackage(
+      validateExtensionPackage(
         await zip([
           ["dir", "a"],
           ["dir/file.php", "b"]
-        ]),
-        manifest
+        ])
       )
     ).rejects.toThrow("File conflicts");
     await expect(
-      buildExtensionPackage(
-        await zip([["link", "../outside"]], { unixMode: 0o120777 }),
-        manifest
+      validateExtensionPackage(
+        await zip([["link", "../outside"]], { unixMode: 0o120777 })
       )
     ).rejects.toThrow("Unsupported package entry");
   });
 
   it("rejects files beneath the reserved manifest path", async () => {
     await expect(
-      buildExtensionPackage(
-        await zip([["manifest.json/file.php", "bad"]]),
-        manifest
-      )
+      validateExtensionPackage(await zip([["manifest.json/file.php", "bad"]]))
     ).rejects.toThrow("Manifest path is a directory");
   });
 
   it("rejects encrypted files and truncated archives", async () => {
     await expect(
-      buildExtensionPackage(
-        await zip([["file", "secret"]], { password: "test" }),
-        manifest
+      validateExtensionPackage(
+        await zip([["file", "secret"]], { password: "test" })
       )
     ).rejects.toThrow("Unsupported package entry");
     const source = await zip([["file", "content"]]);
     await expect(
-      buildExtensionPackage(source.slice(0, -30), manifest)
+      validateExtensionPackage(source.slice(0, -30))
     ).rejects.toThrow();
   });
 
   it.each(["manifest.json", "file.php"])(
-    "checks CRCs before copying or replacing %s",
+    "checks CRCs for %s",
     async (filename) => {
       const source = await zip(
         [
@@ -259,7 +231,7 @@ describe("directory package builder", () => {
       );
       expect(offset).toBeGreaterThan(0);
       source[offset] ^= 1;
-      await expect(buildExtensionPackage(source, manifest)).rejects.toThrow(
+      await expect(validateExtensionPackage(source)).rejects.toThrow(
         "Invalid CRC32"
       );
     }
@@ -292,22 +264,19 @@ describe("directory package builder", () => {
           break;
         }
       }
-      await expect(buildExtensionPackage(source, manifest)).rejects.toThrow();
+      await expect(validateExtensionPackage(source)).rejects.toThrow();
     }
   );
 
   it("rejects oversized inputs and expansion bombs", async () => {
     await expect(
-      buildExtensionPackage(
-        new Uint8Array(PACKAGE_LIMITS.sourceBytes + 1),
-        manifest
-      )
+      validateExtensionPackage(new Uint8Array(PACKAGE_LIMITS.sourceBytes + 1))
     ).rejects.toThrow("Source ZIP exceeds size limit");
     const source = await zip([
       ["large.txt", "x".repeat(PACKAGE_LIMITS.expandedBytes + 1)]
     ]);
     expect(source.byteLength).toBeLessThan(PACKAGE_LIMITS.sourceBytes);
-    await expect(buildExtensionPackage(source, manifest)).rejects.toThrow(
+    await expect(validateExtensionPackage(source)).rejects.toThrow(
       "expanded size limit"
     );
   });
@@ -319,11 +288,11 @@ describe("directory package builder", () => {
         ""
       ])
     );
-    await expect(buildExtensionPackage(source, manifest)).rejects.toThrow(
+    await expect(validateExtensionPackage(source)).rejects.toThrow(
       "entry limit"
     );
     await expect(
-      buildExtensionPackage(await zip([["manifest.json", "{}"]]), manifest)
+      validateExtensionPackage(await zip([["manifest.json", "{}"]]))
     ).rejects.toThrow("no source files");
   });
 });

@@ -5,8 +5,7 @@ interface JobRow {
   id: string;
   fingerprint: string;
   owner: string;
-  manifest: string;
-  source_id: string | null;
+  target: string;
   upload_object_id: string | null;
   upload_sha256: string | null;
   status: PackagingJob["status"];
@@ -22,8 +21,7 @@ const job = (row: JobRow): PackagingJob => ({
   id: row.id,
   fingerprint: row.fingerprint,
   owner: JSON.parse(row.owner),
-  manifest: JSON.parse(row.manifest),
-  sourceId: row.source_id,
+  target: JSON.parse(row.target),
   uploadObjectId: row.upload_object_id,
   uploadSha256: row.upload_sha256,
   status: row.status,
@@ -65,19 +63,14 @@ export class PackagingJobsDatabase implements PackagingJobRepository {
   async create(
     input: Pick<
       PackagingJob,
-      | "fingerprint"
-      | "owner"
-      | "manifest"
-      | "sourceId"
-      | "uploadObjectId"
-      | "uploadSha256"
+      "fingerprint" | "owner" | "target" | "uploadObjectId" | "uploadSha256"
     >
   ) {
     const id = crypto.randomUUID();
     await this.db
       .prepare(
-        `INSERT INTO package_jobs (id,fingerprint,owner_user_id,owner,manifest,source_id,upload_object_id,upload_sha256,dispatch_scope)
-      SELECT ?,?,?,?,?,?,?,?,? WHERE (SELECT count(*) FROM package_jobs WHERE owner_user_id=?) < 256
+        `INSERT INTO package_jobs (id,fingerprint,owner_user_id,owner,target,upload_object_id,upload_sha256,dispatch_scope)
+      SELECT ?,?,?,?,?,?,?,? WHERE (SELECT count(*) FROM package_jobs WHERE owner_user_id=?) < 256
       ON CONFLICT DO NOTHING`
       )
       .bind(
@@ -85,8 +78,7 @@ export class PackagingJobsDatabase implements PackagingJobRepository {
         input.fingerprint,
         input.owner.owner_user_id,
         JSON.stringify(input.owner),
-        JSON.stringify(input.manifest),
-        input.sourceId,
+        JSON.stringify(input.target),
         input.uploadObjectId,
         input.uploadSha256,
         this.scope,

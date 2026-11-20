@@ -1,10 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   TextReader,
-  TextWriter,
   Uint8ArrayReader,
   Uint8ArrayWriter,
-  ZipReader,
   ZipWriter
 } from "@zip.js/zip.js";
 import sharp from "sharp";
@@ -48,7 +46,7 @@ afterEach(() => {
 });
 async function archive(iconName = "icon.svg", icon = encode(svg)) {
   const writer = new ZipWriter(new Uint8ArrayWriter(), options);
-  await writer.add("manifest.json", new TextReader("replaced metadata"));
+  await writer.add("manifest.json", new TextReader(JSON.stringify(manifest)));
   await writer.add(
     "Service.php",
     new TextReader("<?php // Ready-made package; never executed")
@@ -98,7 +96,7 @@ function fixture() {
       checksum = await sha256(bytes);
     objects.set(key(id), { bytes, checksum });
     return {
-      manifest: structuredClone(manifest),
+      target: { id: manifest.id, version: manifest.version },
       source: { id, sha256: checksum },
       archive: crypto.randomUUID(),
       icons: [crypto.randomUUID(), crypto.randomUUID()]
@@ -107,23 +105,14 @@ function fixture() {
   return { objects, key, fetch, handler, processor, input };
 }
 describe("Node package processor over the generic HTTP contract", () => {
-  it("stores the prepared ZIP privately, sanitizes SVG, and rebuilds from the same original source", async () => {
+  it("seals the unchanged ZIP privately and sanitizes a separate display SVG", async () => {
     const f = fixture(),
       input = await f.input(await archive());
     const result = await f.processor.process(input);
     const bytes = f.objects.get(f.key(input.archive))!.bytes;
-    expect(await sha256(bytes)).toBe(result.archive.sha256);
-    const reader = new ZipReader(new Uint8ArrayReader(bytes), options);
-    const files: Record<string, string> = {};
-    for (const entry of await reader.getEntries())
-      if (!entry.directory)
-        files[entry.filename] = await entry.getData(new TextWriter());
-    await reader.close();
-    expect(JSON.parse(files["manifest.json"])).toEqual(manifest);
-    expect(files["Service.php"]).toBe(
-      "<?php // Ready-made package; never executed"
-    );
-    expect(files["icon.svg"]).toBe(svg);
+    expect(bytes).toEqual(f.objects.get(f.key(input.source.id))!.bytes);
+    expect(result.archive.sha256).toBe(input.source.sha256);
+    expect(result.manifest).toEqual(manifest);
     const image = f.objects.get(f.key(result.icons[0].id))!.bytes;
     const prepared = new TextDecoder().decode(image);
     expect(prepared).not.toMatch(
@@ -132,14 +121,6 @@ describe("Node package processor over the generic HTTP contract", () => {
     expect(prepared).toContain("linearGradient");
     expect(prepared).toContain("url(#paint)");
     expect(prepared).toContain('viewBox="0 0 24 24"');
-    const corrected = await f.processor.process({
-      ...input,
-      manifest: { ...manifest, description: "Corrected metadata" },
-      archive: crypto.randomUUID(),
-      icons: undefined
-    });
-    expect(corrected.archive.sha256).not.toBe(result.archive.sha256);
-    expect(corrected.icons).toEqual([]);
   });
   it.each(["png", "webp", "avif"] as const)(
     "prepares real icon.%s as AVIF and PNG with preserved proportions",
@@ -202,20 +183,15 @@ describe("Node package processor over the generic HTTP contract", () => {
       expect(f.objects.has(f.key(input.archive))).toBe(false);
     }
   });
-  it("accepts a valid manifest whose UTF-8 processing request exceeds 64 KiB", async () => {
+  it("rejects a manifest that does not match the upload target", async () => {
     const f = fixture();
     const input = await f.input(await archive());
-    input.manifest.requires.modules = Object.fromEntries(
-      Array.from({ length: 30 }, (_, i) => [
-        `dependency_${i}`,
-        ">=1.0.0" + "\u2003".repeat(990)
-      ])
-    );
-    expect(JSON.stringify(input.manifest).length).toBeLessThan(64 * 1024);
-    expect(Buffer.byteLength(JSON.stringify(input))).toBeGreaterThan(64 * 1024);
-    await expect(f.processor.process(input)).resolves.toMatchObject({
-      archive: { bytes: expect.any(Number) }
+    input.target.version = "2.0.0";
+    await expect(f.processor.process(input)).rejects.toMatchObject({
+      code: "INVALID_PACKAGE",
+      status: 422
     });
+    expect(f.objects.has(f.key(input.archive))).toBe(false);
   });
   it.each([
     "timeout: 10% complete",
@@ -293,7 +269,8 @@ describe("Node package processor over the generic HTTP contract", () => {
   it("processes a near-limit ZIP over a real local HTTP connection with a small JSON response", async () => {
     const f = fixture();
     const writer = new ZipWriter(new Uint8ArrayWriter(), options);
-    for (let i = 0; i < 500; i++) {
+    await writer.add("manifest.json", new TextReader(JSON.stringify(manifest)));
+    for (let i = 0; i < 499; i++) {
       const bytes = new Uint8Array(33000);
       crypto.getRandomValues(bytes.subarray(0, 9900));
       await writer.add(`files/file-${i}.bin`, new Uint8ArrayReader(bytes));
@@ -333,13 +310,6 @@ describe("Node package processor over the generic HTTP contract", () => {
       expect(await sha256(f.objects.get(f.key(input.archive))!.bytes)).toBe(
         result.archive.sha256
       );
-      const corrected = await processor.process({
-        ...input,
-        manifest: { ...manifest, description: "Rebuilt after a large package" },
-        archive: crypto.randomUUID(),
-        icons: undefined
-      });
-      expect(corrected.archive.sha256).not.toBe(result.archive.sha256);
     } finally {
       server.closeAllConnections();
       await new Promise<void>((resolve, reject) =>
@@ -354,9 +324,14 @@ describe("Node package processor over the generic HTTP contract", () => {
       "secret"
     );
     for (const result of [
-      { archive: { bytes: -1, sha256: "0".repeat(64) }, icons: [] },
       {
-        archive: { bytes: 20, sha256: "0".repeat(64) },
+        manifest,
+        archive: { bytes: -1, sha256: input.source.sha256 },
+        icons: []
+      },
+      {
+        manifest,
+        archive: { bytes: 20, sha256: input.source.sha256 },
         icons: [
           {
             id: crypto.randomUUID(),

@@ -76,6 +76,11 @@ export function databaseError(
       "The retained extension resource quota is exhausted"
     ],
     [
+      "package_release_published",
+      "CONFLICT",
+      "Published release ZIPs are locked; upload a new version"
+    ],
+    [
       "extension_content_size",
       "CONFLICT",
       "Extension content must not exceed 256 KiB"

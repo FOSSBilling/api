@@ -1,9 +1,9 @@
-# Directory-built packages
+# Validated extension packages
 
 Authors upload ready-to-install distribution ZIPs, with any compilation already
-complete. The API validates and repacks them with directory-generated manifests,
-then publishes them through the existing revision review. It never runs uploaded
-code or package build scripts. ZIPs use the private B2 bucket; prepared icons use
+complete. The API validates each archive and reads its root manifest, then
+publishes the original ZIP through revision review. It never runs uploaded code
+or package build scripts. ZIPs use the private B2 bucket; prepared icons use
 the public asset bucket, including icons for pending submissions. Automated tests
 use the B2 adapter with mocked S3 responses.
 Package routes are disabled by default. Local development and production enablement are separate modes.
@@ -55,8 +55,12 @@ also exercise package preparation and B2 storage without a Cloudflare runtime.
 
 The OpenAPI reference is available at `/extensions/v2/docs`.
 
-- `POST /extensions/v2/package-uploads` accepts a manifest v1 object, the ZIP byte
-  count, and a hex SHA-256. A **200** response contains a reservation or a packaging job.
+- `POST /extensions/v2/package-uploads` accepts the ZIP byte count, a hex SHA-256,
+  and a `target`. Use `{}` for a first submission, `{ id }` for a new release
+  of an existing extension, or `{ id, version }` to replace a pending release.
+  A version requires an extension ID. The embedded manifest must match any
+  supplied target fields. A **200** response contains a reservation or a
+  packaging job.
   - `{ "result": { "kind": "upload", "id": "...", "url": "...", "headers": { ... } } }`
     reserves storage quota and provides a five-minute PUT URL. An identical retry
     reuses the active reservation and its expiry.
@@ -66,13 +70,11 @@ The OpenAPI reference is available at `/extensions/v2/docs`.
   Send the raw ZIP to `result.url` with `result.headers` when an upload is needed.
   The HTTP client supplies `Content-Length` for the fixed-size body.
 
-- `POST /extensions/v2/packages` accepts JSON `{ upload_id }` to confirm a direct
-  upload, or `{ manifest, source_id }` to rebuild a stored source. Confirmation
-  checks the stored length and checksum metadata before queuing the job. Both
-  paths return **202** with the job and private status URL in `Location`.
-  An active owning developer profile is required. Machine publishers need
-  `extensions:push` and an active mapped developer binding. Moderators may
-  rebuild published stored source for a correction using its `source_id`.
+- `POST /extensions/v2/packages` accepts JSON `{ upload_id }` to confirm a
+  direct upload. The API checks its length and checksum metadata before queuing
+  validation. Confirmation returns **202** with the job and private status URL
+  in `Location`. An active owning developer profile is required. Machine
+  publishers need `extensions:push` and an active mapped developer binding.
 - `GET /extensions/v2/packaging-jobs/{jobId}` returns `queued`, `processing`, `ready`
   or `failed`. Ready jobs include the artifact; failed jobs include an actionable
   error. Reads require the current owning developer/publisher or a moderator,
@@ -87,20 +89,21 @@ The OpenAPI reference is available at `/extensions/v2/docs`.
 Releases carry `artifact_id`, `sha256`, the download URL and manifest requirements.
 Submission and approval validate these against the stored artifact. The selected
 latest release also supplies the overview's version, download, requirements and
-manifest-backed metadata. Editing a release requires its stored package or a
-source ZIP; the directory always queues package preparation before saving it.
+manifest-backed metadata. The directory description defaults to the manifest
+description and can be edited independently. Release dates, changelogs, the
+README and the source repository link can also be edited without a ZIP upload.
 
-At most one release can have `is_latest: true`. Without a selection, the newest
-stable release is used, falling back to a prerelease. The directory's release
-editor provides a “Set as Latest Release” checkbox, checked by default for new
-stable releases. This flag stays out of the manifest.
+Only one release can have `is_latest: true`. The directory checks “Set as Latest
+Release” for every new release, including prereleases. When no release is
+selected, the directory uses the newest stable release and falls back to a
+prerelease if none is stable. The selection is stored outside the manifest.
 
 ## Background processing and provider boundaries
 
-D1 stores the validated manifest, captured owner/profile generation/ownership
-epoch, upload reference and processing result. The job processor rechecks account
-ownership and machine-publisher revocation before processing. The staged upload
-becomes the immutable source object after validation.
+D1 stores the expected target, captured owner/profile generation/ownership epoch,
+upload reference and processing result. The job rechecks account ownership and
+machine-publisher revocation before processing and before linking the artifact.
+The validated manifest is recorded with the artifact.
 
 A Durable Object alarm dispatches jobs in production, locally and in Cloudflare
 Previews. Environments with a dedicated D1 database use the default job scope.
@@ -124,42 +127,39 @@ runtime can supply its own scheduler and the same package interfaces.
 
 Jobs interrupted or undelivered for a day are marked expired once no active lease
 remains. Terminal jobs are retained for seven days, with at most 256 jobs per owning
-account. Cleanup never deletes uploads referenced by active jobs, and detaches
-terminal job references before reclaiming abandoned objects. Published artifacts
+account. Cleanup never deletes uploads referenced by active jobs, and reclaims unreferenced staging uploads after one day. Published artifacts
 remain immutable and are not removed with job history.
 
 The directory polls private job status and retains a release-job reference across
 reloads. The publisher waits for completion before submitting a revision; failed
-or timed-out jobs stop publication, and a retry reuses existing work. Server-side
-new submissions and manifest corrections also poll with a bounded wait.
+or timed-out jobs stop publication, and a retry reuses existing work.
 
-## Storage and rebuilds
+## Storage and publication
 
-Each developer profile generation, extension ID and version has one immutable
-source ZIP. Changing any source bytes, including repacking, requires a new
-version. Manifest changes produce a new immutable artifact from that source;
-directory-only changes such as README edits keep the existing package.
-Approval publishes the revision and its artifacts in one D1 transaction. Older
-approved artifacts retain their URLs and checksums.
+The packager checks the uploaded SHA-256 and performs bounded archive validation.
+It stores the same bytes under a key reserved for the service, so a still-valid
+upload URL cannot change a reviewed artifact. The staging upload is eligible for
+cleanup after one day. Identical uploads share one retained ZIP within the same
+developer profile generation, extension ID and version. Before processing,
+storage quota reserves up to 5 MiB for the validated ZIP and 4 MiB for each
+possible icon. The per-account allowance is 256 objects / 512 MiB,
+including temporary reservations and prepared images.
 
-Object reservations precede uploads. Before external processing, the API reserves at most
-17 MiB for the archive and 4 MiB for each possible icon; the archive reservation shrinks
-to its actual size after processing. This headroom keeps interrupted runner writes
-accounted for within the owner's quota. Unique constraints deduplicate concurrent
-builds; failed writes remain recorded for cleanup. Cleanup claims unreferenced
-objects before deletion, and builds cannot reference claimed objects. The
-per-account allowance is 256 objects / 512 MiB, including abandoned reservations
-and prepared images. Ready sources and artifacts are retained.
+A pending submission can reference a different validated artifact for the same
+version. Replacing the pending revision invalidates the previous review. The
+first publication locks the ZIP for that extension and version in the approval
+transaction. Changed files subsequently require a new version. Published
+artifacts retain their URLs and checksums.
 
-ZIPs must contain ready-to-install files at the root. Packaging replaces the
-optional root `manifest.json`. Other files are decompressed for CRC and actual
-size validation, then their original compressed payloads are copied unchanged
-with normalized ZIP headers. Only the generated manifest is compressed. It never runs
-scripts from the archive. Input is limited to 5 MiB, 500 entries and 16 MiB of
-actual decompressed data. Upload reservations reject files above 5 MiB.
-Paths are limited to 1,024 characters and 32 components.
-Encrypted entries, symlinks, unsafe paths, duplicate/colliding names, file/directory
-conflicts and corrupt archives are rejected. Checksums cover the final stored ZIP.
+The archive must contain a root `manifest.json` (UTF-8 without a byte order
+mark, up to 256 KiB) and at least one other file. Use the integer `1` for
+`manifest_version` and well-formed Unicode in all strings. Limits are 5 MiB
+uploaded, 500 entries, and 16 MiB decompressed.
+Paths may have up to 1,024 characters and 32 components. The validator checks
+CRCs and actual decompressed sizes and rejects encrypted entries, special file
+types, unsafe paths, name collisions and corrupt archives. These structural and
+integrity checks do not scan for malware. A future scanner can run in the
+packager before the validated bytes are stored.
 
 ## Icons
 
@@ -181,7 +181,7 @@ images directly and never reopen a ZIP.
 
 All prepared icons, including pending ones, use
 `extensions/<extension UUID>/icons/<asset UUID>.<format>` in the public asset bucket.
-One asset UUID identifies all format variants; manifest corrections reuse them.
+One asset UUID identifies all format variants; directory-only edits reuse them.
 UUID paths are unlisted, not access control: anyone given the direct URL can read
 the image before approval. ZIPs and package metadata remain private until approved.
 The API preview route still checks ownership and returns private cache headers,
@@ -259,7 +259,7 @@ https://extensions-assets.fossbilling.net/extensions/019a0000-0000-7000-8000-000
 
 The parent is the extension record's UUID, not its public identifier. The icon
 record allocates an immutable asset UUID when its display images are prepared.
-All format variants share that identity, and manifest-only edits reuse the same image URL.
+All format variants share that identity, and directory-only edits reuse the same image URL.
 A different source gets a new asset UUID. Uploads set
 `Cache-Control: public, max-age=31536000, immutable` and retain each file's SHA-256
 in object metadata for verification.
@@ -306,7 +306,11 @@ Before deployment (including an automatic deployment after merge):
    Development keys in `.dev.vars` are not production secrets.
 2. Configure the packager URL and shared secret described below, confirm the
    scoped CDN security headers remain configured, and keep B2 caps/alerts in place.
-3. Apply the package and job tables through the normal D1 deployment workflow.
+3. Apply the package and job migrations through the normal D1 deployment workflow.
+   After migration `0036_validate_uploaded_zips`, unfinished jobs from the retired
+   manifest rebuild flow fail with `UPLOAD_NOT_FOUND` when processed. Upload a ZIP
+   through the new flow if the release is still pending. Existing published ZIPs
+   retain their URLs and checksums.
 4. After dispatcher capacity and moderation requirements are agreed, explicitly set
    `EXTENSION_PACKAGES_MODE=enabled` in the reviewed production configuration.
    Verify a production smoke test before enabling the dependent directory and

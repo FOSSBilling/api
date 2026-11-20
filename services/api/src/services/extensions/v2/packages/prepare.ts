@@ -3,7 +3,7 @@ import type { PackageProcessor } from "@fossbilling/extension-packaging/processo
 import type { PackageStore } from "@fossbilling/extension-packaging/store";
 import type { PackagingJob } from "./jobs";
 import { PackageError } from "@fossbilling/extension-packaging/errors";
-import { buildStoredPackage } from "./build";
+import { prepareStoredPackage } from "./build";
 
 export interface PackagePreparation {
   repository: PackageRepository;
@@ -18,16 +18,17 @@ export async function prepareQueuedPackage(
 ): Promise<string> {
   const { repository, store } = services;
   const previous = job.owner;
+  const publisher = previous.publisher_client_id
+    ? {
+        clientId: previous.publisher_client_id,
+        developerId: previous.id,
+        ownershipEpoch: previous.ownership_epoch
+      }
+    : null;
   const current = await repository.getOwner(
     previous.owner_user_id,
-    job.manifest.id,
-    previous.publisher_client_id
-      ? {
-          clientId: previous.publisher_client_id,
-          developerId: previous.id,
-          ownershipEpoch: previous.ownership_epoch
-        }
-      : null
+    job.target.id ?? null,
+    publisher
   );
   if (
     current.id !== previous.id ||
@@ -39,17 +40,15 @@ export async function prepareQueuedPackage(
       "Package ownership changed while queued",
       403
     );
-  const upload =
-    job.uploadObjectId && job.uploadSha256
-      ? { objectId: job.uploadObjectId, sha256: job.uploadSha256 }
-      : undefined;
-  const artifact = await buildStoredPackage({
+  if (!job.uploadObjectId || !job.uploadSha256)
+    throw new PackageError("UPLOAD_NOT_FOUND", "Package upload not found", 404);
+  const artifact = await prepareStoredPackage({
     repository,
     store,
     owner: current,
-    manifest: job.manifest,
-    upload,
-    sourceId: job.sourceId ?? undefined,
+    target: job.target,
+    upload: { objectId: job.uploadObjectId, sha256: job.uploadSha256 },
+    publisher,
     baseUrl: services.baseUrl.replace(/\/$/, ""),
     processor: services.processor
   });

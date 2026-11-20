@@ -5,6 +5,7 @@ import {
   type ProcessingInput
 } from "../processor";
 import { PackageError } from "../errors";
+import { PACKAGE_LIMITS } from "../limits";
 import { boundedBytes } from "../store";
 
 export class HttpPackageProcessor implements PackageProcessor {
@@ -50,7 +51,10 @@ export class HttpPackageProcessor implements PackageProcessor {
           signal: AbortSignal.timeout(50000)
         })
       );
-      const bytes = await boundedBytes(response.body, 16 * 1024);
+      const bytes = await boundedBytes(
+        response.body,
+        PACKAGE_LIMITS.manifestBytes + 4096
+      );
       const body = JSON.parse(new TextDecoder().decode(bytes));
       if (response.status === 422 && typeof body.error?.message === "string")
         throw new PackageError(
@@ -68,9 +72,8 @@ export class HttpPackageProcessor implements PackageProcessor {
         );
       if (!response.ok) throw new Error("Package processor request failed");
       const result = ProcessingResultSchema.parse(body.result);
-      const allowed: readonly string[] = input.icons ?? [];
       if (
-        result.icons.some((icon) => !allowed.includes(icon.id)) ||
+        result.icons.some((icon) => !input.icons.includes(icon.id)) ||
         new Set(result.icons.map((icon) => icon.id)).size !==
           result.icons.length
       )
