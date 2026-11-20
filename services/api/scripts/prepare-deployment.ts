@@ -115,19 +115,6 @@ export function prepareDeployment(root: string) {
     join(output, "wrangler.preview-migrations.json"),
     JSON.stringify({ d1_databases: stagingDatabases }, null, 2) + "\n"
   );
-  const consumer = experimental_readRawConfig({
-    config: join(root, "wrangler.package-preview-consumer.jsonc")
-  }).rawConfig;
-  Reflect.deleteProperty(consumer, "$schema");
-  consumer.main = "package-preview-consumer.js";
-  consumer.no_bundle = true;
-  const consumerOutput = join(output, "package-preview-consumer");
-  mkdirSync(consumerOutput, { recursive: true });
-  writeFileSync(
-    join(consumerOutput, "wrangler.json"),
-    JSON.stringify(consumer, null, 2) + "\n"
-  );
-
   Reflect.deleteProperty(config, "$schema");
   config.main = "index.js";
   config.no_bundle = true;

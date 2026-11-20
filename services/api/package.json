@@ -21,7 +21,7 @@
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
     "test:workers": "vitest run",
-    "build": "node scripts/wrangler.ts deploy --dry-run --outdir dist --minify && node scripts/wrangler.ts deploy --config wrangler.package-preview-consumer.jsonc --dry-run --outdir dist/package-preview-consumer --minify && node scripts/prepare-deployment.ts",
+    "build": "node scripts/wrangler.ts deploy --dry-run --outdir dist --minify && node scripts/prepare-deployment.ts",
     "cf-preview": "wrangler preview --config dist/wrangler.json"
   },
   "dependencies": {
