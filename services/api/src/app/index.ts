@@ -15,6 +15,7 @@ import statsV1 from "../services/stats/v1/index";
 import { platformMiddleware } from "../lib/middleware";
 import { createCloudflareBindings } from "../lib/adapters/cloudflare/index";
 import { logError } from "@fossbilling/logging";
+import { packageModeEnabled } from "../services/extensions/v2/packages/store";
 
 const app = new Hono<{ Bindings: CloudflareBindings }>();
 
@@ -85,22 +86,27 @@ export default {
     env: CloudflareBindings
   ): Promise<void> => {
     try {
-      const mode = createCloudflareBindings(env).environment.get(
-        "EXTENSION_PACKAGES_MODE"
-      );
-      if (mode === "enabled" || mode === "local") {
+      const { environment } = createCloudflareBindings(env);
+      if (
+        packageModeEnabled(
+          environment.get("EXTENSION_PACKAGES_MODE"),
+          environment.get("ENVIRONMENT")
+        )
+      ) {
         await packageDispatcher(env).wake();
       }
     } catch (error) {
       logError("extensions/packages", "Packaging job recovery failed", {
         error: error instanceof Error ? error.message : String(error)
       });
+      throw error;
+    } finally {
+      const db = getExtensionsDb(env.DB_EXTENSIONS);
+      await maintainExtensionResources(db, {
+        mode: env.EXTENSIONS_RETENTION_MODE
+      });
+      await reportExtensionResources(db, env.EXTENSIONS_RETENTION_MODE);
     }
-    const db = getExtensionsDb(env.DB_EXTENSIONS);
-    await maintainExtensionResources(db, {
-      mode: env.EXTENSIONS_RETENTION_MODE
-    });
-    await reportExtensionResources(db, env.EXTENSIONS_RETENTION_MODE);
   }
 };
 

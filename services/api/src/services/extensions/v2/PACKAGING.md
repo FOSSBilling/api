@@ -99,7 +99,9 @@ a job, the API arms recovery, then requests an immediate wakeup once the job is
 saved. The alarm processes one job at a time and schedules the next job, retry,
 or expired lease. A 20-minute lease protects against duplicate processing.
 Temporary failures retry after a minute, with at most three attempts. Invalid
-archives and revoked ownership fail immediately.
+archives and revoked ownership fail immediately. When packaging is enabled, the
+hourly maintenance trigger also wakes the dispatcher to recover pending jobs
+and jobs whose processing leases have expired.
 
 `processPackagingJob` takes a `PackagingJobRepository` and a preparation callback.
 Package preparation takes a `PackageRepository`, `PackageStore` and

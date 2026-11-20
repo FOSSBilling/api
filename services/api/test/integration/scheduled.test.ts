@@ -13,25 +13,45 @@ vi.mock("../../src/services/extensions/v2/db/resource-maintenance", () => ({
   reportExtensionResources: mocks.report
 }));
 import app from "../../src/app/index";
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.clearAllMocks();
+  vi.restoreAllMocks();
+});
 describe("scheduled maintenance", () => {
-  it("continues resource maintenance when package recovery fails", async () => {
+  it("reports a failed recovery wakeup after running resource maintenance", async () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
-    mocks.recover.mockRejectedValueOnce(new Error("job database unavailable"));
+    const error = new Error("dispatcher unavailable");
+    mocks.recover.mockRejectedValueOnce(error);
     mocks.maintain.mockResolvedValueOnce(undefined);
     mocks.report.mockResolvedValueOnce(undefined);
-    await app.scheduled(
-      {} as ScheduledController,
-      Object.assign({}, env, {
-        EXTENSION_PACKAGES_MODE: "enabled"
-      })
-    );
+    await expect(
+      app.scheduled(
+        {} as ScheduledController,
+        Object.assign({}, env, { EXTENSION_PACKAGES_MODE: "enabled" })
+      )
+    ).rejects.toBe(error);
     expect(mocks.maintain).toHaveBeenCalledOnce();
     expect(mocks.report).toHaveBeenCalledOnce();
     expect(log).toHaveBeenCalledWith(
       expect.objectContaining({
-        context: { error: "job database unavailable" }
+        context: { error: "dispatcher unavailable" }
       })
     );
   });
+
+  it.each(["disabled", "local"])(
+    "runs production maintenance without waking the dispatcher in %s mode",
+    async (mode) => {
+      await app.scheduled(
+        {} as ScheduledController,
+        Object.assign({}, env, {
+          ENVIRONMENT: "production",
+          EXTENSION_PACKAGES_MODE: mode
+        })
+      );
+      expect(mocks.recover).not.toHaveBeenCalled();
+      expect(mocks.maintain).toHaveBeenCalledOnce();
+      expect(mocks.report).toHaveBeenCalledOnce();
+    }
+  );
 });
