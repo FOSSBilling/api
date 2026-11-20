@@ -168,8 +168,8 @@ removed after successful publication to the asset bucket. Failed or interrupted
 outputs remain tracked for normal cleanup, including a runner whose response was
 lost after it wrote to B2.
 
-This is a regular synchronous function. The existing API Queue provides background
-delivery and waits for the completed response before acknowledging the job. Do not
+This is a regular synchronous function. The API’s Durable Object dispatcher waits
+for the completed response before recording the final job status. Do not
 use Netlify background-function mode, which returns 202 before processing completes.
 The packager deadline is 45 seconds, the HTTP client timeout is 50 seconds, and the
 Netlify synchronous limit is 60 seconds. Invalid ZIPs and icons return 422; transport

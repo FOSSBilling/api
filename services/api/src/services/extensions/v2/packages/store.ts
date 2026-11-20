@@ -8,13 +8,22 @@ export function packageStore(c: Context): PackageStore | null {
   return configuredPackageStore((name) => getPlatform(c).getEnv(name));
 }
 
+export function packageModeEnabled(
+  mode: string | undefined,
+  environment: string | undefined
+): boolean {
+  return (
+    mode === "enabled" || (mode === "local" && environment !== "production")
+  );
+}
+
 export function configuredPackageStore(
   getEnv: (name: string) => string | undefined
 ): PackageStore | null {
-  const mode = getEnv("EXTENSION_PACKAGES_MODE");
-  const production = getEnv("ENVIRONMENT") === "production";
-  if (mode !== "enabled" && !(mode === "local" && !production)) return null;
-  if (production) {
+  const environment = getEnv("ENVIRONMENT");
+  if (!packageModeEnabled(getEnv("EXTENSION_PACKAGES_MODE"), environment))
+    return null;
+  if (environment === "production") {
     const base = getEnv("EXTENSION_PACKAGES_BASE_URL");
     let url: URL;
     try {

@@ -1,5 +1,4 @@
 import { logError } from "@fossbilling/logging";
-import type { IMessageQueue } from "../../../../lib/interfaces";
 import type { Manifest } from "../schemas/manifest";
 import type { PackageOwner } from "./repository";
 import { PackageError } from "@fossbilling/extension-packaging/errors";
@@ -30,20 +29,8 @@ export interface PackagingJobRepository {
     error: NonNullable<PackagingJob["error"]>,
     retry: boolean
   ): Promise<void>;
-  pending(): Promise<string[]>;
-  markEnqueued(id: string): Promise<void>;
 }
 
-export async function dispatchPackagingJob(
-  jobs: PackagingJobRepository,
-  queue: IMessageQueue,
-  id: string
-) {
-  await queue.send({ jobId: id });
-  await jobs.markEnqueued(id);
-}
-
-// Delivery-specific acknowledgement/retry APIs stay in the platform adapter.
 export async function processPackagingJob(
   jobs: PackagingJobRepository,
   id: string,

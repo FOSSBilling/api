@@ -1,7 +1,4 @@
-import {
-  consumePackagingJobs,
-  recoverPackagingJobs
-} from "../lib/adapters/cloudflare/packaging-jobs";
+import { packageDispatcher } from "../lib/adapters/cloudflare/package-dispatcher";
 import { getExtensionsDb } from "../lib/db";
 import {
   maintainExtensionResources,
@@ -18,6 +15,7 @@ import statsV1 from "../services/stats/v1/index";
 import { platformMiddleware } from "../lib/middleware";
 import { createCloudflareBindings } from "../lib/adapters/cloudflare/index";
 import { logError } from "@fossbilling/logging";
+import { packageModeEnabled } from "../services/extensions/v2/packages/store";
 
 const app = new Hono<{ Bindings: CloudflareBindings }>();
 
@@ -81,7 +79,6 @@ app.all("/*", (c) => {
 });
 
 export default {
-  queue: consumePackagingJobs,
   fetch: app.fetch,
   request: app.request.bind(app),
   scheduled: async (
@@ -89,17 +86,27 @@ export default {
     env: CloudflareBindings
   ): Promise<void> => {
     try {
-      await recoverPackagingJobs(env);
+      const { environment } = createCloudflareBindings(env);
+      if (
+        packageModeEnabled(
+          environment.get("EXTENSION_PACKAGES_MODE"),
+          environment.get("ENVIRONMENT")
+        )
+      ) {
+        await packageDispatcher(env).wake();
+      }
     } catch (error) {
       logError("extensions/packages", "Packaging job recovery failed", {
         error: error instanceof Error ? error.message : String(error)
       });
+      throw error;
+    } finally {
+      const db = getExtensionsDb(env.DB_EXTENSIONS);
+      await maintainExtensionResources(db, {
+        mode: env.EXTENSIONS_RETENTION_MODE
+      });
+      await reportExtensionResources(db, env.EXTENSIONS_RETENTION_MODE);
     }
-    const db = getExtensionsDb(env.DB_EXTENSIONS);
-    await maintainExtensionResources(db, {
-      mode: env.EXTENSIONS_RETENTION_MODE
-    });
-    await reportExtensionResources(db, env.EXTENSIONS_RETENTION_MODE);
   }
 };
 
@@ -107,4 +114,4 @@ export default {
 // wrangler.jsonc; the implementation lives with the previews service, which
 // owns its rate-limit policy.
 export { PreviewGitHubBudget } from "../services/previews/v1/budget";
-export { PreviewPackageDispatcher } from "../lib/adapters/cloudflare/preview-package-dispatcher";
+export { PreviewPackageDispatcher } from "../lib/adapters/cloudflare/package-dispatcher";

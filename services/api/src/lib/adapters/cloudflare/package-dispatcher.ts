@@ -4,14 +4,27 @@ import { PackagingJobsDatabase } from "../../../services/extensions/v2/db/packag
 import { processPackagingJob } from "../../../services/extensions/v2/packages/jobs";
 import { prepareQueuedPackage } from "../../../services/extensions/v2/packages/prepare";
 import { packagePreparation } from "./packaging-jobs";
+import { createCloudflareBindings } from "./index";
 
 const retryDelay = 60_000;
 const idleDelay = 60 * retryDelay;
 
-// Each Preview has a separate namespace and serializes package jobs through
-// one dispatcher. The persisted scope partitions its jobs in the shared D1.
+export function packageDispatcher(
+  env: CloudflareBindings
+): Pick<PreviewPackageDispatcher, "scope" | "wake"> {
+  return env.PACKAGE_DISPATCHER.getByName("packaging");
+}
+
+// Keep the exported class name stable so existing Preview namespaces and
+// their alarms survive deployment. Environments with dedicated D1 keep the
+// original job scope. Previews partition their jobs in the shared D1.
 export class PreviewPackageDispatcher extends DurableObject<CloudflareBindings> {
   async scope(): Promise<string> {
+    if (
+      createCloudflareBindings(this.env).environment.get("ENVIRONMENT") !==
+      "preview"
+    )
+      return "";
     return this.ctx.storage.transaction(async (storage) => {
       const existing = await storage.get<string>("scope");
       if (existing) return existing;
@@ -49,7 +62,7 @@ export class PreviewPackageDispatcher extends DurableObject<CloudflareBindings> 
         Date.now() + idleDelay
       );
     } catch (error) {
-      logError("extensions/packages", "Preview packaging alarm failed", {
+      logError("extensions/packages", "Packaging alarm failed", {
         error: error instanceof Error ? error.message : String(error)
       });
       nextWake = Date.now() + retryDelay;

@@ -1,7 +1,6 @@
-import { ICache, IMessageQueue, IPlatformBindings } from "./interfaces";
+import { ICache, IPlatformBindings } from "./interfaces";
 
 export interface PlatformContext {
-  getQueue(name: string): IMessageQueue;
   getCache(name: string): ICache;
   getEnv(key: string): string | undefined;
   fetchService(name: string, request: Request): Promise<Response>;
@@ -14,11 +13,6 @@ export function createPlatformContext(
   waitUntil: (promise: Promise<unknown>) => void
 ): PlatformContext {
   return {
-    getQueue(name: string): IMessageQueue {
-      const queue = bindings.queues?.[name];
-      if (!queue) throw new Error(`Queue binding '${name}' not found`);
-      return queue;
-    },
     getCache(name: string): ICache {
       const cache = bindings.caches[name];
       if (!cache) {

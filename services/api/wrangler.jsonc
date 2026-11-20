@@ -24,7 +24,7 @@
   "keep_vars": true,
   "vars": {
     "ENVIRONMENT": "production",
-    // Enable only after the queue, HTTP processor and B2 secrets are configured.
+    // Enable only after the HTTP processor and B2 secrets are configured.
     "EXTENSION_PACKAGES_MODE": "disabled",
     "EXTENSION_PACKAGES_BASE_URL": "https://api.fossbilling.net/extensions/v2",
     "EXTENSION_ASSETS_PUBLIC_URL": "https://extensions-assets.fossbilling.net",
@@ -62,20 +62,6 @@
       "id": "0771957093ae481b9cd974ffa83f8263"
     }
   ],
-  "queues": {
-    "producers": [
-      { "binding": "EXTENSION_PACKAGE_QUEUE", "queue": "extension-packages" }
-    ],
-    "consumers": [
-      {
-        "queue": "extension-packages",
-        "max_batch_size": 1,
-        "max_batch_timeout": 1,
-        "max_retries": 5,
-        "max_concurrency": 1
-      }
-    ]
-  },
   "r2_buckets": [
     {
       "binding": "DOWNLOAD_BUCKET",
@@ -95,7 +81,7 @@
     "bindings": [
       { "name": "PREVIEW_GITHUB_BUDGET", "class_name": "PreviewGitHubBudget" },
       {
-        "name": "PREVIEW_PACKAGE_DISPATCHER",
+        "name": "PACKAGE_DISPATCHER",
         "class_name": "PreviewPackageDispatcher"
       }
     ]
@@ -150,7 +136,6 @@
       "ENVIRONMENT": "preview",
       "EXTENSIONS_FRONTEND_URL": "https://staging-extensions.fossbilling.workers.dev",
       "EXTENSION_PACKAGES_MODE": "disabled",
-      "EXTENSION_PACKAGES_DISPATCH": "alarm",
       "EXTENSIONS_EMAIL_PROVIDER": "disabled",
       "EXTENSIONS_RETENTION_MODE": "dry-run"
     },
@@ -161,7 +146,7 @@
           "class_name": "PreviewGitHubBudget"
         },
         {
-          "name": "PREVIEW_PACKAGE_DISPATCHER",
+          "name": "PACKAGE_DISPATCHER",
           "class_name": "PreviewPackageDispatcher"
         }
       ]

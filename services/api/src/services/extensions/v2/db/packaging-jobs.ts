@@ -140,17 +140,6 @@ export class PackagingJobsDatabase implements PackagingJobRepository {
       )
       .run();
   }
-  async pending() {
-    const result = await this.db
-      .prepare(
-        `SELECT id FROM package_jobs WHERE dispatch_scope=? AND (
-      (status='queued' AND (enqueued_at IS NULL OR enqueued_at<datetime('now','-1 hour')))
-      OR (status='processing' AND lease_until<CURRENT_TIMESTAMP)) LIMIT 100`
-      )
-      .bind(this.scope)
-      .all<{ id: string }>();
-    return result.results.map((row) => row.id);
-  }
   async nextForAlarm() {
     return this.db
       .prepare(
@@ -164,14 +153,6 @@ export class PackagingJobsDatabase implements PackagingJobRepository {
       )
       .bind(this.scope)
       .first<{ id: string; due: number }>();
-  }
-  async markEnqueued(id: string) {
-    await this.db
-      .prepare(
-        "UPDATE package_jobs SET enqueued_at=CURRENT_TIMESTAMP WHERE id=?"
-      )
-      .bind(id)
-      .run();
   }
   async expire() {
     await this.db

@@ -3,17 +3,13 @@ import { ProcessingInputSchema } from "@fossbilling/extension-packaging/processo
 import { PackageError } from "@fossbilling/extension-packaging/errors";
 import { PackagingJobsDatabase } from "../../../../src/services/extensions/v2/db/packaging-jobs";
 import { processPackagingJob } from "../../../../src/services/extensions/v2/packages/jobs";
-import {
-  recoverPackagingJobs,
-  packagePreparation
-} from "../../../../src/lib/adapters/cloudflare/packaging-jobs";
+import { packagePreparation } from "../../../../src/lib/adapters/cloudflare/packaging-jobs";
+import * as dispatch from "../../../../src/lib/adapters/cloudflare/package-dispatcher";
 import { prepareQueuedPackage } from "../../../../src/services/extensions/v2/packages/prepare";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:workers";
 import {
   createExecutionContext,
-  createMessageBatch,
-  getQueueResult,
   runDurableObjectAlarm,
   runInDurableObject,
   waitOnExecutionContext
@@ -176,9 +172,13 @@ function mockB2() {
   return { calls, objects, fetch, images };
 }
 
+const wake = vi.fn<(immediate?: boolean) => Promise<void>>();
+
 beforeEach(async () => {
-  vi.spyOn(env.EXTENSION_PACKAGE_QUEUE, "send").mockResolvedValue({
-    metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } }
+  wake.mockReset().mockResolvedValue(undefined);
+  vi.spyOn(dispatch, "packageDispatcher").mockReturnValue({
+    scope: async () => "",
+    wake
   });
   b2 = mockB2();
   Object.assign(env, {
@@ -210,7 +210,6 @@ afterEach(() => {
     Reflect.deleteProperty(env, `EXTENSION_PACKAGES_S3_${suffix}`);
   Reflect.deleteProperty(env, "EXTENSION_PACKAGER_URL");
   Reflect.deleteProperty(env, "EXTENSION_PACKAGER_SECRET");
-  Reflect.deleteProperty(env, "EXTENSION_PACKAGES_DISPATCH");
   env.EXTENSION_PACKAGES_MODE = "disabled";
   // Assert outside the adapter's catch, including calls with injected failures.
   for (const request of requests) {
@@ -527,12 +526,89 @@ describe("publisher package builds", () => {
 });
 
 describe("queued package preparation", () => {
-  it("completes a Preview upload through its scheduled dispatcher", async () => {
-    Object.assign(env, { EXTENSION_PACKAGES_DISPATCH: "alarm" });
-    const dispatcher = env.PREVIEW_PACKAGE_DISPATCHER.getByName("packaging");
-    const other = env.PREVIEW_PACKAGE_DISPATCHER.getByName("other-preview");
+  it("processes a production burst, including a job submitted by the previous dispatcher", async () => {
+    const baseUrl = "https://api.fossbilling.net/extensions/v2";
+    Object.assign(env, {
+      ENVIRONMENT: "production",
+      EXTENSION_PACKAGES_MODE: "enabled",
+      EXTENSION_PACKAGES_BASE_URL: baseUrl
+    });
+    const dispatcher = env.PACKAGE_DISPATCHER.getByName("packaging");
     await runInDurableObject(dispatcher, (instance) => {
       Object.assign(Reflect.get(instance, "env"), env);
+    });
+    expect(await dispatcher.scope()).toBe("");
+    const jobs = new PackagingJobsDatabase(db);
+    const ids: string[] = [];
+    for (const version of ["1.0.0", "1.1.0", "1.2.0"]) {
+      const response = await upload(
+        { ...manifest(), version },
+        undefined,
+        undefined,
+        "owner",
+        false
+      );
+      expect(response.status).toBe(202);
+      const { result } = (await response.json()) as { result: { id: string } };
+      expect(response.headers.get("Location")).toBe(
+        `${baseUrl}/packaging-jobs/${result.id}`
+      );
+      ids.push(result.id);
+    }
+    await db
+      .prepare(
+        "UPDATE package_jobs SET enqueued_at=CURRENT_TIMESTAMP WHERE id=?"
+      )
+      .bind(ids[0])
+      .run();
+    for (const id of ids)
+      expect(await jobs.get(id)).toMatchObject({
+        status: "queued",
+        attempts: 0
+      });
+
+    // Arm recovery as the hourly cron would for any jobs already in D1.
+    await dispatcher.wake();
+    for (const id of ids) {
+      await runDurableObjectAlarm(dispatcher);
+      await expect
+        .poll(() => jobs.get(id))
+        .toMatchObject({
+          status: "ready",
+          attempts: 1,
+          artifactId: expect.any(String)
+        });
+    }
+    vi.mocked(dispatch.packageDispatcher).mockRestore();
+    const response = await get(
+      `${root}/packaging-jobs/${ids[0]}`,
+      await authHeaders("owner")
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      result: { status: "ready" }
+    });
+    await runInDurableObject(dispatcher, (_instance, state) =>
+      state.storage.deleteAlarm()
+    );
+  });
+
+  it("completes a Preview upload through its scheduled dispatcher", async () => {
+    vi.mocked(dispatch.packageDispatcher).mockRestore();
+    Object.assign(env, {
+      ENVIRONMENT: "preview",
+      EXTENSION_PACKAGES_MODE: "enabled",
+      EXTENSION_PACKAGES_BASE_URL: "https://api.fossbilling.net/extensions/v2"
+    });
+    const dispatcher = env.PACKAGE_DISPATCHER.getByName("packaging");
+    const other = env.PACKAGE_DISPATCHER.getByName("other-preview");
+    await runInDurableObject(dispatcher, (instance) => {
+      Object.assign(Reflect.get(instance, "env"), env, {
+        ENVIRONMENT: "preview"
+      });
+    });
+    await runInDurableObject(other, (instance) => {
+      Object.assign(Reflect.get(instance, "env"), { ENVIRONMENT: "preview" });
     });
     const response = await upload(
       manifest(),
@@ -548,7 +624,6 @@ describe("queued package preparation", () => {
     expect(new URL(response.headers.get("Location")!).pathname).toBe(
       `${root}/packaging-jobs/${job.id}`
     );
-    expect(env.EXTENSION_PACKAGE_QUEUE.send).not.toHaveBeenCalled();
     const jobs = new PackagingJobsDatabase(db, await dispatcher.scope());
     // The upload schedules this alarm. It may already be running by the
     // time the test asks workerd to deliver it.
@@ -568,7 +643,7 @@ describe("queued package preparation", () => {
     });
 
     const otherJobs = new PackagingJobsDatabase(db, await other.scope());
-    expect(await new PackagingJobsDatabase(db).pending()).toEqual([]);
+    expect(await new PackagingJobsDatabase(db).get(job.id)).toBeNull();
     expect(await otherJobs.get(job.id)).toBeNull();
     const otherJob = await otherJobs.create((await jobs.get(job.id))!);
     expect(otherJob.id).not.toBe(job.id);
@@ -580,7 +655,7 @@ describe("queued package preparation", () => {
     );
   });
 
-  it("recovers a scoped job without an immediate wakeup and retries storage failures", async () => {
+  it("recovers a scoped job without an immediate wakeup and retries after a restart", async () => {
     const response = await upload(
       manifest(),
       undefined,
@@ -592,17 +667,19 @@ describe("queued package preparation", () => {
     const { result: submitted } = (await response.json()) as {
       result: { id: string };
     };
-    const queueJobs = new PackagingJobsDatabase(db);
-    const dispatcher =
-      env.PREVIEW_PACKAGE_DISPATCHER.getByName("preview-recovery");
-    const jobs = new PackagingJobsDatabase(db, await dispatcher.scope());
+    const defaultJobs = new PackagingJobsDatabase(db);
+    let dispatcher = env.PACKAGE_DISPATCHER.getByName("preview-recovery");
+    await runInDurableObject(dispatcher, (instance) => {
+      Object.assign(Reflect.get(instance, "env"), env, {
+        ENVIRONMENT: "preview"
+      });
+    });
+    const scope = await dispatcher.scope();
+    const jobs = new PackagingJobsDatabase(db, scope);
     // Emulate a request interrupted after the D1 insert. The pre-armed
     // alarm must finish the job without the immediate wakeup.
     await dispatcher.wake();
-    const job = await jobs.create((await queueJobs.get(submitted.id))!);
-    await runInDurableObject(dispatcher, (instance) => {
-      Object.assign(Reflect.get(instance, "env"), env);
-    });
+    const job = await jobs.create((await defaultJobs.get(submitted.id))!);
     const key = packageKey(job.uploadObjectId!);
     const staged = b2.objects.get(key)!;
     b2.objects.delete(key);
@@ -616,6 +693,23 @@ describe("queued package preparation", () => {
       state.storage.getAlarm()
     );
     expect(retryAt).toBeGreaterThan(Date.now());
+    await expect(
+      runInDurableObject(dispatcher, (_instance, state) =>
+        state.abort("test restart")
+      )
+    ).rejects.toThrow();
+    dispatcher = env.PACKAGE_DISPATCHER.getByName("preview-recovery");
+    await runInDurableObject(dispatcher, (instance) => {
+      Object.assign(Reflect.get(instance, "env"), env, {
+        ENVIRONMENT: "preview"
+      });
+    });
+    expect(
+      await runInDurableObject(dispatcher, (_instance, state) =>
+        state.storage.getAlarm()
+      )
+    ).toBe(retryAt);
+    expect(await dispatcher.scope()).toBe(scope);
 
     b2.objects.set(key, staged);
     await db
@@ -629,7 +723,7 @@ describe("queued package preparation", () => {
       status: "ready",
       attempts: 2
     });
-    expect(await queueJobs.get(submitted.id)).toMatchObject({
+    expect(await defaultJobs.get(submitted.id)).toMatchObject({
       status: "queued",
       attempts: 0
     });
@@ -657,10 +751,7 @@ describe("queued package preparation", () => {
         .prepare("SELECT count(*) AS count FROM package_artifacts")
         .first()
     ).toEqual({ count: 0 });
-    expect(env.EXTENSION_PACKAGE_QUEUE.send).toHaveBeenCalledWith(
-      { jobId: job.id },
-      { contentType: "json" }
-    );
+    expect(wake.mock.calls).toEqual([[], [true]]);
     const repeat = await upload(manifest(), source, undefined, "owner", false);
     expect(
       ((await repeat.json()) as { result: { id: string } }).result.id
@@ -676,20 +767,9 @@ describe("queued package preparation", () => {
         )
       ).status
     ).toBe(403);
-    const ctx = createExecutionContext();
-    const batch = createMessageBatch("extension-packages", [
-      {
-        id: "delivery",
-        timestamp: new Date(),
-        attempts: 1,
-        body: { jobId: job.id }
-      }
-    ]);
-    await app.queue(batch, env);
-    expect(await getQueueResult(batch, ctx)).toMatchObject({
-      explicitAcks: ["delivery"],
-      retryMessages: []
-    });
+    expect(
+      (await finishJob(Response.json({ result: job }, { status: 202 }))).status
+    ).toBe(200);
     const status = await get(
       `${root}/packaging-jobs/${job.id}`,
       await authHeaders("owner")
@@ -723,45 +803,22 @@ describe("queued package preparation", () => {
         .first()
     ).toEqual({ count: 0 });
   });
-  it("keeps the job recoverable if queue publication fails", async () => {
-    vi.mocked(env.EXTENSION_PACKAGE_QUEUE.send).mockRejectedValueOnce(
-      new Error("queue unavailable")
-    );
+  it("keeps a job recoverable if the immediate wakeup fails", async () => {
+    wake
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("dispatcher unavailable"));
+    const source = await zip();
     expect(
-      (await upload(manifest(), undefined, undefined, "owner", false)).status
+      (await upload(manifest(), source, undefined, "owner", false)).status
     ).toBe(503);
     const jobs = new PackagingJobsDatabase(db);
-    const ids = await jobs.pending();
-    expect(ids).toHaveLength(1);
-    const { dispatchPackagingJob } =
-      await import("../../../../src/services/extensions/v2/packages/jobs");
-    const send = vi.fn().mockResolvedValue(undefined);
-    await dispatchPackagingJob(jobs, { send }, ids[0]);
-    expect(send).toHaveBeenCalledWith({ jobId: ids[0] });
-    expect(await jobs.pending()).toEqual([]);
-  });
-  it("continues recovery after one queue dispatch fails", async () => {
-    await upload(manifest(), undefined, undefined, "owner", false);
-    await upload(
-      { ...manifest(), version: "2.0.0" },
-      undefined,
-      undefined,
-      "owner",
-      false
-    );
-    await db.prepare("UPDATE package_jobs SET enqueued_at=NULL").run();
-    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.mocked(env.EXTENSION_PACKAGE_QUEUE.send)
-      .mockClear()
-      .mockRejectedValueOnce(new Error("queue unavailable"));
-    await recoverPackagingJobs(env);
-    expect(env.EXTENSION_PACKAGE_QUEUE.send).toHaveBeenCalledTimes(2);
-    expect(await new PackagingJobsDatabase(db).pending()).toHaveLength(1);
-    expect(logged).toHaveBeenCalledWith(
-      expect.objectContaining({
-        context: expect.objectContaining({ error: "queue unavailable" })
-      })
-    );
+    const pending = await jobs.nextForAlarm();
+    expect(pending).not.toBeNull();
+
+    const retry = await upload(manifest(), source, undefined, "owner", false);
+    expect(retry.status).toBe(202);
+    expect(await retry.json()).toMatchObject({ result: { id: pending!.id } });
+    expect(wake).toHaveBeenLastCalledWith(true);
   });
   it("retries a missing staged upload and completes when storage recovers", async () => {
     const source = await zip();

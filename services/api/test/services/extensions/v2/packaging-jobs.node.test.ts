@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  dispatchPackagingJob,
   processPackagingJob,
   type PackagingJob,
   type PackagingJobRepository
@@ -61,9 +60,7 @@ function repository() {
         job.error = error;
         activeLease = null;
       }
-    },
-    pending: async () => [job.id],
-    markEnqueued: vi.fn().mockResolvedValue(undefined)
+    }
   };
   return { job, jobs };
 }
@@ -71,13 +68,6 @@ function repository() {
 afterEach(() => vi.restoreAllMocks());
 
 describe("provider-independent packaging job processing", () => {
-  it("publishes only an identifier through the queue interface", async () => {
-    const { jobs, job } = repository();
-    const send = vi.fn().mockResolvedValue(undefined);
-    await dispatchPackagingJob(jobs, { send }, job.id);
-    expect(send).toHaveBeenCalledWith({ jobId: job.id });
-    expect(jobs.markEnqueued).toHaveBeenCalledWith(job.id);
-  });
   it("leaves an actively leased job unchanged when another delivery arrives", async () => {
     const { jobs, job } = repository();
     job.status = "processing";

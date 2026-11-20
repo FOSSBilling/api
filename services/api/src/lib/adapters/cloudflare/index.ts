@@ -1,4 +1,3 @@
-import { CloudflareQueueAdapter } from "./queue";
 import { IPlatformBindings } from "../../interfaces";
 import { CloudflareKVAdapter } from "./cache";
 import { CloudflareEnvironmentAdapter } from "./environment";
@@ -23,13 +22,6 @@ export function createCloudflareBindings(
     );
     const frontendUrl = environment.get("EXTENSIONS_FRONTEND_URL");
     bindings = {
-      queues: env.EXTENSION_PACKAGE_QUEUE
-        ? {
-            EXTENSION_PACKAGE_QUEUE: new CloudflareQueueAdapter(
-              env.EXTENSION_PACKAGE_QUEUE
-            )
-          }
-        : {},
       services: env.EXTENSIONS_FRONTEND
         ? {
             EXTENSIONS_FRONTEND: (request) =>
