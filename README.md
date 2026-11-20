@@ -4,12 +4,12 @@ This repository contains separately deployed backend services and the libraries 
 It uses npm workspaces and one root `package-lock.json`. Install dependencies from this
 repository root with `npm ci`; each workspace declares its own dependencies.
 
-| Workspace                                                              | Purpose                                                                                | Deployment                            |
-| ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------- |
-| [`services/api`](services/api/README.md)                               | HTTP API, authentication, persistence, queues and publication                          | Cloudflare Workers                    |
-| [`services/extension-packager`](services/extension-packager/README.md) | ZIP validation, manifest replacement and icon preparation                              | Netlify Function or another Node host |
-| [`libraries/extension-packaging`](libraries/extension-packaging)       | Shared manifest and processing contracts, ZIP implementation and storage/HTTP adapters | Bundled by its consumers              |
-| [`libraries/logging`](libraries/logging)                               | Structured logging and credential redaction used by both services                      | Bundled by its consumers              |
+| Workspace                                                                                | Purpose                                                                                | Deployment                            |
+| ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------- |
+| [`services/api`](services/api/README.md)                                                 | HTTP API, authentication, persistence, job dispatch and publication                    | Cloudflare Workers                    |
+| [`services/extension-package-processor`](services/extension-package-processor/README.md) | ZIP validation, manifest extraction and icon preparation                               | Netlify Function or another Node host |
+| [`libraries/extension-packaging`](libraries/extension-packaging)                         | Shared manifest and processing contracts, ZIP implementation and storage/HTTP adapters | Bundled by its consumers              |
+| [`libraries/logging`](libraries/logging)                                                 | Structured logging and credential redaction used by both services                      | Bundled by its consumers              |
 
 Services do not import each other's source. Shared libraries are private npm
 workspaces consumed directly from TypeScript source; there is no separate package
@@ -23,8 +23,8 @@ are installed for the build host.
 
 ```sh
 npm ci
-npm run dev                    # API and local S3 storage
-npm run extension-packager:dev  # Node packager, sharing the local S3 storage
+npm run dev                              # API and local S3 storage
+npm run extension-package-processor:dev  # Package processor with local S3 storage
 ```
 
 API migrations and other service-specific commands use npm's workspace option:
@@ -32,7 +32,7 @@ API migrations and other service-specific commands use npm's workspace option:
 ```sh
 npm run db:migrate:all:local --workspace @fossbilling/api
 npm run test:workers --workspace @fossbilling/api
-npm test --workspace @fossbilling/extension-packager
+npm test --workspace @fossbilling/extension-package-processor
 ```
 
 Both development commands use local package and image storage by default, with
@@ -47,8 +47,8 @@ npm run format:check
 npm run lint
 npm run typecheck
 npm test
-npm run build:api  # Wrangler dry run; does not deploy or apply remote migrations
-npm run build:extension-packager  # Offline Netlify function build
+npm run build:api                          # Wrangler dry run
+npm run build:extension-package-processor  # Offline Netlify function build
 ```
 
 Each workspace owns its tests and type checking. The root test and type-check
@@ -58,7 +58,7 @@ from the repository root; do not create service-specific lockfiles.
 ## Deployments
 
 The services deploy independently from the same repository. Netlify configuration
-and setup are documented in the [packager README](services/extension-packager/README.md).
+and setup are documented in the [package processor README](services/extension-package-processor/README.md).
 The same CI/CD workflow compiles the function without credentials and deploys
 it through the Netlify CLI after validation. Main updates production and fixed
 staging in one Netlify project; other branch pushes update preview aliases using
@@ -78,9 +78,10 @@ builds a self-contained Worker artifact, including deployment configuration and 
 See the [API deployment setup](services/api/README.md#deployment) for GitHub environments,
 staging resource IDs, Preview secrets, migration behaviour and the Workers Builds cutover.
 All API production and Preview deployments require validation, the API build and
-migrations to succeed. Previews keep package processing disabled because Cloudflare Previews
-cannot consume Queues. Production API package processing also remains disabled
-pending Netlify runtime verification and the controlled production package test.
+migrations to succeed. The API keeps package processing disabled in production and
+Previews (`EXTENSION_PACKAGES_MODE=disabled` in `services/api/wrangler.jsonc`) pending
+runtime verification and the controlled production package test. Netlify deploys
+the processor independently of this setting.
 
 `npm run cf-deploy` remains the explicit manual production command; it applies
-remote migrations and deploys the API. It does not deploy the packager.
+remote migrations and deploys the API. It does not deploy the package processor.

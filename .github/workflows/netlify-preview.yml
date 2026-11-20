@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   comment:
-    name: Sync Packager Preview Comment
+    name: Sync Package Processor Preview Comment
     runs-on: ubuntu-slim
     timeout-minutes: 5
     concurrency:
@@ -49,7 +49,7 @@ jobs:
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           artifact-ids: ${{ steps.preview.outputs.artifact-id }}
-          path: ${{ runner.temp }}/packager-preview
+          path: ${{ runner.temp }}/package-processor-preview
           run-id: ${{ steps.preview.outputs.run-id }}
           github-token: ${{ github.token }}
       - name: Update Preview Comment
@@ -62,5 +62,5 @@ jobs:
             const fs = require('node:fs');
             const path = require('node:path');
             const { publishPreview } = await import(`${process.env.GITHUB_WORKSPACE}/.github/scripts/netlify-preview.mjs`);
-            const metadata = JSON.parse(fs.readFileSync(path.join(process.env.RUNNER_TEMP, 'packager-preview/preview.json'), 'utf8'));
+            const metadata = JSON.parse(fs.readFileSync(path.join(process.env.RUNNER_TEMP, 'package-processor-preview/preview.json'), 'utf8'));
             await publishPreview({ github, context, preview: JSON.parse(process.env.PREVIEW_METADATA), metadata });

@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { URL } from "node:url";
 
-const artifactPrefix = "extension-packager-preview-attempt-";
+const artifactPrefix = "extension-package-processor-preview-attempt-";
+// Keep the marker so existing preview comments are updated.
 const marker = "<!-- extension-packager-preview -->";
 const statuses = {
   success: "Passed",
@@ -105,15 +106,15 @@ export async function publishPreview({ github, context, preview, metadata }) {
         url.hostname.endsWith(".netlify.app") &&
         !url.username &&
         !url.password &&
-        url.pathname === "/.netlify/functions/extension-packager",
-      "Invalid packager preview URL"
+        url.pathname === "/.netlify/functions/extension-package-processor",
+      "Invalid package processor preview URL"
     );
   }
   const repoUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}`;
   const logs = `${repoUrl}/actions/runs/${preview.runId}/attempts/${preview.attempt}`;
   const body = [
     marker,
-    "### Extension Packager Preview",
+    "### Extension Package Processor Preview",
     "",
     `Commit [\`${preview.sha.slice(0, 7)}\`](${repoUrl}/commit/${preview.sha}) · Attempt ${preview.attempt} · [CI logs](${logs})`,
     "",
