@@ -92,6 +92,11 @@ const packageErrors = {
   503: errorResponse("Package storage is not configured or is unavailable")
 };
 
+function previewDispatcher(c: Context<{ Bindings: CloudflareBindings }>) {
+  if (getPlatform(c).getEnv("EXTENSION_PACKAGES_DISPATCH") === "alarm")
+    return c.env.PREVIEW_PACKAGE_DISPATCHER.getByName("packaging");
+}
+
 export function registerPackageRoutes(app: ExtensionsV2App) {
   const availability: MiddlewareHandler<{
     Bindings: CloudflareBindings;
@@ -221,7 +226,8 @@ export function registerPackageRoutes(app: ExtensionsV2App) {
             "Package download URL is not configured",
             503
           );
-        const jobs = new PackagingJobsDatabase(db);
+        const dispatcher = previewDispatcher(c);
+        const jobs = new PackagingJobsDatabase(db, await dispatcher?.scope());
         const source = form.source
           ? new Uint8Array(await form.source.arrayBuffer())
           : undefined;
@@ -249,6 +255,9 @@ export function registerPackageRoutes(app: ExtensionsV2App) {
                 uploadSha256!
               )
             : null;
+          // Arm recovery before inserting, so an interrupted request leaves
+          // a job the alarm can pick up even if the immediate wakeup never runs.
+          await dispatcher?.wake();
           job = await jobs.create({
             fingerprint,
             owner,
@@ -258,15 +267,20 @@ export function registerPackageRoutes(app: ExtensionsV2App) {
             uploadSha256
           });
         }
-        if (job.status === "queued")
-          await dispatchPackagingJob(
-            jobs,
-            getPlatform(c).getQueue("EXTENSION_PACKAGE_QUEUE"),
-            job.id
-          );
+        if (job.status === "queued") {
+          if (dispatcher) await dispatcher.wake(true);
+          else
+            await dispatchPackagingJob(
+              jobs,
+              getPlatform(c).getQueue("EXTENSION_PACKAGE_QUEUE"),
+              job.id
+            );
+        }
         c.header(
           "Location",
-          `${baseUrl.replace(/\/$/, "")}/packaging-jobs/${job.id}`
+          dispatcher
+            ? new URL(`/extensions/v2/packaging-jobs/${job.id}`, c.req.url).href
+            : `${baseUrl.replace(/\/$/, "")}/packaging-jobs/${job.id}`
         );
         c.header("Retry-After", "1");
         return c.json(await jobResponse(db, job), 202);
@@ -301,9 +315,11 @@ export function registerPackageRoutes(app: ExtensionsV2App) {
       try {
         const db = c.env.DB_EXTENSIONS;
         const repository = new PackageBuildDatabase(db);
-        const job = await new PackagingJobsDatabase(db).get(
-          c.req.valid("param").jobId
-        );
+        const dispatcher = previewDispatcher(c);
+        const job = await new PackagingJobsDatabase(
+          db,
+          await dispatcher?.scope()
+        ).get(c.req.valid("param").jobId);
         if (!job)
           throw new PackageError("NOT_FOUND", "Packaging job not found", 404);
         const userId = getAuth(c).userId;

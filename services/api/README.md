@@ -253,14 +253,11 @@ Here `staging` is a named Preview, not a Git branch; its source is `main`.
 Register the directory's staging OAuth callback with the dedicated preview client
 before testing sign-in.
 
-Cloudflare Previews cannot consume Queues or receive Cron Triggers. Preview package
-messages use `extension-packages-preview`, consumed by the fixed
-`api-package-preview-consumer` Worker with staging resources. The staging job
-updates this consumer on `main`; branch Previews share it. The API Preview's
-package routes default to `EXTENSION_PACKAGES_MODE=disabled` under `previews.vars`
-in `services/api/wrangler.jsonc`. The consumer is deployed with that mode enabled
-and needs complete runtime settings before its first deployment. This API setting
-does not configure the separate Netlify packager. Notification email is disabled.
+The Preview API uses a Durable Object alarm for package jobs. Each Preview has
+its own dispatcher and job scope in the shared staging database. Package routes
+default to `EXTENSION_PACKAGES_MODE=disabled` under `previews.vars`. The staging
+job still updates `api-package-preview-consumer` so it can finish jobs submitted
+by earlier queue-based deployments during the trial. Notification email is disabled.
 See [packaging setup](src/services/extensions/v2/PACKAGING.md)
 and [Cloudflare's Preview resource behaviour](https://developers.cloudflare.com/workers/previews/resources/).
 

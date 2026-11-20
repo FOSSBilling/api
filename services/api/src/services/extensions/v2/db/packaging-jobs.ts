@@ -41,21 +41,24 @@ const job = (row: JobRow): PackagingJob => ({
 });
 
 export class PackagingJobsDatabase implements PackagingJobRepository {
-  constructor(private readonly db: D1Database) {}
+  constructor(
+    private readonly db: D1Database,
+    private readonly scope = ""
+  ) {}
 
   async get(id: string) {
     const row = await this.db
-      .prepare("SELECT * FROM package_jobs WHERE id=?")
-      .bind(id)
+      .prepare("SELECT * FROM package_jobs WHERE id=? AND dispatch_scope=?")
+      .bind(id, this.scope)
       .first<JobRow>();
     return row ? job(row) : null;
   }
   async find(fingerprint: string) {
     const row = await this.db
       .prepare(
-        "SELECT * FROM package_jobs WHERE fingerprint=? AND status!='failed'"
+        "SELECT * FROM package_jobs WHERE fingerprint=? AND dispatch_scope=? AND status!='failed'"
       )
-      .bind(fingerprint)
+      .bind(fingerprint, this.scope)
       .first<JobRow>();
     return row ? job(row) : null;
   }
@@ -73,8 +76,8 @@ export class PackagingJobsDatabase implements PackagingJobRepository {
     const id = crypto.randomUUID();
     await this.db
       .prepare(
-        `INSERT INTO package_jobs (id,fingerprint,owner_user_id,owner,manifest,source_id,upload_object_id,upload_sha256)
-      SELECT ?,?,?,?,?,?,?,? WHERE (SELECT count(*) FROM package_jobs WHERE owner_user_id=?) < 256
+        `INSERT INTO package_jobs (id,fingerprint,owner_user_id,owner,manifest,source_id,upload_object_id,upload_sha256,dispatch_scope)
+      SELECT ?,?,?,?,?,?,?,?,? WHERE (SELECT count(*) FROM package_jobs WHERE owner_user_id=?) < 256
       ON CONFLICT DO NOTHING`
       )
       .bind(
@@ -86,6 +89,7 @@ export class PackagingJobsDatabase implements PackagingJobRepository {
         input.sourceId,
         input.uploadObjectId,
         input.uploadSha256,
+        this.scope,
         input.owner.owner_user_id
       )
       .run();
@@ -102,9 +106,9 @@ export class PackagingJobsDatabase implements PackagingJobRepository {
     const row = await this.db
       .prepare(
         `UPDATE package_jobs SET status='processing',attempts=attempts+1,lease_id=?,lease_until=datetime('now','+20 minutes'),updated_at=CURRENT_TIMESTAMP
-      WHERE id=? AND (status='queued' OR status='processing' AND lease_until<CURRENT_TIMESTAMP) RETURNING *`
+      WHERE id=? AND dispatch_scope=? AND (status='queued' OR status='processing' AND lease_until<CURRENT_TIMESTAMP) RETURNING *`
       )
-      .bind(lease, id)
+      .bind(lease, id, this.scope)
       .first<JobRow>();
     return row ? job(row) : null;
   }
@@ -139,12 +143,27 @@ export class PackagingJobsDatabase implements PackagingJobRepository {
   async pending() {
     const result = await this.db
       .prepare(
-        `SELECT id FROM package_jobs WHERE
+        `SELECT id FROM package_jobs WHERE dispatch_scope=? AND (
       (status='queued' AND (enqueued_at IS NULL OR enqueued_at<datetime('now','-1 hour')))
-      OR (status='processing' AND lease_until<CURRENT_TIMESTAMP) LIMIT 100`
+      OR (status='processing' AND lease_until<CURRENT_TIMESTAMP)) LIMIT 100`
       )
+      .bind(this.scope)
       .all<{ id: string }>();
     return result.results.map((row) => row.id);
+  }
+  async nextForAlarm() {
+    return this.db
+      .prepare(
+        `SELECT id, CASE
+          WHEN status='processing' THEN unixepoch(lease_until) + 1
+          WHEN attempts=0 THEN unixepoch(created_at)
+          ELSE unixepoch(updated_at) + 60
+        END AS due FROM package_jobs
+        WHERE dispatch_scope=? AND status IN ('queued','processing')
+        ORDER BY due, created_at, id LIMIT 1`
+      )
+      .bind(this.scope)
+      .first<{ id: string; due: number }>();
   }
   async markEnqueued(id: string) {
     await this.db
@@ -157,13 +176,15 @@ export class PackagingJobsDatabase implements PackagingJobRepository {
   async expire() {
     await this.db
       .prepare(
-        `UPDATE package_jobs SET status='failed',error_code='PACKAGE_EXPIRED',error_message='Package processing expired. Please try again.',error_status=503,lease_id=NULL,lease_until=NULL,updated_at=CURRENT_TIMESTAMP WHERE status IN ('queued','processing') AND created_at<datetime('now','-1 day') AND (lease_until IS NULL OR lease_until<CURRENT_TIMESTAMP)`
+        `UPDATE package_jobs SET status='failed',error_code='PACKAGE_EXPIRED',error_message='Package processing expired. Please try again.',error_status=503,lease_id=NULL,lease_until=NULL,updated_at=CURRENT_TIMESTAMP WHERE dispatch_scope=? AND status IN ('queued','processing') AND created_at<datetime('now','-1 day') AND (lease_until IS NULL OR lease_until<CURRENT_TIMESTAMP)`
       )
+      .bind(this.scope)
       .run();
     await this.db
       .prepare(
-        "DELETE FROM package_jobs WHERE id IN (SELECT id FROM package_jobs WHERE status IN ('ready','failed') AND updated_at<datetime('now','-7 days') LIMIT 100)"
+        "DELETE FROM package_jobs WHERE id IN (SELECT id FROM package_jobs WHERE dispatch_scope=? AND status IN ('ready','failed') AND updated_at<datetime('now','-7 days') LIMIT 100)"
       )
+      .bind(this.scope)
       .run();
   }
 }

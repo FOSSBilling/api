@@ -597,6 +597,7 @@ export const packagingJobs = sqliteTable(
   {
     id: text("id").primaryKey(),
     fingerprint: text("fingerprint").notNull(),
+    dispatchScope: text("dispatch_scope").notNull().default(""),
     ownerUserId: text("owner_user_id").notNull(),
     owner: text("owner").notNull(),
     manifest: text("manifest").notNull(),
@@ -627,11 +628,15 @@ export const packagingJobs = sqliteTable(
   },
   (table) => [
     uniqueIndex("idx_package_jobs_fingerprint")
-      .on(table.fingerprint)
+      .on(table.fingerprint, table.dispatchScope)
       .where(sql`${table.status} != 'failed'`),
     index("idx_package_jobs_owner").on(table.ownerUserId),
     index("idx_package_jobs_upload_object").on(table.uploadObjectId),
-    index("idx_package_jobs_dispatch").on(table.status, table.enqueuedAt),
+    index("idx_package_jobs_dispatch").on(
+      table.dispatchScope,
+      table.status,
+      table.enqueuedAt
+    ),
     check(
       "package_jobs_status_check",
       sql`${table.status} IN ('queued','processing','ready','failed')`
