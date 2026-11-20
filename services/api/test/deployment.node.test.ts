@@ -25,10 +25,6 @@ function fixture(update?: (config: Unstable_RawConfig) => void) {
   const folder = mkdtempSync(join(tmpdir(), "api-deployment-"));
   folders.push(folder);
   copyFileSync(join(service, "wrangler.jsonc"), join(folder, "wrangler.jsonc"));
-  copyFileSync(
-    join(service, "wrangler.package-preview-consumer.jsonc"),
-    join(folder, "wrangler.package-preview-consumer.jsonc")
-  );
   if (update) {
     const config = experimental_readRawConfig({
       config: join(folder, "wrangler.jsonc")
@@ -87,20 +83,8 @@ describe("API deployment artifact", () => {
       tag: "preview-package-dispatcher-v1",
       new_sqlite_classes: ["PreviewPackageDispatcher"]
     });
-    const consumer = read(folder, "package-preview-consumer/wrangler.json");
-    expect(consumer.main).toBe("package-preview-consumer.js");
-    expect(consumer.no_bundle).toBe(true);
-    expect(consumer.d1_databases).toEqual([
-      {
-        binding: "DB_EXTENSIONS",
-        database_id: source.previews!.d1_databases!.find(
-          (db) => db.binding === "DB_EXTENSIONS"
-        )!.database_id
-      }
-    ]);
-    expect(consumer.queues.consumers[0].queue).toBe(
-      artifact.previews.queues.producers[0].queue
-    );
+    expect(artifact.previews.queues).toBeUndefined();
+    expect(artifact.queues).toEqual(source.queues);
     for (const database of source.d1_databases!) {
       const packaged = artifact.d1_databases.find(
         (db: { binding: string }) => db.binding === database.binding

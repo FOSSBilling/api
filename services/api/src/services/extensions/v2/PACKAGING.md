@@ -114,14 +114,6 @@ request can leave a recoverable job. The alarm processes one job at a time, sche
 retries or expired leases, and calls the existing Netlify packager over HTTP. Source
 files and artifacts still use the shared staging storage.
 
-The legacy `api-package-preview-consumer` handles Preview jobs submitted to
-`extension-packages-preview`. Its `EXTENSION_PACKAGES_MODE=enabled` is set in
-`services/api/wrangler.package-preview-consumer.jsonc` and starts queue processing
-and hourly queue-only recovery on its first deployment, independently of the API
-Preview flag. Before deploying the consumer for the first time, configure its
-package and asset storage and Netlify packager credentials using the staging
-API's Preview values.
-
 Production and local development default to Queue dispatch. To use alarms locally,
 set `EXTENSION_PACKAGES_DISPATCH=alarm` in `services/api/.dev.vars` and apply the
 local migrations.

@@ -12,7 +12,6 @@ import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:workers";
 import {
   createExecutionContext,
-  createScheduledController,
   createMessageBatch,
   getQueueResult,
   runDurableObjectAlarm,
@@ -28,7 +27,6 @@ import {
   TextWriter
 } from "@zip.js/zip.js";
 import app from "../../../../src/app/index";
-import previewConsumer from "../../../../src/app/package-preview-consumer";
 import {
   signAccessToken,
   activateM2mJwks,
@@ -741,21 +739,6 @@ describe("queued package preparation", () => {
     await dispatchPackagingJob(jobs, { send }, ids[0]);
     expect(send).toHaveBeenCalledWith({ jobId: ids[0] });
     expect(await jobs.pending()).toEqual([]);
-  });
-  it("logs preview recovery failures without marking the scheduled invocation successful", async () => {
-    const error = new Error("database unavailable");
-    vi.spyOn(PackagingJobsDatabase.prototype, "expire").mockRejectedValueOnce(
-      error
-    );
-    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
-    await expect(
-      previewConsumer.scheduled(createScheduledController(), env)
-    ).rejects.toBe(error);
-    expect(logged).toHaveBeenCalledWith({
-      service: "extensions/packages",
-      message: "Packaging job recovery failed",
-      context: { error: "database unavailable" }
-    });
   });
   it("continues recovery after one queue dispatch fails", async () => {
     await upload(manifest(), undefined, undefined, "owner", false);
