@@ -737,6 +737,29 @@ describe("queued package preparation", () => {
     );
   });
 
+  it("rejects a version-only target before reserving storage", async () => {
+    const response = await reserveUpload(
+      { version: manifest().version },
+      await zip(),
+      await authHeaders("owner")
+    );
+    expect(response.status).toBe(422);
+    expect(await response.json()).toMatchObject({
+      error: {
+        code: "VALIDATION_ERROR",
+        details: [
+          {
+            path: ["target", "id"],
+            message: "Extension ID is required when a version is supplied"
+          }
+        ]
+      }
+    });
+    expect(
+      await db.prepare("SELECT count(*) AS count FROM package_objects").first()
+    ).toEqual({ count: 0 });
+  });
+
   it("reuses an active reservation without extending its expiry", async () => {
     const source = await zip();
     const headers = await authHeaders("owner");

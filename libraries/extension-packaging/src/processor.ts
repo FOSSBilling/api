@@ -13,10 +13,15 @@ const output = z
     sha256: checksum
   })
   .strict();
-export const PackageTargetSchema = z.strictObject({
-  id: ManifestSchema.shape.id.optional(),
-  version: ManifestSchema.shape.version.optional()
-});
+export const PackageTargetSchema = z
+  .strictObject({
+    id: ManifestSchema.shape.id.optional(),
+    version: ManifestSchema.shape.version.optional()
+  })
+  .refine(({ id, version }) => id !== undefined || version === undefined, {
+    path: ["id"],
+    message: "Extension ID is required when a version is supplied"
+  });
 export type PackageTarget = z.infer<typeof PackageTargetSchema>;
 
 export const ProcessingInputSchema = z

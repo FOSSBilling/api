@@ -58,8 +58,9 @@ The OpenAPI reference is available at `/extensions/v2/docs`.
 - `POST /extensions/v2/package-uploads` accepts the ZIP byte count, a hex SHA-256,
   and a `target`. Use `{}` for a first submission, `{ id }` for a new release
   of an existing extension, or `{ id, version }` to replace a pending release.
-  The embedded manifest must match any supplied target fields. A **200** response
-  contains a reservation or a packaging job.
+  A version requires an extension ID. The embedded manifest must match any
+  supplied target fields. A **200** response contains a reservation or a
+  packaging job.
   - `{ "result": { "kind": "upload", "id": "...", "url": "...", "headers": { ... } } }`
     reserves storage quota and provides a five-minute PUT URL. An identical retry
     reuses the active reservation and its expiry.
@@ -92,10 +93,10 @@ manifest-backed metadata. The directory description defaults to the manifest
 description and can be edited independently. Release dates, changelogs, the
 README and the source repository link can also be edited without a ZIP upload.
 
-At most one release can have `is_latest: true`. Without a selection, the newest
-stable release is used, falling back to a prerelease. The directory's release
-editor provides a “Set as Latest Release” checkbox, checked by default for new
-releases. This flag stays out of the manifest.
+Only one release can have `is_latest: true`. The directory checks “Set as Latest
+Release” for every new release, including prereleases. When no release is
+selected, the directory uses the newest stable release and falls back to a
+prerelease if none is stable. The selection is stored outside the manifest.
 
 ## Background processing and provider boundaries
 
@@ -138,9 +139,10 @@ or timed-out jobs stop publication, and a retry reuses existing work.
 The packager checks the uploaded SHA-256 and performs bounded archive validation.
 It stores the same bytes under a key reserved for the service, so a still-valid
 upload URL cannot change a reviewed artifact. The staging upload is eligible for
-cleanup after one day. There is one retained ZIP per validated upload. Before
-processing, storage quota reserves up to 5 MiB for the validated ZIP and 4 MiB
-for each possible icon. The per-account allowance is 256 objects / 512 MiB,
+cleanup after one day. Identical uploads share one retained ZIP within the same
+developer profile generation, extension ID and version. Before processing,
+storage quota reserves up to 5 MiB for the validated ZIP and 4 MiB for each
+possible icon. The per-account allowance is 256 objects / 512 MiB,
 including temporary reservations and prepared images.
 
 A pending submission can reference a different validated artifact for the same
@@ -302,7 +304,11 @@ Before deployment (including an automatic deployment after merge):
    Development keys in `.dev.vars` are not production secrets.
 2. Configure the packager URL and shared secret described below, confirm the
    scoped CDN security headers remain configured, and keep B2 caps/alerts in place.
-3. Apply the package and job tables through the normal D1 deployment workflow.
+3. Apply the package and job migrations through the normal D1 deployment workflow.
+   After migration `0036_validate_uploaded_zips`, unfinished jobs from the retired
+   manifest rebuild flow fail with `UPLOAD_NOT_FOUND` when processed. Upload a ZIP
+   through the new flow if the release is still pending. Existing published ZIPs
+   retain their URLs and checksums.
 4. After dispatcher capacity and moderation requirements are agreed, explicitly set
    `EXTENSION_PACKAGES_MODE=enabled` in the reviewed production configuration.
    Verify a production smoke test before enabling the dependent directory and
