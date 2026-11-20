@@ -221,22 +221,25 @@ export function registerPackageRoutes(app: ExtensionsV2App) {
           const { result: job } = await jobResponse(db, existing);
           return c.json({ result: { kind: "job" as const, job } }, 200);
         }
-        const id = crypto.randomUUID();
-        const expiresAt = Math.floor(Date.now() / 1000) + uploadLifetimeSeconds;
+        const now = Math.floor(Date.now() / 1000);
+        const { id, expires_at: expiresAt } = await repository.reserveUpload(
+          owner,
+          manifest,
+          {
+            scope,
+            fingerprint,
+            bytes,
+            sha256: checksum,
+            now,
+            expiresAt: now + uploadLifetimeSeconds
+          }
+        );
         const upload = await packageStore(c)!.authorizeUpload(
           id,
           bytes,
           checksum,
-          uploadLifetimeSeconds
-        );
-        await repository.reserveUpload(owner, manifest, {
-          id,
-          scope,
-          fingerprint,
-          bytes,
-          sha256: checksum,
           expiresAt
-        });
+        );
         return c.json(
           { result: { kind: "upload" as const, id, ...upload } },
           200

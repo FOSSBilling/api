@@ -524,17 +524,27 @@ export const packageObjects = sqliteTable(
   (table) => [index("idx_package_objects_creator").on(table.createdBy)]
 );
 
-export const packageUploads = sqliteTable("package_uploads", {
-  id: text("id")
-    .primaryKey()
-    .references(() => packageObjects.id, { onDelete: "cascade" }),
-  dispatchScope: text("dispatch_scope").notNull(),
-  fingerprint: text("fingerprint").notNull(),
-  manifest: text("manifest").notNull(),
-  owner: text("owner").notNull(),
-  sha256: text("sha256").notNull(),
-  expiresAt: integer("expires_at").notNull()
-});
+export const packageUploads = sqliteTable(
+  "package_uploads",
+  {
+    id: text("id")
+      .primaryKey()
+      .references(() => packageObjects.id, { onDelete: "cascade" }),
+    dispatchScope: text("dispatch_scope").notNull(),
+    fingerprint: text("fingerprint").notNull(),
+    manifest: text("manifest").notNull(),
+    owner: text("owner").notNull(),
+    sha256: text("sha256").notNull(),
+    expiresAt: integer("expires_at").notNull()
+  },
+  (table) => [
+    index("idx_package_uploads_lookup").on(
+      table.dispatchScope,
+      table.fingerprint,
+      table.expiresAt
+    )
+  ]
+);
 
 // No extension FK: a developer can build a package before creating its listing.
 export const packageSources = sqliteTable(

@@ -95,7 +95,7 @@ export function b2ObjectStore(
     }
   }
   return {
-    async authorizeUpload(key, bytes, checksum, expiresIn) {
+    async authorizeUpload(key, bytes, checksum, expiresAt) {
       if (
         kind !== "packages" ||
         !/^[a-f0-9]{64}$/.test(checksum) ||
@@ -104,6 +104,14 @@ export function b2ObjectStore(
         bytes > PACKAGE_LIMITS.sourceBytes
       )
         throw unavailable("Invalid package upload reservation");
+      const now = new Date();
+      const expiresIn = expiresAt - Math.floor(now.getTime() / 1000);
+      if (expiresIn <= 0)
+        throw new PackageError(
+          "UPLOAD_EXPIRED",
+          "Package upload expired; reserve a new upload",
+          409
+        );
       const sha256Base64 = btoa(
         String.fromCharCode(
           ...Uint8Array.from(checksum.match(/../g)!, (byte) =>
@@ -122,7 +130,8 @@ export function b2ObjectStore(
         target(key),
         { ...headers, "Content-Length": String(bytes) },
         credentials,
-        expiresIn
+        expiresIn,
+        now
       );
       return { url, headers };
     },

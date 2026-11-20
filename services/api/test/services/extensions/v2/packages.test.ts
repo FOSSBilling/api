@@ -22,7 +22,10 @@ import {
   activateM2mJwks,
   deactivateM2mJwks
 } from "../../../lib/auth/m2m-helper";
-import { PackageArtifactSchema } from "../../../../src/services/extensions/v2/schemas/packages";
+import {
+  PackageArtifactSchema,
+  PackageReservationSchema
+} from "../../../../src/services/extensions/v2/schemas/packages";
 import { ManifestSchema } from "../../../../src/services/extensions/v2/schemas/manifest";
 import { ExtensionContentSchema } from "../../../../src/services/extensions/v2/schemas/extensions";
 import { contentManifest } from "../../../../src/services/extensions/v2/packages/manifest";
@@ -749,6 +752,39 @@ describe("queued package preparation", () => {
     await runInDurableObject(dispatcher, (_instance, state) =>
       state.storage.deleteAlarm()
     );
+  });
+
+  it("reuses an active reservation without extending its expiry", async () => {
+    const source = await zip();
+    const headers = await authHeaders("owner");
+    const reserve = async () => {
+      const response = await reserveUpload(manifest(), source, headers);
+      expect(response.status).toBe(200);
+      const { result } = await response.json<{ result: unknown }>();
+      const reservation = PackageReservationSchema.parse(result);
+      if (reservation.kind !== "upload")
+        throw new Error("Expected a source upload reservation");
+      return reservation;
+    };
+    const original = await reserve();
+    const setExpiry = db.prepare(
+      "UPDATE package_uploads SET expires_at=? WHERE id=?"
+    );
+    await setExpiry.bind(Math.floor(Date.now() / 1000) + 60, original.id).run();
+    const retry = await reserve();
+    expect(retry.id).toBe(original.id);
+    const remaining = Number(
+      new URL(retry.url).searchParams.get("X-Amz-Expires")
+    );
+    expect(remaining).toBeGreaterThan(0);
+    expect(remaining).toBeLessThanOrEqual(60);
+    expect(
+      await db.prepare("SELECT count(*) as count FROM package_objects").first()
+    ).toEqual({ count: 1 });
+
+    await setExpiry.bind(0, original.id).run();
+    const replacement = await reserve();
+    expect(replacement.id).not.toBe(original.id);
   });
 
   it("confirms only a reserved object with the expected bytes and checksum", async () => {
@@ -1691,7 +1727,7 @@ describe("stored directory packages", () => {
     ).toBe(503);
   });
 
-  it("concurrent identical uploads converge on one source and artifact", async () => {
+  it("concurrent identical uploads share one reservation, source and artifact", async () => {
     const source = await zip();
     const [first, second] = await Promise.all([
       built(manifest(), source),
@@ -1708,7 +1744,7 @@ describe("stored directory packages", () => {
     ).toEqual({ count: 1 });
     expect(
       await db.prepare("SELECT count(*) AS count FROM package_objects").first()
-    ).toEqual({ count: 3 }); // one duplicate staged upload remains eligible for cleanup
+    ).toEqual({ count: 2 }); // one source ZIP and its prepared artifact
   });
 
   it("does not allow a removed managed release to return as an external download", async () => {

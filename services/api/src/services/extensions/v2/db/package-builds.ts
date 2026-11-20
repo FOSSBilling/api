@@ -49,6 +49,19 @@ function ownerParams(owner: PackageOwner, id: string) {
   ];
 }
 
+const activeUpload = `SELECT r.id, r.expires_at
+  FROM package_uploads r JOIN package_objects o ON o.id=r.id
+  WHERE r.dispatch_scope=? AND r.fingerprint=? AND o.bytes=?
+    AND r.expires_at>? AND o.deleting=0`;
+
+function packageAdmissionError() {
+  return new PackageError(
+    "PACKAGE_ADMISSION",
+    "Ownership changed or package storage quota is exhausted",
+    409
+  );
+}
+
 export class PackageBuildDatabase implements PackageRepository {
   constructor(private readonly db: D1Database) {}
   async getOwner(
@@ -96,14 +109,21 @@ export class PackageBuildDatabase implements PackageRepository {
     owner: PackageOwner,
     extensionId: string,
     id: string,
-    bytes: number
+    bytes: number,
+    uploadLookup?: readonly [
+      scope: string,
+      fingerprint: string,
+      bytes: number,
+      now: number
+    ]
   ) {
     return this.db
       .prepare(
         `INSERT INTO package_objects (id,created_by,bytes)
     SELECT ?,?,? WHERE ${ownerPredicate()}
     AND (SELECT count(*) FROM package_objects WHERE created_by=?) < ?
-    AND (SELECT coalesce(sum(bytes),0) FROM package_objects WHERE created_by=?) + ? <= ?`
+    AND (SELECT coalesce(sum(bytes),0) FROM package_objects WHERE created_by=?) + ? <= ?
+    ${uploadLookup ? `AND NOT EXISTS (${activeUpload})` : ""}`
       )
       .bind(
         id,
@@ -114,15 +134,8 @@ export class PackageBuildDatabase implements PackageRepository {
         MAX_PACKAGE_OBJECTS,
         owner.owner_user_id,
         bytes,
-        MAX_PACKAGE_STORAGE_BYTES
-      );
-  }
-  private checkReservation(result: D1Result) {
-    if (!result.meta.changes)
-      throw new PackageError(
-        "PACKAGE_ADMISSION",
-        "Ownership changed or package storage quota is exhausted",
-        409
+        MAX_PACKAGE_STORAGE_BYTES,
+        ...(uploadLookup ?? [])
       );
   }
   async reserveObject(
@@ -131,24 +144,39 @@ export class PackageBuildDatabase implements PackageRepository {
     id: string,
     bytes: number
   ) {
-    this.checkReservation(
-      await this.objectReservation(owner, extensionId, id, bytes).run()
-    );
+    const result = await this.objectReservation(
+      owner,
+      extensionId,
+      id,
+      bytes
+    ).run();
+    if (!result.meta.changes) throw packageAdmissionError();
   }
   async reserveUpload(
     owner: PackageOwner,
     manifest: Manifest,
     input: {
-      id: string;
       bytes: number;
       scope: string;
       fingerprint: string;
       sha256: string;
+      now: number;
       expiresAt: number;
     }
   ) {
-    const [reservation] = await this.db.batch([
-      this.objectReservation(owner, manifest.id, input.id, input.bytes),
+    const id = crypto.randomUUID();
+    const lookup = [
+      input.scope,
+      input.fingerprint,
+      input.bytes,
+      input.now
+    ] as const;
+    // The quota check and the lookup share a transaction so retries cannot reserve twice.
+    const [, , matched] = await this.db.batch<{
+      id: string;
+      expires_at: number;
+    }>([
+      this.objectReservation(owner, manifest.id, id, input.bytes, lookup),
       this.db
         .prepare(
           `INSERT INTO package_uploads (id, dispatch_scope, fingerprint, manifest, owner, sha256, expires_at)
@@ -161,10 +189,17 @@ export class PackageBuildDatabase implements PackageRepository {
           JSON.stringify(owner),
           input.sha256,
           input.expiresAt,
-          input.id
+          id
+        ),
+      this.db
+        .prepare(
+          `${activeUpload} AND ${ownerPredicate()} ORDER BY r.expires_at DESC LIMIT 1`
         )
+        .bind(...lookup, ...ownerParams(owner, manifest.id))
     ]);
-    this.checkReservation(reservation);
+    const reservation = matched.results[0];
+    if (!reservation) throw packageAdmissionError();
+    return reservation;
   }
   async getUpload(
     id: string,

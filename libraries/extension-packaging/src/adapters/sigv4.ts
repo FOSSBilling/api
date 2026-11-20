@@ -171,13 +171,14 @@ export async function presignS3Put(
   target: URL,
   requiredHeaders: Record<string, string>,
   credentials: S3Credentials,
-  expiresIn: number
+  expiresIn: number,
+  now: Date
 ) {
   const url = new URL(target);
   const headers = new Headers(requiredHeaders);
   headers.set("host", url.host);
   const signedHeaders = [...headers.keys()].sort();
-  const amzDate = signingDate(new Date());
+  const amzDate = signingDate(now);
   url.searchParams.set("X-Amz-Algorithm", "AWS4-HMAC-SHA256");
   url.searchParams.set(
     "X-Amz-Credential",

@@ -56,10 +56,16 @@ also exercise package preparation and B2 storage without a Cloudflare runtime.
 The OpenAPI reference is available at `/extensions/v2/docs`.
 
 - `POST /extensions/v2/package-uploads` accepts a manifest v1 object, the ZIP byte
-  count, and a hex SHA-256. It reserves storage quota and returns either an existing
-  job or `{ kind: "upload", id, url, headers }` with a five-minute PUT URL. Send the
-  raw ZIP to that URL with the returned headers. The HTTP client supplies
-  `Content-Length` for the fixed-size body.
+  count, and a hex SHA-256. A **200** response contains a reservation or a packaging job.
+  - `{ "result": { "kind": "upload", "id": "...", "url": "...", "headers": { ... } } }`
+    reserves storage quota and provides a five-minute PUT URL. An identical retry
+    reuses the active reservation and its expiry.
+  - `{ "result": { "kind": "job", "job": { ... } } }` returns an existing packaging
+    job. Poll it using `result.job.id`.
+
+  Send the raw ZIP to `result.url` with `result.headers` when an upload is needed.
+  The HTTP client supplies `Content-Length` for the fixed-size body.
+
 - `POST /extensions/v2/packages` accepts JSON `{ upload_id }` to confirm a direct
   upload, or `{ manifest, source_id }` to rebuild a stored source. Confirmation
   checks the stored length and checksum metadata before queuing the job. Both

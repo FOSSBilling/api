@@ -18,7 +18,7 @@ export interface PackageUploadStore extends PackageStore {
     key: string,
     bytes: number,
     checksum: string,
-    expiresIn: number
+    expiresAt: number
   ): Promise<{ url: string; headers: Record<string, string> }>;
   head(key: string): Promise<{ bytes: number; checksum: string | null } | null>;
 }
