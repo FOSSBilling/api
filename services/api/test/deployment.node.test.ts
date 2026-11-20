@@ -78,6 +78,15 @@ describe("API deployment artifact", () => {
       "https://staging-extensions.fossbilling.workers.dev"
     );
     expect(artifact.previews.vars.EXTENSION_PACKAGES_MODE).toBe("disabled");
+    expect(artifact.previews.vars.EXTENSION_PACKAGES_DISPATCH).toBe("alarm");
+    expect(artifact.previews.durable_objects.bindings).toContainEqual({
+      name: "PREVIEW_PACKAGE_DISPATCHER",
+      class_name: "PreviewPackageDispatcher"
+    });
+    expect(artifact.migrations).toContainEqual({
+      tag: "preview-package-dispatcher-v1",
+      new_sqlite_classes: ["PreviewPackageDispatcher"]
+    });
     const consumer = read(folder, "package-preview-consumer/wrangler.json");
     expect(consumer.main).toBe("package-preview-consumer.js");
     expect(consumer.no_bundle).toBe(true);

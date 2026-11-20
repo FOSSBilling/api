@@ -107,3 +107,4 @@ export default {
 // wrangler.jsonc; the implementation lives with the previews service, which
 // owns its rate-limit policy.
 export { PreviewGitHubBudget } from "../services/previews/v1/budget";
+export { PreviewPackageDispatcher } from "../lib/adapters/cloudflare/preview-package-dispatcher";

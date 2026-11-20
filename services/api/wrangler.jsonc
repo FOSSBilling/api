@@ -93,13 +93,21 @@
   ],
   "durable_objects": {
     "bindings": [
-      { "name": "PREVIEW_GITHUB_BUDGET", "class_name": "PreviewGitHubBudget" }
+      { "name": "PREVIEW_GITHUB_BUDGET", "class_name": "PreviewGitHubBudget" },
+      {
+        "name": "PREVIEW_PACKAGE_DISPATCHER",
+        "class_name": "PreviewPackageDispatcher"
+      }
     ]
   },
   "migrations": [
     {
       "tag": "preview-github-budget-v1",
       "new_sqlite_classes": ["PreviewGitHubBudget"]
+    },
+    {
+      "tag": "preview-package-dispatcher-v1",
+      "new_sqlite_classes": ["PreviewPackageDispatcher"]
     }
   ],
   "triggers": { "crons": ["0 * * * *"] },
@@ -150,12 +158,20 @@
       "ENVIRONMENT": "preview",
       "EXTENSIONS_FRONTEND_URL": "https://staging-extensions.fossbilling.workers.dev",
       "EXTENSION_PACKAGES_MODE": "disabled",
+      "EXTENSION_PACKAGES_DISPATCH": "alarm",
       "EXTENSIONS_EMAIL_PROVIDER": "disabled",
       "EXTENSIONS_RETENTION_MODE": "dry-run"
     },
     "durable_objects": {
       "bindings": [
-        { "name": "PREVIEW_GITHUB_BUDGET", "class_name": "PreviewGitHubBudget" }
+        {
+          "name": "PREVIEW_GITHUB_BUDGET",
+          "class_name": "PreviewGitHubBudget"
+        },
+        {
+          "name": "PREVIEW_PACKAGE_DISPATCHER",
+          "class_name": "PreviewPackageDispatcher"
+        }
       ]
     },
     "ratelimits": [

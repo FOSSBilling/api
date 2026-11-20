@@ -15,6 +15,8 @@ import {
   createScheduledController,
   createMessageBatch,
   getQueueResult,
+  runDurableObjectAlarm,
+  runInDurableObject,
   waitOnExecutionContext
 } from "cloudflare:test";
 import {
@@ -210,6 +212,7 @@ afterEach(() => {
     Reflect.deleteProperty(env, `EXTENSION_PACKAGES_S3_${suffix}`);
   Reflect.deleteProperty(env, "EXTENSION_PACKAGER_URL");
   Reflect.deleteProperty(env, "EXTENSION_PACKAGER_SECRET");
+  Reflect.deleteProperty(env, "EXTENSION_PACKAGES_DISPATCH");
   env.EXTENSION_PACKAGES_MODE = "disabled";
   // Assert outside the adapter's catch, including calls with injected failures.
   for (const request of requests) {
@@ -526,6 +529,83 @@ describe("publisher package builds", () => {
 });
 
 describe("queued package preparation", () => {
+  it("dispatches Preview uploads by alarm and recovers scoped jobs and retries", async () => {
+    Object.assign(env, { EXTENSION_PACKAGES_DISPATCH: "alarm" });
+    const dispatcher = env.PREVIEW_PACKAGE_DISPATCHER.getByName("packaging");
+    const other = env.PREVIEW_PACKAGE_DISPATCHER.getByName("other-preview");
+    const response = await upload(
+      manifest(),
+      undefined,
+      undefined,
+      "owner",
+      false
+    );
+    expect(response.status).toBe(202);
+    const { result: job } = (await response.json()) as {
+      result: { id: string };
+    };
+    expect(new URL(response.headers.get("Location")!).pathname).toBe(
+      `${root}/packaging-jobs/${job.id}`
+    );
+    expect(env.EXTENSION_PACKAGE_QUEUE.send).not.toHaveBeenCalled();
+    const jobs = new PackagingJobsDatabase(db, await dispatcher.scope());
+    const otherJobs = new PackagingJobsDatabase(db, await other.scope());
+    const queued = (await jobs.get(job.id))!;
+    expect(await new PackagingJobsDatabase(db).pending()).toEqual([]);
+    expect(await otherJobs.get(job.id)).toBeNull();
+    await other.wake();
+    const otherJob = await otherJobs.create(queued);
+    expect(otherJob.id).not.toBe(job.id);
+    expect(
+      (
+        await get(
+          `${root}/packaging-jobs/${otherJob.id}`,
+          await authHeaders("owner")
+        )
+      ).status
+    ).toBe(404);
+
+    // Emulate a request interrupted after the D1 insert. The pre-armed
+    // alarm must finish the job without the immediate wakeup.
+    await runInDurableObject(other, (instance) => {
+      Object.assign(Reflect.get(instance, "env"), env);
+    });
+    const key = packageKey(otherJob.uploadObjectId!);
+    const staged = b2.objects.get(key)!;
+    b2.objects.delete(key);
+    expect(await runDurableObjectAlarm(other)).toBe(true);
+    expect(await otherJobs.get(otherJob.id)).toMatchObject({
+      status: "queued",
+      attempts: 1,
+      error: { code: "SOURCE_UNAVAILABLE" }
+    });
+    const retryAt = await runInDurableObject(other, (_instance, state) =>
+      state.storage.getAlarm()
+    );
+    expect(retryAt).toBeGreaterThan(Date.now());
+
+    b2.objects.set(key, staged);
+    await db
+      .prepare(
+        "UPDATE package_jobs SET updated_at=datetime('now','-61 seconds') WHERE id=?"
+      )
+      .bind(otherJob.id)
+      .run();
+    expect(await runDurableObjectAlarm(other)).toBe(true);
+    expect(await otherJobs.get(otherJob.id)).toMatchObject({
+      status: "ready",
+      attempts: 2
+    });
+    expect(await jobs.get(otherJob.id)).toBeNull();
+
+    await runInDurableObject(other, (_instance, state) =>
+      state.storage.deleteAlarm()
+    );
+    await runInDurableObject(dispatcher, (_instance, state) =>
+      state.storage.deleteAlarm()
+    );
+  });
+
   it("accepts a private job without preparing an artifact and deduplicates retries", async () => {
     const source = await zip();
     const response = await upload(
