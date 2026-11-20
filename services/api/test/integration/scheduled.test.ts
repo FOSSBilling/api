@@ -5,9 +5,8 @@ const mocks = vi.hoisted(() => ({
   maintain: vi.fn(),
   report: vi.fn()
 }));
-vi.mock("../../src/lib/adapters/cloudflare/packaging-jobs", () => ({
-  consumePackagingJobs: vi.fn(),
-  recoverPackagingJobs: mocks.recover
+vi.mock("../../src/lib/adapters/cloudflare/package-dispatcher", () => ({
+  packageDispatcher: () => ({ wake: mocks.recover })
 }));
 vi.mock("../../src/services/extensions/v2/db/resource-maintenance", () => ({
   maintainExtensionResources: mocks.maintain,
@@ -21,7 +20,12 @@ describe("scheduled maintenance", () => {
     mocks.recover.mockRejectedValueOnce(new Error("job database unavailable"));
     mocks.maintain.mockResolvedValueOnce(undefined);
     mocks.report.mockResolvedValueOnce(undefined);
-    await app.scheduled({} as ScheduledController, env);
+    await app.scheduled(
+      {} as ScheduledController,
+      Object.assign({}, env, {
+        EXTENSION_PACKAGES_MODE: "enabled"
+      })
+    );
     expect(mocks.maintain).toHaveBeenCalledOnce();
     expect(mocks.report).toHaveBeenCalledOnce();
     expect(log).toHaveBeenCalledWith(

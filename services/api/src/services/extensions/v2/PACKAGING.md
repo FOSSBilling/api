@@ -24,7 +24,7 @@ The API dev command includes a development-only Wrangler configuration that serv
 [local R2 S3 API](https://developers.cloudflare.com/r2/local-development/).
 The endpoint is experimental and supported by the pinned Wrangler version. Both
 services use the existing S3 adapter; no R2 binding reaches package domain code.
-Objects persist under `services/api/.wrangler/state`. The Queue and D1 also run
+Objects persist under `services/api/.wrangler/state`. Durable Objects and D1 also run
 locally. Nothing is uploaded to B2 during development.
 
 Local defaults use API port 8787 and packager port 8790. Local storage is unversioned;
@@ -84,48 +84,30 @@ stable release is used, falling back to a prerelease. The directory's release
 editor provides a “Set as Latest Release” checkbox, checked by default for new
 stable releases. This flag stays out of the manifest.
 
-## Queue processing and provider boundaries
+## Background processing and provider boundaries
 
-Queue messages contain only job IDs. D1 stores the validated manifest, captured
-owner/profile generation/ownership epoch, upload reference and processing result.
-The consumer rechecks account ownership and machine-publisher revocation before
-processing. The staged upload becomes the immutable source object after validation,
-so it is not uploaded to package storage a second time.
+D1 stores the validated manifest, captured owner/profile generation/ownership
+epoch, upload reference and processing result. The job processor rechecks account
+ownership and machine-publisher revocation before processing. The staged upload
+becomes the immutable source object after validation.
 
-The generic `IMessageQueue` producer interface lives in `src/lib/interfaces.ts`;
-`CloudflareQueueAdapter` implements it. `processPackagingJob` depends on a
-`PackagingJobRepository` and a preparation callback, not Cloudflare MessageBatch,
-acknowledgements or retry APIs. Package preparation accepts a `PackageRepository`,
-`PackageStore` and `PackageProcessor`. SQL and guarded writes live in `db/package-builds.ts`;
-Cloudflare bindings and queue delivery live under `src/lib/adapters/cloudflare/`.
-The `@fossbilling/extension-packaging` workspace defines the shared contracts and adapters.
-A `PackageProcessor` handles ZIP validation, manifest replacement and image preparation.
-The API calls the shared HTTP adapter; the Netlify entry point runs the
-same Node handler used locally. The B2 store lives under `libraries/extension-packaging/src/adapters/b2.ts`.
-The package workflow contains no Cloudflare binding types or SDK calls. A different
-runtime supplies these interfaces and its own queue consumer; the rest of the API
-still has existing platform integrations outside this package workflow.
+A Durable Object alarm dispatches jobs in production, locally and in Cloudflare
+Previews. Environments with a dedicated D1 database use the default job scope.
+Each Preview assigns a stable scope to its jobs in the shared staging D1 database.
+The scope also applies to status reads and request deduplication. Before inserting
+a job, the API arms recovery, then requests an immediate wakeup once the job is
+saved. The alarm processes one job at a time and schedules the next job, retry,
+or expired lease. A 20-minute lease protects against duplicate processing.
+Temporary failures retry after a minute, with at most three attempts. Invalid
+archives and revoked ownership fail immediately.
 
-Named Cloudflare Previews use `EXTENSION_PACKAGES_DISPATCH=alarm`. Each Preview
-has a Durable Object that assigns a stable scope to its jobs in staging D1.
-That scope also applies to status reads and request deduplication. Before inserting
-a job, the API arms recovery. It then requests an immediate wakeup, so an interrupted
-request can leave a recoverable job. The alarm processes one job at a time, schedules
-retries or expired leases, and calls the existing Netlify packager over HTTP. Source
-files and artifacts still use the shared staging storage.
-
-Production and local development default to Queue dispatch. To use alarms locally,
-set `EXTENSION_PACKAGES_DISPATCH=alarm` in `services/api/.dev.vars` and apply the
-local migrations.
-
-Wrangler declares the production producer/consumer pair; local development emulates it. The
-consumer handles one message at a time, with concurrency limited to one. Duplicate
-delivery uses a 20-minute processing lease; a busy duplicate is delayed until that
-lease can expire. Temporary failures retry after a minute, at most three processing
-attempts. Invalid archives and revoked ownership fail immediately. The normal
-scheduled handler redispatches unsent or stale jobs; this covers interruption
-between saving a job and publishing its queue message. It does not rely on the
-browser or the HTTP request remaining connected.
+`processPackagingJob` takes a `PackagingJobRepository` and a preparation callback.
+Package preparation takes a `PackageRepository`, `PackageStore` and
+`PackageProcessor`. Cloudflare scheduling and binding adapters live under
+`src/lib/adapters/cloudflare/`. The `@fossbilling/extension-packaging` workspace
+defines the shared contracts and adapters. The API calls the packager over HTTP
+and the Netlify entry point runs the same Node handler used locally. A different
+runtime can supply its own scheduler and the same package interfaces.
 
 Jobs interrupted or undelivered for a day are marked expired once no active lease
 remains. Terminal jobs are retained for seven days, with at most 256 jobs per owning
@@ -297,19 +279,15 @@ or secrets are created by a local build or type-generation command.
 
 Before deployment (including an automatic deployment after merge):
 
-1. Provision the `extension-packages` Queue.
-   ZIPs use private B2 and prepared icons use the public B2 asset bucket.
-   The queue binding must exist even while package mode is disabled; that flag blocks
-   application routes, not deployment-time binding validation.
-2. Supply `EXTENSION_PACKAGES_S3_ACCESS_KEY_ID` and
+1. Supply `EXTENSION_PACKAGES_S3_ACCESS_KEY_ID` and
    `EXTENSION_PACKAGES_S3_SECRET_ACCESS_KEY` as Worker secrets for
    the private package bucket. Supply separate `EXTENSION_ASSETS_S3_ACCESS_KEY_ID`
    and `EXTENSION_ASSETS_S3_SECRET_ACCESS_KEY` for the public asset bucket.
    Development keys in `.dev.vars` are not production secrets.
-3. Configure the packager URL and shared secret described below, confirm the
+2. Configure the packager URL and shared secret described below, confirm the
    scoped CDN security headers remain configured, and keep B2 caps/alerts in place.
-4. Apply the package and job tables through the normal D1 deployment workflow.
-5. After queue-consumer capacity and moderation requirements are agreed, explicitly set
+3. Apply the package and job tables through the normal D1 deployment workflow.
+4. After dispatcher capacity and moderation requirements are agreed, explicitly set
    `EXTENSION_PACKAGES_MODE=enabled` in the reviewed production configuration.
    Verify a production smoke test before enabling the dependent directory and
    modules publisher changes. Those callers require an enabled, configured API;
@@ -326,9 +304,9 @@ The disabled mode blocks package reads as well as writes. Once managed releases
 are published, disabling it also stops their API downloads and private previews;
 it is not an upload-only pause switch. Prepared CDN images remain accessible independently, even for pending packages.
 
-Before enabling package mode, measure admission and queue-consumer invocations
-separately: CPU and wall duration, memory failures, queue delay, retries, and
-storage and packager latency. Include near-limit ZIPs and SVG/raster icons.
+Before enabling package mode, measure admission and alarm invocations
+separately. Track CPU and wall duration, memory failures, time from submission
+to processing, retries, and storage and packager latency. Include near-limit ZIPs and SVG/raster icons.
 Local functional tests do not establish production capacity or billing.
 
 ## Extension packager

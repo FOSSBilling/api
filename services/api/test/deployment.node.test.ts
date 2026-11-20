@@ -74,17 +74,20 @@ describe("API deployment artifact", () => {
       "https://staging-extensions.fossbilling.workers.dev"
     );
     expect(artifact.previews.vars.EXTENSION_PACKAGES_MODE).toBe("disabled");
-    expect(artifact.previews.vars.EXTENSION_PACKAGES_DISPATCH).toBe("alarm");
-    expect(artifact.previews.durable_objects.bindings).toContainEqual({
-      name: "PREVIEW_PACKAGE_DISPATCHER",
+    const dispatcherBinding = {
+      name: "PACKAGE_DISPATCHER",
       class_name: "PreviewPackageDispatcher"
-    });
+    };
+    expect(artifact.durable_objects.bindings).toContainEqual(dispatcherBinding);
+    expect(artifact.previews.durable_objects.bindings).toContainEqual(
+      dispatcherBinding
+    );
     expect(artifact.migrations).toContainEqual({
       tag: "preview-package-dispatcher-v1",
       new_sqlite_classes: ["PreviewPackageDispatcher"]
     });
     expect(artifact.previews.queues).toBeUndefined();
-    expect(artifact.queues).toEqual(source.queues);
+    expect(artifact.queues).toBeUndefined();
     for (const database of source.d1_databases!) {
       const packaged = artifact.d1_databases.find(
         (db: { binding: string }) => db.binding === database.binding

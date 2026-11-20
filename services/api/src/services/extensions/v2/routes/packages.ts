@@ -1,6 +1,7 @@
 import { configuredPackageProcessor } from "../packages/processor";
 import { PackagingJobsDatabase } from "../db/packaging-jobs";
-import { dispatchPackagingJob, type PackagingJob } from "../packages/jobs";
+import type { PackagingJob } from "../packages/jobs";
+import { packageDispatcher } from "../../../../lib/adapters/cloudflare/package-dispatcher";
 import { sha256 } from "@fossbilling/extension-packaging/checksum";
 import { createRoute, z } from "@hono/zod-openapi";
 import type { Context, MiddlewareHandler } from "hono";
@@ -91,11 +92,6 @@ const packageErrors = {
   429: errorResponse("Write allowance exhausted"),
   503: errorResponse("Package storage is not configured or is unavailable")
 };
-
-function previewDispatcher(c: Context<{ Bindings: CloudflareBindings }>) {
-  if (getPlatform(c).getEnv("EXTENSION_PACKAGES_DISPATCH") === "alarm")
-    return c.env.PREVIEW_PACKAGE_DISPATCHER.getByName("packaging");
-}
 
 export function registerPackageRoutes(app: ExtensionsV2App) {
   const availability: MiddlewareHandler<{
@@ -226,8 +222,8 @@ export function registerPackageRoutes(app: ExtensionsV2App) {
             "Package download URL is not configured",
             503
           );
-        const dispatcher = previewDispatcher(c);
-        const jobs = new PackagingJobsDatabase(db, await dispatcher?.scope());
+        const dispatcher = packageDispatcher(c.env);
+        const jobs = new PackagingJobsDatabase(db, await dispatcher.scope());
         const source = form.source
           ? new Uint8Array(await form.source.arrayBuffer())
           : undefined;
@@ -257,7 +253,7 @@ export function registerPackageRoutes(app: ExtensionsV2App) {
             : null;
           // Arm recovery before inserting, so an interrupted request leaves
           // a job the alarm can pick up even if the immediate wakeup never runs.
-          await dispatcher?.wake();
+          await dispatcher.wake();
           job = await jobs.create({
             fingerprint,
             owner,
@@ -267,18 +263,10 @@ export function registerPackageRoutes(app: ExtensionsV2App) {
             uploadSha256
           });
         }
-        if (job.status === "queued") {
-          if (dispatcher) await dispatcher.wake(true);
-          else
-            await dispatchPackagingJob(
-              jobs,
-              getPlatform(c).getQueue("EXTENSION_PACKAGE_QUEUE"),
-              job.id
-            );
-        }
+        if (job.status === "queued") await dispatcher.wake(true);
         c.header(
           "Location",
-          dispatcher
+          getPlatform(c).getEnv("ENVIRONMENT") === "preview"
             ? new URL(`/extensions/v2/packaging-jobs/${job.id}`, c.req.url).href
             : `${baseUrl.replace(/\/$/, "")}/packaging-jobs/${job.id}`
         );
@@ -315,10 +303,10 @@ export function registerPackageRoutes(app: ExtensionsV2App) {
       try {
         const db = c.env.DB_EXTENSIONS;
         const repository = new PackageBuildDatabase(db);
-        const dispatcher = previewDispatcher(c);
+        const dispatcher = packageDispatcher(c.env);
         const job = await new PackagingJobsDatabase(
           db,
-          await dispatcher?.scope()
+          await dispatcher.scope()
         ).get(c.req.valid("param").jobId);
         if (!job)
           throw new PackageError("NOT_FOUND", "Packaging job not found", 404);

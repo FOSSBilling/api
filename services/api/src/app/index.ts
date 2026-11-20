@@ -1,7 +1,4 @@
-import {
-  consumePackagingJobs,
-  recoverPackagingJobs
-} from "../lib/adapters/cloudflare/packaging-jobs";
+import { packageDispatcher } from "../lib/adapters/cloudflare/package-dispatcher";
 import { getExtensionsDb } from "../lib/db";
 import {
   maintainExtensionResources,
@@ -81,7 +78,6 @@ app.all("/*", (c) => {
 });
 
 export default {
-  queue: consumePackagingJobs,
   fetch: app.fetch,
   request: app.request.bind(app),
   scheduled: async (
@@ -89,7 +85,12 @@ export default {
     env: CloudflareBindings
   ): Promise<void> => {
     try {
-      await recoverPackagingJobs(env);
+      const mode = createCloudflareBindings(env).environment.get(
+        "EXTENSION_PACKAGES_MODE"
+      );
+      if (mode === "enabled" || mode === "local") {
+        await packageDispatcher(env).wake();
+      }
     } catch (error) {
       logError("extensions/packages", "Packaging job recovery failed", {
         error: error instanceof Error ? error.message : String(error)
@@ -107,4 +108,4 @@ export default {
 // wrangler.jsonc; the implementation lives with the previews service, which
 // owns its rate-limit policy.
 export { PreviewGitHubBudget } from "../services/previews/v1/budget";
-export { PreviewPackageDispatcher } from "../lib/adapters/cloudflare/preview-package-dispatcher";
+export { PreviewPackageDispatcher } from "../lib/adapters/cloudflare/package-dispatcher";

@@ -8,7 +8,6 @@ import { IPlatformBindings } from "../../src/lib/interfaces";
 // that boots the real app.
 describe("createPlatformContext", () => {
   const mockBindings: IPlatformBindings = {
-    queues: { testQueue: { send: async () => {} } },
     caches: {
       testCache: {
         get: async () => null,
@@ -26,15 +25,8 @@ describe("createPlatformContext", () => {
 
     expect(context.getCache("testCache")).toBe(mockBindings.caches.testCache);
     expect(context.getEnv("TEST_VAR")).toBe("test-value");
-    expect(context.getQueue("testQueue")).toBe(mockBindings.queues!.testQueue);
   });
 
-  it("throws when a queue binding is missing", () => {
-    const context = createPlatformContext(mockBindings, () => {});
-    expect(() => context.getQueue("missing")).toThrow(
-      "Queue binding 'missing' not found"
-    );
-  });
   it("throws when cache binding not found", () => {
     const context = createPlatformContext(mockBindings, () => {});
 

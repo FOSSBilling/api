@@ -35,7 +35,7 @@ The worker exposes five services:
 Feature modules live under `src/services/`. Smaller services are flat; larger ones,
 such as `extensions/v2`, split into `routes/`, `db/`, `schemas/` and `github/`.
 
-`src/lib/context.ts` exposes caches, queues, environment values, service requests,
+`src/lib/context.ts` exposes caches, environment values, service requests,
 rate-limit checks and background-task scheduling. Cloudflare adapters translate
 bindings into these capabilities. The Worker entry point supplies the request's
 `waitUntil` callback; another host can supply its own task scheduling. Application
@@ -47,8 +47,8 @@ integrations. The Node adapters currently provide caches and environment access,
 not a complete alternative API runtime.
 
 Package processing uses the shared library's storage, processor and image interfaces.
-B2 storage configuration lives in `extensions/v2/packages/store.ts`; Cloudflare Queue
-delivery and acknowledgement stay in `src/lib/adapters/cloudflare/packaging-jobs.ts`.
+B2 storage configuration lives in `extensions/v2/packages/store.ts`; Durable Object
+scheduling lives in `src/lib/adapters/cloudflare/package-dispatcher.ts`.
 The separately hosted packager does not import API source or Cloudflare bindings.
 
 ## APIs
@@ -203,8 +203,7 @@ Migration jobs serialize access to the shared staging databases.
    deployment token.
 
    The token needs `Individual Workers Editor` for `api`,
-   `Workers Routes Write` for its zone, `D1 Read` and `D1 Write` for migrations,
-   and `Queues Read` and `Queues Write` to configure Queue consumers.
+   `Workers Routes Write` for its zone, and `D1 Read` and `D1 Write` for migrations.
    Also grant `Workers Content Read-Only` at the Workers product scope in the
    FOSSBilling account: Wrangler's configuration comparison after dashboard edits
    reads account-level Custom Domain metadata, which does not support per-Worker
