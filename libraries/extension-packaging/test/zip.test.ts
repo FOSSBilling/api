@@ -53,14 +53,19 @@ describe("ZIP validation", () => {
       )
     ).resolves.toMatchObject({ manifest });
   });
-  it("reads metadata from a root manifest alongside ordinary directory entries", async () => {
+  it("reads metadata with valid Unicode escapes and ordinary directory entries", async () => {
+    const description = "Example extension 🚀 \\ud800";
+    const manifestJson = JSON.stringify({ ...manifest, description }).replace(
+      "🚀",
+      String.raw`\ud83d\ude80`
+    );
     const source = await zip([
-      ["manifest.json", JSON.stringify(manifest)],
+      ["manifest.json", manifestJson],
       ["assets/", ""],
       ["assets/example.css", "body {}"]
     ]);
     await expect(validateExtensionPackage(source)).resolves.toMatchObject({
-      manifest
+      manifest: { ...manifest, description }
     });
   });
 
@@ -128,6 +133,28 @@ describe("ZIP validation", () => {
     await expect(validateExtensionPackage(source)).rejects.toThrow(
       "without a byte order mark"
     );
+  });
+
+  it.each([
+    [
+      "a decimal manifest version",
+      JSON.stringify(manifest).replace(
+        '"manifest_version":1',
+        '"manifest_version":1.0'
+      ),
+      "manifest_version must be written as the integer 1"
+    ],
+    [
+      "an unpaired Unicode escape in an overwritten field",
+      String.raw`{"description":"\ud800",` + JSON.stringify(manifest).slice(1),
+      "unpaired Unicode surrogate escape"
+    ]
+  ])("rejects %s", async (_name, manifestJson, message) => {
+    const source = await zip([
+      ["file.php", "<?php"],
+      ["manifest.json", manifestJson]
+    ]);
+    await expect(validateExtensionPackage(source)).rejects.toThrow(message);
   });
 
   it.each([

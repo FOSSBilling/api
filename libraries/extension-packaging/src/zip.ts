@@ -169,6 +169,31 @@ export async function validateExtensionPackage(
   if (manifestText.startsWith("\uFEFF")) {
     throw new Error("manifest.json must be UTF-8 without a byte order mark");
   }
-  const manifest = ManifestSchema.parse(JSON.parse(manifestText));
+  // Skip valid pairs and escaped backslashes. Check the original text because
+  // JSON.parse discards overwritten values before calling the reviver.
+  for (const [, unpaired] of manifestText.matchAll(
+    /\\ud[89ab][\da-f]{2}\\ud[c-f][\da-f]{2}|(\\ud[89a-f][\da-f]{2})|\\./gi
+  )) {
+    if (unpaired) {
+      throw new Error(
+        "manifest.json contains an unpaired Unicode surrogate escape"
+      );
+    }
+  }
+  const parsed = JSON.parse(
+    manifestText,
+    (key, value: unknown, context?: { source?: string }) => {
+      // PHP's installer requires an integer and rejects decimal or exponent forms.
+      if (
+        key === "manifest_version" &&
+        value === 1 &&
+        context?.source !== "1"
+      ) {
+        throw new Error("manifest_version must be written as the integer 1");
+      }
+      return value;
+    }
+  );
+  const manifest = ManifestSchema.parse(parsed);
   return { manifest, icon, iconName };
 }

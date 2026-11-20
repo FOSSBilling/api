@@ -152,8 +152,9 @@ transaction. Changed files subsequently require a new version. Published
 artifacts retain their URLs and checksums.
 
 The archive must contain a root `manifest.json` (UTF-8 without a byte order
-mark, up to 256 KiB) and at least one other file. Limits are 5 MiB uploaded,
-500 entries, and 16 MiB decompressed.
+mark, up to 256 KiB) and at least one other file. Use the integer `1` for
+`manifest_version` and well-formed Unicode in all strings. Limits are 5 MiB
+uploaded, 500 entries, and 16 MiB decompressed.
 Paths may have up to 1,024 characters and 32 components. The validator checks
 CRCs and actual decompressed sizes and rejects encrypted entries, special file
 types, unsafe paths, name collisions and corrupt archives. These structural and
