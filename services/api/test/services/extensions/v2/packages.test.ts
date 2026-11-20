@@ -529,10 +529,13 @@ describe("publisher package builds", () => {
 });
 
 describe("queued package preparation", () => {
-  it("dispatches Preview uploads by alarm and recovers scoped jobs and retries", async () => {
+  it("completes a Preview upload through its scheduled dispatcher", async () => {
     Object.assign(env, { EXTENSION_PACKAGES_DISPATCH: "alarm" });
     const dispatcher = env.PREVIEW_PACKAGE_DISPATCHER.getByName("packaging");
     const other = env.PREVIEW_PACKAGE_DISPATCHER.getByName("other-preview");
+    await runInDurableObject(dispatcher, (instance) => {
+      Object.assign(Reflect.get(instance, "env"), env);
+    });
     const response = await upload(
       manifest(),
       undefined,
@@ -549,37 +552,69 @@ describe("queued package preparation", () => {
     );
     expect(env.EXTENSION_PACKAGE_QUEUE.send).not.toHaveBeenCalled();
     const jobs = new PackagingJobsDatabase(db, await dispatcher.scope());
+    // The upload schedules this alarm. It may already be running by the
+    // time the test asks workerd to deliver it.
+    await runDurableObjectAlarm(dispatcher);
+    await expect
+      .poll(() => jobs.get(job.id))
+      .toMatchObject({
+        status: "ready",
+        attempts: 1,
+        artifactId: expect.any(String)
+      });
+    const headers = await authHeaders("owner");
+    const status = await get(`${root}/packaging-jobs/${job.id}`, headers);
+    expect(status.status).toBe(200);
+    expect(await status.json()).toMatchObject({
+      result: { status: "ready", artifact: { id: expect.any(String) } }
+    });
+
     const otherJobs = new PackagingJobsDatabase(db, await other.scope());
-    const queued = (await jobs.get(job.id))!;
     expect(await new PackagingJobsDatabase(db).pending()).toEqual([]);
     expect(await otherJobs.get(job.id)).toBeNull();
-    await other.wake();
-    const otherJob = await otherJobs.create(queued);
+    const otherJob = await otherJobs.create((await jobs.get(job.id))!);
     expect(otherJob.id).not.toBe(job.id);
     expect(
-      (
-        await get(
-          `${root}/packaging-jobs/${otherJob.id}`,
-          await authHeaders("owner")
-        )
-      ).status
+      (await get(`${root}/packaging-jobs/${otherJob.id}`, headers)).status
     ).toBe(404);
+    await runInDurableObject(dispatcher, (_instance, state) =>
+      state.storage.deleteAlarm()
+    );
+  });
 
+  it("recovers a scoped job without an immediate wakeup and retries storage failures", async () => {
+    const response = await upload(
+      manifest(),
+      undefined,
+      undefined,
+      "owner",
+      false
+    );
+    expect(response.status).toBe(202);
+    const { result: submitted } = (await response.json()) as {
+      result: { id: string };
+    };
+    const queueJobs = new PackagingJobsDatabase(db);
+    const dispatcher =
+      env.PREVIEW_PACKAGE_DISPATCHER.getByName("preview-recovery");
+    const jobs = new PackagingJobsDatabase(db, await dispatcher.scope());
     // Emulate a request interrupted after the D1 insert. The pre-armed
     // alarm must finish the job without the immediate wakeup.
-    await runInDurableObject(other, (instance) => {
+    await dispatcher.wake();
+    const job = await jobs.create((await queueJobs.get(submitted.id))!);
+    await runInDurableObject(dispatcher, (instance) => {
       Object.assign(Reflect.get(instance, "env"), env);
     });
-    const key = packageKey(otherJob.uploadObjectId!);
+    const key = packageKey(job.uploadObjectId!);
     const staged = b2.objects.get(key)!;
     b2.objects.delete(key);
-    expect(await runDurableObjectAlarm(other)).toBe(true);
-    expect(await otherJobs.get(otherJob.id)).toMatchObject({
+    expect(await runDurableObjectAlarm(dispatcher)).toBe(true);
+    expect(await jobs.get(job.id)).toMatchObject({
       status: "queued",
       attempts: 1,
       error: { code: "SOURCE_UNAVAILABLE" }
     });
-    const retryAt = await runInDurableObject(other, (_instance, state) =>
+    const retryAt = await runInDurableObject(dispatcher, (_instance, state) =>
       state.storage.getAlarm()
     );
     expect(retryAt).toBeGreaterThan(Date.now());
@@ -589,18 +624,17 @@ describe("queued package preparation", () => {
       .prepare(
         "UPDATE package_jobs SET updated_at=datetime('now','-61 seconds') WHERE id=?"
       )
-      .bind(otherJob.id)
+      .bind(job.id)
       .run();
-    expect(await runDurableObjectAlarm(other)).toBe(true);
-    expect(await otherJobs.get(otherJob.id)).toMatchObject({
+    expect(await runDurableObjectAlarm(dispatcher)).toBe(true);
+    expect(await jobs.get(job.id)).toMatchObject({
       status: "ready",
       attempts: 2
     });
-    expect(await jobs.get(otherJob.id)).toBeNull();
-
-    await runInDurableObject(other, (_instance, state) =>
-      state.storage.deleteAlarm()
-    );
+    expect(await queueJobs.get(submitted.id)).toMatchObject({
+      status: "queued",
+      attempts: 0
+    });
     await runInDurableObject(dispatcher, (_instance, state) =>
       state.storage.deleteAlarm()
     );

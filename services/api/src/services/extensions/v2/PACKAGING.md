@@ -114,15 +114,17 @@ request can leave a recoverable job. The alarm processes one job at a time, sche
 retries or expired leases, and calls the existing Netlify packager over HTTP. Source
 files and artifacts still use the shared staging storage.
 
-For the trial, the build and staging job retain `api-package-preview-consumer`
-to drain jobs from earlier queue-based deployments. Before enabling packaging on
-an alarm-based Preview, apply migration `0033_scope_packaging_dispatch.sql` and
-deploy the updated legacy consumer, which limits its recovery to queue jobs. The
-`main` staging job runs those steps in order. Wait for older queue jobs to finish
-before switching a Preview that already has packaging enabled, as alarm-based
-Previews read their own job scope. Production and local development default to
-Queue dispatch. To try alarms locally, set `EXTENSION_PACKAGES_DISPATCH=alarm`
-in `services/api/.dev.vars` and apply the local migrations.
+The legacy `api-package-preview-consumer` handles Preview jobs submitted to
+`extension-packages-preview`. Its `EXTENSION_PACKAGES_MODE=enabled` is set in
+`services/api/wrangler.package-preview-consumer.jsonc` and starts queue processing
+and hourly queue-only recovery on its first deployment, independently of the API
+Preview flag. Before deploying the consumer for the first time, configure its
+package and asset storage and Netlify packager credentials using the staging
+API's Preview values.
+
+Production and local development default to Queue dispatch. To use alarms locally,
+set `EXTENSION_PACKAGES_DISPATCH=alarm` in `services/api/.dev.vars` and apply the
+local migrations.
 
 Wrangler declares the production producer/consumer pair; local development emulates it. The
 consumer handles one message at a time, with concurrency limited to one. Duplicate
