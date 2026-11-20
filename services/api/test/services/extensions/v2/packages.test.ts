@@ -76,8 +76,8 @@ const avif = Uint8Array.from(
 
 function mockB2() {
   Object.assign(env, {
-    EXTENSION_PACKAGER_URL: "https://processor.example.test/process",
-    EXTENSION_PACKAGER_SECRET: "test-processor-secret",
+    EXTENSION_PACKAGE_PROCESSOR_URL: "https://processor.example.test/process",
+    EXTENSION_PACKAGE_PROCESSOR_SECRET: "test-processor-secret",
     EXTENSION_PACKAGES_S3_ENDPOINT: "https://s3.test-region.backblazeb2.com",
     EXTENSION_PACKAGES_S3_BUCKET: "test-packages",
     EXTENSION_PACKAGES_S3_ACCESS_KEY_ID: "test-key",
@@ -206,8 +206,8 @@ afterEach(() => {
     "SECRET_ACCESS_KEY"
   ])
     Reflect.deleteProperty(env, `EXTENSION_PACKAGES_S3_${suffix}`);
-  Reflect.deleteProperty(env, "EXTENSION_PACKAGER_URL");
-  Reflect.deleteProperty(env, "EXTENSION_PACKAGER_SECRET");
+  Reflect.deleteProperty(env, "EXTENSION_PACKAGE_PROCESSOR_URL");
+  Reflect.deleteProperty(env, "EXTENSION_PACKAGE_PROCESSOR_SECRET");
   env.EXTENSION_PACKAGES_MODE = "disabled";
   // Assert outside the adapter's catch, including calls with injected failures.
   for (const request of requests) {
@@ -1744,11 +1744,12 @@ describe("stored directory packages", () => {
 
   it("rejects missing or malformed processor configuration before accepting an upload", async () => {
     for (const overrides of [
-      { EXTENSION_PACKAGER_URL: "" },
-      { EXTENSION_PACKAGER_URL: "not a URL" },
+      { EXTENSION_PACKAGE_PROCESSOR_URL: "" },
+      { EXTENSION_PACKAGE_PROCESSOR_URL: "not a URL" },
       {
-        EXTENSION_PACKAGER_URL: "https://processor.example.test/process",
-        EXTENSION_PACKAGER_SECRET: ""
+        EXTENSION_PACKAGE_PROCESSOR_URL:
+          "https://processor.example.test/process",
+        EXTENSION_PACKAGE_PROCESSOR_SECRET: ""
       }
     ]) {
       Object.assign(env, overrides);

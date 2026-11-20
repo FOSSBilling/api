@@ -12,11 +12,11 @@
   },
   "scripts": {
     "dev": "npm run dev --workspace @fossbilling/api",
-    "extension-packager:dev": "npm run dev --workspace @fossbilling/extension-packager",
+    "extension-package-processor:dev": "npm run dev --workspace @fossbilling/extension-package-processor",
     "cf-typegen": "npm run cf-typegen --workspace @fossbilling/api",
     "cf-deploy": "npm run cf-deploy --workspace @fossbilling/api",
     "build:api": "npm run build --workspace @fossbilling/api",
-    "build:extension-packager": "netlify build --offline --filter @fossbilling/extension-packager",
+    "build:extension-package-processor": "netlify build --offline --filter @fossbilling/extension-package-processor",
     "test": "vitest run .github/scripts && npm test --workspaces",
     "typecheck": "tsc --noEmit && npm run typecheck --workspaces",
     "lint": "eslint .",

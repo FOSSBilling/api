@@ -15,7 +15,11 @@ function fixture() {
   };
   const run = { id: 11, run_attempt: 1, head_sha: sha };
   const artifacts = [
-    { id: 21, name: "extension-packager-preview-attempt-1", expired: false }
+    {
+      id: 21,
+      name: "extension-package-processor-preview-attempt-1",
+      expired: false
+    }
   ];
   const comments = [];
   const rest = {
@@ -55,7 +59,7 @@ function fixture() {
   const metadata = {
     sha,
     attempt: 1,
-    url: "https://deploy-id--fb-api-packager.netlify.app/.netlify/functions/extension-packager",
+    url: "https://deploy-id--fb-api-packager.netlify.app/.netlify/functions/extension-package-processor",
     build: "success",
     checks: "success",
     deployment: "success"
@@ -78,7 +82,7 @@ function fixture() {
   };
 }
 
-describe("packager preview reporting", () => {
+describe("package processor preview reporting", () => {
   it("creates one comment, leaves identical reports untouched, and updates it after a failed retry", async () => {
     const f = fixture();
     await f.publish(await f.find());
@@ -92,7 +96,7 @@ describe("packager preview reporting", () => {
     f.run.run_attempt = 2;
     f.artifacts.push({
       id: 22,
-      name: "extension-packager-preview-attempt-2",
+      name: "extension-package-processor-preview-attempt-2",
       expired: false
     });
     await f.publish(await f.find(), {
@@ -178,7 +182,7 @@ describe("packager preview reporting", () => {
     f.run.run_attempt = 2;
     f.artifacts.push({
       id: 22,
-      name: "extension-packager-preview-attempt-2",
+      name: "extension-package-processor-preview-attempt-2",
       expired: false
     });
     const preview = await f.find();

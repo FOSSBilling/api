@@ -13,7 +13,7 @@ export async function handlePackageProcessing(
   getEnv: (name: string) => string | undefined
 ): Promise<Response> {
   const headers = { "Cache-Control": "no-store" };
-  const secret = getEnv("EXTENSION_PACKAGER_SECRET");
+  const secret = getEnv("EXTENSION_PACKAGE_PROCESSOR_SECRET");
   if (!secret)
     return Response.json(
       { error: { message: "Package processor is not configured" } },

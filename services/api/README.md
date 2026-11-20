@@ -49,7 +49,7 @@ not a complete alternative API runtime.
 Package processing uses the shared library's storage, processor and image interfaces.
 B2 storage configuration lives in `extensions/v2/packages/store.ts`; Durable Object
 scheduling lives in `src/lib/adapters/cloudflare/package-dispatcher.ts`.
-The separately hosted packager does not import API source or Cloudflare bindings.
+The separately hosted package processor does not import API source or Cloudflare bindings.
 
 ## APIs
 
@@ -272,4 +272,4 @@ migrations using `services/api/dist/wrangler.preview-migrations.json` before run
 
 `npm run cf-deploy` remains a deliberate manual production command. It applies remote
 migrations and deploys through Wrangler. Neither command deploys the separate
-[extension packager](../extension-packager/README.md). Production packaging remains disabled.
+[extension package processor](../extension-package-processor/README.md). Production packaging remains disabled.

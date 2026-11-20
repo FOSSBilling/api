@@ -4,8 +4,8 @@ import { PackageError } from "@fossbilling/extension-packaging/errors";
 export function configuredPackageProcessor(
   getEnv: (name: string) => string | undefined
 ) {
-  const url = getEnv("EXTENSION_PACKAGER_URL");
-  const secret = getEnv("EXTENSION_PACKAGER_SECRET");
+  const url = getEnv("EXTENSION_PACKAGE_PROCESSOR_URL");
+  const secret = getEnv("EXTENSION_PACKAGE_PROCESSOR_SECRET");
   if (!url || !secret)
     throw new PackageError(
       "PACKAGES_DISABLED",

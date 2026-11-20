@@ -27,7 +27,7 @@ const manifest = {
   requires: { fossbilling: ">=0.7.0", php: ">=8.3" }
 };
 const config: Record<string, string> = {
-  EXTENSION_PACKAGER_SECRET: "local-test-secret",
+  EXTENSION_PACKAGE_PROCESSOR_SECRET: "local-test-secret",
   EXTENSION_PACKAGES_S3_ENDPOINT: "https://s3.test-region.backblazeb2.com",
   EXTENSION_PACKAGES_S3_BUCKET: "private-packages",
   EXTENSION_PACKAGES_S3_ACCESS_KEY_ID: "test-key",
@@ -87,7 +87,7 @@ function fixture() {
   vi.stubGlobal("fetch", fetch);
   const processor = new HttpPackageProcessor(
     "https://processor.example.test/process",
-    config.EXTENSION_PACKAGER_SECRET
+    config.EXTENSION_PACKAGE_PROCESSOR_SECRET
   );
   const input = async (
     bytes: Uint8Array<ArrayBuffer>
@@ -242,7 +242,7 @@ describe("Node package processor over the generic HTTP contract", () => {
       new Request("https://processor.example.test", {
         method: "POST",
         headers: {
-          Authorization: "Bearer " + config.EXTENSION_PACKAGER_SECRET
+          Authorization: "Bearer " + config.EXTENSION_PACKAGE_PROCESSOR_SECRET
         },
         body: "{}"
       })
@@ -300,7 +300,7 @@ describe("Node package processor over the generic HTTP contract", () => {
         throw new Error("Missing HTTP port");
       const processor = new HttpPackageProcessor(
         `http://127.0.0.1:${address.port}/process`,
-        config.EXTENSION_PACKAGER_SECRET,
+        config.EXTENSION_PACKAGE_PROCESSOR_SECRET,
         true
       );
       const result = await processor.process(input);
