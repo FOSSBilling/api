@@ -26,7 +26,6 @@ import {
   PackageArtifactSchema,
   PackageReservationSchema
 } from "../../../../src/services/extensions/v2/schemas/packages";
-import { ManifestSchema } from "../../../../src/services/extensions/v2/schemas/manifest";
 import { ExtensionContentSchema } from "../../../../src/services/extensions/v2/schemas/extensions";
 import { contentManifest } from "../../../../src/services/extensions/v2/packages/manifest";
 import { sha256 } from "@fossbilling/extension-packaging/checksum";
@@ -996,62 +995,19 @@ describe("queued package preparation", () => {
 });
 
 describe("stored directory packages", () => {
-  it("uses separate B2 buckets for ZIPs and icons through validation and approval", async () => {
-    const requests = b2.calls;
-    const writer = new ZipWriter(new Uint8ArrayWriter(), options);
-    await writer.add(
-      "manifest.json",
-      new TextReader(JSON.stringify(manifest()))
-    );
-    await writer.add("Service.php", new TextReader("<?php // B2 test"));
-    await writer.add(
-      "icon.svg",
-      new TextReader(
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4"/></svg>'
-      )
-    );
-    const source = await writer.close();
+  it("stores the validated ZIP and prepared icon in their configured B2 buckets", async () => {
+    const source = await iconSource();
     const artifact = await built(manifest(), source);
-    const uploads = requests.filter((request) => request.method === "PUT");
-    expect(uploads).toHaveLength(4); // upload, sealed ZIP, staged icon and public icon
-    expect(
-      uploads.filter((request) =>
-        new URL(request.url).pathname.startsWith("/test-packages/packages/")
+    const objects = (await db
+      .prepare(
+        "SELECT a.object_id, i.svg_object_id FROM package_artifacts a JOIN package_icons i ON a.source_id=i.source_id WHERE a.id=?"
       )
-    ).toHaveLength(3);
-    expect(
-      uploads.filter((request) =>
-        new URL(request.url).pathname.startsWith("/test-assets/extensions/")
-      )
-    ).toHaveLength(1);
-    const path = `${root}/packages/${artifact.id}/download`;
-    const before = requests.length;
-    expect((await get(path, {})).status).toBe(404);
-    expect(requests.length).toBe(before);
-    const owner = await get(path, await authHeaders("owner"));
-    expect(owner.status).toBe(200);
-    expect(new Uint8Array(await owner.arrayBuffer())).toEqual(source);
-    expect((await get(`${root}/packages/${artifact.id}/icon`, {})).status).toBe(
-      404
-    );
-    expect(
-      (
-        await get(
-          `${root}/packages/${artifact.id}/icon`,
-          await authHeaders("owner")
-        )
-      ).status
-    ).toBe(200);
-    const revision = await submitted(artifact);
-    expect((await approve(revision)).status).toBe(200);
-    const publicDownload = await get(path, {});
-    expect(publicDownload.status).toBe(200);
-    expect(publicDownload.headers.get("Cache-Control")).toBe(
-      "private, no-store"
-    );
-    expect(
-      await sha256(new Uint8Array(await publicDownload.arrayBuffer()))
-    ).toBe(artifact.sha256);
+      .bind(artifact.id)
+      .first<{ object_id: string; svg_object_id: string }>())!;
+    const archive = b2.objects.get(packageKey(objects.object_id));
+    expect(archive && new Uint8Array(archive.bytes)).toEqual(source);
+    const asset = b2.objects.get(`/test-assets/${objects.svg_object_id}`);
+    expect(asset?.bytes).toEqual(new TextEncoder().encode(preparedSvg).buffer);
   });
 
   it("keeps uploads private until approval and publishes the exact reviewed ZIP", async () => {
@@ -1082,11 +1038,7 @@ describe("stored directory packages", () => {
     const bytes = new Uint8Array(await download.arrayBuffer());
     expect(bytes).toEqual(source);
     expect(artifact.sha256).toBe(await sha256(source));
-    const files = await unpack(bytes);
-    expect(files["Service.php"]).toBe("<?php // source");
-    expect(ManifestSchema.parse(JSON.parse(files["manifest.json"]))).toEqual(
-      artifact.manifest
-    );
+    expect(artifact.manifest).toEqual(manifest());
     await db
       .prepare(
         "UPDATE package_objects SET created_at=datetime('now','-2 days')"

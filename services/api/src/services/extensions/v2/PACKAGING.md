@@ -151,8 +151,9 @@ first publication locks the ZIP for that extension and version in the approval
 transaction. Changed files subsequently require a new version. Published
 artifacts retain their URLs and checksums.
 
-The archive must contain a root `manifest.json` (up to 256 KiB) and at least
-one other file. Limits are 5 MiB uploaded, 500 entries, and 16 MiB decompressed.
+The archive must contain a root `manifest.json` (UTF-8 without a byte order
+mark, up to 256 KiB) and at least one other file. Limits are 5 MiB uploaded,
+500 entries, and 16 MiB decompressed.
 Paths may have up to 1,024 characters and 32 components. The validator checks
 CRCs and actual decompressed sizes and rejects encrypted entries, special file
 types, unsafe paths, name collisions and corrupt archives. These structural and

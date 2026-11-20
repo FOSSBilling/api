@@ -162,12 +162,13 @@ export async function validateExtensionPackage(
   if (!manifestBytes)
     throw new Error("Package must contain a root manifest.json");
   if (!files) throw new Error("Package contains no source files");
-  const manifest = ManifestSchema.parse(
-    JSON.parse(
-      new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(
-        manifestBytes
-      )
-    )
-  );
+  const manifestText = new TextDecoder("utf-8", {
+    fatal: true,
+    ignoreBOM: true
+  }).decode(manifestBytes);
+  if (manifestText.startsWith("\uFEFF")) {
+    throw new Error("manifest.json must be UTF-8 without a byte order mark");
+  }
+  const manifest = ManifestSchema.parse(JSON.parse(manifestText));
   return { manifest, icon, iconName };
 }

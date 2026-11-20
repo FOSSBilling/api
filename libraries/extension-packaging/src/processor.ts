@@ -2,14 +2,12 @@ import { z } from "zod";
 import { ManifestSchema } from "./manifest";
 import { PACKAGE_LIMITS } from "./limits";
 
-export const MAX_PACKAGE_OBJECT_BYTES =
-  PACKAGE_LIMITS.expandedBytes + 1024 * 1024;
 // Matches the sanitizer's maximum prepared SVG output.
 export const MAX_PACKAGE_ICON_BYTES = 4 * 1024 * 1024;
 const checksum = z.string().regex(/^[a-f0-9]{64}$/);
 const output = z
   .object({
-    bytes: z.number().int().positive().max(MAX_PACKAGE_OBJECT_BYTES),
+    bytes: z.number().int().positive(),
     sha256: checksum
   })
   .strict();

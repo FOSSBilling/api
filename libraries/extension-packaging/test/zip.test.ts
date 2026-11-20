@@ -120,6 +120,16 @@ describe("ZIP validation", () => {
     ).rejects.toThrow();
   });
 
+  it("rejects a manifest with a UTF-8 byte order mark", async () => {
+    const source = await zip([
+      ["file.php", "<?php"],
+      ["manifest.json", "\uFEFF" + JSON.stringify(manifest)]
+    ]);
+    await expect(validateExtensionPackage(source)).rejects.toThrow(
+      "without a byte order mark"
+    );
+  });
+
   it.each([
     "../outside.php",
     "/absolute.php",
