@@ -78,8 +78,10 @@ builds a self-contained Worker artifact, including deployment configuration and 
 See the [API deployment setup](services/api/README.md#deployment) for GitHub environments,
 staging resource IDs, Preview secrets, migration behaviour and the Workers Builds cutover.
 All API production and Preview deployments require validation, the API build and
-migrations to succeed. Production and Previews keep package processing disabled
-pending runtime verification and the controlled production package test.
+migrations to succeed. The API keeps package processing disabled in production and
+Previews (`EXTENSION_PACKAGES_MODE=disabled` in `services/api/wrangler.jsonc`) pending
+runtime verification and the controlled production package test. Netlify deploys
+the processor independently of this setting.
 
 `npm run cf-deploy` remains the explicit manual production command; it applies
 remote migrations and deploys the API. It does not deploy the package processor.
