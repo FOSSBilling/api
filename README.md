@@ -60,9 +60,10 @@ from the repository root; do not create service-specific lockfiles.
 The services deploy independently from the same repository. Netlify configuration
 and setup are documented in the [package processor README](services/extension-package-processor/README.md).
 The same CI/CD workflow compiles the function without credentials and deploys
-it through the Netlify CLI after validation. Main updates production and fixed
-staging in one Netlify project; other branch pushes update preview aliases using
-separate preview runtime credentials and storage.
+it through the Netlify CLI after validation. Main updates fixed staging and
+publishes to production when the `NETLIFY_DEPLOY_PRODUCTION` repository variable
+is `true`. Other branch pushes update preview aliases using separate preview
+runtime credentials and storage.
 
 The API uses the same pinned [shared Cloudflare workflow](https://github.com/FOSSBilling/.workflows)
 as `fossbilling.org`. [CI/CD](.github/workflows/ci.yml) validates the workspaces and
