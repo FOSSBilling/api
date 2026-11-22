@@ -138,6 +138,10 @@ production and allows loopback HTTP for local development.
 The function must be reachable by the API without a Netlify browser login; its
 bearer secret authenticates processing requests.
 
+GitHub imports require outbound HTTPS to `api.github.com` and GitHub's release
+asset CDN (`release-assets.githubusercontent.com` or `objects.githubusercontent.com`).
+The API supplies a short-lived GitHub token for the request to `api.github.com`.
+
 Deploying the package processor does not enable API package processing. Keep
 `EXTENSION_PACKAGES_MODE=disabled` in the API's `services/api/wrangler.jsonc` for
 production and Previews until storage, runtime and end-to-end verification are
@@ -150,12 +154,12 @@ and publication. The processor handles ZIP validation, manifest extraction and
 image preparation.
 
 The API reserves bounded private B2 output keys before invoking `PackageProcessor`.
-The processor reads the uploaded ZIP and stores the validated bytes unchanged
-alongside any temporary display icons in the private package bucket. Requests and
-responses pass metadata and object keys to stay within function payload limits.
+The processor reads uploaded ZIPs from storage and downloads imported ZIPs by
+GitHub asset ID. It stores the validated bytes unchanged alongside any temporary
+display icons in the private package bucket. Requests and responses pass metadata
+and object keys to stay within function payload limits.
 The API then creates/reuses the permanent extension draft, copies the prepared
 icons to their public UUID paths, records the artifact, and deletes temporary icons.
-The processor uses only package bucket credentials.
 
 Output reservations use the maximum object size until processing succeeds; the
 archive reservation then shrinks to its actual size. Unused icon reservations are
@@ -167,9 +171,10 @@ This is a regular synchronous function. The API’s Durable Object dispatcher wa
 for the completed response before recording the final job status. Do not
 use Netlify background-function mode, which returns 202 before processing completes.
 The package processor deadline is 45 seconds, the HTTP client timeout is 50 seconds, and the
-Netlify synchronous limit is 60 seconds. Invalid ZIPs and icons return 422; transport
-failures, timeouts and unavailable storage return retryable 503 errors. Existing API
-attempt limits and lease recovery apply.
+Netlify synchronous limit is 60 seconds. Invalid ZIPs and icons, missing GitHub
+assets, and size or SHA-256 mismatches return 422. Transport failures, timeouts,
+unavailable storage and unexpected GitHub download responses return retryable
+503 errors. Existing API attempt limits and lease recovery apply.
 
 Production package processing remains disabled in `services/api/wrangler.jsonc`.
 Before enablement, verify the Netlify deployment, measure runtime and credit usage,

@@ -52,7 +52,7 @@ export async function downloadGitHubReleaseAsset(
   if (
     response.status !== 200 ||
     !response.body ||
-    response.headers.get("Content-Type")?.includes("json")
+    response.headers.get("Content-Type")?.toLowerCase().includes("json")
   ) {
     await response.body?.cancel();
     if (response.status === 404 || response.status === 410)

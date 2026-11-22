@@ -108,6 +108,25 @@ function fixture(githubToken?: () => Promise<string>) {
   };
   return { objects, key, fetch, handler, processor, input };
 }
+
+const githubAssetUrl =
+  "https://api.github.com/repos/fossbilling/modules/releases/assets/123";
+async function githubInput(bytes: Uint8Array<ArrayBuffer>) {
+  return {
+    target: { id: manifest.id },
+    source: {
+      github: {
+        repository: "fossbilling/modules",
+        assetId: 123,
+        bytes: bytes.length
+      },
+      sha256: await sha256(bytes)
+    },
+    archive: crypto.randomUUID(),
+    icons: [crypto.randomUUID(), crypto.randomUUID()]
+  } satisfies ProcessingInput;
+}
+
 describe("Node package processor over the generic HTTP contract", () => {
   it("seals the unchanged ZIP privately and sanitizes a separate display SVG", async () => {
     const f = fixture(),
@@ -126,31 +145,19 @@ describe("Node package processor over the generic HTTP contract", () => {
     expect(prepared).toContain("url(#paint)");
     expect(prepared).toContain('viewBox="0 0 24 24"');
   });
-  it.each([false, true])(
-    "checks the GitHub asset checksum before storing the original ZIP (changed: %s)",
-    async (changed) => {
+  it.each(["match", "checksum mismatch", "size mismatch"])(
+    "checks a GitHub asset before storing the original ZIP (%s)",
+    async (scenario) => {
       const f = fixture(async () => "test-github-token");
-      const repository = "fossbilling/modules";
-      const assetId = 123;
       const source = await archive();
-      const input = {
-        target: { id: manifest.id },
-        source: {
-          github: { repository, assetId, bytes: source.length },
-          sha256: await sha256(source)
-        },
-        archive: crypto.randomUUID(),
-        icons: [crypto.randomUUID(), crypto.randomUUID()]
-      } satisfies ProcessingInput;
+      const input = await githubInput(source);
+      if (scenario === "size mismatch") input.source.github.bytes++;
       const downloadUrl =
         "https://release-assets.githubusercontent.com/test.zip";
       const fetch = f.fetch.getMockImplementation()!;
       f.fetch.mockImplementation(async (request, init) => {
         const url = request instanceof Request ? request.url : String(request);
-        if (
-          url ===
-          `https://api.github.com/repos/${repository}/releases/assets/${assetId}`
-        ) {
+        if (url === githubAssetUrl) {
           const headers = new Headers(init?.headers);
           expect(headers.get("Accept")).toBe("application/octet-stream");
           expect(headers.get("Authorization")).toBe("Bearer test-github-token");
@@ -159,15 +166,17 @@ describe("Node package processor over the generic HTTP contract", () => {
         if (url === downloadUrl) {
           expect(new Headers(init?.headers).get("Authorization")).toBeNull();
           return new Response(
-            changed ? source.map((byte) => byte ^ 1) : source
+            scenario === "checksum mismatch"
+              ? source.map((byte) => byte ^ 1)
+              : source
           );
         }
         return fetch(request, init);
       });
-      if (changed) {
+      if (scenario !== "match") {
         await expect(f.processor.process(input)).rejects.toMatchObject({
           code: "INVALID_PACKAGE",
-          message: expect.stringContaining("checksum")
+          status: 422
         });
         expect(f.objects.size).toBe(0);
       } else {
@@ -181,6 +190,51 @@ describe("Node package processor over the generic HTTP contract", () => {
       }
     }
   );
+  it.each([
+    [
+      "unexpected redirect",
+      () => Response.redirect("https://downloads.example.test/test.zip", 302)
+    ],
+    [
+      "JSON content with mixed case",
+      () =>
+        new Response("{}", { headers: { "Content-Type": "application/JSON" } })
+    ]
+  ])(
+    "treats a GitHub asset response with %s as retryable",
+    async (_, response) => {
+      const f = fixture(async () => "test-github-token");
+      const input = await githubInput(encode("ZIP bytes"));
+      const fetch = f.fetch.getMockImplementation()!;
+      f.fetch.mockImplementation((request, init) =>
+        request === githubAssetUrl
+          ? Promise.resolve(response())
+          : fetch(request, init)
+      );
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      await expect(f.processor.process(input)).rejects.toMatchObject({
+        code: "PACKAGE_UNAVAILABLE",
+        status: 503
+      });
+      expect(f.fetch).toHaveBeenCalledTimes(2);
+      expect(f.objects.size).toBe(0);
+    }
+  );
+  it("rejects GitHub imports without a token before contacting GitHub", async () => {
+    const f = fixture();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const response = await f.handler(
+      new Request("https://processor.example.test/process", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${config.EXTENSION_PACKAGE_PROCESSOR_SECRET}`
+        },
+        body: JSON.stringify(await githubInput(encode("ZIP bytes")))
+      })
+    );
+    expect(response.status).toBe(503);
+    expect(f.fetch).not.toHaveBeenCalled();
+  });
   it.each(["png", "webp", "avif"] as const)(
     "prepares real icon.%s as AVIF and PNG with preserved proportions",
     async (format) => {
