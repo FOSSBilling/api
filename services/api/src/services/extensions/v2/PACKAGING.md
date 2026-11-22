@@ -32,7 +32,12 @@ Deployed environments use separate private B2 package buckets:
 
 Branch Previews share the Preview bucket. Configure their package and asset B2
 settings and bucket-restricted keys in **Previews Base** and on existing Previews
-individually before enabling package processing.
+individually. The committed `previews.vars.EXTENSION_PACKAGES_MODE` setting in
+`services/api/wrangler.jsonc` is `disabled`. For a dedicated test Preview, point
+`EXTENSION_PACKAGES_BASE_URL` at its `/extensions/v2` URL and set
+`EXTENSION_ASSETS_PUBLIC_URL` to the Preview asset base. Once the storage
+settings are in place, pass `--var EXTENSION_PACKAGES_MODE:enabled` to
+`npm run cf-preview -- --name <test-preview>` to enable that deployment.
 
 From the repository root, `npm test` covers the API routes, Durable Object
 dispatcher and D1 repository using mocked S3 responses. A separate local test
