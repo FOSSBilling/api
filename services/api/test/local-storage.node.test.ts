@@ -8,18 +8,12 @@ import { sha256 } from "@fossbilling/extension-packaging/checksum";
 
 let server: Unstable_DevWorker;
 const defaults = parseEnv(
-  readFileSync(
-    new URL(
-      "../../../libraries/extension-packaging/development.env",
-      import.meta.url
-    ),
-    "utf8"
-  )
+  readFileSync(new URL("../development.env", import.meta.url), "utf8")
 );
 beforeAll(async () => {
   server = await unstable_dev("scripts/local-storage.ts", {
     config: "wrangler.local-storage.jsonc",
-    envFiles: ["../../libraries/extension-packaging/development.env"],
+    envFiles: ["development.env"],
     ip: "127.0.0.1",
     port: 0,
     persist: false,
@@ -49,11 +43,7 @@ it("shares local S3 objects between clients, serves icons and removes objects on
   const zip = new Uint8Array(new TextEncoder().encode("synthetic ZIP bytes"));
   const checksum = await sha256(zip);
   await writer.put(id, zip, checksum);
-  expect(
-    new Uint8Array(
-      await new Response(await reader.get(id, checksum)).arrayBuffer()
-    )
-  ).toEqual(zip);
+  expect(await reader.get(id, checksum)).toEqual(zip);
 
   const assets = b2ObjectStore(getEnv, "assets");
   const key = `extensions/${crypto.randomUUID()}/icons/${id}.svg`;

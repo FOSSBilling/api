@@ -6,7 +6,6 @@
 
 # deps
 node_modules/
-.netlify/
 .wrangler
 
 # env

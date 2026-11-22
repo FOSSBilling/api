@@ -1,7 +1,6 @@
 import { PACKAGE_LIMITS } from "@fossbilling/extension-packaging/limits";
 import { sha256 } from "@fossbilling/extension-packaging/checksum";
 import {
-  MAX_PACKAGE_ICON_BYTES,
   type PackageProcessor,
   type PackageSource,
   type PackageTarget
@@ -15,10 +14,7 @@ import type {
 } from "./repository";
 import type { IconVariant } from "@fossbilling/extension-packaging/images";
 import { PackageError } from "@fossbilling/extension-packaging/errors";
-import {
-  boundedBytes,
-  type PackageStore
-} from "@fossbilling/extension-packaging/store";
+import type { PackageStore } from "@fossbilling/extension-packaging/store";
 
 export async function cleanupPackageObjects(
   repository: PackageRepository,
@@ -44,34 +40,18 @@ export async function preparePackage(input: {
 }) {
   const { repository, store, source: reference, target } = input;
   const objectId = crypto.randomUUID();
-  const iconIds: [string, string] = [crypto.randomUUID(), crypto.randomUUID()];
   await repository.reserveObject(
     input.owner,
     target.id ?? null,
     objectId,
     PACKAGE_LIMITS.sourceBytes
   );
-  for (const id of iconIds) {
-    await repository.reserveObject(
-      input.owner,
-      target.id ?? null,
-      id,
-      MAX_PACKAGE_ICON_BYTES
-    );
-  }
   const prepared = await input.processor.process({
     target,
     source: reference,
-    archive: objectId,
-    icons: iconIds
+    archive: objectId
   });
   const { manifest } = prepared;
-  if (prepared.archive.sha256 !== reference.sha256)
-    throw new PackageError(
-      "PACKAGE_UNAVAILABLE",
-      "Validated archive checksum does not match the source",
-      503
-    );
   const owner = await repository.getOwner(
     input.owner.owner_user_id,
     manifest.id,
@@ -88,7 +68,7 @@ export async function preparePackage(input: {
       403
     );
 
-  await repository.setObjectSize(objectId, prepared.archive.bytes);
+  await repository.setObjectSize(objectId, prepared.archiveBytes);
   const existingSource = await repository.findSource(
     owner.profile_generation,
     manifest.id,
@@ -107,20 +87,6 @@ export async function preparePackage(input: {
       "Published release ZIPs are locked; upload a new version",
       409
     );
-  const variants: (IconVariant & { checksum: string })[] = [];
-  for (const icon of prepared.icons) {
-    const bytes = await boundedBytes(
-      await store.get(icon.id, icon.sha256),
-      MAX_PACKAGE_ICON_BYTES
-    );
-    if (bytes.length !== icon.bytes || (await sha256(bytes)) !== icon.sha256)
-      throw new PackageError(
-        "PACKAGE_UNAVAILABLE",
-        "Prepared icon failed checksum verification",
-        503
-      );
-    variants.push({ format: icon.format, bytes, checksum: icon.sha256 });
-  }
   const source =
     existingSource ??
     (await repository.linkSource(owner, manifest, {
@@ -143,7 +109,7 @@ export async function preparePackage(input: {
     owner,
     manifest,
     sourceId: source.id,
-    variants
+    variants: prepared.icons
   });
   const artifactId = crypto.randomUUID();
   const downloadUrl = `${input.baseUrl}/packages/${artifactId}/download`;
@@ -166,10 +132,6 @@ export async function preparePackage(input: {
     await store.delete(objectId);
     await repository.removeObject(objectId);
   }
-  for (const id of iconIds) {
-    await store.delete(id);
-    await repository.removeObject(id);
-  }
   return artifact;
 }
 
@@ -180,15 +142,16 @@ async function storePackageIcon(input: {
   owner: PackageOwner;
   manifest: Manifest;
   sourceId: string;
-  variants: (IconVariant & { checksum: string })[];
+  variants: IconVariant[];
 }) {
   const { repository, store, owner, manifest, sourceId, variants } = input;
   if (await repository.hasIcon(sourceId)) return;
   const assetId = crypto.randomUUID();
   const objects: IconObject[] = [];
-  for (const { format, bytes, checksum } of variants) {
+  for (const { format, bytes } of variants) {
     const id = `extensions/${input.extensionId}/icons/${assetId}.${format}`;
     await repository.reserveObject(owner, manifest.id, id, bytes.length);
+    const checksum = await sha256(bytes);
     await store.put(id, bytes, checksum);
     objects.push({ format, id, checksum });
   }

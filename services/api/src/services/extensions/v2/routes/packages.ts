@@ -1,4 +1,3 @@
-import { configuredPackageProcessor } from "../packages/processor";
 import { PackagingJobsDatabase } from "../db/packaging-jobs";
 import type { PackagingJob } from "../packages/jobs";
 import { packageDispatcher } from "../../../../lib/adapters/cloudflare/package-dispatcher";
@@ -136,19 +135,7 @@ export function registerPackageRoutes(app: ExtensionsV2App) {
   app.use("/package-uploads", availability);
   app.use("/packages/*", availability);
   app.use("/packaging-jobs/*", availability);
-  app.on(
-    "POST",
-    ["/packages", "/package-uploads"],
-    async (c, next) => {
-      try {
-        configuredPackageProcessor(getPlatform(c).getEnv);
-      } catch (error) {
-        return failure(c, error);
-      }
-      await next();
-    },
-    paceContentIp()
-  );
+  app.on("POST", ["/packages", "/package-uploads"], paceContentIp());
   app.openapi(
     createRoute({
       method: "post",

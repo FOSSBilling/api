@@ -5,7 +5,7 @@ import { isLocalDevelopmentUrl } from "../urls";
 import { boundedBytes, type PackageUploadStore } from "../store";
 import { presignS3Put, signS3Request, type S3RequestInit } from "./sigv4";
 
-// Includes generated manifest and ZIP headers as well as the source contents.
+// Allow reads of older published ZIPs built before the upload size limit.
 const MAX_STORED_BYTES = PACKAGE_LIMITS.expandedBytes + 1024 * 1024;
 
 export function b2ObjectStore(
@@ -177,7 +177,7 @@ export function b2ObjectStore(
       await response.body?.cancel();
       if (!response.ok) throw unavailable("Package upload failed");
     },
-    async get(key, checksum) {
+    async get(key, checksum, maxBytes = MAX_STORED_BYTES) {
       const response = await request(target(key), { method: "GET" });
       if (response.status === 404) {
         await response.body?.cancel();
@@ -196,7 +196,10 @@ export function b2ObjectStore(
       // bound also applies to responses without Content-Length (e.g. chunked).
       let bytes: Uint8Array<ArrayBuffer>;
       try {
-        bytes = await boundedBytes(response.body, MAX_STORED_BYTES);
+        bytes = await boundedBytes(
+          response.body,
+          Math.min(maxBytes, MAX_STORED_BYTES)
+        );
       } catch {
         signal?.throwIfAborted();
         throw unavailable(
@@ -205,7 +208,7 @@ export function b2ObjectStore(
       }
       if (checksum && (await sha256(bytes)) !== checksum)
         throw unavailable("Stored package failed checksum verification");
-      return new Blob([bytes]).stream();
+      return bytes;
     },
     async delete(key) {
       const url = target(key);

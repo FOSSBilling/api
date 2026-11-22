@@ -1,6 +1,9 @@
-import { PACKAGE_LIMITS } from "@fossbilling/extension-packaging/limits";
-import { Uint8ArrayReader, ZipReader } from "@zip.js/zip.js";
-import { ManifestSchema } from "@fossbilling/extension-packaging/manifest";
+import { PACKAGE_LIMITS } from "./limits";
+import {
+  Uint8ArrayReader,
+  ZipReader
+} from "@zip.js/zip.js/lib/zip-core-native.js";
+import { ManifestSchema } from "./manifest";
 
 const zipOptions = {
   useWebWorkers: false,
@@ -106,7 +109,10 @@ export async function validateExtensionPackage(
       )
         throw new Error("Expected a root manifest.json file up to 256 KiB");
       if (isIcon && icon) throw new Error("Include only one package icon");
-      const chunks: Uint8Array[] = [];
+      const bytes =
+        isIcon || isManifest
+          ? new Uint8Array(entry.uncompressedSize)
+          : undefined;
       let length = 0;
       // zip.js also exposes getData on directories at runtime.
       if (!("getData" in entry))
@@ -119,11 +125,9 @@ export async function validateExtensionPackage(
             if (expandedBytes > PACKAGE_LIMITS.expandedBytes) {
               throw new Error("Source ZIP exceeds expanded size limit");
             }
-            if (isManifest && length > PACKAGE_LIMITS.manifestBytes)
-              throw new Error("Manifest exceeds size limit");
-            if (entry.directory && length)
-              throw new Error("ZIP directory entry contains data");
-            if (isIcon || isManifest) chunks.push(chunk.slice());
+            if (length > entry.uncompressedSize)
+              throw new Error("Source ZIP entry has inconsistent size");
+            bytes?.set(chunk, length - chunk.byteLength);
           }
         })
       );
@@ -131,19 +135,11 @@ export async function validateExtensionPackage(
         throw new Error("Source ZIP entry has inconsistent size");
       }
       if (!isManifest && !entry.directory) files++;
-      if (isManifest || isIcon) {
-        const bytes = new Uint8Array(length);
-        let offset = 0;
-        for (const chunk of chunks) {
-          bytes.set(chunk, offset);
-          offset += chunk.byteLength;
-        }
-        if (isManifest) {
-          manifestBytes = bytes;
-        } else {
-          icon = bytes;
-          iconName = path;
-        }
+      if (isManifest) {
+        manifestBytes = bytes;
+      } else if (bytes) {
+        icon = bytes;
+        iconName = path;
       }
     }
   } finally {

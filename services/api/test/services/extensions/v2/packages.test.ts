@@ -1,10 +1,3 @@
-import { b2ObjectStore } from "@fossbilling/extension-packaging/adapters/b2";
-import {
-  ProcessingInputSchema,
-  type ProcessingInput,
-  type ProcessingResult
-} from "@fossbilling/extension-packaging/processor";
-import { PackageError } from "@fossbilling/extension-packaging/errors";
 import { PackagingJobsDatabase } from "../../../../src/services/extensions/v2/db/packaging-jobs";
 import { processPackagingJob } from "../../../../src/services/extensions/v2/packages/jobs";
 import { packagePreparation } from "../../../../src/lib/adapters/cloudflare/packaging-jobs";
@@ -63,25 +56,16 @@ const manifest = () =>
   );
 const packageKey = (id: string) => `/test-packages/packages/${id}`;
 let b2: ReturnType<typeof mockB2>;
-const preparedSvg =
-  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M0 0h24v24z"/></svg>';
+const svg =
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><script/><path d="M0 0h24v24z"/></svg>';
 const png = Uint8Array.from(
   atob(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADUlEQVQImWNQTvnfAAAEOwIHOVGdNAAAAABJRU5ErkJggg=="
   ),
   (c) => c.charCodeAt(0)
 );
-const avif = Uint8Array.from(
-  atob(
-    "AAAAHGZ0eXBhdmlmAAAAAG1pZjFhdmlmbWlhZgAAAXBtZXRhAAAAAAAAACFoZGxyAAAAAAAAAABwaWN0AAAAAAAAAAAAAAAAAAAAADRpbG9jAAAAAERAAAIAAQAAAAABlAABAAAAAAAAACMAAgAAAAABtwABAAAAAAAAABAAAAA4aWluZgAAAAAAAgAAABVpbmZlAgAAAAABAABhdjAxAAAAABVpbmZlAgAAAAACAABhdjAxAAAAAA5waXRtAAAAAAABAAAAr2lwcnAAAACKaXBjbwAAAAxhdjFDgSACAAAAABRpc3BlAAAAAAAAAAEAAAABAAAAEHBpeGkAAAAAAwgICAAAAAxhdjFDgQAcAAAAAA5waXhpAAAAAAEIAAAAOGF1eEMAAAAAdXJuOm1wZWc6bXBlZ0I6Y2ljcDpzeXN0ZW1zOmF1eGlsaWFyeTphbHBoYQAAAAAdaXBtYQAAAAAAAAACAAEDgQIDAAIEhAIFhgAAABppcmVmAAAAAAAAAA5hdXhsAAIAAQABAAAAO21kYXQSAAoHOAAGkBDQaTIWGUJjBMAANAAAkEDJHGFRR0szJUz6VhIACgQYAAYVMgYYAAABQA8="
-  ),
-  (c) => c.charCodeAt(0)
-);
-
 function mockB2() {
   Object.assign(env, {
-    EXTENSION_PACKAGE_PROCESSOR_URL: "https://processor.example.test/process",
-    EXTENSION_PACKAGE_PROCESSOR_SECRET: "test-processor-secret",
     EXTENSION_PACKAGES_S3_ENDPOINT: "https://s3.test-region.backblazeb2.com",
     EXTENSION_PACKAGES_S3_BUCKET: "test-packages",
     EXTENSION_PACKAGES_S3_ACCESS_KEY_ID: "test-key",
@@ -92,66 +76,6 @@ function mockB2() {
     EXTENSION_ASSETS_S3_SECRET_ACCESS_KEY: "test-secret",
     EXTENSION_ASSETS_PUBLIC_URL: "https://extensions-assets.fossbilling.net"
   });
-  // ZIP validation and image conversion are exercised in the processor suite.
-  const fixtures = new Map<
-    string,
-    {
-      bytes: Uint8Array<ArrayBuffer>;
-      manifest: ReturnType<typeof manifest>;
-      icon?: "svg" | "png";
-    }
-  >();
-  const prepare = vi.fn(
-    async (input: ProcessingInput): Promise<ProcessingResult> => {
-      const store = b2ObjectStore((name) => Reflect.get(env, name), "packages");
-      const { source } = input;
-      if ("id" in source) {
-        const body = await store.get(source.id, source.sha256);
-        if (!body)
-          throw new PackageError(
-            "SOURCE_UNAVAILABLE",
-            "Source ZIP is unavailable",
-            503
-          );
-        await body.cancel();
-      }
-      const fixture = fixtures.get(source.sha256);
-      if (!fixture)
-        throw new PackageError("INVALID_PACKAGE", "Invalid ZIP", 422);
-      await store.put(input.archive, fixture.bytes, source.sha256);
-      const variants =
-        fixture.icon === "svg"
-          ? [
-              {
-                format: "svg" as const,
-                bytes: new Uint8Array(new TextEncoder().encode(preparedSvg))
-              }
-            ]
-          : fixture.icon === "png"
-            ? [
-                { format: "avif" as const, bytes: avif },
-                { format: "png" as const, bytes: png }
-              ]
-            : [];
-      const icons: ProcessingResult["icons"] = [];
-      for (const [index, variant] of variants.entries()) {
-        const id = input.icons[index];
-        const checksum = await sha256(variant.bytes);
-        await store.put(id, variant.bytes, checksum);
-        icons.push({
-          id,
-          format: variant.format,
-          bytes: variant.bytes.length,
-          sha256: checksum
-        });
-      }
-      return {
-        manifest: fixture.manifest,
-        archive: { bytes: fixture.bytes.length, sha256: source.sha256 },
-        icons
-      };
-    }
-  );
   const calls: Request[] = [];
   const objects = new Map<
     string,
@@ -163,23 +87,6 @@ function mockB2() {
   >();
   const fetch = vi.fn(async (request: Request) => {
     const url = new URL(request.url);
-    if (url.hostname === "processor.example.test") {
-      const input = ProcessingInputSchema.parse(await request.json());
-      try {
-        return Response.json({ result: await prepare(input) });
-      } catch (error) {
-        const e = error as { code?: string; message: string; status?: number };
-        return Response.json(
-          {
-            error: {
-              code: e.code,
-              message: e.message
-            }
-          },
-          { status: e.status ?? 503 }
-        );
-      }
-    }
     calls.push(request.clone());
     const key = url.pathname;
     if (request.method === "PUT") {
@@ -209,7 +116,7 @@ function mockB2() {
     });
   });
   vi.stubGlobal("fetch", fetch);
-  return { calls, objects, fetch, fixtures, prepare };
+  return { calls, objects, fetch };
 }
 
 const wake = vi.fn<(immediate?: boolean) => Promise<void>>();
@@ -248,20 +155,10 @@ afterEach(() => {
     "SECRET_ACCESS_KEY"
   ])
     Reflect.deleteProperty(env, `EXTENSION_PACKAGES_S3_${suffix}`);
-  Reflect.deleteProperty(env, "EXTENSION_PACKAGE_PROCESSOR_URL");
-  Reflect.deleteProperty(env, "EXTENSION_PACKAGE_PROCESSOR_SECRET");
   env.EXTENSION_PACKAGES_MODE = "disabled";
   // Assert outside the adapter's catch, including calls with injected failures.
   for (const request of requests) {
     const url = new URL(request.url);
-    if (url.hostname === "processor.example.test") {
-      expect(request.method).toBe("POST");
-      expect(request.headers.get("Authorization")).toBe(
-        "Bearer test-processor-secret"
-      );
-      expect(request.cache).toBe("no-store");
-      continue;
-    }
     expect(url.hostname).toBe("s3.test-region.backblazeb2.com");
     if (url.searchParams.has("X-Amz-Signature")) {
       expect(request.method).toBe("PUT");
@@ -279,21 +176,14 @@ afterEach(() => {
 async function zip(
   content = "<?php // source",
   metadata = manifest(),
-  icon?: "svg" | "png"
+  icon?: "svg" | "png",
+  iconBytes = icon === "png" ? png : new TextEncoder().encode(svg)
 ) {
   const writer = new ZipWriter(new Uint8ArrayWriter(), options);
   await writer.add("Service.php", new TextReader(content));
   await writer.add("manifest.json", new TextReader(JSON.stringify(metadata)));
-  if (icon)
-    await writer.add(
-      `icon.${icon}`,
-      new Uint8ArrayReader(
-        icon === "png" ? png : new TextEncoder().encode(preparedSvg)
-      )
-    );
-  const bytes = await writer.close();
-  b2.fixtures.set(await sha256(bytes), { bytes, manifest: metadata, icon });
-  return bytes;
+  if (icon) await writer.add(`icon.${icon}`, new Uint8ArrayReader(iconBytes));
+  return writer.close();
 }
 async function reserveUpload(
   target: { id?: string; version?: string },
@@ -439,16 +329,30 @@ async function githubPackage(tag = "package-demo-v1.0.0") {
   const metadataUrl = `https://api.github.com/repos/fossbilling/modules/releases/tags/${encodeURIComponent(tag)}`;
   const bytes = await zip();
   const checksum = await sha256(bytes);
+  const assetUrl =
+    "https://api.github.com/repos/fossbilling/modules/releases/assets/123";
+  const downloadUrl =
+    "https://release-assets.githubusercontent.com/package.zip";
+  const download = vi.fn(() => new Response(bytes.slice()));
   const fetch = globalThis.fetch;
   vi.stubGlobal(
     "fetch",
     async (input: RequestInfo | URL, init?: RequestInit) => {
       const request =
         input instanceof Request ? input : new Request(input, init);
-      if (request.url !== metadataUrl) return fetch(request);
+      if (request.url === downloadUrl) {
+        expect(request.headers.get("Authorization")).toBeNull();
+        return download();
+      }
+      if (request.url !== metadataUrl && request.url !== assetUrl)
+        return fetch(request);
       expect(request.headers.get("Authorization")).toBe(
         "Bearer public-release-token"
       );
+      if (request.url === assetUrl) {
+        expect(request.headers.get("Accept")).toBe("application/octet-stream");
+        return Response.redirect(downloadUrl);
+      }
       return Response.json({
         draft: false,
         assets: [
@@ -463,11 +367,11 @@ async function githubPackage(tag = "package-demo-v1.0.0") {
       });
     }
   );
-  return { github_url, checksum, size: bytes.length };
+  return { github_url, bytes, checksum, download };
 }
 
 it("queues a pinned GitHub asset with a slash in its tag and reuses the ready artifact", async () => {
-  const { github_url, checksum, size } = await githubPackage(
+  const { github_url, checksum, download } = await githubPackage(
     "package-demo/v1.0.0"
   );
   const headers = await authHeaders("owner");
@@ -484,27 +388,30 @@ it("queues a pinned GitHub asset with a slash in its tag and reuses the ready ar
   expect(await retry.json()).toMatchObject({
     result: { id: job.id, status: "ready", artifact: { sha256: checksum } }
   });
-  expect(b2.prepare).toHaveBeenCalledOnce();
-  const processorRequest = b2.fetch.mock.calls
-    .map(([request]) => request)
-    .find(
-      (request) => new URL(request.url).hostname === "processor.example.test"
-    );
-  expect(processorRequest?.headers.get("X-GitHub-Authorization")).toBe(
-    "Bearer public-release-token"
-  );
-  expect(b2.prepare).toHaveBeenCalledWith(
-    expect.objectContaining({
-      source: {
-        github: {
-          repository: "fossbilling/modules",
-          assetId: 123,
-          bytes: size
-        },
-        sha256: checksum
-      }
-    })
-  );
+  expect(download).toHaveBeenCalledOnce();
+});
+
+it("rejects a GitHub ZIP that changed without changing size", async () => {
+  const { github_url, bytes, download } = await githubPackage();
+  const queued = await post(`${root}/packages`, await authHeaders("owner"), {
+    github_url,
+    target: {}
+  });
+  expect(queued.status).toBe(202);
+  const changed = bytes.slice();
+  changed[0] ^= 1;
+  download.mockReturnValueOnce(new Response(changed));
+  const response = await finishJob(queued);
+  expect(response.status).toBe(422);
+  expect(await response.json()).toMatchObject({
+    error: {
+      code: "INVALID_PACKAGE",
+      message: expect.stringContaining("checksum")
+    }
+  });
+  expect(
+    await db.prepare("SELECT count(*) AS count FROM package_sources").first()
+  ).toEqual({ count: 0 });
 });
 
 describe("publisher package builds", () => {
@@ -514,10 +421,7 @@ describe("publisher package builds", () => {
     vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
       const request =
         input instanceof Request ? input : new Request(input, init);
-      return [
-        "s3.test-region.backblazeb2.com",
-        "processor.example.test"
-      ].includes(new URL(request.url).hostname)
+      return new URL(request.url).hostname === "s3.test-region.backblazeb2.com"
         ? b2.fetch(request)
         : jwksFetch(input, init);
     });
@@ -743,7 +647,7 @@ describe("queued package preparation", () => {
     );
   });
 
-  it("completes a Preview upload through its scheduled dispatcher", async () => {
+  it("validates and stores a Preview ZIP in its scheduled dispatcher", async () => {
     vi.mocked(dispatch.packageDispatcher).mockRestore();
     Object.assign(env, {
       ENVIRONMENT: "preview",
@@ -760,7 +664,9 @@ describe("queued package preparation", () => {
     await runInDurableObject(other, (instance) => {
       Object.assign(Reflect.get(instance, "env"), { ENVIRONMENT: "preview" });
     });
-    const response = await upload(manifest(), undefined, "owner", false);
+    const metadata = manifest();
+    const source = await zip(undefined, metadata, "svg");
+    const response = await upload(metadata, source, "owner", false);
     expect(response.status).toBe(202);
     const { result: job } = (await response.json()) as {
       result: { id: string };
@@ -782,17 +688,28 @@ describe("queued package preparation", () => {
     const headers = await authHeaders("owner");
     const status = await get(`${root}/packaging-jobs/${job.id}`, headers);
     expect(status.status).toBe(200);
-    expect(await status.json()).toMatchObject({
-      result: { status: "ready", artifact: { id: expect.any(String) } }
-    });
-
-    const otherJobs = new PackagingJobsDatabase(db, await other.scope());
-    expect(await new PackagingJobsDatabase(db).get(job.id)).toBeNull();
-    expect(await otherJobs.get(job.id)).toBeNull();
-    const otherJob = await otherJobs.create((await jobs.get(job.id))!);
-    expect(otherJob.id).not.toBe(job.id);
+    const { result } = (await status.json()) as {
+      result: { status: string; artifact: unknown };
+    };
+    expect(result.status).toBe("ready");
+    const artifact = PackageArtifactSchema.parse(result.artifact);
+    expect(artifact.manifest).toEqual(metadata);
+    expect(artifact.sha256).toBe(await sha256(source));
+    const download = await get(
+      new URL(artifact.download_url).pathname,
+      headers
+    );
+    expect(download.status).toBe(200);
+    expect(new Uint8Array(await download.arrayBuffer())).toEqual(source);
     expect(
-      (await get(`${root}/packaging-jobs/${otherJob.id}`, headers)).status
+      [...b2.objects.keys()].some(
+        (key) => key.includes("/icons/") && key.endsWith(".svg")
+      )
+    ).toBe(true);
+
+    vi.spyOn(dispatch, "packageDispatcher").mockReturnValue(other);
+    expect(
+      (await get(`${root}/packaging-jobs/${job.id}`, headers)).status
     ).toBe(404);
     await runInDurableObject(dispatcher, (_instance, state) =>
       state.storage.deleteAlarm()
@@ -800,12 +717,6 @@ describe("queued package preparation", () => {
   });
 
   it("recovers a scoped job without an immediate wakeup and retries after a restart", async () => {
-    const response = await upload(manifest(), undefined, "owner", false);
-    expect(response.status).toBe(202);
-    const { result: submitted } = (await response.json()) as {
-      result: { id: string };
-    };
-    const defaultJobs = new PackagingJobsDatabase(db);
     let dispatcher = env.PACKAGE_DISPATCHER.getByName("preview-recovery");
     await runInDurableObject(dispatcher, (instance) => {
       Object.assign(Reflect.get(instance, "env"), env, {
@@ -813,11 +724,17 @@ describe("queued package preparation", () => {
       });
     });
     const scope = await dispatcher.scope();
-    const jobs = new PackagingJobsDatabase(db, scope);
-    // Emulate a request interrupted after the D1 insert. The pre-armed
-    // alarm must finish the job without the immediate wakeup.
+    vi.mocked(dispatch.packageDispatcher).mockReturnValue({
+      scope: async () => scope,
+      wake
+    });
+    // Leave recovery armed and simulate losing the immediate wakeup.
     await dispatcher.wake();
-    const job = await jobs.create((await defaultJobs.get(submitted.id))!);
+    const response = await upload(manifest(), undefined, "owner", false);
+    expect(response.status).toBe(202);
+    const { result } = (await response.json()) as { result: { id: string } };
+    const jobs = new PackagingJobsDatabase(db, scope);
+    const job = (await jobs.get(result.id))!;
     const key = packageKey(job.uploadObjectId!);
     const staged = b2.objects.get(key)!;
     b2.objects.delete(key);
@@ -860,10 +777,6 @@ describe("queued package preparation", () => {
     expect(await jobs.get(job.id)).toMatchObject({
       status: "ready",
       attempts: 2
-    });
-    expect(await defaultJobs.get(submitted.id)).toMatchObject({
-      status: "queued",
-      attempts: 0
     });
     await runInDurableObject(dispatcher, (_instance, state) =>
       state.storage.deleteAlarm()
@@ -1141,7 +1054,9 @@ describe("stored directory packages", () => {
     const archive = b2.objects.get(packageKey(objects.object_id));
     expect(archive && new Uint8Array(archive.bytes)).toEqual(source);
     const asset = b2.objects.get(`/test-assets/${objects.svg_object_id}`);
-    expect(asset?.bytes).toEqual(new TextEncoder().encode(preparedSvg).buffer);
+    const sanitized = new TextDecoder().decode(asset?.bytes);
+    expect(sanitized).toContain("<path");
+    expect(sanitized).not.toContain("<script");
   });
 
   it("keeps uploads private until approval and publishes the exact reviewed ZIP", async () => {
@@ -1209,7 +1124,7 @@ describe("stored directory packages", () => {
       "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:"
     );
     expect(preview.headers.get("X-Content-Type-Options")).toBe("nosniff");
-    expect(await preview.text()).toBe(preparedSvg);
+    expect(await preview.text()).toContain("<path");
     const avif = await get(path, {
       ...(await authHeaders("owner")),
       Accept: "image/avif,image/webp,*/*"
@@ -1247,13 +1162,16 @@ describe("stored directory packages", () => {
     const headers = await authHeaders("owner");
     const response = await get(path, headers);
     expect(response.headers.get("Content-Type")).toBe("image/png");
-    expect(new Uint8Array(await response.arrayBuffer())).toEqual(png);
+    expect(new Uint8Array(await response.arrayBuffer()).slice(0, 8)).toEqual(
+      png.slice(0, 8)
+    );
     const preferred = await get(path, {
       ...headers,
       Accept: "image/avif,image/png"
     });
     expect(preferred.headers.get("Content-Type")).toBe("image/avif");
-    expect(new Uint8Array(await preferred.arrayBuffer())).toEqual(avif);
+    const signature = (await preferred.arrayBuffer()).slice(4, 12);
+    expect(new TextDecoder().decode(signature)).toBe("ftypavif");
     const excluded = await get(path, {
       ...headers,
       Accept: "image/avif;q=0,image/png"
@@ -1285,15 +1203,10 @@ describe("stored directory packages", () => {
     );
   });
 
-  it("propagates runner icon rejection without reserving the source version", async () => {
-    b2.prepare.mockRejectedValueOnce(
-      new PackageError(
-        "INVALID_ICON",
-        "Package icon could not be processed",
-        422
-      )
-    );
-    const response = await upload();
+  it("rejects an invalid icon without reserving the source version", async () => {
+    const invalidIcon = new TextEncoder().encode("not an SVG");
+    const source = await zip(undefined, manifest(), "svg", invalidIcon);
+    const response = await upload(manifest(), source);
     expect(response.status).toBe(422);
     expect(await response.json()).toMatchObject({
       error: { code: "INVALID_ICON" }
@@ -1445,6 +1358,11 @@ describe("stored directory packages", () => {
   });
   it("publishes AVIF and PNG with one immutable image identity for browser fallback", async () => {
     const artifact = await built(manifest(), await iconSource("png"));
+    const packageRequests = b2.calls.filter((request) =>
+      new URL(request.url).pathname.startsWith("/test-packages/")
+    );
+    // The browser uploads the source, the API confirms it, and the job seals the ZIP.
+    expect(packageRequests.length).toBeLessThanOrEqual(4);
     expect((await approve(await submitted(artifact))).status).toBe(200);
     const uploads = b2.calls.filter(
       (request) =>
@@ -1843,31 +1761,6 @@ describe("stored directory packages", () => {
         )
       )
     ).toBe(true);
-  });
-
-  it("rejects missing or malformed processor configuration before accepting an upload", async () => {
-    for (const overrides of [
-      { EXTENSION_PACKAGE_PROCESSOR_URL: "" },
-      { EXTENSION_PACKAGE_PROCESSOR_URL: "not a URL" },
-      {
-        EXTENSION_PACKAGE_PROCESSOR_URL:
-          "https://processor.example.test/process",
-        EXTENSION_PACKAGE_PROCESSOR_SECRET: ""
-      }
-    ]) {
-      Object.assign(env, overrides);
-      const response = await upload();
-      expect(response.status).toBe(503);
-      expect(await response.json()).toMatchObject({
-        error: { code: "PACKAGES_DISABLED" }
-      });
-    }
-    expect(
-      await db.prepare("SELECT count(*) AS count FROM package_jobs").first()
-    ).toEqual({ count: 0 });
-    expect(
-      await db.prepare("SELECT count(*) AS count FROM package_objects").first()
-    ).toEqual({ count: 0 });
   });
 
   it("admits a small package with 30 MiB of remaining storage headroom", async () => {

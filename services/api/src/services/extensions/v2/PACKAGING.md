@@ -10,26 +10,18 @@ Package routes are disabled by default. Local development and production enablem
 
 ## Local development and testing
 
-Run `npm run dev` and `npm run extension-package-processor:dev` in separate terminals at the
-repository root. Apply local migrations with `npm run db:migrate:all:local`.
-The API's normal `.dev.vars` is still used for authentication; package processing
-needs no B2 credentials. Both development commands apply
-`libraries/extension-packaging/development.env` after service-specific env files,
-deliberately overriding old B2 and package processor settings. Other service settings remain
-available from `.dev.vars`. The shared settings select development mode, the local
-processor and loopback S3/public endpoints.
+Run `npm run dev` from the repository root. The API and its package dispatcher
+run in the same Wrangler session. Apply local migrations with
+`npm run db:migrate:all:local`. The API reads authentication settings from its
+`.dev.vars` and applies `services/api/development.env` afterward to select
+local package and image storage.
 
-The API dev command includes a development-only Wrangler configuration that serves
-`extension-packages-local` and `extension-assets-local` through the
-[local R2 S3 API](https://developers.cloudflare.com/r2/local-development/).
-The endpoint is experimental and supported by the pinned Wrangler version. Both
-services use the existing S3 adapter; no R2 binding reaches package domain code.
-Objects persist under `services/api/.wrangler/state`. Durable Objects and D1 also run
-locally. Nothing is uploaded to B2 during development.
-
-Local defaults use API port 8787 and package processor port 8790. Local storage is unversioned;
-B2 cleanup still requires an explicit version ID. HTTP storage and asset URLs are
-accepted only on loopback addresses with `ENVIRONMENT=development`.
+Wrangler serves `extension-packages-local` and `extension-assets-local` through
+its [local R2 S3 API](https://developers.cloudflare.com/r2/local-development/).
+Objects persist under `services/api/.wrangler/state`. The API uses the same S3
+adapter for local and B2 storage. Local storage is unversioned. B2 cleanup
+requires an explicit version ID. HTTP storage and asset URLs are accepted
+only on loopback addresses with `ENVIRONMENT=development`.
 
 Deployed environments use separate private B2 package buckets:
 
@@ -38,18 +30,13 @@ Deployed environments use separate private B2 package buckets:
 | Production  | `fb-extensions-packages`         |
 | Preview     | `fb-extensions-packages-preview` |
 
-The API and package processor must use the same bucket within each environment. All branch
-Previews share the preview bucket. There is no development B2 bucket.
+Branch Previews share the Preview bucket. Configure their package and asset B2
+settings and bucket-restricted keys in **Previews Base** and on existing Previews
+individually before enabling package processing.
 
-Preview packaging stays disabled (`EXTENSION_PACKAGES_MODE=disabled`) until its
-package and asset B2 settings and bucket-restricted keys are configured, together
-with the Preview package processor URL and shared secret. Set the API's Preview runtime
-values in **Previews Base** and on existing Previews individually. The package processor
-setup and B2 variable names are documented below.
-
-From the repository root, `npm test` covers the package lifecycle through the real API routes and
-D1 repository, with mocked S3 responses and prepared image fixtures. Node tests
-also exercise package preparation and B2 storage without a Cloudflare runtime.
+From the repository root, `npm test` covers the API routes, Durable Object
+dispatcher and D1 repository using mocked S3 responses. A separate local test
+exercises Wrangler's R2 S3 endpoint.
 
 ## API and review
 
@@ -129,9 +116,10 @@ and jobs whose processing leases have expired.
 Package preparation takes a `PackageRepository`, `PackageStore` and
 `PackageProcessor`. Cloudflare scheduling and binding adapters live under
 `src/lib/adapters/cloudflare/`. The `@fossbilling/extension-packaging` workspace
-defines the shared contracts and adapters. The API calls the package processor over HTTP
-and the Netlify entry point runs the same Node handler used locally. A different
-runtime can supply its own scheduler and the same package interfaces.
+contains ZIP validation, checksum verification, GitHub asset downloads and storage.
+The Durable Object uses these routines through the package preparation adapter.
+The shared processor takes a storage adapter and an image processor, so another
+runtime can reuse it with its own platform bindings.
 
 Jobs interrupted or undelivered for a day are marked expired once no active lease
 remains. Terminal jobs are retained for seven days, with at most 256 jobs per owning
@@ -174,15 +162,16 @@ package processor before the validated bytes are stored.
 Include at most one root `icon.svg`, `icon.png`, `icon.webp`, or `icon.avif`.
 There is no manifest icon field; packages without an icon use the generic icon.
 Packaging prepares display images once and stores them in the configured public asset bucket.
+Prepared variants stay in memory until they are written to their final asset keys.
 The original icon stays unchanged in the ZIP. A new extension receives its permanent
 UUIDv7 draft identity after package validation, before the first icon is stored.
 The first review submission reuses that draft identity.
 
-SVGs are sanitized with Cloudflare svg-hush through the pinned `@zeropress/svg-hush`
-Node adapter and served directly. SVG inputs are bounded by the ZIP expansion
-limit and the sanitizer's built-in input/output limits. Raster inputs use Sharp in the Node package processor to produce
-AVIF and PNG variants within 256 × 256 pixels, preserving proportions and
-transparency without enlarging small images. Raster inputs are limited to 16,777,216 pixels.
+The processor uses the pinned `@zeropress/svg-hush` sanitizer for SVG. The ZIP expansion
+limit and the sanitizer bound SVG input and output. The `PACKAGE_IMAGES` binding
+produces AVIF and PNG variants within 256 × 256 pixels, preserving proportions and
+transparency without enlarging small images. Raster inputs are limited to
+16,777,216 pixels. Include image transformations in Cloudflare quota estimates.
 Requests prefer SVG when present,
 otherwise AVIF when explicitly accepted, with PNG fallback. They read stored
 images directly and never reopen a ZIP.
@@ -203,7 +192,7 @@ newer publication.
 
 ## Private B2 package storage
 
-Configure the deployed API and package processor with their environment's bucket and
+Configure the deployed API with its environment's bucket and
 bucket-restricted key:
 
 ```dotenv
@@ -217,8 +206,8 @@ The B2 adapter derives its signing region from the standard
 `https://s3.<region>.backblazeb2.com` endpoint for both packages and assets.
 Local R2 uses `auto` internally; no separate region settings are needed.
 
-Keep the bucket private. The API key needs read, write and delete-file permissions;
-the package processor needs read and write. No public URL or domain is required. Preview
+Keep the bucket private. The API key needs read, write and delete-file permissions.
+Preview
 uses its own bucket and credentials. The committed production configuration remains
 disabled. An incomplete S3 configuration or upstream failure returns 503 rather than
 silently switching storage backends.
@@ -312,8 +301,7 @@ Before deployment (including an automatic deployment after merge):
    the private package bucket. Supply separate `EXTENSION_ASSETS_S3_ACCESS_KEY_ID`
    and `EXTENSION_ASSETS_S3_SECRET_ACCESS_KEY` for the public asset bucket.
    Development keys in `.dev.vars` are not production secrets.
-2. Configure the package processor URL and shared secret described below, confirm the
-   scoped CDN security headers remain configured, and keep B2 caps/alerts in place.
+2. Confirm the scoped asset CDN security headers and B2 caps and alerts.
 3. Apply the package and job migrations through the normal D1 deployment workflow.
    After migration `0036_validate_uploaded_zips`, unfinished jobs from the retired
    manifest rebuild flow fail with `UPLOAD_NOT_FOUND` when processed. Upload a ZIP
@@ -327,7 +315,7 @@ Before deployment (including an automatic deployment after merge):
 
 Production requires HTTPS download URLs with the `/extensions/v2` base path,
 complete credentials for its private package and public asset buckets, a public
-asset URL and an authenticated extension package processor. An incomplete configuration
+asset URL. An incomplete configuration
 fails with 503; it cannot fall back to local ZIP storage. Private package objects
 use `packages/<object UUID>` in the bucket selected for that environment.
 Public image objects use the UUID-based layout described above.
@@ -338,15 +326,5 @@ it is not an upload-only pause switch. Prepared CDN images remain accessible ind
 
 Before enabling package mode, measure admission and alarm invocations
 separately. Track CPU and wall duration, memory failures, time from submission
-to processing, retries, and storage and package processor latency. Include near-limit ZIPs and SVG/raster icons.
+to processing, retries, and storage and image transformation latency. Include near-limit ZIPs and SVG/raster icons.
 Local functional tests do not establish production capacity or billing.
-
-## Extension package processor
-
-The API dispatches ZIP and image work to a separately deployed Node service through
-an authenticated HTTP adapter. Requests and responses contain metadata and private
-B2 object keys, not ZIP bytes. The API retains ownership, leases and publication.
-
-See the [package processor setup and deployment guide](../../../../../extension-package-processor/README.md) for Netlify configuration,
-local development, credentials, deadlines and runtime verification. The shared
-contracts and portable ZIP implementation live in `libraries/extension-packaging`.

@@ -271,5 +271,5 @@ migrations using `services/api/dist/wrangler.preview-migrations.json` before run
 `npm run cf-preview`; CI performs those steps automatically.
 
 `npm run cf-deploy` remains a deliberate manual production command. It applies remote
-migrations and deploys through Wrangler. Neither command deploys the separate
-[extension package processor](../extension-package-processor/README.md). Production packaging remains disabled.
+migrations and deploys the API and its Durable Objects through Wrangler. Production
+packaging remains disabled.
