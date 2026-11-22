@@ -24,7 +24,7 @@
   "keep_vars": true,
   "vars": {
     "ENVIRONMENT": "production",
-    // Enable only after the HTTP processor and B2 secrets are configured.
+    // Enable after verifying package processing and B2 access.
     "EXTENSION_PACKAGES_MODE": "disabled",
     "EXTENSION_PACKAGES_BASE_URL": "https://api.fossbilling.net/extensions/v2",
     "EXTENSION_ASSETS_PUBLIC_URL": "https://extensions-assets.fossbilling.net",
@@ -68,6 +68,7 @@
       "bucket_name": "fossbilling-download"
     }
   ],
+  "images": { "binding": "PACKAGE_IMAGES" },
   "services": [
     {
       // Private service binding to the extensions site worker. Used by
@@ -131,6 +132,7 @@
     "r2_buckets": [
       { "binding": "DOWNLOAD_BUCKET", "bucket_name": "api-preview-downloads" }
     ],
+    "images": { "binding": "PACKAGE_IMAGES" },
     "services": [],
     "vars": {
       "ENVIRONMENT": "preview",

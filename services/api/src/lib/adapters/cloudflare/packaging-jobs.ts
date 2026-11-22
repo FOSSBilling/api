@@ -3,7 +3,10 @@ import { PackageBuildDatabase } from "../../../services/extensions/v2/db/package
 import type { PackagePreparation } from "../../../services/extensions/v2/packages/prepare";
 import { PackageError } from "@fossbilling/extension-packaging/errors";
 import { configuredPackageStore } from "../../../services/extensions/v2/packages/store";
-import { configuredPackageProcessor } from "../../../services/extensions/v2/packages/processor";
+import { b2ObjectStore } from "@fossbilling/extension-packaging/adapters/b2";
+import { processPackage } from "@fossbilling/extension-packaging/process";
+import { publicGitHubToken } from "../../github-app";
+import { CloudflarePackageImages } from "./package-images";
 
 export function packagePreparation(
   env: CloudflareBindings
@@ -18,10 +21,25 @@ export function packagePreparation(
       "Package storage or download URL is not configured",
       503
     );
+  const images = new CloudflarePackageImages(env.PACKAGE_IMAGES);
   return {
     repository: new PackageBuildDatabase(env.DB_EXTENSIONS),
     store,
-    processor: configuredPackageProcessor(getEnv),
+    processor: {
+      async process(input) {
+        const signal = AbortSignal.timeout(45_000);
+        const githubAuthorization =
+          "github" in input.source
+            ? `Bearer ${await publicGitHubToken({ getEnv })}`
+            : null;
+        return processPackage(
+          input,
+          b2ObjectStore(getEnv, "packages", signal),
+          images,
+          { signal, githubAuthorization }
+        );
+      }
+    },
     baseUrl
   };
 }

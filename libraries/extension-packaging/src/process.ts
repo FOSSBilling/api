@@ -1,18 +1,11 @@
 import { downloadGitHubReleaseAsset } from "./github-release";
 import { validateExtensionPackage } from "./zip";
-import { PACKAGE_LIMITS } from "@fossbilling/extension-packaging/limits";
-import { sha256 } from "@fossbilling/extension-packaging/checksum";
-import { PackageError } from "@fossbilling/extension-packaging/errors";
-import type { PackageImageProcessor } from "@fossbilling/extension-packaging/images";
-import {
-  boundedBytes,
-  type PackageStore
-} from "@fossbilling/extension-packaging/store";
-import {
-  ProcessingResultSchema,
-  type ProcessingInput,
-  type ProcessingResult
-} from "@fossbilling/extension-packaging/processor";
+import { PACKAGE_LIMITS } from "./limits";
+import { sha256 } from "./checksum";
+import { PackageError } from "./errors";
+import type { PackageImageProcessor } from "./images";
+import { boundedBytes, type PackageStore } from "./store";
+import type { ProcessingInput, ProcessingResult } from "./processor";
 
 export async function processPackage(
   input: ProcessingInput,
@@ -26,16 +19,25 @@ export async function processPackage(
   signal.throwIfAborted();
   const reference = input.source;
   const fromGitHub = "github" in reference;
-  const source = await boundedBytes(
-    fromGitHub
-      ? await downloadGitHubReleaseAsset(reference, githubAuthorization, signal)
-      : await store.get(reference.id, reference.sha256),
-    PACKAGE_LIMITS.sourceBytes
-  );
+  const source = fromGitHub
+    ? await boundedBytes(
+        await downloadGitHubReleaseAsset(
+          reference,
+          githubAuthorization,
+          signal
+        ),
+        PACKAGE_LIMITS.sourceBytes
+      )
+    : await store.get(
+        reference.id,
+        reference.sha256,
+        PACKAGE_LIMITS.sourceBytes
+      );
   if (
-    !source.length ||
-    (fromGitHub && source.length !== reference.github.bytes) ||
-    (await sha256(source)) !== reference.sha256
+    !source?.length ||
+    (fromGitHub &&
+      (source.length !== reference.github.bytes ||
+        (await sha256(source)) !== reference.sha256))
   ) {
     if (fromGitHub)
       throw new PackageError(
@@ -45,7 +47,7 @@ export async function processPackage(
       );
     throw new PackageError(
       "SOURCE_UNAVAILABLE",
-      "Source ZIP is unavailable or failed checksum verification",
+      "Source ZIP is unavailable",
       503
     );
   }
@@ -72,29 +74,16 @@ export async function processPackage(
       "ZIP manifest does not match the expected extension or release version",
       422
     );
-  const variants = validated.icon
+  const icons = validated.icon
     ? await images.prepare(validated.icon, validated.iconName === "icon.svg")
     : [];
   signal.throwIfAborted();
   // Seal the validated bytes at a key that has never had a client PUT URL.
   await store.put(input.archive, source, reference.sha256);
-  const icons: ProcessingResult["icons"] = [];
-  for (const [index, variant] of variants.entries()) {
-    signal.throwIfAborted();
-    const id = input.icons[index];
-    const checksum = await sha256(variant.bytes);
-    await store.put(id, variant.bytes, checksum);
-    icons.push({
-      id,
-      format: variant.format,
-      sha256: checksum,
-      bytes: variant.bytes.length
-    });
-  }
   signal.throwIfAborted();
-  return ProcessingResultSchema.parse({
+  return {
     manifest,
-    archive: { bytes: source.length, sha256: reference.sha256 },
+    archiveBytes: source.length,
     icons
-  });
+  };
 }

@@ -61,7 +61,8 @@ export function configuredPackageStore(
     authorizeUpload: packages.authorizeUpload,
     head: packages.head,
     put: (key, bytes, checksum) => storeFor(key).put(key, bytes, checksum),
-    get: (key, checksum) => storeFor(key).get(key, checksum),
+    get: (key, checksum, maxBytes) =>
+      storeFor(key).get(key, checksum, maxBytes),
     delete: (key) => storeFor(key).delete(key)
   };
 }

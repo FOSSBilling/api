@@ -46,10 +46,9 @@ directly. Moving the API to another host would still require replacing those
 integrations. The Node adapters currently provide caches and environment access,
 not a complete alternative API runtime.
 
-Package processing uses the shared library's storage, processor and image interfaces.
-B2 storage configuration lives in `extensions/v2/packages/store.ts`; Durable Object
-scheduling lives in `src/lib/adapters/cloudflare/package-dispatcher.ts`.
-The separately hosted package processor does not import API source or Cloudflare bindings.
+The API's Durable Object schedules and runs package jobs. It uses the shared ZIP
+processor with B2 storage and the Worker's `PACKAGE_IMAGES` binding. The shared
+processor accepts storage and image adapters for use in other runtimes.
 
 ## APIs
 
@@ -271,5 +270,6 @@ migrations using `services/api/dist/wrangler.preview-migrations.json` before run
 `npm run cf-preview`; CI performs those steps automatically.
 
 `npm run cf-deploy` remains a deliberate manual production command. It applies remote
-migrations and deploys through Wrangler. Neither command deploys the separate
-[extension package processor](../extension-package-processor/README.md). Production packaging remains disabled.
+migrations and deploys the API and its Durable Objects through Wrangler.
+Production `vars.EXTENSION_PACKAGES_MODE` stays set to `disabled` in
+`services/api/wrangler.jsonc`.

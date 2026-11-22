@@ -6,10 +6,12 @@ export interface PackageStore {
     bytes: Uint8Array<ArrayBuffer>,
     checksum: string
   ): Promise<void>;
+  // When supplied, the checksum must match the bytes before they are returned.
   get(
     key: string,
-    checksum?: string
-  ): Promise<ReadableStream<Uint8Array> | null>;
+    checksum?: string,
+    maxBytes?: number
+  ): Promise<Uint8Array<ArrayBuffer> | null>;
   delete(key: string): Promise<void>;
 }
 

@@ -1,5 +1,5 @@
-import { PackageError } from "@fossbilling/extension-packaging/errors";
-import type { GitHubPackageSource } from "@fossbilling/extension-packaging/processor";
+import { PackageError } from "./errors";
+import type { GitHubPackageSource } from "./processor";
 
 export async function downloadGitHubReleaseAsset(
   source: GitHubPackageSource,

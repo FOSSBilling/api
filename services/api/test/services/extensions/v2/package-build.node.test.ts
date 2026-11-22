@@ -85,8 +85,7 @@ describe("package preparation outside Cloudflare", () => {
       put: async (key, bytes) => {
         objects.set(key, new Uint8Array(bytes));
       },
-      get: async (key) =>
-        objects.has(key) ? new Blob([objects.get(key)!]).stream() : null,
+      get: async (key) => objects.get(key) ?? null,
       delete: async (key) => {
         objects.delete(key);
       }
@@ -119,19 +118,11 @@ describe("package preparation outside Cloudflare", () => {
       processor: {
         process: async (input: ProcessingInput) => {
           expect(input.source).toEqual({ id: uploadId, sha256: checksum });
-          const iconChecksum = await sha256(icon);
-          await store.put(input.icons[0], icon, iconChecksum);
+          await store.put(input.archive, upload, checksum);
           return {
             manifest,
-            archive: { bytes: upload.length, sha256: checksum },
-            icons: [
-              {
-                id: input.icons[0],
-                format: "svg" as const,
-                bytes: icon.length,
-                sha256: iconChecksum
-              }
-            ]
+            archiveBytes: upload.length,
+            icons: [{ format: "svg" as const, bytes: icon }]
           };
         }
       },

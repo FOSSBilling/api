@@ -71,11 +71,7 @@ describe("B2 object storage", () => {
       BUCKET: "preview-packages"
     });
     await storage.put(objectId, bytes, checksum);
-    expect(
-      new Uint8Array(
-        await new Response(await storage.get(objectId, checksum)).arrayBuffer()
-      )
-    ).toEqual(bytes);
+    expect(await storage.get(objectId, checksum)).toEqual(bytes);
     expect(requests.map((r) => r.method)).toEqual(["PUT", "GET"]);
     for (const request of requests) {
       expect(request.url).toBe(
