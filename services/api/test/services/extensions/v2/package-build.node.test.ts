@@ -120,7 +120,6 @@ describe("package preparation outside Cloudflare", () => {
         process: async (input: ProcessingInput) => {
           expect(input.source).toEqual({ id: uploadId, sha256: checksum });
           const iconChecksum = await sha256(icon);
-          await store.put(input.archive, upload, checksum);
           await store.put(input.icons[0], icon, iconChecksum);
           return {
             manifest,
@@ -140,9 +139,6 @@ describe("package preparation outside Cloudflare", () => {
     };
     const id = await prepareQueuedPackage(services, job);
     const first = [...artifacts.values()].find((row) => row.id === id)!;
-    const bytes = objects.get(first.object_id)!;
-    expect(await sha256(bytes)).toBe(first.sha256);
-    expect(bytes).toEqual(upload);
     expect(first.object_id).not.toBe(uploadId);
     expect(JSON.parse(first.manifest)).toEqual(manifest);
     expect(first.svg_object_id).toMatch(

@@ -46,7 +46,10 @@ beforeEach(() => {
     if (String(url).endsWith("/access_tokens")) {
       const body = JSON.parse(init?.body as string);
       return Response.json({
-        token: "installation-token",
+        token:
+          body.permissions.metadata === "read"
+            ? "metadata-token"
+            : "installation-token",
         expires_at: new Date(Date.now() + 3600_000).toISOString(),
         permissions: body.permissions,
         repository_selection: "selected"
@@ -113,8 +116,8 @@ describe("GitHub client", () => {
 
   it("uses a separate cached metadata-only token for public release reads", async () => {
     await githubClientProvider(platform)();
-    expect(await publicGitHubToken(platform)).toBe("installation-token");
-    expect(await publicGitHubToken(platform)).toBe("installation-token");
+    expect(await publicGitHubToken(platform)).toBe("metadata-token");
+    expect(await publicGitHubToken(platform)).toBe("metadata-token");
     expect(tokenRequests()).toHaveLength(2);
     expect(JSON.parse(tokenRequests()[1][1]?.body as string)).toEqual({
       repositories: ["FOSSBilling"],
