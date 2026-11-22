@@ -23,7 +23,8 @@ export async function downloadGitHubReleaseAsset(
       ...options,
       headers: {
         Accept: "application/octet-stream",
-        Authorization: authorization
+        Authorization: authorization,
+        "User-Agent": "FOSSBilling Extensions"
       }
     }
   );

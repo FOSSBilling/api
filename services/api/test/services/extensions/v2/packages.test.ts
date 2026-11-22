@@ -351,6 +351,9 @@ async function githubPackage(tag = "package-demo-v1.0.0") {
       );
       if (request.url === assetUrl) {
         expect(request.headers.get("Accept")).toBe("application/octet-stream");
+        expect(request.headers.get("User-Agent")).toBe(
+          "FOSSBilling Extensions"
+        );
         return Response.redirect(downloadUrl);
       }
       return Response.json({
