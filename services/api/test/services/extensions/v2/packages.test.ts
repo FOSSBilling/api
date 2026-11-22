@@ -446,6 +446,9 @@ async function githubPackage(tag = "package-demo-v1.0.0") {
       const request =
         input instanceof Request ? input : new Request(input, init);
       if (request.url !== metadataUrl) return fetch(request);
+      expect(request.headers.get("Authorization")).toBe(
+        "Bearer public-release-token"
+      );
       return Response.json({
         draft: false,
         assets: [

@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { publicGitHubToken } from "../../../../lib/github-app";
+import type { PlatformContext } from "../../../../lib/context";
 import { PackageError } from "@fossbilling/extension-packaging/errors";
 import { PACKAGE_LIMITS } from "@fossbilling/extension-packaging/limits";
 import { boundedBytes } from "@fossbilling/extension-packaging/store";
@@ -59,14 +61,23 @@ function releasePath(value: string) {
 }
 
 export async function resolveGitHubPackageAsset(
-  value: string
+  value: string,
+  platform: Pick<PlatformContext, "getEnv">
 ): Promise<GitHubPackageSource> {
   const { repository, tag, name } = releasePath(value);
+  const token = await publicGitHubToken(platform).catch(() => {
+    throw new PackageError(
+      "PACKAGE_UNAVAILABLE",
+      "GitHub authentication is temporarily unavailable. Please try again.",
+      503
+    );
+  });
   const response = await fetch(
     `https://api.github.com/repos/${repository}/releases/tags/${encodeURIComponent(tag)}`,
     {
       headers: {
         Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${token}`,
         "User-Agent": "FOSSBilling Extensions"
       },
       redirect: "manual",

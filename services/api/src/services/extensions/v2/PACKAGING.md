@@ -74,9 +74,9 @@ The OpenAPI reference is available at `/extensions/v2/docs`.
   direct upload. The API checks its length and checksum metadata before queuing
   validation. To import a public GitHub Release ZIP instead, send
   `{ github_url, target }` to the same endpoint. Use the attached asset URL for
-  a specific release tag. The API resolves the asset ID, size and SHA-256 from
-  GitHub. The processor downloads and verifies the ZIP before storing the
-  unchanged bytes. Assets without a GitHub SHA-256 can use direct upload.
+  a specific release tag. The API uses a metadata-only token from its GitHub App
+  installation to resolve the public asset ID, size and SHA-256. The processor
+  downloads and verifies the ZIP before storing the unchanged bytes. Assets without a GitHub SHA-256 can use direct upload.
   Both requests return **202** with the job and private status URL in `Location`.
   An active owning developer profile is required. Machine publishers need
   `extensions:push` and an active mapped developer binding.

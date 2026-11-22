@@ -1,4 +1,4 @@
-import { createAppAuth } from "@octokit/auth-app";
+import { createAppAuth, type InstallationAuthOptions } from "@octokit/auth-app";
 import { Octokit } from "@octokit/core";
 import { request } from "@octokit/request";
 import type { PlatformContext } from "./context";
@@ -36,6 +36,27 @@ export function githubClientProvider(
 async function createClient(
   platform: Pick<PlatformContext, "getEnv">
 ): Promise<GitHubClient> {
+  const token = await installationToken(platform, {
+    contents: "read",
+    actions: "read",
+    pull_requests: "read"
+  });
+  return new Octokit({
+    auth: token,
+    userAgent: "FOSSBilling-API",
+    request: transport
+  });
+}
+
+export function publicGitHubToken(platform: Pick<PlatformContext, "getEnv">) {
+  // Public releases remain readable with this token. Private releases require Contents.
+  return installationToken(platform, { metadata: "read" });
+}
+
+async function installationToken(
+  platform: Pick<PlatformContext, "getEnv">,
+  permissions: NonNullable<InstallationAuthOptions["permissions"]>
+) {
   const clientId = platform.getEnv("GITHUB_APP_CLIENT_ID");
   const installationId = platform.getEnv("GITHUB_APP_INSTALLATION_ID");
   const privateKey = platform.getEnv("GITHUB_APP_PRIVATE_KEY");
@@ -71,13 +92,9 @@ async function createClient(
     const { token } = await cached.authenticate({
       type: "installation",
       repositoryNames: ["FOSSBilling"],
-      permissions: { contents: "read", actions: "read", pull_requests: "read" }
+      permissions
     });
-    return new Octokit({
-      auth: token,
-      userAgent: "FOSSBilling-API",
-      request: transport
-    });
+    return token;
   } catch {
     // Never expose signing keys, tokens or SDK request/response objects in logs.
     // A token-endpoint 404 must not become a missing GitHub user or artifact.

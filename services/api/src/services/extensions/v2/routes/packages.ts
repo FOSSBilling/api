@@ -294,7 +294,8 @@ export function registerPackageRoutes(app: ExtensionsV2App) {
             getPublisher(c)
           );
           const githubAsset = await resolveGitHubPackageAsset(
-            request.github_url
+            request.github_url,
+            getPlatform(c)
           );
           input = {
             fingerprint: await packageFingerprint(

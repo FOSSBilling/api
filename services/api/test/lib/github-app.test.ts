@@ -8,7 +8,10 @@ import {
   vi
 } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
-import { githubClientProvider } from "../../src/lib/github-app";
+import {
+  githubClientProvider,
+  publicGitHubToken
+} from "../../src/lib/github-app";
 import { checkGithubEntity } from "../../src/services/extensions/v2/github/verification";
 
 let pkcs1: string;
@@ -106,6 +109,17 @@ describe("GitHub client", () => {
     settings.GITHUB_APP_PRIVATE_KEY = generateTestKey();
     await githubClientProvider(platform)();
     expect(tokenRequests()).toHaveLength(2);
+  });
+
+  it("uses a separate cached metadata-only token for public release reads", async () => {
+    await githubClientProvider(platform)();
+    expect(await publicGitHubToken(platform)).toBe("installation-token");
+    expect(await publicGitHubToken(platform)).toBe("installation-token");
+    expect(tokenRequests()).toHaveLength(2);
+    expect(JSON.parse(tokenRequests()[1][1]?.body as string)).toEqual({
+      repositories: ["FOSSBilling"],
+      permissions: { metadata: "read" }
+    });
   });
 
   it("keeps a token-endpoint 404 unavailable during developer verification", async () => {
