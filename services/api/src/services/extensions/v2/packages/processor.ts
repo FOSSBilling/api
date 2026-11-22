@@ -1,5 +1,6 @@
 import { HttpPackageProcessor } from "@fossbilling/extension-packaging/adapters/http";
 import { PackageError } from "@fossbilling/extension-packaging/errors";
+import { publicGitHubToken } from "../../../../lib/github-app";
 
 export function configuredPackageProcessor(
   getEnv: (name: string) => string | undefined
@@ -15,6 +16,7 @@ export function configuredPackageProcessor(
   return new HttpPackageProcessor(
     url,
     secret,
-    getEnv("ENVIRONMENT") !== "production"
+    getEnv("ENVIRONMENT") !== "production",
+    () => publicGitHubToken({ getEnv })
   );
 }

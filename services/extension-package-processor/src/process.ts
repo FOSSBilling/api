@@ -18,14 +18,17 @@ export async function processPackage(
   input: ProcessingInput,
   store: PackageStore,
   images: PackageImageProcessor,
-  signal?: AbortSignal
+  {
+    signal,
+    githubAuthorization
+  }: { signal: AbortSignal; githubAuthorization: string | null }
 ): Promise<ProcessingResult> {
-  signal?.throwIfAborted();
+  signal.throwIfAborted();
   const reference = input.source;
   const fromGitHub = "github" in reference;
   const source = await boundedBytes(
     fromGitHub
-      ? await downloadGitHubReleaseAsset(reference, signal)
+      ? await downloadGitHubReleaseAsset(reference, githubAuthorization, signal)
       : await store.get(reference.id, reference.sha256),
     PACKAGE_LIMITS.sourceBytes
   );
@@ -50,7 +53,7 @@ export async function processPackage(
   try {
     validated = await validateExtensionPackage(source, signal);
   } catch (error) {
-    signal?.throwIfAborted();
+    signal.throwIfAborted();
     throw new PackageError(
       "INVALID_PACKAGE",
       error instanceof Error
@@ -72,12 +75,12 @@ export async function processPackage(
   const variants = validated.icon
     ? await images.prepare(validated.icon, validated.iconName === "icon.svg")
     : [];
-  signal?.throwIfAborted();
+  signal.throwIfAborted();
   // Seal the validated bytes at a key that has never had a client PUT URL.
   await store.put(input.archive, source, reference.sha256);
   const icons: ProcessingResult["icons"] = [];
   for (const [index, variant] of variants.entries()) {
-    signal?.throwIfAborted();
+    signal.throwIfAborted();
     const id = input.icons[index];
     const checksum = await sha256(variant.bytes);
     await store.put(id, variant.bytes, checksum);
@@ -88,7 +91,7 @@ export async function processPackage(
       bytes: variant.bytes.length
     });
   }
-  signal?.throwIfAborted();
+  signal.throwIfAborted();
   return ProcessingResultSchema.parse({
     manifest,
     archive: { bytes: source.length, sha256: reference.sha256 },

@@ -485,6 +485,14 @@ it("queues a pinned GitHub asset with a slash in its tag and reuses the ready ar
     result: { id: job.id, status: "ready", artifact: { sha256: checksum } }
   });
   expect(b2.prepare).toHaveBeenCalledOnce();
+  const processorRequest = b2.fetch.mock.calls
+    .map(([request]) => request)
+    .find(
+      (request) => new URL(request.url).hostname === "processor.example.test"
+    );
+  expect(processorRequest?.headers.get("X-GitHub-Authorization")).toBe(
+    "Bearer public-release-token"
+  );
   expect(b2.prepare).toHaveBeenCalledWith(
     expect.objectContaining({
       source: {

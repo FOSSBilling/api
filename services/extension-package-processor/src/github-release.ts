@@ -3,8 +3,15 @@ import type { GitHubPackageSource } from "@fossbilling/extension-packaging/proce
 
 export async function downloadGitHubReleaseAsset(
   source: GitHubPackageSource,
-  signal?: AbortSignal
+  authorization: string | null,
+  signal: AbortSignal
 ) {
+  if (!authorization?.startsWith("Bearer "))
+    throw new PackageError(
+      "PACKAGE_UNAVAILABLE",
+      "GitHub App authentication is unavailable",
+      503
+    );
   const options = {
     redirect: "manual" as const,
     signal,
@@ -14,7 +21,10 @@ export async function downloadGitHubReleaseAsset(
     `https://api.github.com/repos/${source.github.repository}/releases/assets/${source.github.assetId}`,
     {
       ...options,
-      headers: { Accept: "application/octet-stream" }
+      headers: {
+        Accept: "application/octet-stream",
+        Authorization: authorization
+      }
     }
   );
   if (response.status === 302) {

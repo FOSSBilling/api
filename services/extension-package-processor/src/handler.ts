@@ -2,7 +2,10 @@ import { logError } from "@fossbilling/logging";
 import { timingSafeEqual } from "node:crypto";
 import { b2ObjectStore } from "@fossbilling/extension-packaging/adapters/b2";
 import { NodePackageImages } from "./images";
-import { ProcessingInputSchema } from "@fossbilling/extension-packaging/processor";
+import {
+  GITHUB_AUTHORIZATION_HEADER,
+  ProcessingInputSchema
+} from "@fossbilling/extension-packaging/processor";
 import { processPackage } from "./process";
 import { PackageError } from "@fossbilling/extension-packaging/errors";
 import { boundedBytes } from "@fossbilling/extension-packaging/store";
@@ -49,7 +52,10 @@ export async function handlePackageProcessing(
       input,
       b2ObjectStore(getEnv, "packages", signal),
       new NodePackageImages(),
-      signal
+      {
+        signal,
+        githubAuthorization: request.headers.get(GITHUB_AUTHORIZATION_HEADER)
+      }
     );
     return Response.json({ result }, { headers });
   } catch (error) {

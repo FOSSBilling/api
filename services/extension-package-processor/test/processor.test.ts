@@ -54,7 +54,7 @@ async function archive(iconName = "icon.svg", icon = encode(svg)) {
   await writer.add(iconName, new Uint8ArrayReader(icon));
   return writer.close();
 }
-function fixture() {
+function fixture(githubToken?: () => Promise<string>) {
   const nativeFetch = globalThis.fetch;
   const objects = new Map<
     string,
@@ -91,7 +91,9 @@ function fixture() {
   vi.stubGlobal("fetch", fetch);
   const processor = new HttpPackageProcessor(
     "https://processor.example.test/process",
-    config.EXTENSION_PACKAGE_PROCESSOR_SECRET
+    config.EXTENSION_PACKAGE_PROCESSOR_SECRET,
+    false,
+    githubToken
   );
   const input = async (bytes: Uint8Array<ArrayBuffer>) => {
     const id = crypto.randomUUID(),
@@ -127,7 +129,7 @@ describe("Node package processor over the generic HTTP contract", () => {
   it.each([false, true])(
     "checks the GitHub asset checksum before storing the original ZIP (changed: %s)",
     async (changed) => {
-      const f = fixture();
+      const f = fixture(async () => "test-github-token");
       const repository = "fossbilling/modules";
       const assetId = 123;
       const source = await archive();
@@ -149,15 +151,17 @@ describe("Node package processor over the generic HTTP contract", () => {
           url ===
           `https://api.github.com/repos/${repository}/releases/assets/${assetId}`
         ) {
-          expect(new Headers(init?.headers).get("Accept")).toBe(
-            "application/octet-stream"
-          );
+          const headers = new Headers(init?.headers);
+          expect(headers.get("Accept")).toBe("application/octet-stream");
+          expect(headers.get("Authorization")).toBe("Bearer test-github-token");
           return Response.redirect(downloadUrl, 302);
         }
-        if (url === downloadUrl)
+        if (url === downloadUrl) {
+          expect(new Headers(init?.headers).get("Authorization")).toBeNull();
           return new Response(
             changed ? source.map((byte) => byte ^ 1) : source
           );
+        }
         return fetch(request, init);
       });
       if (changed) {

@@ -4,6 +4,7 @@ import { PACKAGE_LIMITS } from "./limits";
 
 // Matches the sanitizer's maximum prepared SVG output.
 export const MAX_PACKAGE_ICON_BYTES = 4 * 1024 * 1024;
+export const GITHUB_AUTHORIZATION_HEADER = "X-GitHub-Authorization";
 const checksum = z.string().regex(/^[a-f0-9]{64}$/);
 const output = z
   .object({
