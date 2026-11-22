@@ -1,5 +1,8 @@
 import { logError } from "@fossbilling/logging";
-import type { PackageTarget } from "@fossbilling/extension-packaging/processor";
+import type {
+  GitHubPackageSource,
+  PackageTarget
+} from "@fossbilling/extension-packaging/processor";
 import type { PackageOwner } from "./repository";
 import { PackageError } from "@fossbilling/extension-packaging/errors";
 
@@ -10,6 +13,7 @@ export interface PackagingJob {
   target: PackageTarget;
   uploadObjectId: string | null;
   uploadSha256: string | null;
+  githubAsset?: GitHubPackageSource;
   status: "queued" | "processing" | "ready" | "failed";
   attempts: number;
   artifactId: string | null;

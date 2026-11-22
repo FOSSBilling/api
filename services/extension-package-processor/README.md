@@ -1,10 +1,11 @@
 # Extension package processor
 
-This Node service validates uploaded ZIPs, reads their manifests, stores the ZIPs
-unchanged, and prepares display icons. It uses the shared
-`@fossbilling/extension-packaging` library. The Netlify function in
-`netlify/functions/extension-package-processor.ts` calls the same Request/Response
-handler used locally in `src/handler.ts`.
+This Node service validates uploaded and imported ZIPs, reads their manifests,
+stores the ZIPs unchanged, and prepares display icons. It downloads GitHub Release
+assets directly using the asset ID supplied by the API. The two services share
+the processing contract and storage adapters in `@fossbilling/extension-packaging`.
+The Netlify function in `netlify/functions/extension-package-processor.ts` calls
+the same Request/Response handler used locally in `src/handler.ts`.
 
 ## Local development
 

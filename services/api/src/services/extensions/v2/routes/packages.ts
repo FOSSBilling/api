@@ -10,6 +10,7 @@ import { getPlatform } from "../../../../lib/middleware";
 import { canonicalJson } from "../packages/manifest";
 import type { ArtifactRow } from "../packages/repository";
 import { PackageBuildDatabase } from "../db/package-builds";
+import { resolveGitHubPackageAsset } from "../github/package-assets";
 import {
   requireContentWrite,
   getPublisher,
@@ -242,7 +243,7 @@ export function registerPackageRoutes(app: ExtensionsV2App) {
       method: "post",
       path: "/packages",
       tags: ["Packages"],
-      summary: "Confirm an upload and queue ZIP validation",
+      summary: "Confirm an upload or import a GitHub release ZIP",
       security: [{ Bearer: [] }],
       middleware: [
         requireContentWrite(),
@@ -276,20 +277,6 @@ export function registerPackageRoutes(app: ExtensionsV2App) {
         const dispatcher = packageDispatcher(c.env);
         const scope = await dispatcher.scope();
         const jobs = new PackagingJobsDatabase(db, scope);
-        const uploadId = request.upload_id;
-        const upload = await repository.getUpload(
-          uploadId,
-          scope,
-          getAuth(c).userId,
-          getPublisher(c)
-        );
-        if (!upload)
-          throw new PackageError(
-            "UPLOAD_NOT_FOUND",
-            "Package upload not found",
-            404
-          );
-
         const baseUrl = getPlatform(c).getEnv("EXTENSION_PACKAGES_BASE_URL");
         if (!baseUrl)
           throw new PackageError(
@@ -298,34 +285,76 @@ export function registerPackageRoutes(app: ExtensionsV2App) {
             503
           );
 
-        let job = await jobs.find(upload.fingerprint);
-        if (!job) {
-          if (upload.expires_at <= Math.floor(Date.now() / 1000))
+        let input: Parameters<PackagingJobsDatabase["create"]>[0];
+        let job: PackagingJob | null;
+        if ("github_url" in request) {
+          const owner = await repository.getOwner(
+            getAuth(c).userId,
+            request.target.id ?? null,
+            getPublisher(c)
+          );
+          const githubAsset = await resolveGitHubPackageAsset(
+            request.github_url
+          );
+          input = {
+            fingerprint: await packageFingerprint(
+              owner,
+              request.target,
+              githubAsset.sha256
+            ),
+            owner,
+            target: request.target,
+            uploadObjectId: null,
+            uploadSha256: null,
+            githubAsset
+          };
+          job = await jobs.find(input.fingerprint);
+        } else {
+          const uploadId = request.upload_id;
+          const upload = await repository.getUpload(
+            uploadId,
+            scope,
+            getAuth(c).userId,
+            getPublisher(c)
+          );
+          if (!upload)
             throw new PackageError(
-              "UPLOAD_EXPIRED",
-              "Package upload expired; select the ZIP and try again",
-              409
+              "UPLOAD_NOT_FOUND",
+              "Package upload not found",
+              404
             );
-          const stored = await packageStore(c)!.head(uploadId);
-          if (
-            !stored ||
-            stored.bytes !== upload.bytes ||
-            stored.checksum !== upload.sha256
-          )
-            throw new PackageError(
-              "UPLOAD_INCOMPLETE",
-              "The uploaded ZIP is missing or does not match the reservation",
-              409
-            );
-          // Arm recovery before inserting so an interrupted request can be picked up.
-          await dispatcher.wake();
-          job = await jobs.create({
+          job = await jobs.find(upload.fingerprint);
+          if (!job) {
+            if (upload.expires_at <= Math.floor(Date.now() / 1000))
+              throw new PackageError(
+                "UPLOAD_EXPIRED",
+                "Package upload expired; select the ZIP and try again",
+                409
+              );
+            const stored = await packageStore(c)!.head(uploadId);
+            if (
+              !stored ||
+              stored.bytes !== upload.bytes ||
+              stored.checksum !== upload.sha256
+            )
+              throw new PackageError(
+                "UPLOAD_INCOMPLETE",
+                "The uploaded ZIP is missing or does not match the reservation",
+                409
+              );
+          }
+          input = {
             fingerprint: upload.fingerprint,
             owner: upload.owner,
             target: upload.target,
             uploadObjectId: uploadId,
             uploadSha256: upload.sha256
-          });
+          };
+        }
+        if (!job) {
+          // Arm recovery before inserting so an interrupted request can be picked up.
+          await dispatcher.wake();
+          job = await jobs.create(input);
         }
         if (job.status === "queued") await dispatcher.wake(true);
         c.header(

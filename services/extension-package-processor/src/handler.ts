@@ -3,7 +3,7 @@ import { timingSafeEqual } from "node:crypto";
 import { b2ObjectStore } from "@fossbilling/extension-packaging/adapters/b2";
 import { NodePackageImages } from "./images";
 import { ProcessingInputSchema } from "@fossbilling/extension-packaging/processor";
-import { processPackage } from "@fossbilling/extension-packaging/process";
+import { processPackage } from "./process";
 import { PackageError } from "@fossbilling/extension-packaging/errors";
 import { boundedBytes } from "@fossbilling/extension-packaging/store";
 

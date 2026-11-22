@@ -9,7 +9,10 @@ export const PackageUploadRequestSchema = z.strictObject({
   bytes: z.number().int().min(1),
   sha256
 });
-export const PackageBuildSchema = z.strictObject({ upload_id: z.uuid() });
+export const PackageBuildSchema = z.union([
+  z.strictObject({ upload_id: z.uuid() }),
+  z.strictObject({ github_url: z.url().max(2048), target: PackageTargetSchema })
+]);
 export const PackageParamSchema = z.object({ packageId: z.uuid() });
 export const PackageArtifactSchema = z
   .object({

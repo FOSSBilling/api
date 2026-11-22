@@ -63,35 +63,37 @@ function fixture() {
   const key = (id: string) => "/private-packages/packages/" + id;
   const handler = (request: Request) =>
     handlePackageProcessing(request, (name) => config[name]);
-  const fetch = vi.fn(async (request: Request) => {
-    const url = new URL(request.url);
-    if (url.hostname === "processor.example.test") return handler(request);
-    if (url.hostname === "127.0.0.1") return nativeFetch(request);
-    if (url.hostname !== "s3.test-region.backblazeb2.com")
-      throw new Error("Unexpected network request");
-    expect(request.cache).toBe("no-store");
-    if (request.method === "PUT") {
-      objects.set(url.pathname, {
-        bytes: new Uint8Array(await request.arrayBuffer()),
-        checksum: request.headers.get("x-amz-meta-sha256")!
-      });
-      return new Response(null);
+  const fetch = vi.fn(
+    async (input: Request | string | URL, init?: RequestInit) => {
+      const request =
+        input instanceof Request ? input : new Request(input, init);
+      const url = new URL(request.url);
+      if (url.hostname === "processor.example.test") return handler(request);
+      if (url.hostname === "127.0.0.1") return nativeFetch(request);
+      if (url.hostname !== "s3.test-region.backblazeb2.com")
+        throw new Error("Unexpected network request");
+      expect(request.cache).toBe("no-store");
+      if (request.method === "PUT") {
+        objects.set(url.pathname, {
+          bytes: new Uint8Array(await request.arrayBuffer()),
+          checksum: request.headers.get("x-amz-meta-sha256")!
+        });
+        return new Response(null);
+      }
+      const value = objects.get(url.pathname);
+      return value
+        ? new Response(value.bytes, {
+            headers: { "x-amz-meta-sha256": value.checksum }
+          })
+        : new Response(null, { status: 404 });
     }
-    const value = objects.get(url.pathname);
-    return value
-      ? new Response(value.bytes, {
-          headers: { "x-amz-meta-sha256": value.checksum }
-        })
-      : new Response(null, { status: 404 });
-  });
+  );
   vi.stubGlobal("fetch", fetch);
   const processor = new HttpPackageProcessor(
     "https://processor.example.test/process",
     config.EXTENSION_PACKAGE_PROCESSOR_SECRET
   );
-  const input = async (
-    bytes: Uint8Array<ArrayBuffer>
-  ): Promise<ProcessingInput> => {
+  const input = async (bytes: Uint8Array<ArrayBuffer>) => {
     const id = crypto.randomUUID(),
       checksum = await sha256(bytes);
     objects.set(key(id), { bytes, checksum });
@@ -100,7 +102,7 @@ function fixture() {
       source: { id, sha256: checksum },
       archive: crypto.randomUUID(),
       icons: [crypto.randomUUID(), crypto.randomUUID()]
-    };
+    } satisfies ProcessingInput;
   };
   return { objects, key, fetch, handler, processor, input };
 }
@@ -122,6 +124,59 @@ describe("Node package processor over the generic HTTP contract", () => {
     expect(prepared).toContain("url(#paint)");
     expect(prepared).toContain('viewBox="0 0 24 24"');
   });
+  it.each([false, true])(
+    "checks the GitHub asset checksum before storing the original ZIP (changed: %s)",
+    async (changed) => {
+      const f = fixture();
+      const repository = "fossbilling/modules";
+      const assetId = 123;
+      const source = await archive();
+      const input = {
+        target: { id: manifest.id },
+        source: {
+          github: { repository, assetId, bytes: source.length },
+          sha256: await sha256(source)
+        },
+        archive: crypto.randomUUID(),
+        icons: [crypto.randomUUID(), crypto.randomUUID()]
+      } satisfies ProcessingInput;
+      const downloadUrl =
+        "https://release-assets.githubusercontent.com/test.zip";
+      const fetch = f.fetch.getMockImplementation()!;
+      f.fetch.mockImplementation(async (request, init) => {
+        const url = request instanceof Request ? request.url : String(request);
+        if (
+          url ===
+          `https://api.github.com/repos/${repository}/releases/assets/${assetId}`
+        ) {
+          expect(new Headers(init?.headers).get("Accept")).toBe(
+            "application/octet-stream"
+          );
+          return Response.redirect(downloadUrl, 302);
+        }
+        if (url === downloadUrl)
+          return new Response(
+            changed ? source.map((byte) => byte ^ 1) : source
+          );
+        return fetch(request, init);
+      });
+      if (changed) {
+        await expect(f.processor.process(input)).rejects.toMatchObject({
+          code: "INVALID_PACKAGE",
+          message: expect.stringContaining("checksum")
+        });
+        expect(f.objects.size).toBe(0);
+      } else {
+        const result = await f.processor.process(input);
+        expect(result.manifest).toEqual(manifest);
+        expect(f.objects.size).toBe(1 + result.icons.length);
+        expect(f.objects.get(f.key(input.archive))).toEqual({
+          bytes: source,
+          checksum: input.source.sha256
+        });
+      }
+    }
+  );
   it.each(["png", "webp", "avif"] as const)(
     "prepares real icon.%s as AVIF and PNG with preserved proportions",
     async (format) => {

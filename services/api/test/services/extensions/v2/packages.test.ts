@@ -1,5 +1,9 @@
-import { processPackage } from "@fossbilling/extension-packaging/process";
-import { ProcessingInputSchema } from "@fossbilling/extension-packaging/processor";
+import { b2ObjectStore } from "@fossbilling/extension-packaging/adapters/b2";
+import {
+  ProcessingInputSchema,
+  type ProcessingInput,
+  type ProcessingResult
+} from "@fossbilling/extension-packaging/processor";
 import { PackageError } from "@fossbilling/extension-packaging/errors";
 import { PackagingJobsDatabase } from "../../../../src/services/extensions/v2/db/packaging-jobs";
 import { processPackagingJob } from "../../../../src/services/extensions/v2/packages/jobs";
@@ -88,23 +92,66 @@ function mockB2() {
     EXTENSION_ASSETS_S3_SECRET_ACCESS_KEY: "test-secret",
     EXTENSION_ASSETS_PUBLIC_URL: "https://extensions-assets.fossbilling.net"
   });
-  // The remote runner's conversion is tested with Sharp in the Node suite.
-  // Here it supplies prepared fixtures so these tests cover API publication.
-  const images = {
-    prepare: vi.fn(async (_icon: Uint8Array<ArrayBuffer>, isSvg: boolean) =>
-      isSvg
-        ? [
-            {
-              format: "svg" as const,
-              bytes: new Uint8Array(new TextEncoder().encode(preparedSvg))
-            }
-          ]
-        : [
-            { format: "avif" as const, bytes: avif },
-            { format: "png" as const, bytes: png }
-          ]
-    )
-  };
+  // ZIP validation and image conversion are exercised in the processor suite.
+  const fixtures = new Map<
+    string,
+    {
+      bytes: Uint8Array<ArrayBuffer>;
+      manifest: ReturnType<typeof manifest>;
+      icon?: "svg" | "png";
+    }
+  >();
+  const prepare = vi.fn(
+    async (input: ProcessingInput): Promise<ProcessingResult> => {
+      const store = b2ObjectStore((name) => Reflect.get(env, name), "packages");
+      const { source } = input;
+      if ("id" in source) {
+        const body = await store.get(source.id, source.sha256);
+        if (!body)
+          throw new PackageError(
+            "SOURCE_UNAVAILABLE",
+            "Source ZIP is unavailable",
+            503
+          );
+        await body.cancel();
+      }
+      const fixture = fixtures.get(source.sha256);
+      if (!fixture)
+        throw new PackageError("INVALID_PACKAGE", "Invalid ZIP", 422);
+      await store.put(input.archive, fixture.bytes, source.sha256);
+      const variants =
+        fixture.icon === "svg"
+          ? [
+              {
+                format: "svg" as const,
+                bytes: new Uint8Array(new TextEncoder().encode(preparedSvg))
+              }
+            ]
+          : fixture.icon === "png"
+            ? [
+                { format: "avif" as const, bytes: avif },
+                { format: "png" as const, bytes: png }
+              ]
+            : [];
+      const icons: ProcessingResult["icons"] = [];
+      for (const [index, variant] of variants.entries()) {
+        const id = input.icons[index];
+        const checksum = await sha256(variant.bytes);
+        await store.put(id, variant.bytes, checksum);
+        icons.push({
+          id,
+          format: variant.format,
+          bytes: variant.bytes.length,
+          sha256: checksum
+        });
+      }
+      return {
+        manifest: fixture.manifest,
+        archive: { bytes: fixture.bytes.length, sha256: source.sha256 },
+        icons
+      };
+    }
+  );
   const calls: Request[] = [];
   const objects = new Map<
     string,
@@ -118,13 +165,8 @@ function mockB2() {
     const url = new URL(request.url);
     if (url.hostname === "processor.example.test") {
       const input = ProcessingInputSchema.parse(await request.json());
-      const { b2ObjectStore } =
-        await import("@fossbilling/extension-packaging/adapters/b2");
-      const store = b2ObjectStore((name) => Reflect.get(env, name), "packages");
       try {
-        return Response.json({
-          result: await processPackage(input, store, images)
-        });
+        return Response.json({ result: await prepare(input) });
       } catch (error) {
         const e = error as { code?: string; message: string; status?: number };
         return Response.json(
@@ -167,7 +209,7 @@ function mockB2() {
     });
   });
   vi.stubGlobal("fetch", fetch);
-  return { calls, objects, fetch, images };
+  return { calls, objects, fetch, fixtures, prepare };
 }
 
 const wake = vi.fn<(immediate?: boolean) => Promise<void>>();
@@ -234,11 +276,24 @@ afterEach(() => {
       expect(url.searchParams.get("versionId")).toBeTruthy();
   }
 });
-async function zip(content = "<?php // source", metadata = manifest()) {
+async function zip(
+  content = "<?php // source",
+  metadata = manifest(),
+  icon?: "svg" | "png"
+) {
   const writer = new ZipWriter(new Uint8ArrayWriter(), options);
   await writer.add("Service.php", new TextReader(content));
   await writer.add("manifest.json", new TextReader(JSON.stringify(metadata)));
-  return writer.close();
+  if (icon)
+    await writer.add(
+      `icon.${icon}`,
+      new Uint8ArrayReader(
+        icon === "png" ? png : new TextEncoder().encode(preparedSvg)
+      )
+    );
+  const bytes = await writer.close();
+  b2.fixtures.set(await sha256(bytes), { bytes, manifest: metadata, icon });
+  return bytes;
 }
 async function reserveUpload(
   target: { id?: string; version?: string },
@@ -379,6 +434,68 @@ async function unpack(bytes: Uint8Array<ArrayBuffer>) {
   return result;
 }
 
+async function githubPackage(tag = "package-demo-v1.0.0") {
+  const github_url = `https://github.com/FOSSBilling/modules/releases/download/${tag}/package.zip`;
+  const metadataUrl = `https://api.github.com/repos/fossbilling/modules/releases/tags/${encodeURIComponent(tag)}`;
+  const bytes = await zip();
+  const checksum = await sha256(bytes);
+  const fetch = globalThis.fetch;
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request =
+        input instanceof Request ? input : new Request(input, init);
+      if (request.url !== metadataUrl) return fetch(request);
+      return Response.json({
+        draft: false,
+        assets: [
+          {
+            id: 123,
+            name: "package.zip",
+            size: bytes.byteLength,
+            state: "uploaded",
+            digest: `sha256:${checksum}`
+          }
+        ]
+      });
+    }
+  );
+  return { github_url, checksum, size: bytes.length };
+}
+
+it("queues a pinned GitHub asset with a slash in its tag and reuses the ready artifact", async () => {
+  const { github_url, checksum, size } = await githubPackage(
+    "package-demo/v1.0.0"
+  );
+  const headers = await authHeaders("owner");
+  const importPackage = () =>
+    post(`${root}/packages`, headers, { github_url, target: {} });
+  const queued = await importPackage();
+  expect(queued.status).toBe(202);
+  const { result: job } = (await queued.clone().json()) as {
+    result: { id: string };
+  };
+  const result = await finishJob(queued);
+  expect(result.status).toBe(200);
+  const retry = await importPackage();
+  expect(await retry.json()).toMatchObject({
+    result: { id: job.id, status: "ready", artifact: { sha256: checksum } }
+  });
+  expect(b2.prepare).toHaveBeenCalledOnce();
+  expect(b2.prepare).toHaveBeenCalledWith(
+    expect.objectContaining({
+      source: {
+        github: {
+          repository: "fossbilling/modules",
+          assetId: 123,
+          bytes: size
+        },
+        sha256: checksum
+      }
+    })
+  );
+});
+
 describe("publisher package builds", () => {
   beforeEach(async () => {
     await activateM2mJwks();
@@ -446,8 +563,22 @@ describe("publisher package builds", () => {
       (await get(`${root}/packaging-jobs/${job.id}`, headers)).status
     ).toBe(403);
   });
-  it("builds under the mapped developer while retaining owner privacy", async () => {
-    const response = await machineBuild();
+  it("imports and publishes a GitHub asset under the mapped developer", async () => {
+    const token = await signAccessToken({
+      clientId: "package-publisher",
+      scopes: ["extensions:push", "extensions:publish"]
+    });
+    const headers = {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    };
+    const { github_url } = await githubPackage();
+    const response = await finishJob(
+      await post(`${root}/packages`, headers, {
+        github_url,
+        target: { id: "package-demo", version: manifest().version }
+      })
+    );
     expect(response.status).toBe(200);
     const artifact = PackageArtifactSchema.parse(
       ((await response.json()) as { result: unknown }).result
@@ -468,14 +599,6 @@ describe("publisher package builds", () => {
         )
       ).status
     ).toBe(200);
-    const token = await signAccessToken({
-      clientId: "package-publisher",
-      scopes: ["extensions:push", "extensions:publish"]
-    });
-    const headers = {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json"
-    };
     const created = await post(`${root}/extensions`, headers, {
       identifier: "package-demo",
       ...content(artifact)
@@ -1064,19 +1187,7 @@ describe("stored directory packages", () => {
   });
 
   it("serves convention icons with the same publication permissions as downloads", async () => {
-    const writer = new ZipWriter(new Uint8ArrayWriter(), options);
-    await writer.add(
-      "manifest.json",
-      new TextReader(JSON.stringify(manifest()))
-    );
-    await writer.add("Service.php", new TextReader("<?php"));
-    await writer.add(
-      "icon.svg",
-      new TextReader(
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 256"><rect width="512" height="256" fill="blue"/></svg>'
-      )
-    );
-    const artifact = await built(manifest(), await writer.close());
+    const artifact = await built(manifest(), await iconSource());
     const path = `${root}/packages/${artifact.id}/icon`;
     expect((await get(path, {})).status).toBe(404);
     expect((await get(path, await authHeaders("stranger"))).status).toBe(404);
@@ -1164,20 +1275,14 @@ describe("stored directory packages", () => {
   });
 
   it("propagates runner icon rejection without reserving the source version", async () => {
-    b2.images.prepare.mockRejectedValueOnce(
+    b2.prepare.mockRejectedValueOnce(
       new PackageError(
         "INVALID_ICON",
         "Package icon could not be processed",
         422
       )
     );
-    const writer = new ZipWriter(new Uint8ArrayWriter(), options);
-    await writer.add(
-      "manifest.json",
-      new TextReader(JSON.stringify(manifest()))
-    );
-    await writer.add("icon.png", new TextReader("not an image"));
-    const response = await upload(manifest(), await writer.close());
+    const response = await upload();
     expect(response.status).toBe(422);
     expect(await response.json()).toMatchObject({
       error: { code: "INVALID_ICON" }
@@ -1188,21 +1293,8 @@ describe("stored directory packages", () => {
     expect((await upload()).status).toBe(200);
   });
 
-  async function iconSource(format: "svg" | "png" = "svg") {
-    const svg =
-      '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M0 0h24v24z"/></svg>';
-    const bytes = format === "svg" ? new TextEncoder().encode(svg) : png;
-    const writer = new ZipWriter(new Uint8ArrayWriter(), options);
-    await writer.add(
-      "manifest.json",
-      new TextReader(JSON.stringify(manifest()))
-    );
-    await writer.add(
-      `icon.${format}`,
-      new Uint8ArrayReader(new Uint8Array(bytes))
-    );
-    return writer.close();
-  }
+  const iconSource = (format: "svg" | "png" = "svg") =>
+    zip(undefined, manifest(), format);
   it("stores pending icons using the permanent draft UUID and publishes local asset URLs in development", async () => {
     Object.assign(env, {
       ENVIRONMENT: "development",
@@ -1777,7 +1869,7 @@ describe("stored directory packages", () => {
     expect((await upload()).status).toBe(200);
   });
 
-  it("checks account ownership, upload bounds, invalid archives and disabled storage", async () => {
+  it("checks account ownership, upload bounds, processor rejection and disabled storage", async () => {
     expect((await upload(manifest(), new Uint8Array([1, 2, 3]))).status).toBe(
       422
     );

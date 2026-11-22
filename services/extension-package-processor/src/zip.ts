@@ -1,6 +1,6 @@
-import { PACKAGE_LIMITS } from "./limits";
+import { PACKAGE_LIMITS } from "@fossbilling/extension-packaging/limits";
 import { Uint8ArrayReader, ZipReader } from "@zip.js/zip.js";
-import { ManifestSchema } from "./manifest";
+import { ManifestSchema } from "@fossbilling/extension-packaging/manifest";
 
 const zipOptions = {
   useWebWorkers: false,
