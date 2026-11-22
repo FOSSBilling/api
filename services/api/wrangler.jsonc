@@ -24,8 +24,7 @@
   "keep_vars": true,
   "vars": {
     "ENVIRONMENT": "production",
-    // Enable after verifying package processing and B2 access.
-    "EXTENSION_PACKAGES_MODE": "disabled",
+    "EXTENSION_PACKAGES_MODE": "enabled",
     "EXTENSION_PACKAGES_BASE_URL": "https://api.fossbilling.net/extensions/v2",
     "EXTENSION_ASSETS_PUBLIC_URL": "https://extensions-assets.fossbilling.net",
     "EXTENSIONS_RETENTION_MODE": "dry-run",

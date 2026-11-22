@@ -155,7 +155,7 @@ afterEach(() => {
     "SECRET_ACCESS_KEY"
   ])
     Reflect.deleteProperty(env, `EXTENSION_PACKAGES_S3_${suffix}`);
-  env.EXTENSION_PACKAGES_MODE = "disabled";
+  Object.assign(env, { EXTENSION_PACKAGES_MODE: "disabled" });
   // Assert outside the adapter's catch, including calls with injected failures.
   for (const request of requests) {
     const url = new URL(request.url);
@@ -1789,7 +1789,7 @@ describe("stored directory packages", () => {
       .prepare("UPDATE users SET deleted_at=CURRENT_TIMESTAMP WHERE id='owner'")
       .run();
     expect((await upload()).status).toBe(403);
-    env.EXTENSION_PACKAGES_MODE = "disabled";
+    Object.assign(env, { EXTENSION_PACKAGES_MODE: "disabled" });
     expect((await upload()).status).toBe(503);
   });
 

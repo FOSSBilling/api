@@ -271,5 +271,3 @@ migrations using `services/api/dist/wrangler.preview-migrations.json` before run
 
 `npm run cf-deploy` remains a deliberate manual production command. It applies remote
 migrations and deploys the API and its Durable Objects through Wrangler.
-Production `vars.EXTENSION_PACKAGES_MODE` stays set to `disabled` in
-`services/api/wrangler.jsonc`.
