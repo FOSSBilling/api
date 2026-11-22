@@ -52,9 +52,14 @@ recompile source or depend on Netlify's short-lived build cache:
 
 | Source              | Deployment                        | Netlify variables      |
 | ------------------- | --------------------------------- | ---------------------- |
-| `main`              | Production project URL            | Production context     |
+| `main` (opt-in)     | Production project URL            | Production context     |
 | `main`              | Fixed `staging` alias             | Branch deploys context |
 | Other branch pushes | `branch-<branch-name-hash>` alias | Branch deploys context |
+
+Set the `NETLIFY_DEPLOY_PRODUCTION` repository Actions variable to `true` to
+publish the processor to production from `main`. Leave it unset while the
+production processor is on hold. Staging deploys continue on every push to
+`main`. The API controls packaging separately through `EXTENSION_PACKAGES_MODE`.
 
 PR runs validate and build without deploying or receiving deployment credentials.
 Deployment links appear in the job summary and one updated package processor comment per
