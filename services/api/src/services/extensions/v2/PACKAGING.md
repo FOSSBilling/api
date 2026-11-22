@@ -6,7 +6,8 @@ publishes the original ZIP through revision review. It never runs uploaded code
 or package build scripts. ZIPs use the private B2 bucket; prepared icons use
 the public asset bucket, including icons for pending submissions. Automated tests
 use the B2 adapter with mocked S3 responses.
-Package routes are disabled by default. Local development and production enablement are separate modes.
+Package routes are disabled by default in Previews. Local development uses its
+own package mode and storage.
 
 ## Local development and testing
 
@@ -286,10 +287,10 @@ Prepared assets enter this bucket during packaging, before approval. Delisting
 stops access through the API, but does not revoke direct image URLs or cached copies.
 Keep B2 daily caps and alerts configured for download and transaction charges.
 
-## Production configuration (prepared locally)
+## Production configuration
 
-The top-level Wrangler configuration declares bindings, public URLs and deployment
-controls, keeping `EXTENSION_PACKAGES_MODE=disabled`. B2 endpoints and
+The top-level Wrangler configuration declares bindings, public URLs and
+`EXTENSION_PACKAGES_MODE=enabled` for production. B2 endpoints and
 bucket names are dashboard-managed runtime variables. Configure
 these under the Worker's **Settings > Variables and Secrets**, not build settings:
 
@@ -303,7 +304,7 @@ reintroduce them in the committed `vars` map. Keep development values in ignored
 `.dev.vars` files; the examples above use placeholders. No production resources
 or secrets are created by a local build or type-generation command.
 
-Before deployment (including an automatic deployment after merge):
+### Production rollout
 
 1. Supply `EXTENSION_PACKAGES_S3_ACCESS_KEY_ID` and
    `EXTENSION_PACKAGES_S3_SECRET_ACCESS_KEY` as Worker secrets for
@@ -316,17 +317,13 @@ Before deployment (including an automatic deployment after merge):
    manifest rebuild flow fail with `UPLOAD_NOT_FOUND` when processed. Upload a ZIP
    through the new flow if the release is still pending. Existing published ZIPs
    retain their URLs and checksums.
-4. After dispatcher capacity and moderation requirements are agreed, explicitly set
-   `EXTENSION_PACKAGES_MODE=enabled` in the reviewed production configuration.
-   Verify a production smoke test before enabling the dependent directory and
-   modules publisher changes. Those callers require an enabled, configured API;
-   merging a disabled API alone does not make package submission available.
+4. Verify the production upload preflight and run a smoke test after deployment
+   before switching the modules publisher to managed packages.
 
-Production requires HTTPS download URLs with the `/extensions/v2` base path,
-complete credentials for its private package and public asset buckets, a public
-asset URL. An incomplete configuration
-fails with 503; it cannot fall back to local ZIP storage. Private package objects
-use `packages/<object UUID>` in the bucket selected for that environment.
+Production requires an HTTPS download URL with the `/extensions/v2` base path,
+complete credentials for its private package and public asset buckets, and an HTTPS
+public asset URL. An incomplete configuration returns 503. Private package objects
+use `packages/<object UUID>` in the selected bucket.
 Public image objects use the UUID-based layout described above.
 
 The disabled mode blocks package reads as well as writes. Once managed releases

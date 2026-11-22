@@ -66,9 +66,9 @@ builds a self-contained Worker artifact, including deployment configuration and 
 See the [API deployment setup](services/api/README.md#deployment) for GitHub environments,
 staging resource IDs, Preview secrets, migration behaviour and the Workers Builds cutover.
 All API production and Preview deployments require validation, the API build and
-migrations to succeed. The API keeps package processing disabled in production and
-Previews (`EXTENSION_PACKAGES_MODE=disabled` in `services/api/wrangler.jsonc`) pending
-runtime verification and the controlled production package test.
+migrations to succeed. Package processing is enabled in production and disabled
+by default in Previews. See the [packaging setup](services/api/src/services/extensions/v2/PACKAGING.md)
+for storage configuration and testing.
 
 `npm run cf-deploy` remains the explicit manual production command; it applies
 remote migrations and deploys the API.
