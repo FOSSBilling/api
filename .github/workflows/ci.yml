@@ -136,7 +136,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: ${{ fromJSON(github.ref == 'refs/heads/main' && '["production", "staging"]' || '["preview"]') }}
+        target: >-
+          ${{ fromJSON(github.ref == 'refs/heads/main'
+            && (vars.NETLIFY_DEPLOY_PRODUCTION == 'true' && '["production", "staging"]' || '["staging"]')
+            || '["preview"]') }}
     environment:
       name: ${{ matrix.target == 'production' && 'production' || 'preview' }}
       deployment: false
