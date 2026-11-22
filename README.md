@@ -7,8 +7,8 @@ repository root with `npm ci`; each workspace declares its own dependencies.
 | Workspace                                                                                | Purpose                                                                                | Deployment                            |
 | ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------- |
 | [`services/api`](services/api/README.md)                                                 | HTTP API, authentication, persistence, job dispatch and publication                    | Cloudflare Workers                    |
-| [`services/extension-package-processor`](services/extension-package-processor/README.md) | ZIP validation, manifest extraction and icon preparation                               | Netlify Function or another Node host |
-| [`libraries/extension-packaging`](libraries/extension-packaging)                         | Shared manifest and processing contracts, ZIP implementation and storage/HTTP adapters | Bundled by its consumers              |
+| [`services/extension-package-processor`](services/extension-package-processor/README.md) | GitHub Release ZIP downloads, ZIP validation, manifest extraction and icon preparation | Netlify Function or another Node host |
+| [`libraries/extension-packaging`](libraries/extension-packaging)                         | Shared manifest and processing contracts and storage/HTTP adapters                     | Bundled by its consumers              |
 | [`libraries/logging`](libraries/logging)                                                 | Structured logging and credential redaction used by both services                      | Bundled by its consumers              |
 
 Services do not import each other's source. Shared libraries are private npm

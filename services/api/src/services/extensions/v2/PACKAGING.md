@@ -72,9 +72,17 @@ The OpenAPI reference is available at `/extensions/v2/docs`.
 
 - `POST /extensions/v2/packages` accepts JSON `{ upload_id }` to confirm a
   direct upload. The API checks its length and checksum metadata before queuing
-  validation. Confirmation returns **202** with the job and private status URL
-  in `Location`. An active owning developer profile is required. Machine
-  publishers need `extensions:push` and an active mapped developer binding.
+  validation. To import a public GitHub Release ZIP instead, send
+  `{ github_url, target }` to the same endpoint. Use the attached asset URL for
+  a specific release tag. The API uses a metadata-only token from its GitHub App
+  installation to resolve the public asset ID, size and SHA-256. It supplies a
+  short-lived token to the processor for the download request to `api.github.com`.
+  The processor follows GitHub's CDN redirect without credentials and verifies
+  the ZIP before storing the unchanged bytes. Assets without a GitHub SHA-256
+  can use direct upload.
+  Both requests return **202** with the job and private status URL in `Location`.
+  An active owning developer profile is required. Machine publishers need
+  `extensions:push` and an active mapped developer binding.
 - `GET /extensions/v2/packaging-jobs/{jobId}` returns `queued`, `processing`, `ready`
   or `failed`. Ready jobs include the artifact; failed jobs include an actionable
   error. Reads require the current owning developer/publisher or a moderator,

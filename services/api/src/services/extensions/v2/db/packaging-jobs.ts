@@ -1,3 +1,4 @@
+import { GitHubPackageSourceSchema } from "@fossbilling/extension-packaging/processor";
 import type { PackagingJob, PackagingJobRepository } from "../packages/jobs";
 import { PackageError } from "@fossbilling/extension-packaging/errors";
 
@@ -8,6 +9,7 @@ interface JobRow {
   target: string;
   upload_object_id: string | null;
   upload_sha256: string | null;
+  github_asset: string | null;
   status: PackagingJob["status"];
   attempts: number;
   artifact_id: string | null;
@@ -24,6 +26,9 @@ const job = (row: JobRow): PackagingJob => ({
   target: JSON.parse(row.target),
   uploadObjectId: row.upload_object_id,
   uploadSha256: row.upload_sha256,
+  githubAsset: row.github_asset
+    ? GitHubPackageSourceSchema.parse(JSON.parse(row.github_asset))
+    : undefined,
   status: row.status,
   attempts: row.attempts,
   artifactId: row.artifact_id,
@@ -63,14 +68,19 @@ export class PackagingJobsDatabase implements PackagingJobRepository {
   async create(
     input: Pick<
       PackagingJob,
-      "fingerprint" | "owner" | "target" | "uploadObjectId" | "uploadSha256"
+      | "fingerprint"
+      | "owner"
+      | "target"
+      | "uploadObjectId"
+      | "uploadSha256"
+      | "githubAsset"
     >
   ) {
     const id = crypto.randomUUID();
     await this.db
       .prepare(
-        `INSERT INTO package_jobs (id,fingerprint,owner_user_id,owner,target,upload_object_id,upload_sha256,dispatch_scope)
-      SELECT ?,?,?,?,?,?,?,? WHERE (SELECT count(*) FROM package_jobs WHERE owner_user_id=?) < 256
+        `INSERT INTO package_jobs (id,fingerprint,owner_user_id,owner,target,upload_object_id,upload_sha256,github_asset,dispatch_scope)
+      SELECT ?,?,?,?,?,?,?,?,? WHERE (SELECT count(*) FROM package_jobs WHERE owner_user_id=?) < 256
       ON CONFLICT DO NOTHING`
       )
       .bind(
@@ -81,6 +91,7 @@ export class PackagingJobsDatabase implements PackagingJobRepository {
         JSON.stringify(input.target),
         input.uploadObjectId,
         input.uploadSha256,
+        input.githubAsset ? JSON.stringify(input.githubAsset) : null,
         this.scope,
         input.owner.owner_user_id
       )

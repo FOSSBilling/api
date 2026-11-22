@@ -18,6 +18,7 @@ export function octokitRequestMock() {
 // tests against real Octokit clients and a mocked HTTP transport.
 export function githubClientMock() {
   return {
+    publicGitHubToken: async () => "public-release-token",
     githubClientProvider: () => async () => ({
       request: (await import("@octokit/request")).request,
       graphql: async (query: string, options?: Record<string, unknown>) =>

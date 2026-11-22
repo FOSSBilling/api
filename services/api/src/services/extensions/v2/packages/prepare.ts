@@ -3,7 +3,7 @@ import type { PackageProcessor } from "@fossbilling/extension-packaging/processo
 import type { PackageStore } from "@fossbilling/extension-packaging/store";
 import type { PackagingJob } from "./jobs";
 import { PackageError } from "@fossbilling/extension-packaging/errors";
-import { prepareStoredPackage } from "./build";
+import { preparePackage } from "./build";
 
 export interface PackagePreparation {
   repository: PackageRepository;
@@ -40,14 +40,19 @@ export async function prepareQueuedPackage(
       "Package ownership changed while queued",
       403
     );
-  if (!job.uploadObjectId || !job.uploadSha256)
+  const source =
+    job.githubAsset ??
+    (job.uploadObjectId && job.uploadSha256
+      ? { id: job.uploadObjectId, sha256: job.uploadSha256 }
+      : null);
+  if (!source)
     throw new PackageError("UPLOAD_NOT_FOUND", "Package upload not found", 404);
-  const artifact = await prepareStoredPackage({
+  const artifact = await preparePackage({
     repository,
     store,
     owner: current,
     target: job.target,
-    upload: { objectId: job.uploadObjectId, sha256: job.uploadSha256 },
+    source,
     publisher,
     baseUrl: services.baseUrl.replace(/\/$/, ""),
     processor: services.processor

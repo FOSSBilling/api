@@ -3,6 +3,7 @@ import { sha256 } from "@fossbilling/extension-packaging/checksum";
 import {
   MAX_PACKAGE_ICON_BYTES,
   type PackageProcessor,
+  type PackageSource,
   type PackageTarget
 } from "@fossbilling/extension-packaging/processor";
 import type { Manifest } from "../schemas/manifest";
@@ -31,17 +32,17 @@ export async function cleanupPackageObjects(
   return ids.length;
 }
 
-export async function prepareStoredPackage(input: {
+export async function preparePackage(input: {
   repository: PackageRepository;
   store: PackageStore;
   owner: PackageOwner;
   target: PackageTarget;
-  upload: { sha256: string; objectId: string };
+  source: PackageSource;
   publisher: PackagePublisher | null;
   baseUrl: string;
   processor: PackageProcessor;
 }) {
-  const { repository, store, upload, target } = input;
+  const { repository, store, source: reference, target } = input;
   const objectId = crypto.randomUUID();
   const iconIds: [string, string] = [crypto.randomUUID(), crypto.randomUUID()];
   await repository.reserveObject(
@@ -60,15 +61,15 @@ export async function prepareStoredPackage(input: {
   }
   const prepared = await input.processor.process({
     target,
-    source: { id: upload.objectId, sha256: upload.sha256 },
+    source: reference,
     archive: objectId,
     icons: iconIds
   });
   const { manifest } = prepared;
-  if (prepared.archive.sha256 !== upload.sha256)
+  if (prepared.archive.sha256 !== reference.sha256)
     throw new PackageError(
       "PACKAGE_UNAVAILABLE",
-      "Validated archive checksum does not match the upload",
+      "Validated archive checksum does not match the source",
       503
     );
   const owner = await repository.getOwner(
@@ -92,10 +93,10 @@ export async function prepareStoredPackage(input: {
     owner.profile_generation,
     manifest.id,
     manifest.version,
-    upload.sha256
+    reference.sha256
   );
   const existing = existingSource
-    ? await repository.findArtifact(existingSource.id, upload.sha256)
+    ? await repository.findArtifact(existingSource.id, reference.sha256)
     : null;
   if (
     !existing?.published_at &&
@@ -124,7 +125,7 @@ export async function prepareStoredPackage(input: {
     existingSource ??
     (await repository.linkSource(owner, manifest, {
       id: crypto.randomUUID(),
-      sha256: upload.sha256,
+      sha256: reference.sha256,
       object_id: objectId
     }));
   if (!source)
@@ -151,7 +152,7 @@ export async function prepareStoredPackage(input: {
     (await repository.linkArtifact(owner, manifest, {
       id: artifactId,
       sourceId: source.id,
-      sha256: upload.sha256,
+      sha256: reference.sha256,
       objectId: source.object_id,
       downloadUrl
     }));

@@ -4,6 +4,7 @@ import { PACKAGE_LIMITS } from "./limits";
 
 // Matches the sanitizer's maximum prepared SVG output.
 export const MAX_PACKAGE_ICON_BYTES = 4 * 1024 * 1024;
+export const GITHUB_AUTHORIZATION_HEADER = "X-GitHub-Authorization";
 const checksum = z.string().regex(/^[a-f0-9]{64}$/);
 const output = z
   .object({
@@ -22,16 +23,36 @@ export const PackageTargetSchema = z
   });
 export type PackageTarget = z.infer<typeof PackageTargetSchema>;
 
+const StoredPackageSourceSchema = z.strictObject({
+  id: z.uuid(),
+  sha256: checksum
+});
+export const GitHubPackageSourceSchema = z.strictObject({
+  github: z.strictObject({
+    repository: z.string().regex(/^[a-z0-9-]+\/[a-z0-9_.-]+$/u),
+    assetId: z.number().int().positive(),
+    bytes: z.number().int().positive().max(PACKAGE_LIMITS.sourceBytes)
+  }),
+  sha256: checksum
+});
+export type GitHubPackageSource = z.infer<typeof GitHubPackageSourceSchema>;
+const PackageSourceSchema = z.union([
+  StoredPackageSourceSchema,
+  GitHubPackageSourceSchema
+]);
+export type PackageSource = z.infer<typeof PackageSourceSchema>;
+
 export const ProcessingInputSchema = z
   .object({
     target: PackageTargetSchema,
-    source: z.object({ id: z.uuid(), sha256: checksum }).strict(),
+    source: PackageSourceSchema,
     archive: z.uuid(),
     icons: z.tuple([z.uuid(), z.uuid()])
   })
   .strict()
   .refine((value) => {
-    const keys = [value.source.id, value.archive, ...value.icons];
+    const keys = [value.archive, ...value.icons];
+    if ("id" in value.source) keys.push(value.source.id);
     return new Set(keys).size === keys.length;
   }, "Processing object IDs must be distinct");
 export const ProcessingResultSchema = z

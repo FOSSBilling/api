@@ -627,6 +627,7 @@ export const packagingJobs = sqliteTable(
       () => packageObjects.id
     ),
     uploadSha256: text("upload_sha256"),
+    githubAsset: text("github_asset"),
     status: text("status", {
       enum: ["queued", "processing", "ready", "failed"]
     })

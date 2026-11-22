@@ -1,5 +1,6 @@
 import { logError } from "@fossbilling/logging";
 import {
+  GITHUB_AUTHORIZATION_HEADER,
   ProcessingResultSchema,
   type PackageProcessor,
   type ProcessingInput
@@ -13,7 +14,8 @@ export class HttpPackageProcessor implements PackageProcessor {
   constructor(
     url: string,
     private readonly secret: string,
-    local = false
+    local = false,
+    private readonly githubToken?: () => Promise<string>
   ) {
     const target = URL.canParse(url) ? new URL(url) : null;
     if (
@@ -38,13 +40,19 @@ export class HttpPackageProcessor implements PackageProcessor {
   }
   async process(input: ProcessingInput) {
     try {
+      const headers = new Headers({
+        Authorization: `Bearer ${this.secret}`,
+        "Content-Type": "application/json"
+      });
+      if ("github" in input.source) {
+        const token = await this.githubToken?.();
+        if (!token) throw new Error("GitHub App authentication is unavailable");
+        headers.set(GITHUB_AUTHORIZATION_HEADER, `Bearer ${token}`);
+      }
       const response = await fetch(
         new Request(this.url, {
           method: "POST",
-          headers: {
-            Authorization: `Bearer ${this.secret}`,
-            "Content-Type": "application/json"
-          },
+          headers,
           body: JSON.stringify(input),
           redirect: "manual",
           cache: "no-store",

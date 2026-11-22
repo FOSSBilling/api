@@ -54,7 +54,7 @@ async function archive(iconName = "icon.svg", icon = encode(svg)) {
   await writer.add(iconName, new Uint8ArrayReader(icon));
   return writer.close();
 }
-function fixture() {
+function fixture(githubToken?: () => Promise<string>) {
   const nativeFetch = globalThis.fetch;
   const objects = new Map<
     string,
@@ -63,35 +63,39 @@ function fixture() {
   const key = (id: string) => "/private-packages/packages/" + id;
   const handler = (request: Request) =>
     handlePackageProcessing(request, (name) => config[name]);
-  const fetch = vi.fn(async (request: Request) => {
-    const url = new URL(request.url);
-    if (url.hostname === "processor.example.test") return handler(request);
-    if (url.hostname === "127.0.0.1") return nativeFetch(request);
-    if (url.hostname !== "s3.test-region.backblazeb2.com")
-      throw new Error("Unexpected network request");
-    expect(request.cache).toBe("no-store");
-    if (request.method === "PUT") {
-      objects.set(url.pathname, {
-        bytes: new Uint8Array(await request.arrayBuffer()),
-        checksum: request.headers.get("x-amz-meta-sha256")!
-      });
-      return new Response(null);
+  const fetch = vi.fn(
+    async (input: Request | string | URL, init?: RequestInit) => {
+      const request =
+        input instanceof Request ? input : new Request(input, init);
+      const url = new URL(request.url);
+      if (url.hostname === "processor.example.test") return handler(request);
+      if (url.hostname === "127.0.0.1") return nativeFetch(request);
+      if (url.hostname !== "s3.test-region.backblazeb2.com")
+        throw new Error("Unexpected network request");
+      expect(request.cache).toBe("no-store");
+      if (request.method === "PUT") {
+        objects.set(url.pathname, {
+          bytes: new Uint8Array(await request.arrayBuffer()),
+          checksum: request.headers.get("x-amz-meta-sha256")!
+        });
+        return new Response(null);
+      }
+      const value = objects.get(url.pathname);
+      return value
+        ? new Response(value.bytes, {
+            headers: { "x-amz-meta-sha256": value.checksum }
+          })
+        : new Response(null, { status: 404 });
     }
-    const value = objects.get(url.pathname);
-    return value
-      ? new Response(value.bytes, {
-          headers: { "x-amz-meta-sha256": value.checksum }
-        })
-      : new Response(null, { status: 404 });
-  });
+  );
   vi.stubGlobal("fetch", fetch);
   const processor = new HttpPackageProcessor(
     "https://processor.example.test/process",
-    config.EXTENSION_PACKAGE_PROCESSOR_SECRET
+    config.EXTENSION_PACKAGE_PROCESSOR_SECRET,
+    false,
+    githubToken
   );
-  const input = async (
-    bytes: Uint8Array<ArrayBuffer>
-  ): Promise<ProcessingInput> => {
+  const input = async (bytes: Uint8Array<ArrayBuffer>) => {
     const id = crypto.randomUUID(),
       checksum = await sha256(bytes);
     objects.set(key(id), { bytes, checksum });
@@ -100,10 +104,29 @@ function fixture() {
       source: { id, sha256: checksum },
       archive: crypto.randomUUID(),
       icons: [crypto.randomUUID(), crypto.randomUUID()]
-    };
+    } satisfies ProcessingInput;
   };
   return { objects, key, fetch, handler, processor, input };
 }
+
+const githubAssetUrl =
+  "https://api.github.com/repos/fossbilling/modules/releases/assets/123";
+async function githubInput(bytes: Uint8Array<ArrayBuffer>) {
+  return {
+    target: { id: manifest.id },
+    source: {
+      github: {
+        repository: "fossbilling/modules",
+        assetId: 123,
+        bytes: bytes.length
+      },
+      sha256: await sha256(bytes)
+    },
+    archive: crypto.randomUUID(),
+    icons: [crypto.randomUUID(), crypto.randomUUID()]
+  } satisfies ProcessingInput;
+}
+
 describe("Node package processor over the generic HTTP contract", () => {
   it("seals the unchanged ZIP privately and sanitizes a separate display SVG", async () => {
     const f = fixture(),
@@ -121,6 +144,96 @@ describe("Node package processor over the generic HTTP contract", () => {
     expect(prepared).toContain("linearGradient");
     expect(prepared).toContain("url(#paint)");
     expect(prepared).toContain('viewBox="0 0 24 24"');
+  });
+  it.each(["match", "checksum mismatch", "size mismatch"])(
+    "checks a GitHub asset before storing the original ZIP (%s)",
+    async (scenario) => {
+      const f = fixture(async () => "test-github-token");
+      const source = await archive();
+      const input = await githubInput(source);
+      if (scenario === "size mismatch") input.source.github.bytes++;
+      const downloadUrl =
+        "https://release-assets.githubusercontent.com/test.zip";
+      const fetch = f.fetch.getMockImplementation()!;
+      f.fetch.mockImplementation(async (request, init) => {
+        const url = request instanceof Request ? request.url : String(request);
+        if (url === githubAssetUrl) {
+          const headers = new Headers(init?.headers);
+          expect(headers.get("Accept")).toBe("application/octet-stream");
+          expect(headers.get("Authorization")).toBe("Bearer test-github-token");
+          return Response.redirect(downloadUrl, 302);
+        }
+        if (url === downloadUrl) {
+          expect(new Headers(init?.headers).get("Authorization")).toBeNull();
+          return new Response(
+            scenario === "checksum mismatch"
+              ? source.map((byte) => byte ^ 1)
+              : source
+          );
+        }
+        return fetch(request, init);
+      });
+      if (scenario !== "match") {
+        await expect(f.processor.process(input)).rejects.toMatchObject({
+          code: "INVALID_PACKAGE",
+          status: 422
+        });
+        expect(f.objects.size).toBe(0);
+      } else {
+        const result = await f.processor.process(input);
+        expect(result.manifest).toEqual(manifest);
+        expect(f.objects.size).toBe(1 + result.icons.length);
+        expect(f.objects.get(f.key(input.archive))).toEqual({
+          bytes: source,
+          checksum: input.source.sha256
+        });
+      }
+    }
+  );
+  it.each([
+    [
+      "unexpected redirect",
+      () => Response.redirect("https://downloads.example.test/test.zip", 302)
+    ],
+    [
+      "JSON content with mixed case",
+      () =>
+        new Response("{}", { headers: { "Content-Type": "application/JSON" } })
+    ]
+  ])(
+    "treats a GitHub asset response with %s as retryable",
+    async (_, response) => {
+      const f = fixture(async () => "test-github-token");
+      const input = await githubInput(encode("ZIP bytes"));
+      const fetch = f.fetch.getMockImplementation()!;
+      f.fetch.mockImplementation((request, init) =>
+        request === githubAssetUrl
+          ? Promise.resolve(response())
+          : fetch(request, init)
+      );
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      await expect(f.processor.process(input)).rejects.toMatchObject({
+        code: "PACKAGE_UNAVAILABLE",
+        status: 503
+      });
+      expect(f.fetch).toHaveBeenCalledTimes(2);
+      expect(f.objects.size).toBe(0);
+    }
+  );
+  it("rejects GitHub imports without a token before contacting GitHub", async () => {
+    const f = fixture();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const response = await f.handler(
+      new Request("https://processor.example.test/process", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${config.EXTENSION_PACKAGE_PROCESSOR_SECRET}`
+        },
+        body: JSON.stringify(await githubInput(encode("ZIP bytes")))
+      })
+    );
+    expect(response.status).toBe(503);
+    expect(f.fetch).not.toHaveBeenCalled();
   });
   it.each(["png", "webp", "avif"] as const)(
     "prepares real icon.%s as AVIF and PNG with preserved proportions",

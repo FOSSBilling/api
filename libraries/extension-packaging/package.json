@@ -12,7 +12,6 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@zip.js/zip.js": "2.25.0",
     "zod": "4.6.7",
     "@fossbilling/logging": "*"
   }

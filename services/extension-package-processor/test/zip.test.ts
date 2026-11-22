@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { TextReader, Uint8ArrayWriter, ZipWriter } from "@zip.js/zip.js";
 import { validateExtensionPackage } from "../src/zip";
-import { PACKAGE_LIMITS } from "../src/limits";
+import { PACKAGE_LIMITS } from "@fossbilling/extension-packaging/limits";
 
 const manifest = {
   manifest_version: 1,

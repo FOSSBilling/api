@@ -1,7 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
-import { TextReader, Uint8ArrayWriter, ZipWriter } from "@zip.js/zip.js";
+import { describe, expect, it } from "vitest";
 import { type ProcessingInput } from "@fossbilling/extension-packaging/processor";
-import { processPackage } from "@fossbilling/extension-packaging/process";
 import { prepareQueuedPackage } from "../../../../src/services/extensions/v2/packages/prepare";
 import type {
   PackageRepository,
@@ -13,9 +11,8 @@ import type { PackagingJob } from "../../../../src/services/extensions/v2/packag
 import type { PackageStore } from "@fossbilling/extension-packaging/store";
 import { sha256 } from "@fossbilling/extension-packaging/checksum";
 
-const zipOptions = { useWebWorkers: false, useCompressionStream: true };
 describe("package preparation outside Cloudflare", () => {
-  it("validates and stores ZIPs with injected persistence, storage and image processing", async () => {
+  it("records a prepared package with injected persistence, storage and processing", async () => {
     const manifest = {
       manifest_version: 1 as const,
       type: "module" as const,
@@ -94,33 +91,21 @@ describe("package preparation outside Cloudflare", () => {
         objects.delete(key);
       }
     };
-    const images = {
-      prepare: vi.fn(async (bytes: Uint8Array<ArrayBuffer>) => [
-        { format: "svg" as const, bytes }
-      ])
-    };
-    const writer = new ZipWriter(new Uint8ArrayWriter(), zipOptions);
-    await writer.add(
-      "Service.php",
-      new TextReader("<?php // Ready to install")
-    );
-    await writer.add(
-      "icon.svg",
-      new TextReader(
+    const icon = new Uint8Array(
+      new TextEncoder().encode(
         '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>'
       )
     );
-    await writer.add("manifest.json", new TextReader(JSON.stringify(manifest)));
-    const upload = await writer.close();
+    const upload = new Uint8Array([1, 2, 3]);
+    const checksum = await sha256(upload);
     const uploadId = crypto.randomUUID();
-    objects.set(uploadId, upload);
     const job: PackagingJob = {
       id: crypto.randomUUID(),
       fingerprint: "node",
       owner,
       target: {},
       uploadObjectId: uploadId,
-      uploadSha256: await sha256(upload),
+      uploadSha256: checksum,
       status: "processing",
       attempts: 1,
       artifactId: null,
@@ -132,21 +117,32 @@ describe("package preparation outside Cloudflare", () => {
       repository,
       store,
       processor: {
-        process: (input: ProcessingInput) =>
-          processPackage(input, store, images)
+        process: async (input: ProcessingInput) => {
+          expect(input.source).toEqual({ id: uploadId, sha256: checksum });
+          const iconChecksum = await sha256(icon);
+          await store.put(input.icons[0], icon, iconChecksum);
+          return {
+            manifest,
+            archive: { bytes: upload.length, sha256: checksum },
+            icons: [
+              {
+                id: input.icons[0],
+                format: "svg" as const,
+                bytes: icon.length,
+                sha256: iconChecksum
+              }
+            ]
+          };
+        }
       },
       baseUrl: "https://directory.example.test/extensions/v2"
     };
     const id = await prepareQueuedPackage(services, job);
     const first = [...artifacts.values()].find((row) => row.id === id)!;
-    const bytes = objects.get(first.object_id)!;
-    expect(await sha256(bytes)).toBe(first.sha256);
-    expect(bytes).toEqual(upload);
     expect(first.object_id).not.toBe(uploadId);
     expect(JSON.parse(first.manifest)).toEqual(manifest);
     expect(first.svg_object_id).toMatch(
       new RegExp(`^extensions/${extensionId}/icons/`)
     );
-    expect(images.prepare).toHaveBeenCalledOnce();
   });
 });
