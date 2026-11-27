@@ -258,8 +258,8 @@ and [Cloudflare's Preview resource behaviour](https://developers.cloudflare.com/
 
 The [Cloudflare Events workflow](../../.github/workflows/cloudflare-events.yml) runs the
 trusted shared comment handler on workflow completion and PR events. It reads deployment
-metadata without checking out or executing PR code. Renovate tracks the pinned shared
-workflow references in both files.
+metadata without checking out or executing PR code. Both workflows use a shared workflow
+commit that supports Wrangler. Update the pinned commit manually when the API moves to `cf`.
 
 #### Local deployment commands
 
